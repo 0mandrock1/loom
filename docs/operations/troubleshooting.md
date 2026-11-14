@@ -317,9 +317,9 @@ each field means is in [monitoring](./monitoring.md#health-checks).
     COMMIT;
     ```
 
-    Then drop the org triggers, in the same session and as the same role, after the
-    state transaction (so a migrating boot's `ensure` does not create them again); on a
-    lock failure, `ROLLBACK` if psql is still open, then rerun the step:
+    Then drop the org triggers and the `loom.tenancy` guard, in the same session and as the
+    same role, after the state transaction (so a migrating boot's `ensure` does not create
+    them again); on a lock failure, `ROLLBACK` if psql is still open, then rerun the step:
 
     ```sql
     \set ON_ERROR_STOP on
@@ -329,7 +329,8 @@ each field means is in [monitoring](./monitoring.md#health-checks).
     SELECT format('DROP TRIGGER %I ON loom.%I', t.tgname, c.relname)
     FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'loom' AND t.tgname IN ('tenancy_insert', 'tenancy_update') \gexec
+    WHERE n.nspname = 'loom'
+      AND t.tgname IN ('tenancy_insert', 'tenancy_update', 'tenancy_record') \gexec
     COMMIT;
     ```
 
@@ -361,18 +362,17 @@ each field means is in [monitoring](./monitoring.md#health-checks).
 
 - **Symptom:** a boot of a cell in any state but `open` logs
   `cell triggers: not applied on loom.<table> (...)`, and `loom doctor` names the table's
-  missing or disabled trigger (`loom.cell_first`'s in any such state, an org table's in
-  `enforced`).
-- **Cause:** the boot creates a cell's org triggers, and sets `loom.cell_first`'s back to
-  always, with a lock wait of 100 ms a try, three tries a second apart, and serves past a
-  table in two cases. The log names the sessions that held or queued a conflicting lock
-  when the table was still busy: a long transaction or a bulk write on it, or an
+  missing or disabled trigger (`loom.cell_first`'s in any such state, an org table's trigger
+  or the `loom.tenancy` guard in `enforced`).
+- **Cause:** the boot creates a cell's org triggers and guard, and sets `loom.cell_first`'s
+  back to always, with a lock wait of 100 ms a try, three tries a second apart, and serves
+  past a table in two cases. The log names the sessions that held or queued a conflicting
+  lock when the table was still busy: a long transaction or a bulk write on it, or an
   autovacuum, which the short tries do not make yield and which is left to finish (a wait
   long enough to cancel it would queue every writer of the table behind the boot). It says
   `this role cannot alter it` when the migrating role does not own the table, which
-  `loom doctor` names as an `owner` defect. Until a later boot finishes the table, a
-  writer that runs no tenancy check is not refused there; Loom's own writes are
-  unaffected.
+  `loom doctor` names as an `owner` defect. Until a later boot finishes the table, a writer
+  that runs no tenancy check is not refused there; Loom's own writes are unaffected.
 - **Fix:** for a busy table, end the transaction the log names if it is stale, or wait for
   the autovacuum to finish (`pg_stat_progress_vacuum`); for a table the role cannot alter,
   run the boot as the role that owns schema `loom`'s tables, or give the table to that
@@ -380,20 +380,40 @@ each field means is in [monitoring](./monitoring.md#health-checks).
   `LOOM_BOOT_MIGRATE` on, and repeat until `loom doctor` names no missing or disabled
   trigger.
 
+### A boot fails with "function loom.tenancy_refuse_… does not exist"
+
+- **Symptom:** a migrating boot of an `enforced` cell fails creating a cell trigger with
+  `function loom.tenancy_refuse_unheld() does not exist` (or `…_unmarked()`), and
+  `loom doctor` names the function absent in any state.
+- **Cause:** the function was dropped by hand after its migration ran (011 for the org
+  triggers, 012 for the `loom.tenancy` guard; a `DROP FUNCTION … CASCADE` drops its triggers
+  with it). The migration ledger already lists the file, so no boot creates the function
+  again, and until it is back, unchecked writers are not refused. A `loom doctor` of a new
+  release that names the function absent before the release's first migrating boot needs no
+  fix: that boot runs the file.
+- **Fix:** run the migration file (`schemas/pg_migrations/011_tenancy_triggers.sql` or
+  `012_tenancy_guard.sql`) with `psql` as the role that owns schema `loom`'s tables, then,
+  on an `enforced` cell, restart one pod with `LOOM_BOOT_MIGRATE` on: its boot creates the
+  triggers (on any other cell, attach creates them later).
+
 ### Writes are slow, or a script is refused, on a deployment that is not a cell
 
-- **Symptom:** on a deployment whose cell state is `open` (every process serves), Loom's
-  own writes, and any script's or bulk loader's, take longer per row, or a role without
-  `SELECT` on `loom.cell_first` gets "permission denied for table cell_first".
-- **Cause:** the org triggers are still on its tables: a schema-only restore of a
-  prepared cell, or a cleanup that skipped the step that drops them. In `open` they let
-  every row through, but each unmarked write still reads the state.
+- **Symptom:** on a deployment whose cell state is `open` (every process serves), Loom's own
+  writes, and any script's or bulk loader's, take longer per row, a role without `SELECT` on
+  `loom.cell_first` gets "permission denied for table cell_first", or a script's
+  `loom.tenancy` insert fails with SQLSTATE `LT001`.
+- **Cause:** the org triggers are still on its tables: a schema-only restore of a prepared
+  cell, or a cleanup that skipped the step that drops them. In `open` they let every row
+  through, but each unmarked write still reads the state. The `loom.tenancy` guard,
+  `tenancy_record`, refuses a script's tenancy row with SQLSTATE `LT001`: the row itself
+  makes the state `partial`.
 - **Check:**
 
   ```sql
   SELECT c.relname, t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
   JOIN pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = 'loom' AND t.tgname IN ('tenancy_insert', 'tenancy_update');
+  WHERE n.nspname = 'loom'
+    AND t.tgname IN ('tenancy_insert', 'tenancy_update', 'tenancy_record');
   ```
 
 - **Fix:** run the drop step of

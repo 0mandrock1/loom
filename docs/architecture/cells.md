@@ -669,29 +669,37 @@ lists any tenancy row the directory does not place.
   no privilege boundary: a writer that sets it on purpose passes; the triggers stop
   writers that do not know it, an older CLI, a pod downgraded past the check, or a script,
   from adding a row for an org the cell does not hold or moving a row to one; an update
-  that keeps a row's org, and a delete, are not refused. Their cost is one setting lookup
-  per marked row, and one read of the state and a `loom.tenancy` lookup per unmarked row;
-  the gate they ship under is a `memory.set` p99 rise of at most 10 ms and a delivery
-  pass's rows per second at `LOOM_PG_DELIVERY_BATCH_ROWS` at most 10% lower, in `enforced`
-  with the orgs held. Every Loom write on a cell is marked, so it pays the setting lookup
-  alone, measured on the statements with the triggers on and off (no cost distinguishable
-  from zero: six rounds range from −0.36 to 0.49 µs a row, [benchmark
+  that keeps a row's org, and a delete, are not refused. The org triggers' cost is one
+  setting lookup per marked row, and one read of the state and a `loom.tenancy` lookup per
+  unmarked row; the gate they ship under is a `memory.set` p99 rise of at most 10 ms and a
+  delivery pass's rows per second at `LOOM_PG_DELIVERY_BATCH_ROWS` at most 10% lower, in
+  `enforced` with the orgs held. Every Loom write on a cell is marked, so it pays the
+  setting lookup alone, measured on the statements with the triggers on and off (no cost
+  distinguishable from zero: six rounds range from −0.36 to 0.49 µs a row, [benchmark
   results](../benchmarks/results.md)), which predicts the gate holds by a wide margin. The
   gate itself is an end-to-end `memory.set` and delivery-pass measurement on a cell, which
-  needs attach and is checked with it; until then the triggers, which a later cell gets
-  from prepare's next migrating boot, ship on the statement-level measurement. With
-  attach, `loom doctor` also lists any tenancy row the directory does not place and any
-  org in an org-keyed Postgres table with no tenancy row, which names a script that writes
-  `loom.tenancy` itself. Before the first attach the operator rotates the cell's
-  ClickHouse writer credentials (create the new user, roll it out to configurations of
-  builds that check, drop the old one), and attach refuses while any ClickHouse user with
-  `INSERT` on `loom.*` (`system.grants`, with database, global and role grants followed
-  through `system.role_grants`, and users from configuration files or with implicit `ALL`
-  counted) is not one a live process of a checking build or the CLI's configured user
-  reports, so only holders of the rotated credential write ClickHouse; an older CLI given
-  that credential still writes unchecked, and with attach `loom doctor` lists what it
-  wrote: any org found in an org-keyed ClickHouse table with no tenancy row, from the same
-  schema list as attach step 2.
+  needs attach and is checked with it; until then the triggers, which a later cell gets from
+  prepare's next migrating boot, ship on the statement-level measurement. `loom.tenancy`
+  itself has its own guard, since a tenancy row makes an org held: `tenancy_record`, a
+  row-level `AFTER INSERT OR UPDATE OF org` origin trigger with the same marker `WHEN`,
+  calls `loom.tenancy_refuse_unmarked()` (migration 012), which refuses, `LT001`, an
+  unmarked session's tenancy row, or an update that moves one to another org, in every state
+  but a first cell still recording (`open` too, since the row itself would make the state
+  `partial`), so a script cannot make an org held that the directory does not place. Boots
+  and attach create and repair it as they do the org triggers. With attach, `loom doctor`
+  also lists any tenancy row the directory does not place, which names one written before
+  the guard or by a writer that set the marker, and any org in an org-keyed Postgres table
+  with no tenancy row, which names rows written before the org triggers, by a writer that
+  set the marker, or left behind by a deleted tenancy row. Before the first attach the
+  operator rotates the cell's ClickHouse writer credentials (create the new user, roll it
+  out to configurations of builds that check, drop the old one), and attach refuses while
+  any ClickHouse user with `INSERT` on `loom.*` (`system.grants`, with database, global and
+  role grants followed through `system.role_grants`, and users from configuration files or
+  with implicit `ALL` counted) is not one a live process of a checking build or the CLI's
+  configured user reports, so only holders of the rotated credential write ClickHouse; an
+  older CLI given that credential still writes unchecked, and with attach `loom doctor`
+  lists what it wrote: any org found in an org-keyed ClickHouse table with no tenancy row,
+  from the same schema list as attach step 2.
 - **An org the cell does not hold is placed there or refused.** For a verified principal
   scoped to the org (a token of that org, or an issuer's or bot's principal whose org it
   is), the cell calls the router's placement API (`POST /cells/v1/placements` at
@@ -1116,16 +1124,17 @@ never by a cell's ops, so a cell's release does not wait on the router's.
   directory unreachable, placements, uncached lookups, the `loom cell` commands that
   read or write it and the recording cells' state reads refuse while each cell keeps
   serving the orgs it holds. Third, a migrating boot that cannot create or enable an org
-  trigger on a table, or set `loom.cell_first`'s triggers back to always (its lock not
-  taken in three tries of 100 ms, or a table the role cannot alter), logs it and serves,
-  leaving that table unguarded until a later boot succeeds: the triggers are a backstop
-  only against writers that send no marker, refusing the boot would take a cell down for a
-  backstop, and attach refuses a missing trigger. Fourth, an org-free revocation command
-  that cannot give access back (a plain `loom revoke-token`, not one that narrows or lapses,
-  a SQL user's revocation, `loom signing-key retire`, `loom bot disable`, `loom sso unlink`)
-  with `LOOM_CELL` set whose read of the cell's `first` row fails for a Postgres that does
-  not answer runs and prints that the cell was not checked, since a revocation must work
-  through an outage; any other failed read, a missing grant among them, refuses.
+  trigger or the `loom.tenancy` guard on a table, or set `loom.cell_first`'s triggers back
+  to always (its lock not taken in three tries of 100 ms, or a table the role cannot alter),
+  logs it and serves, leaving that table unguarded until a later boot succeeds: the triggers
+  are a backstop only against writers that send no marker, refusing the boot would take a
+  cell down for a backstop, and attach refuses a missing trigger. Fourth, an org-free
+  revocation command that cannot give access back (a plain `loom revoke-token`, not one that
+  narrows or lapses, a SQL user's revocation, `loom signing-key retire`, `loom bot disable`,
+  `loom sso unlink`) with `LOOM_CELL` set whose read of the cell's `first` row fails for a
+  Postgres that does not answer runs and prints that the cell was not checked, since a
+  revocation must work through an outage; any other failed read, a missing grant among them,
+  refuses.
 
 ## Source entry points
 
@@ -1139,8 +1148,9 @@ never by a cell's ops, so a cell's release does not wait on the router's.
   workers' lease and the heartbeat read; `server/boot.py`'s `start_cell_gate` is a
   server process's boot read;
 - `server/core/cell_triggers.py`: the org triggers' marker, `ensure` (a migrating boot's
-  creation and repair of the triggers) and `missing` (what `loom doctor` names), with
-  their function in `schemas/pg_migrations/011_tenancy_triggers.sql`;
+  creation and repair of the triggers and the `loom.tenancy` guard) and `missing` (what
+  `loom doctor` names), with their functions in
+  `schemas/pg_migrations/011_tenancy_triggers.sql` and `012_tenancy_guard.sql`;
   `server/cli/doctor_cell.py`: `loom doctor`'s cell checks;
 - `schemas/pg_migrations/008_cells.sql`, `schemas/pg_migrations/009_cell_probe.sql` and
   `schemas/migrations/094_cell_heartbeats.sql`: the cell's tables;
