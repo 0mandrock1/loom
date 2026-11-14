@@ -41,6 +41,7 @@ from server.knowledge.api.models_knowledge import (
     _KnowledgeBulkDeleteResult,
     _KnowledgeBulkEntryResult,
 )
+from server.knowledge.domain import access_list
 from server.knowledge.domain.chunking import Chunk, chunk_context, chunk_document, embedding_text
 from server.knowledge.domain.sources import SYNC_WORKER_ACTOR, source_tags
 from server.knowledge.store import datasets as datasets_repo
@@ -321,7 +322,10 @@ def _chunk_text(content: str) -> list[Chunk]:
 
 
 async def handle_knowledge_upsert(
-    input: KnowledgeUpsertInput, *, read_version: int | None = None
+    input: KnowledgeUpsertInput,
+    *,
+    read_version: int | None = None,
+    permissions: access_list.AccessList = access_list.UNREAD,
 ) -> KnowledgeUpsertOutput:
     """Insert new chunks for `source_uri`; soft-supersede prior chunks.
 
@@ -339,6 +343,9 @@ async def handle_knowledge_upsert(
     rechunk); the write commits over it, so under the Postgres authority a source
     written since refuses it (HeadMoved, 409) and the caller's copy never replaces a
     newer write.
+
+    `permissions`: a mirrored document's permission list, for the sync's turn to pass;
+    never a field of the op, so no request writes one.
     """
     from server.knowledge.store import chunks as knowledge_repo
 
@@ -438,6 +445,7 @@ async def handle_knowledge_upsert(
         blob_content_type=blob_content_type,
         original_filename=original_filename,
         revision=revision,
+        access_json=access_list.to_json(permissions),
     )
     try:
         # Inside the cleanup: a chunk insert that timed out may land later.
