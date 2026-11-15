@@ -1,10 +1,10 @@
 # Memory linked to code for coding agents
 
-Loom links the memories coding agents save about a repository to the functions, classes
-and files they name, follows those symbols through refactors, and flags a memory when its
-code changes. By default, a memory whose code is all gone leaves search results, and every
-other read that still shows a lesson says whether its code moved, changed or is gone. It
-runs over MCP, HTTP and the SDKs on the repositories a self-hosted Loom indexes
+Loom links coding agents' memories to the functions, classes and files they name, follows
+them through refactors, and flags a memory when its code changes. By default, search
+leaves out a memory whose code is all gone, and every read that serves a lesson says
+whether its code moved, changed or is gone. It runs over MCP, HTTP and the SDKs on the
+repositories a self-hosted Loom indexes
 (the [code index](code-intelligence.md), `LOOM_CODE_INGEST_ENABLED=true`), and the
 `memory_code_links` worker that keeps the links is on by default.
 
@@ -12,11 +12,11 @@ runs over MCP, HTTP and the SDKs on the repositories a self-hosted Loom indexes
 
 - **Lessons attached to the code they are about.** A memory tagged `repo:<id>`
   (the Claude Code and Codex plugins tag what their hooks capture) or written in the
-  repository's code namespace is linked to each definition it names in backticks, as
-  `A::b` or as a call (`a.b()`), that resolves to exactly one place; to definitions in the
-  files it lists that it names by a bare camelCase or snake_case word; and to each file it
-  lists that holds none of them. A qualified name not on trunk yet links if it merges
-  within `LOOM_MEMORY_CODE_LINKS_PENDING_DAYS` (14).
+  repository's code namespace is linked to each definition it names in backticks, or
+  anywhere in its text as `A::b` or a call (`a.b()`, `name()`), that resolves to exactly
+  one place; to definitions in the files it lists that it names by a bare camelCase or
+  snake_case word; and to each file it lists that holds none of them. A qualified name not
+  on trunk yet links if it merges within `LOOM_MEMORY_CODE_LINKS_PENDING_DAYS` (14).
   [Memories linked to code](../concepts/memory.md#memories-linked-to-code)
 - **Links that follow refactors.** On every indexed commit, each link reads `fresh`,
   `moved`, `changed` (naming the commit that changed it), `unresolved` or `missing`. A
@@ -57,15 +57,19 @@ runs over MCP, HTTP and the SDKs on the repositories a self-hosted Loom indexes
 ## Start
 
 [Quickstart](../getting-started/quickstart.md) boots Loom, and
-[adding repositories](../features/code-index/repositories.md) turns the code index on for
-a repository. Connect your coding agent with its plugin or over MCP
-([connect a coding agent](../getting-started/connect-a-coding-agent.md)). Save a lesson
-that names a definition of four or more characters in backticks, or a qualified one such
-as `` `Reader.run` ``. The Claude Code and Codex plugins tag what their hooks capture with
+[adding repositories](../features/code-index/repositories.md) turns the code index on for a
+repository. Connect your coding agent with its plugin or over MCP
+([connect a coding agent](../getting-started/connect-a-coding-agent.md)). Save a lesson that
+names a definition of four or more characters in backticks, or a qualified one such as
+`` `Reader.run` ``. The Claude Code and Codex plugins tag what their hooks capture with
 `repo:<id>`, and the session primer names the id
 ([how it is derived](../features/integrations/claude-code.md#configuration)). A lesson the
 agent saves itself with `loom_memory_set` links when it carries that tag
-(`tags: ["repo:<id>"]`) or is written in the repository's code namespace; any client can
-do either. Each link pass links writes at least 60 seconds old and passes run every 60
-seconds, so once trunk is indexed, `code.symbol` on that definition returns the lesson
-under `lessons` within about two minutes.
+(`tags: ["repo:<id>"]`) or is written in the repository's code namespace; any client can do
+either. Over HTTP or the SDKs, a lesson saved in your own namespace is read only when the
+call names that namespace in `lesson_namespaces`. Each link pass links writes at least 60
+seconds old and passes run every 60 seconds, so once trunk is indexed, `code.symbol` on
+that definition returns the lesson under `lessons` within about two minutes.
+
+Some ops on this page are marked experimental on the
+[status page](../reference/status.md).
