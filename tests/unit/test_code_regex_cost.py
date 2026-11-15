@@ -31,15 +31,15 @@ from collections.abc import Callable
 
 import pytest
 
-from tests.unit.lane_walks import WALKS
+from tests.unit.lane_walks import BOUND_S, LANE_FLOOR_S, RATIO, WALKS
 
 _PACKAGES = ("server.code.domain.extract", "server.code.app.index")
 _N = 50_000
 # Below this the timer's noise decides the ratio; a quadratic search at 4N = 200,000
 # characters takes seconds, a linear one milliseconds.
 _FLOOR_S = 0.1
-_RATIO = 8.0
-_BOUND_S = 2.0
+_RATIO = RATIO
+_BOUND_S = BOUND_S
 
 _UNITS = (
     "\n",
@@ -329,7 +329,7 @@ print(json.dumps(registry_cost(sys.argv[1])))
 
 def _lane_over(small: float, big: float) -> bool:
     """Whether a shape grows over linear from `small` to `big`, at 4 times the size."""
-    return big > _BOUND_S or (big > _FLOOR_S / 2 and big > _RATIO * small)
+    return big > BOUND_S or (big > LANE_FLOOR_S and big > RATIO * small)
 
 
 def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
@@ -350,7 +350,7 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
         return got and (got[0], _lane_over(got[1], got[2]))
 
     def quadratic(*at_16n: Run) -> dict[int, list[Run]]:
-        return {1: [0.01], 4: [0.16], 16: list(at_16n) or [2.56]}
+        return {1: [0.01], 4: [0.12], 16: list(at_16n) or [1.9]}  # 12 times, then 16
 
     assert judged({1: [0.01], 4: [0.04], 16: [0.16]}) == ("N", False)
     assert judged({1: [(0.01, "stopped")], 4: [0.04]}) == ("N", False)  # timed all the same
@@ -362,6 +362,7 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     assert judged(quadratic((0.1, "other"))) == ("N", True)
     assert judged(quadratic(1.5, (0.1, "stopped"), 1.6)) == ("4N", True)  # a retry, too
     assert judged(quadratic(), listed=True) == ("N", True)
+    assert judged({1: [0.01], 4: [0.16]}) == ("N", True)  # 16 times from N: not timed at 16N
     assert judged({1: [0.02], 4: [0.3], 16: [1.2]}) == ("N", True)  # over 0.25 s at 4N
     assert judged({1: [1.5]}) == ("N", True)  # over 1 s at N: 4N is not timed
     assert judged({1: [(0.01, "other")]}) is None
@@ -406,7 +407,7 @@ def test_a_registered_lane_costs_linear_time(lang: str) -> None:
     for shape, small, big, parsed_small, parsed_big in timed:
         if _lane_over(small, big):
             slow[shape] = (round(small, 3), round(big, 3))
-        if big < _FLOOR_S / 2 and big < 4 * small:
+        if big < LANE_FLOOR_S and big < 4 * small:
             linear.add(shape)
         if parsed_big > 6 * parsed_small + 1000:  # a 4N file is 4 times the bytes
             reparsed[shape] = (parsed_small, parsed_big)
