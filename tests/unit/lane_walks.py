@@ -685,10 +685,10 @@ def judged_step(
     parsed at each) of one shape, or None when its text at `n` does not read as the lane.
     `cost(n)` is (the time, the bytes parsed, whether the text read as the lane, whether
     every parse and walk finished). A listed shape that looks linear and an unlisted one
-    that looks over linear are timed best of three. An unlisted one still over linear, under
-    16 times N (pure quadratic growth, which no cache step reaches) and from LANE_FLOOR_S to
-    STEP_MAX_S at 4N, is judged from 4N to 16N instead when the 16N text reads as the lane
-    and every parse and walk finishes."""
+    that looks over linear are timed best of three. An unlisted one still over linear, its
+    4N time under 16 times its N time (pure quadratic growth, which no cache step reaches)
+    and from LANE_FLOOR_S to STEP_MAX_S, is judged from 4N to 16N instead when the 16N text
+    reads as the lane and every parse and walk finishes."""
     small, bs, lane, _ = cost(n)
     if not lane:
         return None

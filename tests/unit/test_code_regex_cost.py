@@ -333,7 +333,8 @@ def _lane_over(small: float, big: float) -> bool:
 def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     from tests.unit.lane_walks import judged_step
 
-    Run = float | tuple[float, str]  # a time, or a time and "other" (lane) or "stopped"
+    # a time, or a time and "other" (read as another lane) or "stopped"
+    Run = float | tuple[float, str]
 
     def judged(times: dict[int, list[Run]], listed: bool = False) -> object:
         """(the step, whether it is over linear) for a shape whose runs at each size are
@@ -422,7 +423,7 @@ def test_a_registered_lane_costs_linear_time(lang: str) -> None:
             slow[shape] = (round(small, 3), round(big, 3))
         if big < LANE_FLOOR_S and big < 4 * small:
             linear.add(shape)
-        if parsed_big > 6 * parsed_small + 1000:  # a 4N file is 4 times the bytes
+        if parsed_big > 6 * parsed_small + 1000:  # the larger file is 4 times the bytes
             reparsed[shape] = (parsed_small, parsed_big)
     new = {shape: t for shape, t in slow.items() if shape not in known}
     assert not new and not reparsed, (
