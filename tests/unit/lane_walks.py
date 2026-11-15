@@ -670,8 +670,9 @@ def _extract(path: str, source: bytes) -> tuple[object, bool]:
 
 
 _REGISTRY_N = 5_000
-# The guard's rule for a lane's shape (`_lane_over`): over linear when its time at 4 times
-# the size is over BOUND_S, or over LANE_FLOOR_S and over RATIO times.
+# Over linear, for a lane's shape (`_lane_over` in `test_code_regex_cost.py`): its time at 4
+# times the size over BOUND_S, or over LANE_FLOOR_S and over RATIO times. The pattern tests
+# there share RATIO and BOUND_S.
 RATIO = 8.0
 LANE_FLOOR_S = 0.05
 BOUND_S = 2.0
@@ -694,7 +695,7 @@ def judged_step(
     if small > 1.0:  # already over any linear budget: 4N would only spend the deadline
         return "N", small, float("inf"), bs, bs
     big, bb, _, _ = cost(4 * n)
-    if (listed and big < 0.05) or (not listed and big > 0.02 and big > 8 * small):
+    if (listed and big < LANE_FLOOR_S) or (not listed and big > 0.02 and big > RATIO * small):
         small = min(small, cost(n)[0], cost(n)[0])
         big = min(big, cost(4 * n)[0], cost(4 * n)[0])
     if listed or not (LANE_FLOOR_S < big < 0.25 and RATIO * small < big < 2 * RATIO * small):
@@ -720,29 +721,38 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
 
     path, head, as_lang = SAMPLES[lang]
     real = bounded_parse.parse
-    parsed = [0.0, 0, False]
+
+    class Parses:
+        """The tree-sitter parses of one file: their time, the bytes they read, and
+        whether one raised."""
+
+        seconds = 0.0
+        read = 0
+        raised = False
+
+    parses = Parses()
 
     def timed(parser: object, source: bytes) -> object:
         t0 = time.process_time()
         try:
             return real(parser, source)
         except BaseException:
-            parsed[2] = True
+            parses.raised = True
             raise
         finally:
-            parsed[0] += time.process_time() - t0
-            parsed[1] += len(source)
+            parses.seconds += time.process_time() - t0
+            parses.read += len(source)
 
     bounded_parse.parse = timed  # type: ignore[assignment]
 
     def cost(text: Callable[[int], str], n: int) -> tuple[float, int, bool, bool]:
         source = (head + text(n)).encode()
-        parsed[:] = [0.0, 0, False]
+        parses.seconds, parses.read, parses.raised = 0.0, 0, False
         with untraced():
             t0 = time.process_time()  # CPU time, as in `walk_cost`
             pf, walked = _extract(path, source)
-            took = time.process_time() - t0 - parsed[0]
-        return took, int(parsed[1]), getattr(pf, "lang", "") == as_lang, walked and not parsed[2]
+            took = time.process_time() - t0 - parses.seconds
+        return took, parses.read, getattr(pf, "lang", "") == as_lang, walked and not parses.raised
 
     cost(lambda n: "a\n", 1)  # the first file of a lane loads its grammar and imports
     out = []

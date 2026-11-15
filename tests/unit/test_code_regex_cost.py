@@ -38,8 +38,6 @@ _N = 50_000
 # Below this the timer's noise decides the ratio; a quadratic search at 4N = 200,000
 # characters takes seconds, a linear one milliseconds.
 _FLOOR_S = 0.1
-_RATIO = RATIO
-_BOUND_S = BOUND_S
 
 _UNITS = (
     "\n",
@@ -176,16 +174,16 @@ def test_a_pattern_costs_linear_time(name: str, pattern: re.Pattern) -> None:
     slow = []
     for unit in _units(pattern):
         small = _cost(pattern, _text(unit, _N, as_bytes))
-        if small > _BOUND_S:
+        if small > BOUND_S:
             slow.append((unit, small, None))
             continue
         big = _cost(pattern, _text(unit, 4 * _N, as_bytes))
-        if big > _BOUND_S or (big > _FLOOR_S and big > _RATIO * small):
+        if big > BOUND_S or (big > _FLOOR_S and big > RATIO * small):
             # Timers jitter on a loaded host: the best of three runs of each counts.
             for _ in range(2):
                 small = min(small, _cost(pattern, _text(unit, _N, as_bytes)))
                 big = min(big, _cost(pattern, _text(unit, 4 * _N, as_bytes)))
-            if big > _BOUND_S or (big > _FLOOR_S and big > _RATIO * small):
+            if big > BOUND_S or (big > _FLOOR_S and big > RATIO * small):
                 slow.append((unit, round(small, 3), round(big, 3)))
     assert not slow, f"{name}: (unit, N s, 4N s) {slow}"
 
@@ -219,7 +217,7 @@ def _composites(p: re.Pattern) -> list[tuple[str, str, str]]:
 def _over(small: float, big: float) -> bool:
     """Whether `big`, the time at 4 times `small`'s size, grows over linear: over the
     bound, or over 10 ms and over 8 times `small`."""
-    return big > _BOUND_S or (big > _FLOOR_S / 10 and big > _RATIO * small)
+    return big > BOUND_S or (big > _FLOOR_S / 10 and big > RATIO * small)
 
 
 def _slow(cost: Callable[[int], float]) -> tuple[int, float, float] | None:
@@ -309,7 +307,7 @@ def test_a_lane_walk_costs_linear_time(name: str) -> None:
     )
     assert done.returncode == 0, done.stderr[-4000:]
     small, big = json.loads(done.stdout)
-    assert big < _FLOOR_S or big < _RATIO * small, (name, small, big)
+    assert big < _FLOOR_S or big < RATIO * small, (name, small, big)
 
 
 # The class guard: every lane parser in the ingest's registry, over generated shapes (runs
@@ -352,7 +350,7 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     def quadratic(*at_16n: Run) -> dict[int, list[Run]]:
         return {1: [0.01], 4: [0.12], 16: list(at_16n) or [1.9]}  # 12 times, then 16
 
-    assert judged({1: [0.01], 4: [0.04], 16: [0.16]}) == ("N", False)
+    assert judged({1: [0.01], 4: [0.04]}) == ("N", False)  # not timed at 16N
     assert judged({1: [(0.01, "stopped")], 4: [0.04]}) == ("N", False)  # timed all the same
     assert judged({1: [0.01], 4: [0.1], 16: [0.4]}) == ("4N", False)  # 10 times once, then 4
     assert judged({1: [0.01], 4: [0.1], 16: [0.9, 0.4]}) == ("4N", False)  # 16N best of 3
@@ -366,6 +364,14 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     assert judged({1: [0.02], 4: [0.3], 16: [1.2]}) == ("N", True)  # over 0.25 s at 4N
     assert judged({1: [1.5]}) == ("N", True)  # over 1 s at N: 4N is not timed
     assert judged({1: [(0.01, "other")]}) is None
+    sizes: list[int] = []
+
+    def counted(n: int) -> tuple[float, int, bool, bool]:
+        sizes.append(n)
+        return {1: 0.01, 4: 0.1, 16: 0.4}[n], n, True, True
+
+    judged_step(counted, 1, False)
+    assert sizes.count(16) == 1  # a 16N run that looks linear is timed once
 
 
 def _registered_lanes() -> list[str]:
