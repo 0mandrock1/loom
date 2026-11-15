@@ -368,6 +368,7 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     assert judged(quadratic(), listed=True) == ("N", True)
     assert judged({1: [0.01], 4: [0.16]}) == ("N", True)  # 16 times from N: not timed at 16N
     assert judged({1: [0.02], 4: [0.3], 16: [1.2]}) == ("N", True)  # over 0.25 s at 4N
+    assert judged({1: [0.004], 4: [0.045]}) == ("N", False)  # under 50 ms at 4N: not at 16N
     assert judged({1: [1.5]}) == ("N", True)  # over 1 s at N: 4N is not timed
     assert judged({1: [(0.01, "other")]}) is None
     sizes: list[int] = []
