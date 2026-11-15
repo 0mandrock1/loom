@@ -24,7 +24,7 @@ opt-in; one you leave unconfigured does nothing. They fall into three groups:
 | Cline CLI (experimental)                                                                                               | hooks: session primer, prompt recall, a file's memories on a read | `integrations/cline/`: [README](../../../integrations/cline/README.md)                                           |
 | Cursor                                                                                                                 | MCP tools + `sessionEnd` transcript hook                          | `integrations/cursor/`: [cursor.md](cursor.md)                                                                   |
 | Any Agent-Skills client                                                                                                | the `loom` and `loom-code` skills, no hooks                       | `skills/loom/`, `skills/loom-code/`: [below](#coding-agents)                                                     |
-| Aider, Continue, OpenCode, JetBrains AI                                                                                | transcript capture template                                       | `integrations/generic/`: [below](#transcript-capture-hooks)                                                      |
+| Aider, Continue (no longer maintained), OpenCode, JetBrains AI                                                         | transcript capture template                                       | `integrations/generic/`: [below](#transcript-capture-hooks)                                                      |
 | Agents that only use shell grep                                                                                        | the grep shim                                                     | `integrations/grep-shim/`: [grep-shim.md](grep-shim.md)                                                          |
 | LibreChat v0.8.8                                                                                                       | chat client on the assistant toolset, per-user token              | `integrations/librechat/`: [librechat.md](librechat.md)                                                          |
 | LangChain, LlamaIndex, OpenAI Agents SDK, CrewAI, AutoGen, AG2, Pydantic AI, Mastra, AI SDK, LangGraph, Strands Agents | SDK retrievers, memory adapters and tools                         | `loom.integrations.*` in Python, `@clickhouse/loom/integrations/*` in TypeScript: [frameworks.md](frameworks.md) |
@@ -58,10 +58,10 @@ conversation logging is on.
 Two shell templates pass a finished transcript to `loom ingest-transcript`, which posts
 each turn to `conversation.append`:
 
-| Client                                  | Template                                     | Wiring                                                                                               | `LOOM_AGENT` default |
-| --------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------- |
-| Cursor                                  | `integrations/cursor/cursor-session-hook.sh` | `sessionEnd` hook in `~/.cursor/hooks.json`, reads hook input on stdin ([cursor.md](cursor.md))      | `cursor`             |
-| Aider, Continue, OpenCode, JetBrains AI | `integrations/generic/ingest.sh`             | run after the session on the exported transcript ([README](../../../integrations/generic/README.md)) | `generic`            |
+| Client                                                         | Template                                     | Wiring                                                                                               | `LOOM_AGENT` default |
+| -------------------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------- |
+| Cursor                                                         | `integrations/cursor/cursor-session-hook.sh` | `sessionEnd` hook in `~/.cursor/hooks.json`, reads hook input on stdin ([cursor.md](cursor.md))      | `cursor`             |
+| Aider, Continue (no longer maintained), OpenCode, JetBrains AI | `integrations/generic/ingest.sh`             | run after the session on the exported transcript ([README](../../../integrations/generic/README.md)) | `generic`            |
 
 Both need `LOOM_NAMESPACE` and a token (`LOOM_API_KEY`, else `~/.loom/token`).
 `LOOM_BASE_URL` defaults to `http://localhost:7777`; `LOOM_BIN` to `loom` on `PATH`.
