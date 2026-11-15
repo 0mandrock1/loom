@@ -2,9 +2,9 @@
 
 Loom links coding agents' memories to the functions, classes and files they name, follows
 them through refactors, and flags a memory when its code changes. By default, search
-leaves out a memory whose code is all gone, and every read that serves a lesson says
-whether its code moved, changed or is gone. It runs over MCP, HTTP and the SDKs on the
-repositories a self-hosted Loom indexes
+leaves out a memory whose code is all gone, and every read that serves a lesson says when
+its code changed or is gone. It runs over MCP, HTTP and the SDKs on the repositories a
+self-hosted Loom indexes
 (the [code index](code-intelligence.md), `LOOM_CODE_INGEST_ENABLED=true`), and the
 `memory_code_links` worker that keeps the links is on by default.
 
@@ -12,11 +12,12 @@ repositories a self-hosted Loom indexes
 
 - **Lessons attached to the code they are about.** A memory tagged `repo:<id>`
   (the Claude Code and Codex plugins tag what their hooks capture) or written in the
-  repository's code namespace is linked to each definition it names in backticks, or
-  anywhere in its text as `A::b` or a call (`a.b()`, `name()`), that resolves to exactly
-  one place; to definitions in the files it lists that it names by a bare camelCase or
-  snake_case word; and to each file it lists that holds none of them. A qualified name not
-  on trunk yet links if it merges within `LOOM_MEMORY_CODE_LINKS_PENDING_DAYS` (14).
+  repository's code namespace is linked to each definition
+  (function, class or other symbol) it names in backticks, or anywhere in its text as
+  `A::b` or a call (`a.b()`, `name()`), that resolves to exactly one place; to definitions
+  in the files it lists that it names by a bare camelCase or snake_case word; and to each
+  file it lists that holds none of them. A qualified name not on trunk yet links if it
+  merges within `LOOM_MEMORY_CODE_LINKS_PENDING_DAYS` (14 days).
   [Memories linked to code](../concepts/memory.md#memories-linked-to-code)
 - **Links that follow refactors.** On every indexed commit, each link reads `fresh`,
   `moved`, `changed` (naming the commit that changed it), `unresolved` or `missing`. A
@@ -28,17 +29,20 @@ repositories a self-hosted Loom indexes
   flags changed code; `flag` only flags; `revise` also leaves gone-code memories out, and
   has the model check a changed one's claim against the old and new code and suggest a
   corrected claim. Under every policy, search ranks a memory whose code changed below the
-  next three results instead of hiding it. Loom never rewrites the memory itself.
+  next three results instead of hiding it, unless a person holds it.
+  [Policies](../concepts/memory.md#memories-linked-to-code) Loom never rewrites the memory
+  itself.
 - **Lessons wherever the agent reads code.** `code.symbol` returns the memories linked to
   a definition as `lessons`; `code.search`, `code.callers`, `code.callees`, `code.impact`,
   `code.outline` and a task's `code.context_pack` attach the lessons for the files they
   return; each lesson carries its link state. The Claude Code and Codex hooks show a
   file's memories (`memory.for_file`) before an agent edits it, and the Cline hooks when
   it reads or edits one. [`code.symbol`](../reference/operations/code.md#codesymbol) ·
-  [Claude Code plugin](../features/integrations/claude-code.md)
+  [Claude Code plugin](../features/integrations/claude-code.md) ·
+  [Codex plugin](../features/integrations/codex.md)
 - **Shared with the team.** Lessons are read from the repository's code namespace and the
   namespaces the call names (over MCP, the caller's own by default), so a lesson saved in
-  the repository's code namespace reaches every agent that reads that code.
+  the repository's code namespace reaches every agent that may read that namespace.
   [Memories linked to code](../concepts/memory.md#memories-linked-to-code)
 - **Branches read their own code.** On another branch, a lesson is checked against that
   branch's own definition, so a release branch that still has the old text reads `fresh`.
@@ -57,19 +61,20 @@ repositories a self-hosted Loom indexes
 ## Start
 
 [Quickstart](../getting-started/quickstart.md) boots Loom, and
-[adding repositories](../features/code-index/repositories.md) turns the code index on for a
-repository. Connect your coding agent with its plugin or over MCP
-([connect a coding agent](../getting-started/connect-a-coding-agent.md)). Save a lesson that
-names a definition of four or more characters in backticks, or a qualified one such as
-`` `Reader.run` ``. The Claude Code and Codex plugins tag what their hooks capture with
+[adding repositories](../features/code-index/repositories.md) turns the code index on for
+a repository. Connect your coding agent with its plugin or over MCP
+([connect a coding agent](../getting-started/connect-a-coding-agent.md)). Save a lesson
+that names a definition of four or more characters in backticks, or a qualified one such
+as `` `Reader.run` ``. The Claude Code and Codex plugins tag what their hooks capture with
 `repo:<id>`, and the session primer names the id
 ([how it is derived](../features/integrations/claude-code.md#configuration)). A lesson the
 agent saves itself with `loom_memory_set` links when it carries that tag
-(`tags: ["repo:<id>"]`) or is written in the repository's code namespace; any client can do
-either. Over HTTP or the SDKs, a lesson saved in your own namespace is read only when the
-call names that namespace in `lesson_namespaces`. Each link pass links writes at least 60
-seconds old and passes run every 60 seconds, so once trunk is indexed, `code.symbol` on
-that definition returns the lesson under `lessons` within about two minutes.
+(`tags: ["repo:<id>"]`) or is written in the repository's code namespace; any client can
+do either. Over HTTP (or `agent.call` in the Python SDK), a lesson saved in your own
+namespace is read only when the call names that namespace in `lesson_namespaces`. Each
+link pass links writes at least 60 seconds old and passes run every 60 seconds, so once
+trunk is indexed, `code.symbol` on that definition returns the lesson under `lessons`
+within about two minutes.
 
-Some ops on this page are marked experimental on the
-[status page](../reference/status.md).
+`code.callees` and `code.outline` are experimental ([status](../reference/status.md)); the
+rest of this page is stable.
