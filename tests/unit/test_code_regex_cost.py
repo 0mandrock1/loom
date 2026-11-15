@@ -359,6 +359,7 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     assert judged(quadratic((0.1, "stopped"))) == ("N", True)
     assert judged(quadratic((0.1, "other"))) == ("N", True)
     assert judged(quadratic(1.5, (0.1, "stopped"), 1.6)) == ("4N", True)  # a retry, too
+    assert judged(quadratic(2.5, 0.1)) == ("4N", True)  # over 2 s: not timed again
     assert judged(quadratic(), listed=True) == ("N", True)
     assert judged({1: [0.01], 4: [0.16]}) == ("N", True)  # 16 times from N: not timed at 16N
     assert judged({1: [0.02], 4: [0.3], 16: [1.2]}) == ("N", True)  # over 0.25 s at 4N

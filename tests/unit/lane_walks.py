@@ -670,12 +670,12 @@ def _extract(path: str, source: bytes) -> tuple[object, bool]:
 
 
 _REGISTRY_N = 5_000
-# Over linear, for a lane's shape (`_lane_over` in `test_code_regex_cost.py`): its time at 4
-# times the size over BOUND_S, or over LANE_FLOOR_S and over RATIO times. The pattern tests
-# there share RATIO and BOUND_S.
+# The over-linear thresholds of test_code_regex_cost.py (`_lane_over`, the other tests).
 RATIO = 8.0
 LANE_FLOOR_S = 0.05
 BOUND_S = 2.0
+# A shape over this at 4N is not timed at 16N: a quadratic walk there takes seconds.
+STEP_MAX_S = 0.25
 
 
 def judged_step(
@@ -686,9 +686,9 @@ def judged_step(
     `cost(n)` is (the time, the bytes parsed, whether the text read as the lane, whether
     every parse and walk finished). A listed shape that looks linear and an unlisted one
     that looks over linear are timed best of three. An unlisted one still over linear, under
-    16 times N (pure quadratic growth, which no cache step reaches) and 0.05 s to 0.25 s at
-    4N (past that, a quadratic walk takes seconds at 16N), is judged from 4N to 16N instead
-    when the 16N text reads as the lane and every parse and walk finishes."""
+    16 times N (pure quadratic growth, which no cache step reaches) and from LANE_FLOOR_S to
+    STEP_MAX_S at 4N, is judged from 4N to 16N instead when the 16N text reads as the lane
+    and every parse and walk finishes."""
     small, bs, lane, _ = cost(n)
     if not lane:
         return None
@@ -698,7 +698,9 @@ def judged_step(
     if (listed and big < LANE_FLOOR_S) or (not listed and big > 0.02 and big > RATIO * small):
         small = min(small, cost(n)[0], cost(n)[0])
         big = min(big, cost(4 * n)[0], cost(4 * n)[0])
-    if listed or not (LANE_FLOOR_S < big < 0.25 and RATIO * small < big < 2 * RATIO * small):
+    in_window = LANE_FLOOR_S < big < STEP_MAX_S
+    in_band = RATIO * small < big < 2 * RATIO * small
+    if listed or not (in_window and in_band):
         return "N", small, big, bs, bb
     # The N walk can fit in the CPU cache and the 4N one not, so that step can grow over 8
     # times on a busy host; from 4N to 16N only a walk over linear does.
@@ -721,38 +723,32 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
 
     path, head, as_lang = SAMPLES[lang]
     real = bounded_parse.parse
-
-    class Parses:
-        """The tree-sitter parses of one file: their time, the bytes they read, and
-        whether one raised."""
-
-        seconds = 0.0
-        read = 0
-        raised = False
-
-    parses = Parses()
+    # the tree-sitter parses of one file: their time, the bytes they read, whether one raised
+    parse_s, parse_bytes, parse_raised = 0.0, 0, False
 
     def timed(parser: object, source: bytes) -> object:
+        nonlocal parse_s, parse_bytes, parse_raised
         t0 = time.process_time()
         try:
             return real(parser, source)
         except BaseException:
-            parses.raised = True
+            parse_raised = True
             raise
         finally:
-            parses.seconds += time.process_time() - t0
-            parses.read += len(source)
+            parse_s += time.process_time() - t0
+            parse_bytes += len(source)
 
     bounded_parse.parse = timed  # type: ignore[assignment]
 
     def cost(text: Callable[[int], str], n: int) -> tuple[float, int, bool, bool]:
         source = (head + text(n)).encode()
-        parses.seconds, parses.read, parses.raised = 0.0, 0, False
+        nonlocal parse_s, parse_bytes, parse_raised
+        parse_s, parse_bytes, parse_raised = 0.0, 0, False
         with untraced():
             t0 = time.process_time()  # CPU time, as in `walk_cost`
             pf, walked = _extract(path, source)
-            took = time.process_time() - t0 - parses.seconds
-        return took, parses.read, getattr(pf, "lang", "") == as_lang, walked and not parses.raised
+            took = time.process_time() - t0 - parse_s
+        return took, parse_bytes, getattr(pf, "lang", "") == as_lang, walked and not parse_raised
 
     cost(lambda n: "a\n", 1)  # the first file of a lane loads its grammar and imports
     out = []
