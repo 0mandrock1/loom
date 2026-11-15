@@ -19,9 +19,9 @@ what it gives in each language is in [code index by language](code-intelligence-
   [History, PRs and releases](../features/code-index/history-and-prs.md) says what each
   needs.
 - **Lessons on the code.** `code.symbol` returns the memories linked to a definition, and
-  `code.search`, `code.callers`, `code.impact` and the other code reads attach the lessons
-  for the files they return, each with whether its code moved, changed or is gone.
-  [Memory linked to code](memory-linked-to-code.md)
+  `code.search`, `code.callers`, `code.callees`, `code.impact`, `code.outline` and
+  `code.context_pack` attach the lessons for the files they return, each with whether its
+  code moved, changed or is gone. [Memory linked to code](memory-linked-to-code.md)
 - **Freshness you can see.** The index trails the branch by merged commits, and a stale
   answer says so. [Freshness](../features/code-index/freshness.md)
 - **Plugins and MCP clients.** The Claude Code plugin connects on the `coding` toolset and
