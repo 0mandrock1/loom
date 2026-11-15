@@ -670,38 +670,69 @@ def _extract(path: str, source: bytes) -> object:
 _REGISTRY_N = 5_000
 
 
+def judged_step(
+    cost: Callable[[int], tuple[float, int, bool]], n: int, listed: bool
+) -> tuple[str, float, float, int, int] | None:
+    """(the step judged, `N` or `4N`, the time at its two sizes, the bytes tree-sitter
+    parsed at each) of one shape, or None when its text at `n` does not read as the lane.
+    `cost(n)` is (the time, the bytes parsed, whether the text read as the lane and every
+    parse finished). A listed shape that looks linear and an unlisted one that looks over
+    linear are timed best of three. An unlisted one still over linear, under 0.25 s at 4N,
+    is judged from 4N to 16N instead when the 16N text reads as the lane."""
+    small, bs, ok = cost(n)
+    if not ok:
+        return None
+    if small > 1.0:  # already over any linear budget: 4N would only spend the deadline
+        return "N", small, float("inf"), bs, bs
+    big, bb, _ = cost(4 * n)
+    if (listed and big < 0.05) or (not listed and big > 0.02 and big > 8 * small):
+        small = min(small, cost(n)[0], cost(n)[0])
+        big = min(big, cost(4 * n)[0], cost(4 * n)[0])
+    if listed or not (0.02 < big < 0.25 and big > 8 * small):
+        return "N", small, big, bs, bb
+    # N fits in the CPU cache and 4N does not; past both, a walk over linear still grows
+    # over 4 times.
+    huge, bh, ok = cost(16 * n)
+    if not ok:
+        return "N", small, big, bs, bb
+    if huge > 8 * big:  # timed again only while it looks over linear, as at 4N
+        huge = min([huge] + [t for t, _, ok in (cost(16 * n), cost(16 * n)) if ok])
+    return "4N", big, huge, bb, bh
+
+
 def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
-    """(shape, the time at N, the time at 4N, the bytes tree-sitter parsed at N and at 4N)
-    per shape the lane reads as its own (a manifest shape can read as a template), the
-    best of three for a listed shape that looks linear or an unlisted one that looks over
-    linear. An unlisted shape still over linear is timed at 4N and 16N instead. The
-    parses' time is not counted, since each has its own CPU deadline
-    (`bounded_parse`); the bytes they read are returned, so a walk that parses the file
-    again per block is still seen."""
+    """`judged_step` per shape the lane reads as its own (a manifest shape can read as a
+    template), with the shape's name first; a shape judged from 4N says so after its name.
+    The parses' time is not counted, since each has its own CPU deadline (`bounded_parse`);
+    the bytes they read are returned, so a walk that parses the file again per block is
+    still seen."""
     from server.code.domain.extract import bounded_parse
 
     path, head, as_lang = SAMPLES[lang]
     real = bounded_parse.parse
-    parsed = [0.0, 0]
+    parsed = [0.0, 0, False]
 
     def timed(parser: object, source: bytes) -> object:
         t0 = time.process_time()
         try:
             return real(parser, source)
+        except BaseException:
+            parsed[2] = True  # a parse past its deadline leaves no tree to walk
+            raise
         finally:
             parsed[0] += time.process_time() - t0
             parsed[1] += len(source)
 
     bounded_parse.parse = timed  # type: ignore[assignment]
 
-    def cost(text: Callable[[int], str], n: int) -> tuple[float, int, str]:
+    def cost(text: Callable[[int], str], n: int) -> tuple[float, int, bool]:
         source = (head + text(n)).encode()
-        parsed[:] = [0.0, 0]
+        parsed[:] = [0.0, 0, False]
         with untraced():
             t0 = time.process_time()  # CPU time, as in `walk_cost`
             pf = _extract(path, source)
             took = time.process_time() - t0 - parsed[0]
-        return took, int(parsed[1]), str(getattr(pf, "lang", ""))
+        return took, int(parsed[1]), getattr(pf, "lang", "") == as_lang and not parsed[2]
 
     cost(lambda n: "a\n", 1)  # the first file of a lane loads its grammar and imports
     out = []
@@ -709,26 +740,11 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
         # distinct names run 4 times larger: a dedupe by a list's `in` is quadratic at C
         # speed, under the timer's floor at 20,000 characters
         n = 4 * _REGISTRY_N if name.startswith("numbered") else _REGISTRY_N
-        small, bs, read_as = cost(text, n)
-        if read_as != as_lang:
-            continue
-        if small > 1.0:  # already over any linear budget: 4N would only spend the deadline
-            out.append((name, small, float("inf"), bs, bs))
-            continue
-        big, bb, _ = cost(text, 4 * n)
         listed = name in KNOWN_SLOW.get(lang, ())
-        if (listed and big < 0.05) or (not listed and big > 0.02 and big > 8 * small):
-            small = min(small, cost(text, n)[0], cost(text, n)[0])
-            big = min(big, cost(text, 4 * n)[0], cost(text, 4 * n)[0])
-        if not listed and 0.02 < big < 0.25 and big > 8 * small:
-            # A walk over N that fits in the CPU cache and 4N that does not grows more than
-            # 4 times once, the more so beside a busy neighbour. Over linear goes on from
-            # 4N to 16N, so that step is judged, if the 16N text still reads as this lane.
-            huge, bh, read_as = cost(text, 16 * n)
-            if read_as == as_lang:
-                huge = min(huge, cost(text, 16 * n)[0], cost(text, 16 * n)[0])
-                small, big, bs, bb = big, huge, bb, bh
-        out.append((name, small, big, bs, bb))
+        got = judged_step(lambda m, text=text: cost(text, m), n, listed)
+        if got is not None:
+            step, small, big, bs, bb = got
+            out.append((name if step == "N" else f"{name} from 4N", small, big, bs, bb))
     return out
 
 

@@ -315,9 +315,9 @@ def test_a_lane_walk_costs_linear_time(name: str) -> None:
 # The class guard: every lane parser in the ingest's registry, over generated shapes (runs
 # of one character, repeated names, unclosed openers, entries times uses), each lane in a
 # child process with a deadline and a memory limit, which also bound a listed shape. A new
-# lane, or a walk added to one without a cost walk of its own, is timed here. A shape that
-# grows over linear from N to 4N is judged by its growth from 4N to 16N (`registry_cost`).
-# `KNOWN_SLOW` holds the shapes still over linear, each a follow-up fix.
+# lane, or a walk added to one without a cost walk of its own, is timed here; `judged_step`
+# says which step a shape is judged on. `KNOWN_SLOW` holds the shapes still over linear,
+# each a follow-up fix.
 _REGISTRY_CHILD = f"""
 import faulthandler, json, resource, sys
 faulthandler.dump_traceback_later({_WALK_DEADLINE_S * 3}, exit=True)
@@ -325,6 +325,33 @@ resource.setrlimit(resource.RLIMIT_AS, (3 << 30, 3 << 30))
 from tests.unit.lane_walks import registry_cost
 print(json.dumps(registry_cost(sys.argv[1])))
 """
+
+
+def _lane_over(small: float, big: float) -> bool:
+    """Whether a lane's shape grows over linear from `small` to `big`, at 4 times the size."""
+    return big > _BOUND_S or (big > _FLOOR_S / 2 and big > _RATIO * small)
+
+
+def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
+    from tests.unit.lane_walks import judged_step
+
+    def judged(times: dict[int, float], failed: int = 0, listed: bool = False) -> tuple[str, bool]:
+        """(the step, whether it is over linear) for a shape that takes `times` by size and
+        whose parse at `failed` fails."""
+        got = judged_step(lambda n: (times[n], n, n != failed), 1, listed)
+        assert got is not None
+        return got[0], _lane_over(got[1], got[2])
+
+    linear = {1: 0.01, 4: 0.04, 16: 0.16}
+    cache = {1: 0.01, 4: 0.1, 16: 0.4}  # 10 times once, then 4 times
+    quadratic = {1: 0.01, 4: 0.16, 16: 2.56}
+    assert judged(linear) == ("N", False)
+    assert judged(cache) == ("4N", False)
+    assert judged(quadratic) == ("4N", True)
+    # a 16N parse that fails leaves nothing to walk: the step from N to 4N stands
+    assert judged(quadratic, failed=16) == ("N", True)
+    assert judged(quadratic, listed=True) == ("N", True)
+    assert judged_step(lambda n: (linear[n], n, False), 1, False) is None
 
 
 def _registered_lanes() -> list[str]:
@@ -364,13 +391,13 @@ def test_a_registered_lane_costs_linear_time(lang: str) -> None:
     assert len(timed) >= len(SHAPES) // 2 and set(known) <= {t[0] for t in timed}, lang
     slow, linear, reparsed = {}, set(), {}
     for shape, small, big, parsed_small, parsed_big in timed:
-        if big > _BOUND_S or (big > _FLOOR_S / 2 and big > _RATIO * small):
+        if _lane_over(small, big):
             slow[shape] = (round(small, 3), round(big, 3))
         if big < _FLOOR_S / 2 and big < 4 * small:
             linear.add(shape)
         if parsed_big > 6 * parsed_small + 1000:  # a 4N file is 4 times the bytes
             reparsed[shape] = (parsed_small, parsed_big)
     new = {shape: t for shape, t in slow.items() if shape not in known}
-    assert not new and not reparsed, f"{lang}: (n s, 4n s) {new}; (n bytes, 4n bytes) {reparsed}"
+    assert not new and not reparsed, f"{lang}: (N s, 4N s) {new}; (N bytes, 4N bytes) {reparsed}"
     fixed = sorted(set(known) & linear)  # clearly linear now, not a timer's doubt
     assert not fixed, f"{lang}: {fixed} run in linear time; drop them from KNOWN_SLOW"
