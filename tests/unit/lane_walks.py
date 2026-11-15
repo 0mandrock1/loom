@@ -6,6 +6,7 @@ per-lane timing (`registry_cost`) and the shapes still over linear (`KNOWN_SLOW`
 
 from __future__ import annotations
 
+import functools
 import time
 from collections.abc import Callable
 
@@ -671,20 +672,20 @@ _REGISTRY_N = 5_000
 
 
 def judged_step(
-    cost: Callable[[int], tuple[float, int, bool]], n: int, listed: bool
+    cost: Callable[[int], tuple[float, int, bool, bool]], n: int, listed: bool
 ) -> tuple[str, float, float, int, int] | None:
     """(the step judged, `N` or `4N`, the time at its two sizes, the bytes tree-sitter
     parsed at each) of one shape, or None when its text at `n` does not read as the lane.
-    `cost(n)` is (the time, the bytes parsed, whether the text read as the lane and every
-    parse finished). A listed shape that looks linear and an unlisted one that looks over
+    `cost(n)` is (the time, the bytes parsed, whether the text read as the lane, whether
+    every parse finished). A listed shape that looks linear and an unlisted one that looks over
     linear are timed best of three. An unlisted one still over linear, under 0.25 s at 4N,
-    is judged from 4N to 16N instead when the 16N text reads as the lane."""
-    small, bs, ok = cost(n)
-    if not ok:
+    is judged from 4N to 16N instead when the 16N text reads as the lane and parses."""
+    small, bs, lane, _ = cost(n)
+    if not lane:
         return None
     if small > 1.0:  # already over any linear budget: 4N would only spend the deadline
         return "N", small, float("inf"), bs, bs
-    big, bb, _ = cost(4 * n)
+    big, bb, _, _ = cost(4 * n)
     if (listed and big < 0.05) or (not listed and big > 0.02 and big > 8 * small):
         small = min(small, cost(n)[0], cost(n)[0])
         big = min(big, cost(4 * n)[0], cost(4 * n)[0])
@@ -692,11 +693,12 @@ def judged_step(
         return "N", small, big, bs, bb
     # N fits in the CPU cache and 4N does not; past both, a walk over linear still grows
     # over 4 times.
-    huge, bh, ok = cost(16 * n)
-    if not ok:
+    huge, bh, lane, finished = cost(16 * n)
+    if not (lane and finished):  # a parse past its deadline leaves no tree to walk
         return "N", small, big, bs, bb
-    if huge > 8 * big:  # timed again only while it looks over linear, as at 4N
-        huge = min([huge] + [t for t, _, ok in (cost(16 * n), cost(16 * n)) if ok])
+    if 8 * big < huge < 1.0:  # timed again while it looks over linear and within budget
+        again = (cost(16 * n), cost(16 * n))
+        huge = min([huge] + [t for t, _, lane, finished in again if lane and finished])
     return "4N", big, huge, bb, bh
 
 
@@ -717,7 +719,7 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
         try:
             return real(parser, source)
         except BaseException:
-            parsed[2] = True  # a parse past its deadline leaves no tree to walk
+            parsed[2] = True
             raise
         finally:
             parsed[0] += time.process_time() - t0
@@ -725,14 +727,14 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
 
     bounded_parse.parse = timed  # type: ignore[assignment]
 
-    def cost(text: Callable[[int], str], n: int) -> tuple[float, int, bool]:
+    def cost(text: Callable[[int], str], n: int) -> tuple[float, int, bool, bool]:
         source = (head + text(n)).encode()
         parsed[:] = [0.0, 0, False]
         with untraced():
             t0 = time.process_time()  # CPU time, as in `walk_cost`
             pf = _extract(path, source)
             took = time.process_time() - t0 - parsed[0]
-        return took, int(parsed[1]), getattr(pf, "lang", "") == as_lang and not parsed[2]
+        return took, int(parsed[1]), getattr(pf, "lang", "") == as_lang, not parsed[2]
 
     cost(lambda n: "a\n", 1)  # the first file of a lane loads its grammar and imports
     out = []
@@ -741,7 +743,7 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
         # speed, under the timer's floor at 20,000 characters
         n = 4 * _REGISTRY_N if name.startswith("numbered") else _REGISTRY_N
         listed = name in KNOWN_SLOW.get(lang, ())
-        got = judged_step(lambda m, text=text: cost(text, m), n, listed)
+        got = judged_step(functools.partial(cost, text), n, listed)
         if got is not None:
             step, small, big, bs, bb = got
             out.append((name if step == "N" else f"{name} from 4N", small, big, bs, bb))

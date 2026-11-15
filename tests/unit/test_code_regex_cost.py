@@ -335,23 +335,33 @@ def _lane_over(small: float, big: float) -> bool:
 def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     from tests.unit.lane_walks import judged_step
 
-    def judged(times: dict[int, float], failed: int = 0, listed: bool = False) -> tuple[str, bool]:
-        """(the step, whether it is over linear) for a shape that takes `times` by size and
-        whose parse at `failed` fails."""
-        got = judged_step(lambda n: (times[n], n, n != failed), 1, listed)
-        assert got is not None
-        return got[0], _lane_over(got[1], got[2])
+    def judged(times: dict[int, list[float]], failed: int = 0, listed: bool = False) -> object:
+        """(the step, whether it is over linear) for a shape whose parse at `failed` fails
+        and whose time at each size is the next of `times`, the last one repeated."""
 
-    linear = {1: 0.01, 4: 0.04, 16: 0.16}
-    cache = {1: 0.01, 4: 0.1, 16: 0.4}  # 10 times once, then 4 times
-    quadratic = {1: 0.01, 4: 0.16, 16: 2.56}
-    assert judged(linear) == ("N", False)
-    assert judged(cache) == ("4N", False)
-    assert judged(quadratic) == ("4N", True)
+        def cost(n: int) -> tuple[float, int, bool, bool]:
+            t = times[n].pop(0) if len(times[n]) > 1 else times[n][0]
+            return t, n, True, n != failed
+
+        got = judged_step(cost, 1, listed)
+        return got and (got[0], _lane_over(got[1], got[2]))
+
+    def linear() -> dict[int, list[float]]:
+        return {1: [0.01], 4: [0.04], 16: [0.16]}
+
+    def quadratic() -> dict[int, list[float]]:
+        return {1: [0.01], 4: [0.16], 16: [2.56]}
+
+    assert judged(linear()) == ("N", False)
+    assert judged(linear(), failed=1) == ("N", False)  # a walk after a failed parse is timed
+    assert judged({1: [0.01], 4: [0.1], 16: [0.4]}) == ("4N", False)  # 10 times once, then 4
+    assert judged({1: [0.01], 4: [0.1], 16: [0.9, 0.4]}) == ("4N", False)  # best of three
+    assert judged(quadratic()) == ("4N", True)
     # a 16N parse that fails leaves nothing to walk: the step from N to 4N stands
-    assert judged(quadratic, failed=16) == ("N", True)
-    assert judged(quadratic, listed=True) == ("N", True)
-    assert judged_step(lambda n: (linear[n], n, False), 1, False) is None
+    assert judged(quadratic(), failed=16) == ("N", True)
+    assert judged(quadratic(), listed=True) == ("N", True)
+    assert judged({1: [0.02], 4: [0.3], 16: [1.2]}) == ("N", True)  # over 0.25 s at 4N
+    assert judged_step(lambda n: (0.01, n, False, True), 1, False) is None  # another lane
 
 
 def _registered_lanes() -> list[str]:
@@ -398,6 +408,8 @@ def test_a_registered_lane_costs_linear_time(lang: str) -> None:
         if parsed_big > 6 * parsed_small + 1000:  # a 4N file is 4 times the bytes
             reparsed[shape] = (parsed_small, parsed_big)
     new = {shape: t for shape, t in slow.items() if shape not in known}
-    assert not new and not reparsed, f"{lang}: (N s, 4N s) {new}; (N bytes, 4N bytes) {reparsed}"
+    assert not new and not reparsed, (
+        f"{lang}: (N s, 4N s; 4N and 16N from 4N) {new}; (N bytes, 4N bytes) {reparsed}"
+    )
     fixed = sorted(set(known) & linear)  # clearly linear now, not a timer's doubt
     assert not fixed, f"{lang}: {fixed} run in linear time; drop them from KNOWN_SLOW"
