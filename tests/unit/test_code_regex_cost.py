@@ -328,40 +328,44 @@ print(json.dumps(registry_cost(sys.argv[1])))
 
 
 def _lane_over(small: float, big: float) -> bool:
-    """Whether a lane's shape grows over linear from `small` to `big`, at 4 times the size."""
+    """Whether a shape grows over linear from `small` to `big`, at 4 times the size."""
     return big > _BOUND_S or (big > _FLOOR_S / 2 and big > _RATIO * small)
 
 
 def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     from tests.unit.lane_walks import judged_step
 
-    def judged(times: dict[int, list[float]], failed: int = 0, listed: bool = False) -> object:
-        """(the step, whether it is over linear) for a shape whose parse at `failed` fails
-        and whose time at each size is the next of `times`, the last one repeated."""
+    Run = float | tuple[float, str]  # a time, or a time and "other" (lane) or "stopped"
+
+    def judged(times: dict[int, list[Run]], listed: bool = False) -> object:
+        """(the step, whether it is over linear) for a shape whose runs at each size are
+        the next of `times`, the last one repeated."""
 
         def cost(n: int) -> tuple[float, int, bool, bool]:
-            t = times[n].pop(0) if len(times[n]) > 1 else times[n][0]
-            return t, n, True, n != failed
+            run = times[n].pop(0) if len(times[n]) > 1 else times[n][0]
+            t, how = run if isinstance(run, tuple) else (run, "")
+            return t, n, how != "other", how != "stopped"
 
         got = judged_step(cost, 1, listed)
         return got and (got[0], _lane_over(got[1], got[2]))
 
-    def linear() -> dict[int, list[float]]:
-        return {1: [0.01], 4: [0.04], 16: [0.16]}
+    def quadratic(*at_16n: Run) -> dict[int, list[Run]]:
+        return {1: [0.01], 4: [0.16], 16: list(at_16n) or [2.56]}
 
-    def quadratic() -> dict[int, list[float]]:
-        return {1: [0.01], 4: [0.16], 16: [2.56]}
-
-    assert judged(linear()) == ("N", False)
-    assert judged(linear(), failed=1) == ("N", False)  # a walk after a failed parse is timed
+    assert judged({1: [0.01], 4: [0.04], 16: [0.16]}) == ("N", False)
+    assert judged({1: [(0.01, "stopped")], 4: [0.04]}) == ("N", False)  # timed all the same
     assert judged({1: [0.01], 4: [0.1], 16: [0.4]}) == ("4N", False)  # 10 times once, then 4
     assert judged({1: [0.01], 4: [0.1], 16: [0.9, 0.4]}) == ("4N", False)  # best of three
     assert judged(quadratic()) == ("4N", True)
-    # a 16N parse that fails leaves nothing to walk: the step from N to 4N stands
-    assert judged(quadratic(), failed=16) == ("N", True)
+    # a 16N run that stopped early or read as another lane leaves the N to 4N step
+    assert judged(quadratic((0.1, "stopped"))) == ("N", True)
+    assert judged(quadratic((0.1, "other"))) == ("N", True)
+    assert judged(quadratic(1.5, (0.1, "stopped"), 1.6)) == ("4N", True)  # a retry, too
+    assert judged(quadratic(1.5, 0.5)) == ("4N", False)  # the best of three at 16N
     assert judged(quadratic(), listed=True) == ("N", True)
     assert judged({1: [0.02], 4: [0.3], 16: [1.2]}) == ("N", True)  # over 0.25 s at 4N
-    assert judged_step(lambda n: (0.01, n, False, True), 1, False) is None  # another lane
+    assert judged({1: [1.5]}) == ("N", True)  # over 1 s at N: 4N is not timed
+    assert judged({1: [(0.01, "other")]}) is None
 
 
 def _registered_lanes() -> list[str]:
@@ -409,7 +413,8 @@ def test_a_registered_lane_costs_linear_time(lang: str) -> None:
             reparsed[shape] = (parsed_small, parsed_big)
     new = {shape: t for shape, t in slow.items() if shape not in known}
     assert not new and not reparsed, (
-        f"{lang}: (N s, 4N s; 4N and 16N from 4N) {new}; (N bytes, 4N bytes) {reparsed}"
+        f"{lang}, at N and 4N, or 4N and 16N for a shape from 4N: (s, s) {new}; "
+        f"(bytes, bytes) {reparsed}"
     )
     fixed = sorted(set(known) & linear)  # clearly linear now, not a timer's doubt
     assert not fixed, f"{lang}: {fixed} run in linear time; drop them from KNOWN_SLOW"

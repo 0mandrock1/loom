@@ -619,11 +619,11 @@ class _Names:
         }
 
 
-def _extract(path: str, source: bytes) -> object:
+def _extract(path: str, source: bytes) -> tuple[object, bool]:
     """What the ingest derives from one file without the store: the parse, its chunks
     and facets, its call edges, and a tree-less lane's own edges against a name table,
     under the recursion limit the edge stage retries with. A walk that raises costs what
-    it ran; running out of memory fails."""
+    it ran and is reported as not finished; running out of memory fails."""
     import asyncio
     import sys
 
@@ -641,7 +641,7 @@ def _extract(path: str, source: bytes) -> object:
     if err.startswith("parse: MemoryError"):
         raise MemoryError(err)  # the parse reports it as a failed file
     if pf is None:
-        return err
+        return err, True
     repo = _Names()
     steps = [
         lambda: _chunks_for(pf, path, source, 6000),
@@ -653,6 +653,7 @@ def _extract(path: str, source: bytes) -> object:
         steps.append(lambda: asyncio.run(ingest_edges._lane_site_edges(repo, "o", "n", pf)))  # type: ignore[arg-type]
     if pf.lang == "prisma":
         steps.append(lambda: prisma_edges(pf))
+    finished = True
     before = sys.getrecursionlimit()
     sys.setrecursionlimit(ingest_edges._DEEP_RECURSION_LIMIT)
     try:
@@ -662,10 +663,10 @@ def _extract(path: str, source: bytes) -> object:
             except MemoryError:
                 raise
             except Exception:  # noqa: BLE001 — the guard times walks; a crash is another test's
-                pass
+                finished = False
     finally:
         sys.setrecursionlimit(before)
-    return pf
+    return pf, finished
 
 
 _REGISTRY_N = 5_000
@@ -677,9 +678,10 @@ def judged_step(
     """(the step judged, `N` or `4N`, the time at its two sizes, the bytes tree-sitter
     parsed at each) of one shape, or None when its text at `n` does not read as the lane.
     `cost(n)` is (the time, the bytes parsed, whether the text read as the lane, whether
-    every parse finished). A listed shape that looks linear and an unlisted one that looks over
-    linear are timed best of three. An unlisted one still over linear, under 0.25 s at 4N,
-    is judged from 4N to 16N instead when the 16N text reads as the lane and parses."""
+    every parse and walk finished). A listed shape that looks linear and an unlisted one
+    that looks over linear are timed best of three. An unlisted one still over linear, under
+    0.25 s at 4N (a walk over linear past that takes seconds at 16N), is judged from 4N to
+    16N instead when the 16N text reads as the lane and every parse and walk finishes."""
     small, bs, lane, _ = cost(n)
     if not lane:
         return None
@@ -691,12 +693,12 @@ def judged_step(
         big = min(big, cost(4 * n)[0], cost(4 * n)[0])
     if listed or not (0.02 < big < 0.25 and big > 8 * small):
         return "N", small, big, bs, bb
-    # N fits in the CPU cache and 4N does not; past both, a walk over linear still grows
-    # over 4 times.
+    # The N walk can fit in the CPU cache and the 4N one not, so that step can grow over 8
+    # times on a busy host; from 4N to 16N only a walk over linear does.
     huge, bh, lane, finished = cost(16 * n)
-    if not (lane and finished):  # a parse past its deadline leaves no tree to walk
+    if not (lane and finished):  # a parse or walk that stopped early looks cheap
         return "N", small, big, bs, bb
-    if 8 * big < huge < 1.0:  # timed again while it looks over linear and within budget
+    if 8 * big < huge < 2.0:  # timed again while it looks over linear, under the bound
         again = (cost(16 * n), cost(16 * n))
         huge = min([huge] + [t for t, _, lane, finished in again if lane and finished])
     return "4N", big, huge, bb, bh
@@ -732,9 +734,9 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
         parsed[:] = [0.0, 0, False]
         with untraced():
             t0 = time.process_time()  # CPU time, as in `walk_cost`
-            pf = _extract(path, source)
+            pf, walked = _extract(path, source)
             took = time.process_time() - t0 - parsed[0]
-        return took, int(parsed[1]), getattr(pf, "lang", "") == as_lang, not parsed[2]
+        return took, int(parsed[1]), getattr(pf, "lang", "") == as_lang, walked and not parsed[2]
 
     cost(lambda n: "a\n", 1)  # the first file of a lane loads its grammar and imports
     out = []
