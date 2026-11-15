@@ -674,7 +674,8 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
     """(shape, the time at N, the time at 4N, the bytes tree-sitter parsed at N and at 4N)
     per shape the lane reads as its own (a manifest shape can read as a template), the
     best of three for a listed shape that looks linear or an unlisted one that looks over
-    linear. The parses' time is not counted, since each has its own CPU deadline
+    linear. An unlisted shape still over linear is timed at 4N and 16N instead. The
+    parses' time is not counted, since each has its own CPU deadline
     (`bounded_parse`); the bytes they read are returned, so a walk that parses the file
     again per block is still seen."""
     from server.code.domain.extract import bounded_parse
@@ -719,6 +720,14 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
         if (listed and big < 0.05) or (not listed and big > 0.02 and big > 8 * small):
             small = min(small, cost(text, n)[0], cost(text, n)[0])
             big = min(big, cost(text, 4 * n)[0], cost(text, 4 * n)[0])
+        if not listed and 0.02 < big < 0.25 and big > 8 * small:
+            # A walk over N that fits in the CPU cache and 4N that does not grows more than
+            # 4 times once, the more so beside a busy neighbour. Over linear goes on from
+            # 4N to 16N, so that step is judged, if the 16N text still reads as this lane.
+            huge, bh, read_as = cost(text, 16 * n)
+            if read_as == as_lang:
+                huge = min(huge, cost(text, 16 * n)[0], cost(text, 16 * n)[0])
+                small, big, bs, bb = big, huge, bb, bh
         out.append((name, small, big, bs, bb))
     return out
 

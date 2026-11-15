@@ -315,8 +315,9 @@ def test_a_lane_walk_costs_linear_time(name: str) -> None:
 # The class guard: every lane parser in the ingest's registry, over generated shapes (runs
 # of one character, repeated names, unclosed openers, entries times uses), each lane in a
 # child process with a deadline and a memory limit, which also bound a listed shape. A new
-# lane, or a walk added to one without a cost walk of its own, is timed here. `KNOWN_SLOW`
-# holds the shapes still over linear, each a follow-up fix.
+# lane, or a walk added to one without a cost walk of its own, is timed here. A shape that
+# grows over linear from N to 4N is judged by its growth from 4N to 16N (`registry_cost`).
+# `KNOWN_SLOW` holds the shapes still over linear, each a follow-up fix.
 _REGISTRY_CHILD = f"""
 import faulthandler, json, resource, sys
 faulthandler.dump_traceback_later({_WALK_DEADLINE_S * 3}, exit=True)
@@ -370,6 +371,6 @@ def test_a_registered_lane_costs_linear_time(lang: str) -> None:
         if parsed_big > 6 * parsed_small + 1000:  # a 4N file is 4 times the bytes
             reparsed[shape] = (parsed_small, parsed_big)
     new = {shape: t for shape, t in slow.items() if shape not in known}
-    assert not new and not reparsed, f"{lang}: (N s, 4N s) {new}; (N bytes, 4N bytes) {reparsed}"
+    assert not new and not reparsed, f"{lang}: (n s, 4n s) {new}; (n bytes, 4n bytes) {reparsed}"
     fixed = sorted(set(known) & linear)  # clearly linear now, not a timer's doubt
     assert not fixed, f"{lang}: {fixed} run in linear time; drop them from KNOWN_SLOW"
