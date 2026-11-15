@@ -1,30 +1,35 @@
-<!-- i18n: source=docs/use-cases/memory-linked-to-code.md blob=9cbe1bbc3b8361789f5d82dc35b67597e77e8dbf model=claude-sonnet-5-5 -->
+<!-- i18n: source=docs/use-cases/memory-linked-to-code.md blob=ba0db8ea1cf39d2ef1aa0c782706183107d553a7 model=claude-sonnet-5-5 -->
 > このページは[英語の原文](https://github.com/ClickHouse/loom/blob/main/docs/use-cases/memory-linked-to-code.md)の機械翻訳です。内容は英語の原文が優先されます。
 > Machine-translated from the [English page](https://github.com/ClickHouse/loom/blob/main/docs/use-cases/memory-linked-to-code.md), which is authoritative.
 
 <a id="memory-linked-to-code-for-coding-agents"></a>
 
-# コーディングエージェント向けのコードに紐づくメモリ
+# コーディングエージェント向けのコードにリンクされたメモリ
 
-Loom は、コーディングエージェントが保存した各メモリを、そのメモリが名指しする関数、クラス、ファイルに紐づけ、リファクタリングをまたいでそれらのシンボルを追跡し、対象のコードが変わるとメモリにフラグを立てます。デフォルトでは、紐づくコードがすべて失われたメモリは検索から外れ、古くなった教訓がエージェントに届かなくなります。この機能は Loom がインデックスしているリポジトリ（[コードインデックス](code-intelligence.md)、`LOOM_CODE_INGEST_ENABLED=true`）で動作し、リンクを維持する `memory_code_links` ワーカーはデフォルトで有効です。
+Loom は、コーディングエージェントがリポジトリについて保存したメモリを、そのメモリが名指しする関数、クラス、ファイルにリンクします。リファクタリングをまたいでそれらのシンボルを追跡し、対応するコードが変更されるとメモリにフラグを立てます。デフォルトでは、紐づくコードがすべて消えたメモリは検索から外れるため、古くなった教訓がエージェントに届かなくなります。この機能は Loom がインデックスしているリポジトリ（[コードインデックス](code-intelligence.md)、`LOOM_CODE_INGEST_ENABLED=true`）で動作し、リンクを維持する `memory_code_links` ワーカーはデフォルトで有効です。
 
 <a id="what-you-get"></a>
 
 ## 得られるもの
 
-- **教訓が、その対象のコードに紐づきます。** リポジトリのタグが付いたメモリ（Claude Code と Codex のプラグインはセッションにタグを付けます）、またはリポジトリのコード名前空間に書かれたメモリは、バッククォートで名指しされ、ちょうど 1 か所に解決される各定義にリンクされます（リストされたファイル内では、裸の単語で名指しされた定義にもリンクされます）。また、それらの定義を1つも含まない、名指しされた各ファイルにもリンクされます。まだ trunk にない修飾名は、`memory_code_links_pending_days`（14）以内にマージされればリンクされます。
-  [コードに紐づくメモリ](https://github.com/ClickHouse/loom/blob/main/docs/concepts/memory.md#memories-linked-to-code)
-- **リンクはリファクタリングに追従します。** インデックスされるコミットごとに、各リンクの状態は `fresh`、`moved`、`changed`（変更したコミットを示します）、`unresolved`、`missing` のいずれかになります。リンクは定義のトークンを記録するため、空白、コメント、ほとんどのフォーマッタによる変更では `fresh` のままです。
-- **古くなったメモリを、選んだ方法で扱えます。** 名前空間の `code_change_policy` により、紐づくコードがすべて失われたメモリを検索から外す（`retire_removed`、デフォルト）、フラグを立てるだけにする（`flag`）、またはモデルが主張を古いコードと新しいコードに照らして確認し、修正案を提示する（`revise`）を選べます。Loom がメモリ自体を書き換えることはありません。
-- **エージェントがコードを読む場所に教訓が現れます。** `code.symbol` は定義に紐づくメモリを、それぞれのリンク状態とともに `lessons` として返します。`memory.for_file` はファイル内のコードに紐づくメモリを返します。Claude Code プラグインは、そのファイルを編集する前にそれらを表示します。[`code.symbol`](https://github.com/ClickHouse/loom/blob/main/docs/reference/operations/code.md#codesymbol) ·
+- **教訓を、その対象のコードに結びつけます。** `repo:<id>` タグが付いたメモリ（Claude Code と Codex のプラグインは、フックが取得した内容にこのタグを付けます）、またはリポジトリのコード名前空間に書かれたメモリは、次の対象にリンクされます。バッククォートで名指しされ、1 か所にだけ解決される各定義。メモリが列挙するファイル内にあり、camelCase または snake_case の単語だけで名指しされた定義。そして、それらの定義を一つも含まないまま名指しされた各ファイル。trunk にまだ存在しない修飾名は、`memory_code_links_pending_days`（14）以内にマージされればリンクされます。
+  [コードにリンクされたメモリ](https://github.com/ClickHouse/loom/blob/main/docs/concepts/memory.md#memories-linked-to-code)
+- **リファクタリングに追従するリンク。** インデックスされるコミットごとに、各リンクの状態は `fresh`、`moved`、`changed`（変更したコミットを示します）、`unresolved`、`missing` のいずれかになります。リンクは定義のトークンを記録するため、空白、コメント、ほとんどのフォーマッタによる変更では `fresh` のままです。
+- **古くなったメモリを、選んだ方法で扱います。** 名前空間の [`code_change_policy`](https://github.com/ClickHouse/loom/blob/main/docs/reference/operations/namespace.md) が方法を決めます。`retire_removed`（デフォルト）は、コードがすべて消えたメモリを検索から外し、変更されたコードにはフラグを立てます。`flag` はフラグを立てるだけです。`revise` はコードが消えたメモリを同様に検索から外し、さらに変更されたメモリについて、モデルが旧コードと新コードに照らしてその主張を確認し、修正案を提示します。どのポリシーでも、コードが変更されたメモリは非表示にはならず、検索では次の 3 件の結果より下に順位づけされます。Loom がメモリ自体を書き換えることはありません。
+- **エージェントがコードを読む場面ごとに教訓を表示します。** `code.symbol` は定義にリンクされたメモリを `lessons` として返します。`code.search`、`code.callers`、`code.callees`、`code.impact`、`code.outline`、`code.context_pack` は、返すファイルに対応する教訓を付加します。各教訓にはリンクの状態が付きます。Claude Code と Codex のフックは、エージェントがファイルを編集する前にそのファイルのメモリ（`memory.for_file`）を表示し、Cline のフックは、ファイルを読むとき、または編集するときに表示します。
+  [`code.symbol`](https://github.com/ClickHouse/loom/blob/main/docs/reference/operations/code.md#codesymbol) ·
   [Claude Code プラグイン](https://github.com/ClickHouse/loom/blob/main/docs/features/integrations/claude-code.md)
-- **ブランチは自身のコードを読みます。** 古いテキストがまだ残っているリリースブランチでは、trunk が変更された後でも、教訓は `fresh` と表示されます。
-- **コードと並ぶドキュメント。** リポジトリの trunk コード名前空間に登録されたソースのドキュメントにはリポジトリのタグが付くため、リポジトリに対する検索でコードとともに読み取れます（同期ワーカーには `LOOM_KNOWLEDGE_SOURCE_SYNC_ENABLED` が必要です）。
+- **チームで共有されます。** 教訓はリポジトリのチーム名前空間と、デフォルトでは呼び出し元自身の名前空間から読み取られます。そのため、あるエージェントがそこに保存した教訓は、そのコードを読むすべてのエージェントに届きます。
+- **ブランチごとに自身のコードを読みます。** 別のブランチでは、教訓はそのブランチ自身の定義に照らして検査されます。そのため、古いテキストをまだ持つリリースブランチでは `fresh` と判定されます。
+- **コードと並ぶドキュメント。** リポジトリの trunk コード名前空間に登録されたソースのドキュメントにはリポジトリのタグが付くため、リポジトリを対象とした検索でコードと一緒に読み取られます（同期ワーカーには `LOOM_KNOWLEDGE_SOURCE_SYNC_ENABLED` が必要です）。
   [ドキュメントソース](https://github.com/ClickHouse/loom/blob/main/docs/features/knowledge.md#document-sources)
-- **レビュー用リスト。** `namespace.validate` は、コードが変更された、または失われたメモリを一覧表示し、ダッシュボードは各メモリのリンクとその状態を表示します。
+- **レビュー用の一覧。**
+  [`namespace.validate`](https://github.com/ClickHouse/loom/blob/main/docs/reference/operations/namespace.md#namespacevalidate) は、コードが変更された、または消えたメモリを一覧表示します。ダッシュボードには、各メモリのリンクとその状態が表示されます。
+
+![ダッシュボードのメモリ詳細：リンクされたコード。一つの定義は最新で、もう一つはあるコミット以降に変更されている](https://github.com/ClickHouse/loom/raw/main/docs/assets/screenshots/memory-linked-code.webp)
 
 <a id="start"></a>
 
 ## はじめに
 
-[クイックスタート](../getting-started/quickstart.md)で Loom を起動し、[リポジトリの追加](https://github.com/ClickHouse/loom/blob/main/docs/features/code-index/repositories.md)でリポジトリのコードインデックスを有効にします。プラグインまたは MCP でコーディングエージェントを接続し（[コーディングエージェントの接続](https://github.com/ClickHouse/loom/blob/main/docs/getting-started/connect-a-coding-agent.md)）、バッククォートで定義を名指しした教訓を保存します。trunk がインデックスされ、次のリンク処理（デフォルトでは 60 秒ごと）が実行されると、その定義に対する `code.symbol` は、その教訓を `lessons` の下に返します。
+[クイックスタート](../getting-started/quickstart.md)で Loom を起動し、[リポジトリの追加](https://github.com/ClickHouse/loom/blob/main/docs/features/code-index/repositories.md)でリポジトリのコードインデックスを有効にします。コーディングエージェントをプラグインまたは MCP で接続します（[コーディングエージェントの接続](https://github.com/ClickHouse/loom/blob/main/docs/getting-started/connect-a-coding-agent.md)）。4 文字以上の定義（または `` `Reader.run` `` のような修飾名）をバッククォートで名指しした教訓を、`repo:<id>` タグ付きで、またはリポジトリのコード名前空間に書いて保存します。trunk がインデックスされ、保存の 1 分後にリンクのパスが実行されると（パスは 60 秒ごとに実行され、最新の書き込みから 60 秒遅れるため、約 2 分以内）、その定義に対する `code.symbol` が、その教訓を `lessons` の下に返します。
