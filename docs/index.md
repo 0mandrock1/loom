@@ -29,6 +29,7 @@ One page per need, each saying what Loom does for it and where to start:
 [code index for coding agents](use-cases/code-intelligence.md) ·
 [code index by language](use-cases/code-intelligence-by-language.md) ·
 [coding-agent model cost](use-cases/coding-agent-cost.md) ·
+[memory linked to code](use-cases/memory-linked-to-code.md) ·
 [multi-agent shared context](use-cases/multi-agent.md) ·
 [autonomous agents: recall, audit, erasure](use-cases/autonomous-agents.md) ·
 [runs, traces and PR history](use-cases/runs-and-pr-history.md) ·

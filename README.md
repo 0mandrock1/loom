@@ -58,6 +58,9 @@ into one place.
   [Namespaces and sharing](./docs/features/namespaces-and-sharing.md)
 - **A code index of your repositories** that coding agents query for definitions,
   callers and change impact. [Code index](./docs/use-cases/code-intelligence.md)
+- **Memories linked to the code they are about**, which follow it through refactors, are
+  flagged when it changes and appear when an agent reads or edits it.
+  [Memory linked to code](./docs/use-cases/memory-linked-to-code.md)
 - **Lower model cost for coding agents**, as [measured](#measured-results) below.
   [Coding-agent cost](./docs/use-cases/coding-agent-cost.md)
 - **Document search with citations (RAG)**, including PDF, `.docx` and `.pptx` files the
