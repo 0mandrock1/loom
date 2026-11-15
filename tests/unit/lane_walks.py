@@ -741,8 +741,8 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
     bounded_parse.parse = timed  # type: ignore[assignment]
 
     def cost(text: Callable[[int], str], n: int) -> tuple[float, int, bool, bool]:
-        source = (head + text(n)).encode()
         nonlocal parse_s, parse_bytes, parse_raised
+        source = (head + text(n)).encode()
         parse_s, parse_bytes, parse_raised = 0.0, 0, False
         with untraced():
             t0 = time.process_time()  # CPU time, as in `walk_cost`

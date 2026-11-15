@@ -355,6 +355,11 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     assert judged({1: [0.01], 4: [0.1], 16: [0.4]}) == ("4N", False)  # 10 times once, then 4
     assert judged({1: [0.01], 4: [0.1], 16: [0.9, 0.4]}) == ("4N", False)  # 16N best of 3
     assert judged(quadratic()) == ("4N", True)
+    # the bytes parsed come from the two sizes judged (the fake parses n bytes at n)
+    got = judged_step(lambda n: ({1: 0.01, 4: 0.12, 16: 1.9}[n], n, True, True), 1, False)
+    assert got is not None and got[3:] == (4, 16)
+    got = judged_step(lambda n: ({1: 0.01, 4: 0.04}[n], n, True, True), 1, False)
+    assert got is not None and got[3:] == (1, 4)
     # a 16N run that stopped early or read as another lane leaves the N to 4N step
     assert judged(quadratic((0.1, "stopped"))) == ("N", True)
     assert judged(quadratic((0.1, "other"))) == ("N", True)
