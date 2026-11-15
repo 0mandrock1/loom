@@ -355,13 +355,12 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     assert judged({1: [0.01], 4: [0.04], 16: [0.16]}) == ("N", False)
     assert judged({1: [(0.01, "stopped")], 4: [0.04]}) == ("N", False)  # timed all the same
     assert judged({1: [0.01], 4: [0.1], 16: [0.4]}) == ("4N", False)  # 10 times once, then 4
-    assert judged({1: [0.01], 4: [0.1], 16: [0.9, 0.4]}) == ("4N", False)  # best of three
+    assert judged({1: [0.01], 4: [0.1], 16: [0.9, 0.4]}) == ("4N", False)  # 16N best of 3
     assert judged(quadratic()) == ("4N", True)
     # a 16N run that stopped early or read as another lane leaves the N to 4N step
     assert judged(quadratic((0.1, "stopped"))) == ("N", True)
     assert judged(quadratic((0.1, "other"))) == ("N", True)
     assert judged(quadratic(1.5, (0.1, "stopped"), 1.6)) == ("4N", True)  # a retry, too
-    assert judged(quadratic(1.5, 0.5)) == ("4N", False)  # the best of three at 16N
     assert judged(quadratic(), listed=True) == ("N", True)
     assert judged({1: [0.02], 4: [0.3], 16: [1.2]}) == ("N", True)  # over 0.25 s at 4N
     assert judged({1: [1.5]}) == ("N", True)  # over 1 s at N: 4N is not timed

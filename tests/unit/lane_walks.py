@@ -679,9 +679,10 @@ def judged_step(
     parsed at each) of one shape, or None when its text at `n` does not read as the lane.
     `cost(n)` is (the time, the bytes parsed, whether the text read as the lane, whether
     every parse and walk finished). A listed shape that looks linear and an unlisted one
-    that looks over linear are timed best of three. An unlisted one still over linear, under
-    0.25 s at 4N (a walk over linear past that takes seconds at 16N), is judged from 4N to
-    16N instead when the 16N text reads as the lane and every parse and walk finishes."""
+    that looks over linear are timed best of three. An unlisted one still over linear and
+    0.05 s to 0.25 s at 4N (past that, a walk over linear takes seconds at 16N) is judged
+    from 4N to 16N instead when the 16N text reads as the lane and every parse and walk
+    finishes."""
     small, bs, lane, _ = cost(n)
     if not lane:
         return None
@@ -691,7 +692,7 @@ def judged_step(
     if (listed and big < 0.05) or (not listed and big > 0.02 and big > 8 * small):
         small = min(small, cost(n)[0], cost(n)[0])
         big = min(big, cost(4 * n)[0], cost(4 * n)[0])
-    if listed or not (0.02 < big < 0.25 and big > 8 * small):
+    if listed or not (0.05 < big < 0.25 and big > 8 * small):
         return "N", small, big, bs, bb
     # The N walk can fit in the CPU cache and the 4N one not, so that step can grow over 8
     # times on a busy host; from 4N to 16N only a walk over linear does.
@@ -700,7 +701,7 @@ def judged_step(
         return "N", small, big, bs, bb
     if 8 * big < huge < 2.0:  # timed again while it looks over linear, under the bound
         again = (cost(16 * n), cost(16 * n))
-        huge = min([huge] + [t for t, _, lane, finished in again if lane and finished])
+        huge = min([huge] + [t for t, _, read, done in again if read and done])
     return "4N", big, huge, bb, bh
 
 
