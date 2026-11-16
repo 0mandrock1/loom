@@ -897,6 +897,7 @@ jobs:
           tests/integration/test_cell_tenancy_pg.py
           tests/integration/test_router_directory_pg.py
           tests/integration/test_pg_online_index.py
+          tests/integration/test_pg_owned_cleanup.py
           tests/integration/test_cell_unset_gate_pg.py
           tests/integration/test_cell_prepare.py
           tests/integration/test_cell_attach.py

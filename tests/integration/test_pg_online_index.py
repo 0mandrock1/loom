@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from server.core import pg
 from server.core.paths import ROUTER_MIGRATIONS_DIR
 from server.core.schema import pg_migrate, pg_online_index
 from server.router import directory
@@ -315,7 +317,7 @@ async def test_cancelled_concurrent_drop_is_retryable(database, tmp_path) -> Non
                         "DROP INDEX CONCURRENTLY loom_router.placements_by_cell_org"
                     )
                 finally:
-                    dropping.terminate()
+                    await pg.close_owned(dropping, end=time.monotonic() + 1)
 
         dropping = asyncio.create_task(direct_drop())
         try:
@@ -325,6 +327,12 @@ async def test_cancelled_concurrent_drop_is_retryable(database, tmp_path) -> Non
                 "AND wait_event IS NOT NULL)"
             )
             await _until(conn, query)
+            # Cancel after catalog invalidation, not an earlier lock/I/O wait.
+            await _until(
+                conn,
+                "SELECT NOT indisvalid FROM pg_index "
+                "WHERE indexrelid='loom_router.placements_by_cell_org'::regclass",
+            )
             dropping.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(dropping, 2)
