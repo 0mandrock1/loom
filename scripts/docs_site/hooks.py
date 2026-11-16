@@ -194,7 +194,7 @@ def _full_text_pages(docs: Path) -> list[str]:
     pages = [
         p.relative_to(docs).as_posix()
         for folder in _FULL_SECTIONS
-        for p in (docs / folder).glob("*.md")
+        for p in (docs / folder).rglob("*.md")
     ] + [page for page in _FULL_FIRST if "/" not in page]
     pages.sort(key=page_key)
 
