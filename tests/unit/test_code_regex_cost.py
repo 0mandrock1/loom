@@ -362,8 +362,8 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     got = judged_step(lambda n: ({1: 0.01, 4: 0.04}[n], n, True, True), 1, False)
     assert got is not None and got[3:] == (1, 4)
     # a 16N run that stopped early or read as another lane leaves the N to 4N step
-    assert judged(quadratic((0.1, "stopped"))) == ("N", True)
-    assert judged(quadratic((0.1, "other"))) == ("N", True)
+    assert judged(quadratic((0.1, "stopped"))) == ("N, 16N unread", True)
+    assert judged(quadratic((0.1, "other"))) == ("N, 16N unread", True)
     assert judged(quadratic(1.5, (0.1, "stopped"), 1.6)) == ("4N", True)  # a retry, too
     assert judged(quadratic(2.5, 0.1)) == ("4N", True)  # over 2 s: not timed again
     assert judged(quadratic(), listed=True) == ("N", True)

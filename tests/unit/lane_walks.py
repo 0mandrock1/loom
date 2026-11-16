@@ -688,8 +688,9 @@ RETRY_FLOOR_S = 0.02
 def judged_step(
     cost: Callable[[int], tuple[float, int, bool, bool]], n: int, listed: bool
 ) -> tuple[str, float, float, int, int] | None:
-    """(the step judged, `N` or `4N`, the time at its two sizes, the bytes tree-sitter
-    parsed at each) of one shape, or None when its text at `n` does not read as the lane.
+    """(the step judged, `N`, `4N`, or `N, 16N unread` when the 16N text stopped early or
+    read as another lane, the time at its two sizes, the bytes tree-sitter parsed at each)
+    of one shape, or None when its text at `n` does not read as the lane.
     `cost(n)` is (the time, the bytes parsed, whether the text read as the lane, whether
     every parse and walk finished). A listed shape that looks linear and an unlisted one
     that looks over linear are timed best of three. An unlisted one still over linear, its
@@ -715,7 +716,7 @@ def judged_step(
     # times on a busy host; from 4N to 16N only a walk over linear does.
     huge, bh, lane, finished = cost(16 * n)
     if not (lane and finished):  # a parse or walk that stopped early looks cheap
-        return "N", small, big, bs, bb
+        return "N, 16N unread", small, big, bs, bb
     if RATIO * big < huge < BOUND_S:  # timed again while it looks over linear
         again = (cost(16 * n), cost(16 * n))
         huge = min([huge] + [t for t, _, read, done in again if read and done])
