@@ -1,20 +1,35 @@
 """Absolute links that published files carry (registry listing, plugin manifests, package
-metadata and READMEs, the citation, the chart, the issue templates) resolve to files in this
-repository; the doc-link check follows only relative links."""
+metadata and READMEs, the citation, the chart, the issue templates) resolve to files, folders
+and site headings in this repository; the doc-link check follows only relative links."""
 
 from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from pathlib import Path
 
-from tests.unit.markdown_links import anchors
+from tests.unit.markdown_links import FENCE, HEADING
 
 ROOT = Path(__file__).resolve().parents[2]
 CLAUDE = ROOT / "integrations" / "claude-code-plugin"
 CODEX = ROOT / "integrations" / "codex-plugin"
 
 SITE = "https://clickhouse.github.io/loom/"
+
+
+def _site_anchors(page: Path) -> set[str]:
+    """Heading ids as the site's Markdown renderer makes them (its default slugify):
+    ASCII only, and runs of hyphens and spaces folded into one hyphen."""
+    out = set()
+    for h in HEADING.findall(FENCE.sub("", page.read_text())):
+        text = (
+            unicodedata.normalize("NFKD", re.sub(r"<[^>]+>", "", h))
+            .encode("ascii", "ignore")
+            .decode()
+        )
+        out.add(re.sub(r"[-\s]+", "-", re.sub(r"[^\w\s-]", "", text).strip().lower()))
+    return out
 
 
 def _site_page(url: str) -> Path:
@@ -40,7 +55,7 @@ def test_published_links_resolve() -> None:
     """The registry listing, the plugin manifests, both pyproject files, the SDK packages
     and their READMEs, the Claude Code plugin's README, the citation, the chart and the
     issue templates publish absolute repository and site links, which the doc-link check
-    does not follow; a renamed file breaks them."""
+    does not follow; a renamed file, folder or heading breaks them."""
     text = "\n".join(
         (ROOT / f).read_text()
         for f in (
@@ -79,4 +94,4 @@ def test_published_links_resolve() -> None:
         page = _site_page(url)
         assert page.is_file(), url
         anchor = url.partition("#")[2]
-        assert not anchor or anchor in anchors(page), url
+        assert not anchor or anchor in _site_anchors(page), url

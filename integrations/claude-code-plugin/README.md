@@ -464,11 +464,13 @@ crystallization, on the ClickHouse substrate, not inline on every tool call.
 ## Other clients
 
 **Codex** has its own build of this plugin — the same scripts and skills,
-Codex's hook wiring — at [`integrations/codex-plugin/`](https://github.com/ClickHouse/loom/tree/main/integrations/codex-plugin): `codex plugin
-marketplace add ClickHouse/loom && codex plugin add loom@loom`; the plugin
-bundles its MCP entry with the URL and `toolset=core,coding,tracker,tasks`
-fixed (Codex plugins have no install-time options). See [Codex](https://clickhouse.github.io/loom/features/integrations/codex/). The scripts learn which client runs them
-from their third argument (`… PostToolUse codex`); unnamed, they are Claude
+Codex's hook wiring — at
+[`integrations/codex-plugin/`](https://github.com/ClickHouse/loom/tree/main/integrations/codex-plugin):
+`codex plugin marketplace add ClickHouse/loom && codex plugin add loom@loom`;
+the plugin bundles its MCP entry with the URL and
+`toolset=core,coding,tracker,tasks` fixed (Codex plugins have no install-time
+options). See [Codex](https://clickhouse.github.io/loom/features/integrations/codex/).
+The scripts learn which client runs them from their third argument (`… PostToolUse codex`); unnamed, they are Claude
 Code's.
 
 `hooks/hooks.generic.json` maps the same lifecycle events to the same
