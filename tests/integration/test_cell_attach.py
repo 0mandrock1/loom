@@ -772,6 +772,83 @@ async def test_doctor_reads_smallest_first_and_leaves_the_largest_unchecked(
 
 
 @pytest.mark.asyncio
+async def test_signaling_another_role_requires_an_effective_signal_grant(cell_stores) -> None:
+    import asyncpg
+
+    caller = f"it_signal_{uuid.uuid4().hex[:6]}"
+    target = f"it_target_{uuid.uuid4().hex[:6]}"
+    password = uuid.uuid4().hex
+    await _admin(f"CREATE ROLE {caller} LOGIN")
+    try:
+        await _admin(f"CREATE ROLE {target} LOGIN PASSWORD '{password}'")
+        victim = await asyncpg.connect(settings.pg_dsn, user=target, password=password)
+        try:
+            pid = await victim.fetchval("SELECT pg_backend_pid()")
+            async with pg.dedicated() as admin, pg.dedicated() as signal:
+                await admin.execute(f"GRANT pg_signal_backend TO {caller} WITH INHERIT FALSE")
+                await signal.execute(f"SET SESSION AUTHORIZATION {caller}")
+                with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                    await signal.fetchval("SELECT pg_terminate_backend($1)", pid)
+                await admin.execute(f"GRANT pg_signal_backend TO {caller} WITH INHERIT TRUE")
+                assert await signal.fetchval("SELECT pg_terminate_backend($1)", pid)
+        finally:
+            await victim.close()
+    finally:
+        await _admin(f"DROP ROLE {caller}")
+        await _admin(f"DROP ROLE IF EXISTS {target}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capability", ["pg_read_all_stats", "pg_signal_backend"])
+async def test_attach_needs_its_predefined_capabilities_without_set_role(
+    cell_stores, monkeypatch, capsys, capability: str
+) -> None:
+    from contextlib import asynccontextmanager
+
+    stores, network = cell_stores, _Network()
+    await _prepare(stores, network)
+    role = f"it_caps_{uuid.uuid4().hex[:6]}"
+    await _admin(f"CREATE ROLE {role} LOGIN")
+    real_dedicated = pg.dedicated
+
+    @asynccontextmanager
+    async def as_attacher(**kwargs: Any) -> AsyncIterator[Any]:
+        async with real_dedicated(**kwargs) as conn:
+            await conn.execute(f"SET SESSION AUTHORIZATION {role}")
+            yield conn
+
+    try:
+        async with real_dedicated() as conn:
+            owner = await conn.fetchval("SELECT current_user")
+            await conn.execute(f"GRANT {owner} TO {role} WITH INHERIT TRUE, SET FALSE")
+            await conn.execute(f"GRANT pg_read_all_stats, pg_signal_backend TO {role}")
+            await conn.execute(f"GRANT {capability} TO {role} WITH INHERIT FALSE")
+            assert await conn.fetchval("SELECT pg_has_role($1, $2, 'MEMBER')", role, capability)
+            assert not await conn.fetchval("SELECT pg_has_role($1, $2, 'USAGE')", role, capability)
+        before = await _row()
+        with monkeypatch.context() as own:
+            own.setattr(pg, "dedicated", as_attacher)
+            assert await _attach(stores, network) == 1
+        assert (
+            f"attach's role lacks effective privileges of {capability}" in capsys.readouterr().err
+        )
+        after = await _row()
+        assert (after.state, after.mode, after.placed) == (before.state, before.mode, before.placed)
+        assert await _mode() == "recording"
+        assert await pg.fetchval("SELECT count(*) FROM loom.tenancy") == 0
+        async with real_dedicated() as conn:
+            await conn.execute(f"GRANT {capability} TO {role} WITH INHERIT TRUE")
+        with monkeypatch.context() as own:
+            own.setattr(pg, "dedicated", as_attacher)
+            assert await _attach(stores, network) == 0, capsys.readouterr().err
+        assert (await _row()).state == "serving"
+    finally:
+        async with real_dedicated() as conn:
+            await conn.execute(f"DROP OWNED BY {role}")
+        await _admin(f"DROP ROLE {role}")
+
+
+@pytest.mark.asyncio
 async def test_attach_requires_every_probe_privilege(cell_stores) -> None:
     role = f"it_probe_{uuid.uuid4().hex[:6]}"
     await _admin(f"CREATE ROLE {role} LOGIN")

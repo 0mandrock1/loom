@@ -398,8 +398,10 @@ async def session_passes() -> bool:
 
 _OWN_GRANTS = """
 SELECT need, held FROM (VALUES
-  ('membership in pg_read_all_stats', pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER')),
-  ('membership in pg_signal_backend', pg_has_role(current_user, 'pg_signal_backend', 'MEMBER')),
+  ('effective privileges of pg_read_all_stats',
+   pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')),
+  ('effective privileges of pg_signal_backend',
+   pg_has_role(current_user, 'pg_signal_backend', 'USAGE')),
   ('USAGE on schema loom', has_schema_privilege('loom', 'USAGE')),
   ('SELECT on loom.cell_first', has_table_privilege('loom.cell_first', 'SELECT')),
   ('SELECT on loom.tenancy_mode', has_table_privilege('loom.tenancy_mode', 'SELECT')),

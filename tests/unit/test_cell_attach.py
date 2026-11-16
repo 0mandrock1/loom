@@ -572,7 +572,7 @@ async def test_own_role_lacks_and_prepared_transactions_refuse() -> None:
     conn = FakeConn(
         [
             ("SELECT current_user", "attacher"),
-            ("WHERE NOT held", [{"need": "membership in pg_read_all_stats"}]),
+            ("WHERE NOT held", [{"need": "effective privileges of pg_read_all_stats"}]),
             ("has_table_privilege($1, 'SELECT')", lambda t: t != "loom.memory_current"),
             ("max_prepared_transactions", 5),
         ]
@@ -586,7 +586,7 @@ async def test_own_role_lacks_and_prepared_transactions_refuse() -> None:
     ]
     refusals = await apg.own_role_refusals(conn, tables)
     assert [str(r) for r in refusals] == [
-        "postgres role attacher: attach's role lacks membership in pg_read_all_stats",
+        "postgres role attacher: attach's role lacks effective privileges of pg_read_all_stats",
         "postgres role attacher: attach's role lacks SELECT on loom.memory_current",
         "postgres role attacher: attach's role lacks membership in the owner role of "
         "loom.scope_generations",

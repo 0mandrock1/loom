@@ -55,7 +55,8 @@ Every item below is a precondition attach checks, or one it cannot check and rel
     `max_prepared_transactions = 0`; the database encoding is UTF8.
 13. No org longer than 2048 bytes is in the cell's stores (below). `--dry-run` lists any.
 
-Attach's Postgres role needs `pg_read_all_stats`, `pg_signal_backend`, `USAGE` on schema
+Attach's Postgres role needs the privileges of `pg_read_all_stats` and `pg_signal_backend`
+without `SET ROLE` (grant their memberships with `INHERIT TRUE`), `USAGE` on schema
 `loom`, `SELECT` on `loom.cell_first`, `loom.tenancy_mode`, `loom.cell_self`,
 `loom.authority` and every org table, `UPDATE` on `loom.tenancy_mode`, `INSERT` on
 `loom.tenancy`, `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `loom.cell_probe`, `TEMPORARY`
