@@ -40,7 +40,8 @@ MCP, HTTP and the SDKs on the repositories a self-hosted Loom indexes (the
   file's memories (`memory.for_file`) before an agent edits it, and the Cline hooks when
   it reads or edits one. [`code.symbol`](../reference/operations/code.md#codesymbol) ·
   [Claude Code plugin](../features/integrations/claude-code.md) ·
-  [Codex plugin](../features/integrations/codex.md)
+  [Codex plugin](../features/integrations/codex.md) ·
+  [Cline hooks](../../integrations/cline/README.md) (experimental)
 - **Shared with the team.** Lessons are read from the repository's code namespace and the
   namespaces the call names (over MCP, the caller's own by default), so a lesson saved in
   the repository's code namespace reaches every agent that may read that namespace (a
@@ -78,5 +79,4 @@ link pass links writes at least 60 seconds old and passes run every 60 seconds, 
 trunk is indexed, `code.symbol` on that definition returns the lesson under `lessons`
 within about two minutes.
 
-`code.callees` and `code.outline` are experimental ([status](../reference/status.md)); the
-rest of this page is stable.
+Some ops on this page are marked experimental on the [status page](../reference/status.md).
