@@ -21,7 +21,7 @@ import pytest
 from scripts.i18n import translate as t
 from tests.unit import markdown_links
 
-# The example credentials of the AWS Signature Version 4 documentation.
+# The access key and secret of the AWS Signature Version 4 documentation's examples.
 CREDS = t.AwsCredentials(
     "AKIDEXAMPLE", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "session-token", "us-east-1"
 )
