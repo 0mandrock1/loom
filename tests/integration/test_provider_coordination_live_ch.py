@@ -19,11 +19,14 @@ def _live() -> None:
 
 
 @pytest.mark.asyncio
-async def test_participant_ack_is_full_row_and_expiry_is_on_the_server_clock():
+async def test_participant_ack_is_full_row_and_expiry_is_on_the_server_clock(monkeypatch):
     _live()
     ch = _default_client()
     await ch.connect()
     identity, transition = uuid4(), uuid4()
+    monkeypatch.setattr(
+        "server.insights.store.provider_participants.process_identity", lambda: identity
+    )
     try:
         await record_participant(identity, transition, "running", ch=ch)
         await record_participant(identity, transition, "drained", ch=ch)
@@ -39,10 +42,11 @@ async def test_participant_ack_is_full_row_and_expiry_is_on_the_server_clock():
         rows = [r for r in await participants(ch=ch) if str(r["participant_id"]) == str(identity)]
         assert rows[0]["expired"]
         assert await running_queries(identity, ch=ch) == 0
-        await record_participant(
-            identity, transition, "retired", after=int(rows[0]["version"]), ch=ch
-        )
-        assert all(str(row["participant_id"]) != str(identity) for row in await participants(ch=ch))
+        with pytest.raises(ValueError, match="state"):
+            await record_participant(
+                identity, transition, "retired", after=int(rows[0]["version"]), ch=ch
+            )
+        assert any(str(row["participant_id"]) == str(identity) for row in await participants(ch=ch))
     finally:
         try:
             await ch.execute(

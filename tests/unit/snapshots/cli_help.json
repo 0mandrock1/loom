@@ -185,12 +185,12 @@
  ],
  "loom participant": [
   "usage: loom participant [-h] {retire} ...",
-  "positional arguments: {retire} retire Retire the provider participant of a process that died without shutting down (its id is `participant_id` in that process's /v1/health).",
+  "positional arguments: {retire} retire Verify exact physical death on this trusted host and retire its participant after all queries settle (the id is participant_id in /v1/health).",
   "options: -h, --help show this help message and exit"
  ],
  "loom participant retire": [
-  "usage: loom participant retire [-h] --participant PARTICIPANT [--yes]",
-  "options: -h, --help show this help message and exit --participant PARTICIPANT The participant id to retire --yes Its process is confirmed stopped"
+  "usage: loom participant retire [-h] --participant PARTICIPANT",
+  "options: -h, --help show this help message and exit --participant PARTICIPANT The participant id to retire"
  ],
  "loom deployment": [
   "usage: loom deployment [-h] {publish} ...",

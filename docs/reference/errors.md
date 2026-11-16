@@ -752,6 +752,10 @@ Raised in `server/router/app.py`. Category `capacity`, retryable: yes.
 
 Raised in `server/router/app.py`. Category `dependency`, retryable: yes.
 
+#### `PROCESS_STOPPING`
+
+Raised in `server/transport/model_maintenance.py`, `server/transport/retirement.py`.
+
 #### `PROJECTION_BEHIND`
 
 HTTP 503, raised as `server.memory.app.pg_admission.ProjectionBehindError`. 503 — earlier commits in this namespace are not yet in ClickHouse, so a read of ClickHouse that must see every write the namespace committed would miss them. Category `capacity`, retryable: yes for an idempotent op, no for another op once it ran.
