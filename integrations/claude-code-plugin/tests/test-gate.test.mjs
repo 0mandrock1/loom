@@ -338,7 +338,7 @@ test("checkoutPython prefers the checkout's virtualenvs, then an active one, the
   }
 });
 
-test("the test gate starts no process", () => {
+test("the test gate's lib and hook do not import node:child_process", () => {
   for (const file of ["../lib/test-gate.mjs", "../hooks/loom-test-gate.mjs"]) {
     const src = fs.readFileSync(new URL(file, import.meta.url), "utf8");
     assert.doesNotMatch(src, /child_process/, file);
