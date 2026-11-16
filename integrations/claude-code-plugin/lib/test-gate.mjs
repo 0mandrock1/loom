@@ -17,11 +17,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { commandText, extractFiles, normalizeToolName, pathUnder, realPath } from "./loom-client.mjs";
-
-const HERE = path.dirname(fileURLToPath(import.meta.url));
+import { commandText, extractFiles, normalizeToolName, pathUnder } from "./loom-client.mjs";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "str_replace_editor", "apply_patch"]);
 
@@ -102,7 +98,7 @@ export function renderGate(gate, { maxRuns = 4, maxNames = 4, python, testExists
       : "Add a test that reaches it, or say why the change needs none, before finishing.";
   const env =
     python === "" && raw.some(isPytest)
-      ? " No Python env with pytest was found in this checkout (no .venv, none on PATH): name the test you would run instead of searching for one."
+      ? " No Python was found for this checkout (no .venv, no python3 or python on PATH): name the test you would run instead of searching for one."
       : "";
   return `Loom test gate${floor}: ${parts.join(" · ")}. ${tail}${env}`;
 }
@@ -168,70 +164,33 @@ export function venvPython(dir, platform = process.platform) {
   return platform === "win32" ? path.win32.join(dir, "Scripts", "python.exe") : path.posix.join(dir, "bin", "python");
 }
 
-/** A PATH or PYTHONPATH `value` without the entries that could reach `root`:
- *  empty and relative ones, which resolve against the working directory, and
- *  any whose real path is under it. */
-export function outsideEntries(root, value = "") {
-  return value
-    .split(path.delimiter)
-    .filter((e) => path.isAbsolute(e) && pathUnder(root, realPath(e)) === null)
-    .join(path.delimiter);
-}
-
-// Exits 0 when pytest is installed outside the checkout (argv[1]). find_spec
-// locates the module without running it; an editable install's .pth file can
-// put the checkout on sys.path whatever the working directory.
-const FIND_PYTEST = `import importlib.util, os, sys
-spec = importlib.util.find_spec("pytest")
-origin = os.path.normcase(os.path.realpath(spec.origin)) if spec and spec.origin else ""
-root = os.path.normcase(os.path.realpath(sys.argv[1]))
-try:
-    inside = os.path.commonpath([origin, root]) == root
-except ValueError:
-    inside = False
-sys.exit(0 if origin and not inside else 1)`;
-
 /** The interpreter that runs this checkout's pytest: its own virtualenv
- *  first, then an active one, then a PATH python with pytest installed
- *  outside the checkout; "" when none has, so the gate can say there is none
- *  instead of sending the agent to look. The probe runs no file the checkout
- *  puts on sys.path. */
-export function checkoutPython(root, { exec = execFileSync } = {}) {
+ *  first, then an active one, then the first python3 or python on PATH; ""
+ *  when there is none. Nothing is run to check for pytest: a Python started
+ *  to ask would run what the checkout puts on its path at startup. */
+export function checkoutPython(root, { pathEnv = process.env.PATH ?? "", platform = process.platform } = {}) {
   const cands = [
-    venvPython(path.join(root, ".venv")),
-    venvPython(path.join(root, "venv")),
-    process.env.VIRTUAL_ENV ? venvPython(process.env.VIRTUAL_ENV) : "",
+    venvPython(path.join(root, ".venv"), platform),
+    venvPython(path.join(root, "venv"), platform),
+    process.env.VIRTUAL_ENV ? venvPython(process.env.VIRTUAL_ENV, platform) : "",
   ].filter(Boolean);
   for (const c of cands) {
-    try {
-      if (fs.statSync(c).isFile()) return pathUnder(root, c) ?? c;
-    } catch {
-      /* next */
-    }
+    if (isFile(c)) return pathUnder(root, c) ?? c;
   }
+  const ext = platform === "win32" ? ".exe" : "";
+  const dirs = pathEnv.split(platform === "win32" ? ";" : ":").filter(Boolean);
   for (const py of ["python3", "python"]) {
-    try {
-      // From the plugin's own directory, not the checkout: -c puts the working
-      // directory on sys.path, and so does an empty or relative PYTHONPATH entry.
-      // PATH and PYTHONPATH keep only absolute entries outside the checkout, so
-      // neither a python3 nor a sitecustomize.py there is run.
-      exec(py, ["-c", FIND_PYTEST, root], {
-        cwd: HERE,
-        env: {
-          ...process.env,
-          PATH: outsideEntries(root, process.env.PATH ?? ""),
-          PYTHONPATH: outsideEntries(root, process.env.PYTHONPATH ?? ""),
-        },
-        timeout: 1500,
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      return py;
-    } catch {
-      /* next */
-    }
+    if (dirs.some((d) => isFile(path.join(d, py + ext)))) return py;
   }
   return "";
+}
+
+function isFile(p) {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** Stop-hook payload: block once with the reason; empty text = no output. */
