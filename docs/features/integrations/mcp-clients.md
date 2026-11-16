@@ -277,8 +277,8 @@ same network. On the same machine, `loom install --client claude-desktop` writes
 - **Langflow**: Settings → MCP Servers → Add MCP Server, HTTP/SSE mode, with an
   `Authorization` header whose value names a Credential global variable holding
   `Bearer <JWT>`.
-- **Zapier**: the MCP Client app, transport Streamable HTTP, OAuth No, and the token in
-  the Bearer Token field.
+- **Zapier**: the MCP Client app, transport Streamable HTTP, OAuth No, and the token in the
+  Bearer Token field ([telling which](#bearer-or-bare-token)).
 - **Make**: the MCP Client app, a new MCP server with the URL and `Bearer <JWT>` in the
   API Key / Access token field; Make's docs do not say whether it adds `Bearer`
   ([telling which](#bearer-or-bare-token)).
@@ -306,11 +306,10 @@ same network. On the same machine, `loom install --client claude-desktop` writes
   say which authentication it takes. Where it asks for a token, enter `Bearer <JWT>`
   ([telling which](#bearer-or-bare-token)); otherwise use the
   [browser sign-in](#clients-that-sign-in-by-browser).
-- **Perplexity**: it documents OAuth and an API key for a custom remote connector, but not
-  which header the key goes in. Loom's [browser sign-in](#clients-that-sign-in-by-browser)
-  registers public clients with no client secret, and a
-  [Perplexity community report](https://community.perplexity.ai/t/custom-mcp-connector-fails-with-did-not-return-a-client-secret-for-rfc-7591-compliant-public-client-registrations/5172)
-  says its connectors refuse such registrations; this route has not been tested with Loom.
+- **Perplexity**: it documents OAuth and an API key for a custom remote connector. Loom's
+  [browser sign-in](#clients-that-sign-in-by-browser) registers it as a public client with
+  no client secret; if Perplexity refuses that registration, no other route is documented,
+  because the header its API-key option uses is not.
 - **Le Chat** (Mistral's connector docs call the app Work): an admin adds it under
   Connectors → Add Connector → Custom MCP Connector; Mistral documents that it detects the
   authentication method from the URL. Choose **HTTP Bearer Token / Basic Auth** and enter
@@ -326,13 +325,13 @@ then read Loom's answer if the connection fails. A refused token answers `401` w
 answers `401` with `missing bearer token`, without the `unauthenticated:` prefix or an
 `error_description`.
 
-| The error contains                                 | It means                                                                         | Then                                                                    |
-| -------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `Invalid header`                                   | the provider added its own prefix (`Bearer Bearer <JWT>`)                        | enter the bare token                                                    |
-| ``authorization header must be `Bearer <token>` `` | the provider sent no `Bearer` scheme (a bare token, or Basic)                    | enter `Bearer <JWT>`, or choose the provider's bearer option            |
-| `missing bearer token`                             | no `Authorization` header arrived                                                | check the header name, or the field the token went in                   |
-| `token expired`, or says it is revoked             | the token itself is refused                                                      | mint a new one ([tokens and grants](../../guides/tokens-and-grants.md)) |
-| a `503` that says to retry shortly                 | the server cannot check tokens yet (keys or revocation list not loaded or stale) | retry; the token may be good                                            |
+| The error contains                                 | It means                                                                                            | Then                                                                                           |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `Invalid header`                                   | the provider added its own prefix (`Bearer Bearer <JWT>`)                                           | enter the bare token                                                                           |
+| ``authorization header must be `Bearer <token>` `` | the provider sent no `Bearer` scheme (a bare token, or Basic), or the scheme with no token after it | enter `Bearer <JWT>` (check the token field is filled), or choose the provider's bearer option |
+| `missing bearer token`                             | no `Authorization` header arrived                                                                   | check the header name, or the field the token went in                                          |
+| `token expired`, or says it is revoked             | the token itself is refused                                                                         | mint a new one ([tokens and grants](../../guides/tokens-and-grants.md))                        |
+| a `503` that says to retry shortly                 | the server cannot check tokens yet (keys or revocation list not loaded or stale)                    | retry; the token may be good                                                                   |
 
 ## Clients that sign in by browser
 
