@@ -444,7 +444,7 @@ def render_llms_txt() -> str:
         return f"- [{title}]({rel})" + (f": {outcome}" if outcome else "")
 
     titles = {sub: heading for heading, sub in SECTIONS}
-    if set(_LLMS_ORDER) - {"faq"} != set(titles):
+    if sorted(_LLMS_ORDER) != sorted([*titles, "faq"]):
         raise ValueError("_LLMS_ORDER must name every section in SECTIONS once")
     for sub in _LLMS_ORDER:
         if sub == "faq":
