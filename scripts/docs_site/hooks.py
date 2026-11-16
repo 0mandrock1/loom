@@ -154,10 +154,9 @@ def on_nav(nav, config, files):
     return nav
 
 
-# llms-full.txt holds these sections in full, then the pages below; every other page is
-# one fetch away through llms.txt.
+# llms-full.txt holds these sections in full, plus the single pages `_FULL_FIRST` names (the
+# FAQ and glossary); every other page is one fetch away through llms.txt.
 _FULL_SECTIONS = ("getting-started", "use-cases", "concepts")
-_FULL_PAGES = ("faq.md", "glossary.md")
 # Fetchers often cut a long file short, so llms-full.txt opens with the pages that say what
 # Loom is for and closes with the setup steps.
 _FULL_FIRST = (
@@ -197,7 +196,7 @@ def _full_text_pages(docs: Path) -> list[str]:
         p.relative_to(docs).as_posix()
         for folder in _FULL_SECTIONS
         for p in (docs / folder).glob("*.md")
-    ] + [name for name in _FULL_PAGES if (docs / name).exists()]
+    ] + [page for page in _FULL_FIRST if "/" not in page]
     pages.sort(key=page_key)
 
     def rank(uri: str) -> int:

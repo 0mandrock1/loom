@@ -243,7 +243,8 @@ def _site_tree(tmp_path: Path) -> tuple[Path, Path]:
         (docs / rel).parent.mkdir(parents=True, exist_ok=True)
         (docs / rel).write_text(text)
     (root / "llms.txt").write_text(
-        "# ClickHouse Loom\n\n> Summary.\n\nStart with docs/index.md, or [install](llms-install.md). Not a page: "
+        "# ClickHouse Loom\n\n> Summary.\n\nStart with docs/index.md, or [install](llms-install.md). "
+        "Not a page: "
         "https://example.org/docs/x.md, agent-docs/y.md.\n\n## Getting started\n\n"
         "- [Overview](docs/getting-started/overview.md): Loom is a server.\n\n"
         "## Use cases\n\n- [Agent memory](docs/use-cases/agent-memory.md): Memory for agents.\n\n"
