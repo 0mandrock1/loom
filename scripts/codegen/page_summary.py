@@ -26,9 +26,9 @@ SECTIONS = (
     ("Development", "development"),
 )
 
-# The pages that open their section, after its index: llms.txt and the documentation
-# site's sidebar list them in this order.
-LEAD_PAGES = ("getting-started/overview.md", "getting-started/quickstart.md")
+# The pages that open their section right after its index page (Getting started's is its
+# overview.md): llms.txt and the documentation site's sidebar list them in this order.
+LEAD_PAGES = ("getting-started/quickstart.md",)
 
 
 def page_key(uri: str) -> tuple[str, int, int, str]:

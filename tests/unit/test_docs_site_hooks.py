@@ -164,7 +164,11 @@ def test_the_sidebar_follows_the_section_order_with_index_and_overview_first() -
             page("faq.md"),
             section(
                 "Reference",
-                section("Operations", page("reference/operations/a.md")),
+                section(
+                    "Operations",
+                    page("reference/operations/b.md"),
+                    page("reference/operations/overview.md"),
+                ),
                 page("reference/cli.md"),
                 page("reference/index.md"),
             ),
@@ -188,6 +192,9 @@ def test_the_sidebar_follows_the_section_order_with_index_and_overview_first() -
     ]
     reference = [getattr(c, "title", None) or c.file.src_uri for c in nav.items[2].children]
     assert reference == ["reference/index.md", "reference/cli.md", "Operations"]
+    # A nested folder is sorted too: its overview.md leads it.
+    operations = [c.file.src_uri for c in nav.items[2].children[2].children]
+    assert operations == ["reference/operations/overview.md", "reference/operations/b.md"]
 
 
 def test_previous_and_next_links_follow_the_sorted_sidebar() -> None:

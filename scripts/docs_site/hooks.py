@@ -6,9 +6,10 @@ Markdown link or image that leaves docs/ (source files, the README) points at th
 GitHub instead of a missing page, except the root files the site serves itself (`llms.txt`,
 `llms-install.md`), which point at the site; links in code blocks and code spans are left
 as written, and reference-style links are not rewritten (the docs use inline links). The
-sidebar follows the sections' order in `SECTIONS`, the FAQ and glossary last, with Overview
-and Quickstart first in Getting started, and a generated page gets no edit button (its
-source is the generator, not the page).
+sidebar follows the sections' order in `SECTIONS`, the FAQ and glossary last; within a
+folder its index page (`index.md`, or `overview.md` without one) comes first, then
+Quickstart in Getting started; a generated page gets no edit button (its source is the
+generator, not the page).
 
 After the build, the site also serves what agents fetch instead of HTML: each page's
 Markdown beside it (`use-cases/agent-memory.md`) and at the page URL plus `index.html.md`,
@@ -134,11 +135,17 @@ def _pages(items) -> list:
     return out
 
 
-def on_nav(nav, config, files):
-    nav.items.sort(key=_top_key)
-    for item in nav.items:
+def _sort_sections(items) -> None:
+    """Every section's children, nested ones too, in `_child_key` order."""
+    for item in items:
         if item.is_section:
             item.children.sort(key=_child_key)
+            _sort_sections(item.children)
+
+
+def on_nav(nav, config, files):
+    nav.items.sort(key=_top_key)
+    _sort_sections(nav.items)
     # MkDocs links each page to its neighbours before this event; relink them in the new order.
     nav.pages = _pages(nav.items)
     for i, page in enumerate(nav.pages):
@@ -204,6 +211,45 @@ def _full_text_pages(docs: Path) -> list[str]:
     return sorted(pages, key=rank)
 
 
+def _full_holds() -> str:
+    """What llms-full.txt holds, as llms.txt and llms-full.txt name it."""
+    names = [title for title, folder in SECTIONS if folder in _FULL_SECTIONS]
+    return f"{', '.join(names[:-1])} and {names[-1]} pages, the FAQ and the glossary"
+
+
+def _site_llms_txt(llms: str, url: str) -> str:
+    """The site's llms.txt from the repository's: each docs/ path becomes its Markdown copy
+    ("docs/use-cases/index.md" -> "<site>/use-cases/index.md"), and a Full text section
+    names llms-full.txt right after the use cases, where an agent reading from the top
+    finds it early."""
+    llms = _DOCS_PAGE.sub(lambda m: url + m.group(1), llms)
+    llms = _ROOT_INSTALL.sub(f"]({url}llms-install.md)", llms)
+    head, sep, rest = llms.partition("\n\n## ")
+    holds = _full_holds()
+    head += f" The full text of the {holds} is in one file: [llms-full.txt]({url}llms-full.txt)."
+    full = f"## Full text\n\n- [llms-full.txt]({url}llms-full.txt): The {holds}, in one file.\n\n"
+    lead, uc, after = rest.partition("\n## Use cases\n")
+    cases, nxt, tail = after.partition("\n## ")
+    if not (uc and nxt):
+        raise ValueError("llms.txt needs a Use cases section with another section after it")
+    rest = f"{lead}{uc}{cases.rstrip()}\n\n{full}## {tail}"
+    return f"{head}{sep}{rest}".rstrip("\n") + "\n"
+
+
+def _site_install(install: str, url: str) -> str:
+    """The site's llms-install.md: links resolve from the repository root, one level above
+    docs/, and past the title and opening paragraph (addressed to people, who want the
+    HTML pages) links to site pages go to their Markdown copies, as llms.txt's do."""
+    install = _rewrite_links(install, "../llms-install.md", url, to_site=True)
+    title, opening, steps = install.split("\n\n", 2)
+    steps = re.sub(
+        rf"\]\({re.escape(url)}([\w./-]+)/(#[^)\s]*)?\)",
+        lambda m: f"]({url}{m.group(1)}.md{m.group(2) or ''})",
+        steps,
+    )
+    return f"{title}\n\n{opening}\n\n{steps}"
+
+
 def on_post_build(config):
     site = Path(config["site_dir"])
     url = config["site_url"]
@@ -225,44 +271,17 @@ def on_post_build(config):
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(text, encoding="utf-8")
 
-    # The repository's llms.txt names pages by their docs/ path; on the site each one is
-    # its Markdown file, so "docs/use-cases/index.md" becomes "<site>/use-cases/index.md".
-    llms = (ROOT / "llms.txt").read_text(encoding="utf-8")
-    llms = _DOCS_PAGE.sub(lambda m: url + m.group(1), llms)
-    llms = _ROOT_INSTALL.sub(f"]({url}llms-install.md)", llms)
-    head, sep, rest = llms.partition("\n\n## ")
-    names = [title for title, folder in SECTIONS if folder in _FULL_SECTIONS]
-    holds = f"{', '.join(names[:-1])} and {names[-1]} pages, the FAQ and the glossary"
-    head += f" The full text of the {holds} is in one file: [llms-full.txt]({url}llms-full.txt)."
-    full = f"## Full text\n\n- [llms-full.txt]({url}llms-full.txt): The {holds}, in one file.\n\n"
-    # Right after the use cases, where an agent reading the file from the top finds it early.
-    lead, uc, after = rest.partition("\n## Use cases\n")
-    cases, nxt, tail = after.partition("\n## ")
-    if not (uc and nxt):
-        raise ValueError("llms.txt needs a Use cases section with another section after it")
-    rest = f"{lead}{uc}{cases.rstrip()}\n\n{full}## {tail}"
-    (site / "llms.txt").write_text(f"{head}{sep}{rest}".rstrip("\n") + "\n", encoding="utf-8")
-
+    llms = _site_llms_txt((ROOT / "llms.txt").read_text(encoding="utf-8"), url)
+    (site / "llms.txt").write_text(llms, encoding="utf-8")
     # The install steps a coding agent follows, at the root as in the repository.
-    install = (ROOT / "llms-install.md").read_text(encoding="utf-8")
-    # Links resolve from the file's own place: the repository root, one level above docs/.
-    install = _rewrite_links(install, "../llms-install.md", url, to_site=True)
-    # Past its title and opening paragraph (addressed to people, who want the HTML pages),
-    # its links to site pages go to their Markdown copies, as llms.txt's do.
-    title, opening, steps = install.split("\n\n", 2)
-    steps = re.sub(
-        rf"\]\({re.escape(url)}([\w./-]+)/(#[^)\s]*)?\)",
-        lambda m: f"]({url}{m.group(1)}.md{m.group(2) or ''})",
-        steps,
-    )
-    install = f"{title}\n\n{opening}\n\n{steps}"
+    install = _site_install((ROOT / "llms-install.md").read_text(encoding="utf-8"), url)
     (site / "llms-install.md").write_text(install, encoding="utf-8")
 
     # The title and summary quote of llms.txt open llms-full.txt too.
-    intro = head.split("\n\n")[:2]
+    intro = llms.split("\n\n")[:2]
     parts = [
         "\n\n".join(intro)
-        + f"\n\nThis file holds the {holds} in full; {url}llms.txt indexes every page.\n"
+        + f"\n\nThis file holds the {_full_holds()} in full; {url}llms.txt indexes every page.\n"
     ]
     for uri in _full_text_pages(docs):
         parts.append(copies[uri])
