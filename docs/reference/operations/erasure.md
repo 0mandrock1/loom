@@ -83,7 +83,7 @@ Erase the rows about a user or namespace (the audit trail is kept).
 | `census` | `dict[str, int] \| None` | The receipt: every count of this run's census, zeros included; `None` when no census counted every store (none ran, or one left a store uncounted). |
 | `purge` | `bool` | The scope's delete-or-tombstone mode (a single namespace's is tombstone whatever was asked); a scope that holds a mirror is deleted whatever this says. |
 | `failure_reason` | `str` | Why a failed saga failed, `""` otherwise: `<step>: <error>` or a bare `<error>` outside a step, where `<error>` is the exception's kind or a Loom error's `<CODE>: <message>`, or `verify.residue: ErasureResidueError: residue after erasure… |
-| `steps_completed` | `list[str]` | Names of the steps finished so far, sorted. |
+| `steps_completed` | `list[str]` | Names of the steps finished so far, sorted; empty for a withheld mirror receipt. |
 
 ## `erasure.status`
 
@@ -104,7 +104,7 @@ Check the status of an in-flight erasure request (queued, running, completed, fa
 | `scope_value` | `str \| None` | The saga's scope (user id, namespace, or the JSON list); a list leaves out any mirror's name but for a platform admin. |
 | `requester` | `str \| None` | Who asked for the erasure, as given in the request. |
 | `status` | `Literal['in_progress', 'completed', 'failed'] \| None` | `in_progress`, `completed` or `failed`; `None` when not found. |
-| `current_step` | `int \| None` | How many steps have finished; 99 once the saga completed. |
+| `current_step` | `int \| None` | How many steps have finished; 99 once completed, zero for a withheld mirror receipt. |
 | `requested_at` | `datetime \| None` | When the saga was registered (UTC). |
 | `completed_at` | `datetime \| None` | When the saga reached its terminal state (UTC); `None` while in progress. |
 | `failure_reason` | `str \| None` | Why a failed saga failed, `None` otherwise: a reason `erasure.request` names, or `max_attempts (N) exceeded` once recovery gave up, then `; last: <reason>` if any; `the saga failed; the error is in the server log` for a reason in neither… |

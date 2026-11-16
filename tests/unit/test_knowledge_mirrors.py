@@ -184,13 +184,24 @@ def test_a_namespace_erasure_with_a_mirror_purges_both_and_counts_both(
     assert run.last["out"].purge is False
 
 
-def test_a_replay_runs_each_step_over_the_mirrors_too(registry: list[Any]) -> None:
+def test_a_replay_runs_each_step_over_the_mirrors_too(
+    registry: list[Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from server.erasure.api.erasure import ErasureRequestInput
     from server.erasure.app import replay
 
     seen, step = _recorded()
     body = ErasureRequestInput(org=ORG, scope_type="namespace", scope_value="team", requester="r")
-    asyncio.run(replay._run_steps(body, "e1", [("memory.tombstone", step)]))
+    marked: list[bool] = []
+
+    async def promote(row: Any) -> None:
+        row["mirror_marked"] = True
+        marked.append(True)
+
+    monkeypatch.setattr(replay, "_promote_mark", promote)
+    asyncio.run(replay._run_steps(body, "e1", [("memory.tombstone", step)], {}))
+    assert marked == [True]
     assert seen == [(["team", MIRROR], True)]
 
 
@@ -228,9 +239,28 @@ def test_a_tombstoning_erasure_fails_on_any_row_left_in_a_mirror(
     registry: list[Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     counted = _counted(monkeypatch, left_in_mirror=1)
+    from server.erasure.app import saga
+
+    async def checkpoint(**kw: Any) -> None:
+        assert kw["row"]["mirror_marked"]
+
+    monkeypatch.setattr(saga, "checkpoint", checkpoint)
+    monkeypatch.setattr(saga, "authority_steps", lambda _: [])
     holder: dict[str, Any] = {}
-    with pytest.raises(saga_steps.ErasureResidueError):
-        asyncio.run(saga_steps._step_verify_residue(ORG, "namespace", "team", holder))
+    row: Any = {}
+    with pytest.raises(saga_steps.ErasureStepError) as failed:
+        asyncio.run(
+            saga._saga_namespace(
+                ORG,
+                "team",
+                completed=set(),
+                row=row,
+                verify=holder,
+                external=False,
+            )
+        )
+    assert isinstance(failed.value.cause, saga_steps.ErasureResidueError)
+    assert row["mirror_marked"]
     assert counted == [(["team", MIRROR], True)]
     assert holder["per_table"]["loom.memory"] == 1
 
@@ -255,7 +285,24 @@ def test_a_failed_saga_s_census_counts_the_mirror(
 
     _counted(monkeypatch, left_in_mirror=3)
     verify: dict[str, Any] = {}
-    asyncio.run(saga._census_tail(ORG, "namespace", "team", verify, purge=False))
+    marked: list[bool] = []
+
+    async def checkpoint(**kw: Any) -> None:
+        marked.append(kw["row"]["mirror_marked"])
+
+    monkeypatch.setattr(saga, "checkpoint", checkpoint)
+    asyncio.run(
+        saga._census_tail(
+            ORG,
+            "namespace",
+            "team",
+            verify,
+            purge=False,
+            row={},
+            completed=set(),
+        )
+    )
+    assert marked == [True]
     assert verify["per_table"] == {"loom.memory": 3}
 
 

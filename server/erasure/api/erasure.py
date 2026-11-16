@@ -94,7 +94,9 @@ class ErasureRequestOutput(BaseModel):
     # the recovery worker retries a failed saga.
     status: ErasureStatus
     # One entry per saga step with the rows it touched; a step done by an earlier attempt
-    # reads `rows_affected` 0 and a `skipped` note.
+    # reads `rows_affected` 0 and a `skipped` note. Marked mirror receipts return zero
+    # counts for every caller; these placeholders do not prove no rows remain.
+    # Their step lists are empty so a failed stage discloses no cause.
     steps: list[_ErasureStepResult]
     # When the saga was registered (UTC).
     requested_at: datetime
@@ -109,7 +111,9 @@ class ErasureRequestOutput(BaseModel):
     residue: dict[str, int] = Field(default_factory=dict)
     # When the residue census ran (UTC); `None` if it never ran or left a store uncounted
     # (the Postgres authority or the bucket, which the server log names); `residue` then
-    # holds what it did count.
+    # holds what it did count. Withheld mirror receipts also return `None`, with
+    # zero counts and empty residue; only status/list to a flat platform admin
+    # expose their evidence.
     verified_at: datetime | None = None
     # The receipt: every count of this run's census, zeros included; `None` when no census
     # counted every store (none ran, or one left a store uncounted).
@@ -120,9 +124,9 @@ class ErasureRequestOutput(BaseModel):
     # Why a failed saga failed, `""` otherwise: `<step>: <error>` or a bare `<error>`
     # outside a step, where `<error>` is the exception's kind or a Loom error's
     # `<CODE>: <message>`, or `verify.residue: ErasureResidueError: residue after
-    # erasure: {table: n}`.
+    # erasure: {table: n}`. Withheld mirror receipts use `ERASURE_FAILED` for every cause.
     failure_reason: str = ""
-    # Names of the steps finished so far, sorted.
+    # Names of the steps finished so far, sorted; empty for a withheld mirror receipt.
     steps_completed: list[str] = Field(default_factory=list)
 
 
@@ -151,7 +155,7 @@ class ErasureStatusOutput(BaseModel):
     requester: str | None = None
     # `in_progress`, `completed` or `failed`; `None` when not found.
     status: ErasureStatus | None = None
-    # How many steps have finished; 99 once the saga completed.
+    # How many steps have finished; 99 once completed, zero for a withheld mirror receipt.
     current_step: int | None = None
     # When the saga was registered (UTC).
     requested_at: datetime | None = None
@@ -160,6 +164,7 @@ class ErasureStatusOutput(BaseModel):
     # Why a failed saga failed, `None` otherwise: a reason `erasure.request` names, or
     # `max_attempts (N) exceeded` once recovery gave up, then `; last: <reason>` if any;
     # `the saga failed; the error is in the server log` for a reason in neither shape.
+    # Withheld mirror receipts use `ERASURE_FAILED` for every cause.
     failure_reason: str | None = None
     # Verified forgetting.
     residue_count: int = 0
@@ -169,7 +174,9 @@ class ErasureStatusOutput(BaseModel):
     residue: dict[str, int] = Field(default_factory=dict)
     # When the last residue census ran (UTC); `None` if it has not run or left a store
     # uncounted (the Postgres authority or the bucket, which the server log names);
-    # `residue` then holds what it did count.
+    # `residue` then holds what it did count. A mirror receipt withheld from this
+    # reader also returns `None`, zero counts and empty residue; these placeholders
+    # do not prove verified absence. A flat platform admin retains the full receipt.
     verified_at: datetime | None = None
     # The receipt: every count of the latest run's census, zeros included; `None` when the
     # latest row holds no census that counted every store (a run in progress, none ran, one
@@ -266,11 +273,13 @@ class ErasureListRow(BaseModel):
     completed_at: datetime | None = None
     # Why a failed saga failed, `""` otherwise; the shapes `erasure.status` names.
     failure_reason: str = ""
+    # Zero for a withheld mirror receipt, regardless of the failed stage.
     steps_completed_count: int = 0
     # Rows tombstoned here but later memory.restore'd; non-zero means
     # "completed" is partially un-true, so the UI surfaces it alongside status.
     reversals_count: int = 0
-    # Verified forgetting: census residue on the terminal row.
+    # Census residue on the terminal row; zero with `verified_at` None when the
+    # mirror receipt is withheld from a reader below flat platform admin.
     residue_count: int = 0
     verified_at: datetime | None = None
 
