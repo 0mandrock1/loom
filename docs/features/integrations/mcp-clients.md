@@ -306,11 +306,11 @@ same network. On the same machine, `loom install --client claude-desktop` writes
   say which authentication it takes. Where it asks for a token, enter `Bearer <JWT>`
   ([telling which](#bearer-or-bare-token)); otherwise use the
   [browser sign-in](#clients-that-sign-in-by-browser).
-- **Perplexity**: it documents OAuth and an API key for a custom remote connector.
-  Perplexity has been reported to refuse servers whose dynamic registration returns no
-  client secret, and Loom's [browser sign-in](#clients-that-sign-in-by-browser) registers
-  clients without one, so its OAuth route may fail; the header its API-key option uses is
-  not documented.
+- **Perplexity**: it documents OAuth and an API key for a custom remote connector, but not
+  which header the key goes in. Loom's [browser sign-in](#clients-that-sign-in-by-browser)
+  registers public clients with no client secret, and a
+  [Perplexity community report](https://community.perplexity.ai/t/custom-mcp-connector-fails-with-did-not-return-a-client-secret-for-rfc-7591-compliant-public-client-registrations/5172)
+  says its connectors refuse such registrations; this route has not been tested with Loom.
 - **Le Chat** (Mistral's connector docs call the app Work): an admin adds it under
   Connectors → Add Connector → Custom MCP Connector; Mistral documents that it detects the
   authentication method from the URL. Choose **HTTP Bearer Token / Basic Auth** and enter
@@ -319,19 +319,20 @@ same network. On the same machine, `loom install --client claude-desktop` writes
 
 ### Bearer or bare token
 
-Where a provider does not say whether it adds the `Bearer ` prefix, enter `Bearer <JWT>`. If
-Loom then answers `401` with an error that contains `Invalid header` (the error the provider
-shows reads `unauthenticated: …`, and the `WWW-Authenticate` header carries the same text as
-`error_description` beside `error="invalid_token"`), the provider added its own prefix:
-enter the bare token instead. An error that says the header must be `` `Bearer <token>` ``
-means the provider sent no `Bearer` scheme: enter `Bearer <JWT>`, or choose the provider's
-bearer option. An error that says `missing bearer token` means no `Authorization` header
-arrived: check the header name, or the field the token went in, before minting a new token.
-Any other `401` error, such as `token expired: …` or one that says the token is revoked,
-refuses the token itself: mint a new one
-([tokens and grants](../../guides/tokens-and-grants.md)). A `503` that says to retry shortly
-means the server cannot check the token yet (its keys or revocation list are not loaded or
-are stale): retry; the token may be good.
+Where a provider does not say whether it adds the `Bearer ` prefix, enter `Bearer <JWT>`,
+then read Loom's answer if the connection fails. A refused token answers `401` with
+`unauthenticated: <reason>`, and its `WWW-Authenticate` header carries the reason as
+`error_description` beside `error="invalid_token"`. A request with no `Authorization` header
+answers `401` with `missing bearer token`, without the `unauthenticated:` prefix or an
+`error_description`.
+
+| The error contains                                 | It means                                                                         | Then                                                                    |
+| -------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `Invalid header`                                   | the provider added its own prefix (`Bearer Bearer <JWT>`)                        | enter the bare token                                                    |
+| ``authorization header must be `Bearer <token>` `` | the provider sent no `Bearer` scheme (a bare token, or Basic)                    | enter `Bearer <JWT>`, or choose the provider's bearer option            |
+| `missing bearer token`                             | no `Authorization` header arrived                                                | check the header name, or the field the token went in                   |
+| `token expired`, or says it is revoked             | the token itself is refused                                                      | mint a new one ([tokens and grants](../../guides/tokens-and-grants.md)) |
+| a `503` that says to retry shortly                 | the server cannot check tokens yet (keys or revocation list not loaded or stale) | retry; the token may be good                                            |
 
 ## Clients that sign in by browser
 
