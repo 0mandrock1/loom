@@ -40,18 +40,25 @@ with (the two skills below are the exceptions). They send:
 - chat turns and session briefs (the compaction summary and a log of asks,
   commands, files and web addresses), stored only when the namespace has
   conversation logging on;
-- up to the session's last 200 turns, which the server keeps as source evidence for
-  the facts it extracts whatever the logging setting is, with up to 80,000
+- up to the session's last 200 turns, which the server keeps as source evidence
+  for the facts it extracts whatever the logging setting is, with up to 80,000
   characters of the session's Loom tool arguments and results
   (`LOOM_SESSION_MEMORY=off` stops it);
-- the file paths and diff outlines of uncommitted changes, run records and
-  working-memory notes, token usage and the model name;
+- the file paths and diff outlines of uncommitted changes (a diff's outline is
+  its file paths, hunk line ranges and usually the enclosing function's name; no
+  changed line is sent), run records and working-memory notes, token usage and
+  the model name;
 - the repository's identity (each remote's owner and name, the branch and `HEAD`
   commit) and the working directory's absolute path;
 - what the agent passes to Loom's tools (memories, search and code queries);
 - on first use with no credential, the OS user name and host name; in agent
   mode, the workload's identity token and `LOOM_CLIENT_ID`, exchanged for a Loom
   token.
+
+A client-side redaction removes common credential shapes from what the hooks
+send; it is best effort, not a guarantee, and MCP tool arguments and a brief the
+`loom-session` skill saves are sent without it. Each item's off switch is in the
+[full list](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling).
 
 The server keeps this in its own databases (ClickHouse, and Postgres when the
 operator makes it the memory authority) and passes text to an LLM or embedding
@@ -68,14 +75,17 @@ active one (`VIRTUAL_ENV`) and, when there is none, run
 `python3 -c "import pytest"` (then `python`) to see whether pytest is installed
 (`LOOM_TEST_GATE=off` stops it).
 
-The plugin keeps the token it saves (a copy of the install token or a self-signup
-token in `~/.loom/config.json`; in agent mode the exchanged one in
+The plugin keeps the token it saves (a copy of the install token or a
+self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
 `~/.loom/agent-token-<hash of LOOM_CLIENT_ID>.json`) and its other state in
-`~/.loom/`, mode 0600, until you remove it. In the system temp directory, a capture job whose
-flusher died stays until you replay or delete it (`loom-status` names it); a job
-whose delivery fails and unsent code-shunt batches are discarded, chat turns are
-sent again at the next Stop and a brief's events at the next save; other state files are swept after a day
-untouched; and a code-shunt decision log (no prompt or file content) stays until
+`~/.loom/`, mode 0600, until you remove it.
+
+Its files in the system temp directory, which can hold prompt and reply text,
+are also mode 0600. A capture job whose flusher died stays until you replay or
+delete it (`loom-status` names it). A job whose delivery fails is discarded, as
+are unsent code-shunt batches; chat turns are sent again at the next Stop and a
+brief's events at the next save. Other state files are swept after a day
+untouched, and a code-shunt decision log (no prompt or file content) stays until
 removed (`LOOM_SHUNT_LOG=off` stops it).
 
 Two skills reach other services when you run them. `loom-status` can install
@@ -94,8 +104,8 @@ Keep one Loom entry per session: a user-scope MCP entry that points at the same
 Loom server registers a second server beside the plugin
 (`claude mcp remove <name> -s user`, with the name SessionStart's warning gives,
 removes it). SessionStart reads the user-scope MCP entries in `~/.claude.json`,
-on the machine only, to warn once a day when one does; nothing from that file is
-sent.
+on the machine only, to warn once a day when one does; nothing from that file
+goes to the Loom server.
 
 The full list is in
 [data handling](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling).
