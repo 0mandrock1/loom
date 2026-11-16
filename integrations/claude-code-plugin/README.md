@@ -33,8 +33,8 @@ tokens per `tools/list`; every other op runs through `loom_op {op, arguments}`. 
 
 The hooks and scripts send data only to the Loom server the plugin is configured
 with (the two skills below are the exceptions). Two terms first: the plugin
-*redirects* a bulk file read or grep by answering it from Loom's code index
-instead, and a `gh` issue search by answering it from Loom; a *namespace* is the
+_redirects_ a bulk file read or grep by answering it from Loom's code index
+instead, and a `gh` issue search by answering it from Loom; a _namespace_ is the
 space on the server that your token writes to. The hooks and scripts send:
 
 - prompts, tool calls' input and output, and the paths of files read or edited;
