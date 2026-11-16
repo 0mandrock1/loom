@@ -10,9 +10,10 @@ name: translations
 #
 # Claude is called on Amazon Bedrock with no stored secret: the job, in the environment
 # i18n, exchanges its GitHub OIDC token for one-hour AWS credentials of the role in the
-# variable LOOM_I18N_AWS_ROLE_ARN, in the region in LOOM_I18N_AWS_REGION. The credentials reach only
-# the Translate step. While LOOM_I18N_AWS_ROLE_ARN is empty the job translates nothing and
-# succeeds. The role's trust and permission policies are in CONTRIBUTING.md#translations.
+# repository variable LOOM_I18N_AWS_ROLE_ARN, in the region in LOOM_I18N_AWS_REGION. The
+# credentials reach only the Translate step. While LOOM_I18N_AWS_ROLE_ARN is empty the job
+# translates nothing and succeeds. The role's trust and permission policies are in
+# CONTRIBUTING.md#translations.
 on:
   push:
     branches: [main]

@@ -10,9 +10,11 @@ import json
 import pathlib
 import re
 import time
+import urllib.error
 import urllib.request
 from collections import Counter
 from datetime import UTC, datetime
+from email.message import Message
 
 import pytest
 
@@ -512,3 +514,29 @@ def test_a_call_posts_the_signed_request_to_bedrock(monkeypatch: pytest.MonkeyPa
     assert request.get_header("Authorization").startswith(
         "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/"
     )
+
+
+def test_each_retry_is_signed_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[urllib.request.Request] = []
+    times = iter(
+        [datetime(2026, 11, 16, 12, tzinfo=UTC), datetime(2026, 11, 16, 12, 6, tzinfo=UTC)]
+    )
+
+    class FakeDatetime:
+        @staticmethod
+        def now(tz: object) -> datetime:
+            return next(times)
+
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> io.BytesIO:
+        sent.append(request)
+        if len(sent) == 1:
+            raise urllib.error.HTTPError(request.full_url, 503, "busy", Message(), io.BytesIO())
+        return io.BytesIO(b'{"stop_reason": "end_turn", "content": []}')
+
+    monkeypatch.setattr(t, "datetime", FakeDatetime)
+    monkeypatch.setattr(t.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    t.call(CREDS, "claude-sonnet-5-5", "system", [{"role": "user", "content": "x"}])
+    first, second = (r.get_header("X-amz-date") for r in sent)
+    assert (first, second) == ("20261116T120000Z", "20261116T120600Z")
+    assert sent[0].get_header("Authorization") != sent[1].get_header("Authorization")
