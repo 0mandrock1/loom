@@ -29,6 +29,11 @@ def _row(pid, transition=None, state="running", *, version=1, expired=False):
 
 @pytest.fixture
 def setup(monkeypatch):
+    from server.core import retirement
+
+    retirement.get_gate().install("test")
+    retirement.get_gate().enrolled = True
+    retirement.get_gate().producers_stopped = True
     identity, transition = uuid4(), uuid4()
     gate = ModelWorkGate()
     monkeypatch.setattr(barrier, "get_model_work_gate", lambda: gate)
@@ -37,6 +42,7 @@ def setup(monkeypatch):
     monkeypatch.setattr(barrier, "flush_registered_buffers", AsyncMock(return_value=True))
     record = AsyncMock()
     monkeypatch.setattr(barrier, "record_participant", record)
+    monkeypatch.setattr(barrier, "record_retirement", AsyncMock())
     monkeypatch.setattr(barrier, "running_queries", AsyncMock(return_value=0))
     rows = [_row(identity, transition, "drained")]
     monkeypatch.setattr(barrier, "participants", AsyncMock(return_value=rows))
@@ -188,7 +194,7 @@ def test_a_heartbeat_carries_the_latest_state_above_any_version_seen(setup):
         "state": "drained",
         "version": 10**20 + 1,
         "stale_after_s": barrier.STALE_AFTER_S,
-        "host_proof": barrier.host_proof(),
+        "host_proof": barrier.participant_proof(),
     }
     # An acknowledgement stamped after the beat outranks it.
     assert barrier._OWN.stamp(transition, "drained")[2] > row[3]
@@ -205,12 +211,14 @@ async def test_register_writes_the_first_row_and_retire_stops_the_beats(setup, m
     await barrier.register_process()
     assert beat.running and len(ch.inserts) == 1
     tags: list[str] = []
-    record.side_effect = lambda *_a, **_k: tags.append(current_query_tag())
+    barrier.record_retirement.side_effect = lambda *_a, **_k: tags.append(current_query_tag())
+    beat.signal_stop()
+    beat.thread.join(timeout=5)
     assert await barrier.retire_process()
     assert beat.stopping.is_set()  # signalled, not joined: the thread ends after its beat
     beat.thread.join(timeout=5)
     assert not beat.running
-    assert record.call_args.args[2] == "retired"
+    assert barrier.record_retirement.call_args.args[0].participant == barrier.process_identity()
     assert tags == ["provider.participant_heartbeat"] and current_query_tag() == ""
     beat.ch = ch
     beat.beat()
@@ -218,7 +226,7 @@ async def test_register_writes_the_first_row_and_retire_stops_the_beats(setup, m
 
 
 @pytest.mark.asyncio
-async def test_a_boot_that_fails_after_enrolling_retires_its_row(setup, monkeypatch):
+async def test_a_boot_that_fails_does_not_certify_a_pending_heartbeat(setup, monkeypatch):
     _, _, _, record = setup
     monkeypatch.setattr(barrier, "_HEARTBEAT", barrier._Heartbeat(lambda: _SyncCH()))
     monkeypatch.setattr(barrier, "_registered", False)
@@ -232,7 +240,10 @@ async def test_a_boot_that_fails_after_enrolling_retires_its_row(setup, monkeypa
     with pytest.raises(RuntimeError, match="migrations failed"):
         async with barrier.participant_lifespan(lifespan)(None):
             pytest.fail("a failed boot never serves")
-    assert record.call_args.args[2] == "retired"
+    barrier.record_retirement.assert_not_awaited()
+    barrier._HEARTBEAT.thread.join(timeout=5)
+    assert await barrier.retire_process()
+    assert barrier.record_retirement.call_args.args[0].participant == barrier.process_identity()
 
 
 @pytest.mark.asyncio
@@ -263,8 +274,9 @@ async def test_retire_participant_refuses_a_live_one(setup, monkeypatch):
     assert await barrier.retire_participant(other) == "live"
     record.assert_not_awaited()
     monkeypatch.setattr(barrier, "running_queries", AsyncMock(return_value=0))
-    assert await barrier.retire_participant(other) == "retired"
-    record.assert_awaited_once_with(other, UUID(int=0), "retired", after=5, ch=None)
+    assert await barrier.retire_participant(other) == "live"
+    record.assert_not_awaited()
+    barrier.record_retirement.assert_not_awaited()
 
 
 def test_loom_participant_retire_refuses_a_live_one(setup, monkeypatch, capsys):
@@ -281,7 +293,7 @@ def test_loom_participant_retire_refuses_a_live_one(setup, monkeypatch, capsys):
     monkeypatch.setattr(_ch, "run_connected", lambda run, **_declared: asyncio.run(run(None)))
     args = argparse.Namespace(participant=str(other), yes=True)
     assert participant._cmd_retire(args) == 1
-    assert "still running" in capsys.readouterr().err
+    assert "no verifiable exact physical-death proof" in capsys.readouterr().err
     record.assert_not_awaited()
 
 
@@ -434,14 +446,13 @@ async def test_shutdown_retirement_never_outlives_its_budget(setup, monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_a_live_row_expires_after_the_heartbeat_window_and_a_retired_one_at_once():
+async def test_a_live_row_expires_after_the_heartbeat_window_and_a_retired_one_at_once(monkeypatch):
     ch = SimpleNamespace(insert=AsyncMock())
-    await pp.record_participant(uuid4(), UUID(int=0), "running", ch=ch)
+    await pp.record_participant(pp.process_identity(), UUID(int=0), "running", ch=ch)
     (row,) = ch.insert.call_args.args[1]
     assert row["stale_after_s"] == pp.STALE_AFTER_S > barrier.HEARTBEAT_S
-    await pp.record_participant(uuid4(), UUID(int=0), "retired", ch=ch)
-    (row,) = ch.insert.call_args.args[1]
-    assert row["stale_after_s"] == 0
+    with pytest.raises(ValueError, match="state"):
+        await pp.record_participant(uuid4(), UUID(int=0), "retired", ch=ch)
 
 
 @pytest.mark.asyncio

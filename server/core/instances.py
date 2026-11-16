@@ -142,9 +142,12 @@ def cell_row() -> dict[str, Any]:
     `marked` (whether this process's pooled sessions keep the tenancy marker, null until a
     cell-state read lands), and with LOOM_CELL set, until the `first` row is read and then
     on a first cell only, `router` and `router_why` (`cell_router.router_key`)."""
+    from server.core.provider_process import process_identity
+
     reported = {
         **cell.as_value(cell.mine()),
         "serves": bool(settings.serves_traffic),
+        "participant_id": str(process_identity()),
         "marked": cell.marked(),
         **cell_router.router_key(),
     }

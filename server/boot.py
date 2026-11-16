@@ -463,6 +463,9 @@ def _spawn_boot_loop(coro: Coroutine[Any, Any, Any], *, name: str) -> asyncio.Ta
     """A task that runs for the process's life: cancelled at shutdown, never
     registered as deferred, since a model transition's drain waits for those."""
     task = asyncio.get_running_loop().create_task(coro, name=name)
+    from server.core.retirement import get_gate
+
+    get_gate().track(task)
     _BOOT_TASKS.add(task)
     task.add_done_callback(_BOOT_TASKS.discard)
     return task

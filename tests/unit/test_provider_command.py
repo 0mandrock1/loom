@@ -10,6 +10,9 @@ from server.insights.app import provider_command as command
 
 @pytest.fixture
 def setup(monkeypatch):
+    from server.core import retirement
+
+    retirement.get_gate().enrolled = True
     gate = ModelWorkGate()
     monkeypatch.setattr(command, "get_model_work_gate", lambda: gate)
     monkeypatch.setattr(command, "register_process", AsyncMock())

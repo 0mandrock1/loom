@@ -17,7 +17,13 @@ from server.core import cell, cell_router, errors, pg, pg_profile
 from server.settings import settings
 
 ROOT = Path(__file__).resolve().parents[2]
-_CONNECTS = {"run_connected", "connect_checked", "connect_declared", "_connected"}
+_CONNECTS = {
+    "run_connected",
+    "connect_checked",
+    "connect_declared",
+    "check_acceptance",
+    "_connected",
+}
 # `.connect()` receivers that are not the deployment's ClickHouse writer: the setup
 # command's own admin client and SQLite files an importer reads.
 _OTHER_CLIENTS = {"preflight", "sqlite3"}
@@ -969,6 +975,7 @@ def test_a_cell_whose_rows_cannot_be_read_refuses_every_declared_org(
     asyncio.run(_ch.check_orgs([]))
 
 
+@pytest.mark.usefixtures("stub_model_command")
 def test_a_command_for_an_org_the_cell_does_not_hold_never_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

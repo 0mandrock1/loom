@@ -29,6 +29,7 @@ from server.auth.public_url import (
 )
 from server.code.app.index.repo_modes import repo_umask
 from server.core import readiness as _readiness
+from server.core import retirement
 from server.core.ch import get_client, probe_reader_user
 from server.core.errors import classified
 from server.core.logging_config import configure_logging
@@ -46,6 +47,22 @@ configure_logging()
 wire()
 
 
+def verify_retirement_topology() -> None:
+    """Capability requires both sides of the request-tail and child-task boundaries."""
+    from server.core.request_tail import RequestTailMiddleware
+    from server.transport.model_maintenance import ModelMaintenanceMiddleware
+    from server.transport.retirement import RetirementMiddleware
+
+    classes: list[object] = [middleware.cls for middleware in app.user_middleware]
+    if not (
+        bool(classes)
+        and all(cls in classes for cls in (RequestTailMiddleware, ModelMaintenanceMiddleware))
+        and classes[0] is RetirementMiddleware
+        and classes.index(RequestTailMiddleware) < classes.index(ModelMaintenanceMiddleware)
+    ):
+        raise RuntimeError("Retirement middleware must wrap the request tail and application")
+
+
 async def _shut_down(ch: Any, lease: Any, supervisor: Any, emitter: Any) -> None:
     """The bounded part of a shutdown: the instance row's stop write and the drains
     share one budget, and the final cleanup gets what they left unused, so the whole
@@ -56,24 +73,35 @@ async def _shut_down(ch: Any, lease: Any, supervisor: Any, emitter: Any) -> None
     started = time.monotonic()
     await _instances.stop(ch)
     left = max(0.0, boot.SHUTDOWN_DRAIN_BUDGET_S - (time.monotonic() - started))
-    try:
-        await asyncio.wait_for(_shutdown_drains(lease, supervisor, emitter), timeout=left)
-    except TimeoutError:
+    from server.core.background import create_deferred_task
+
+    drains = create_deferred_task(
+        _shutdown_drains(lease, supervisor, emitter), name="shutdown-drains"
+    )
+    _, pending = await asyncio.wait({drains}, timeout=left)
+    if pending:
+        drains.cancel()
+
         logging.getLogger(__name__).warning(
-            "shutdown drains exceeded %.0f s; retiring anyway", boot.SHUTDOWN_DRAIN_BUDGET_S
+            "shutdown drains exceeded %.0f s; permanent retirement remains unproved",
+            boot.SHUTDOWN_DRAIN_BUDGET_S,
         )
+    else:
+        await drains
     unused = max(0.0, boot.SHUTDOWN_DRAIN_BUDGET_S - (time.monotonic() - started))
     await boot.leave_deployment(ch, budget_s=SHUTDOWN_RETIRE_S + unused)
 
 
 async def _shutdown_drains(lease: Any, supervisor: Any, emitter: Any) -> None:
     """The lifespan's shutdown drains, in order; it bounds them all together."""
-    from server.workers import leader as _leader
-
     # An agent claim's last cutoff, which ends what an older replica's sign-in
     # with the code issued while the claim was landing: started first, so it
     # runs beside the drains below.
-    claims, started = asyncio.create_task(_agent_claim.drain()), time.monotonic()
+    from server.core.background import create_deferred_task
+    from server.workers import leader as _leader
+
+    claims = create_deferred_task(_agent_claim.drain(), name="shutdown-agent-claims")
+    started = time.monotonic()
     try:
         await _leader.shutdown(lease, supervisor)
         # The service-side writes still in flight land while what they use is
@@ -101,10 +129,29 @@ async def _shutdown_drains(lease: Any, supervisor: Any, emitter: Any) -> None:
     finally:
         claims.cancel()  # a no-op once it is done
     await emitter.stop()
+    producers = tuple(retirement.get_gate().producers)
+    if producers:
+        await asyncio.gather(*producers, return_exceptions=True)
     _otel.shutdown()
     from server.clients import _http as _http_clients
 
     await _http_clients.aclose()
+    retirement.get_gate().stopped()
+
+
+async def _stop_background(probe_listener: Any) -> None:
+    """Stop admission and signal every producer; retirement still waits for completion."""
+    from server.code.app.index import mirrors
+
+    retirement.get_gate().close()
+    _readiness.begin_drain()
+    for producer in tuple(retirement.get_gate().producers):
+        producer.cancel()
+    if probe_listener is not None:
+        await probe_listener.stop()
+    mirrors.stop_warmup()
+    embedder_calibration.stop_refresh_loop()
+    boot.cancel_boot_tasks()
 
 
 @asynccontextmanager
@@ -141,6 +188,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         weak_keys=weak_keys(),
     )
 
+    verify_retirement_topology()
+    retirement.get_gate().install("server")
+    track = retirement.get_gate().track
     from server.core.object_store import require_client
 
     require_client()
@@ -174,7 +224,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await boot.require_storage_authority(ch)
     # The deployment's cell state, before the first heartbeat reports this process
     # serving and before the lease is decided on it.
-    cell_loops = await boot.start_cell_gate()
+    from server.insights.app.provider_barrier import register_process
+
+    await register_process()
+    for task in await boot.start_cell_gate():
+        track(task)
     await boot.warn_newer_schema()
     await boot.warn_collection_named_namespaces()
     # Nothing here writes a column a migration just added while another process
@@ -187,21 +241,21 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     from server.core import instances as _instances
     from server.workers import leader as _leader
 
-    instances_loop = await _instances.start(
-        ch,
-        _leader.leads_deployment,
-        label=_instance_mod.instance_label() or "",
-        workers_lease=_leader.advertised_lease,
-        on_beat=_leader.read_holder,
+    track(
+        await _instances.start(
+            ch,
+            _leader.leads_deployment,
+            label=_instance_mod.instance_label() or "",
+            workers_lease=_leader.advertised_lease,
+            on_beat=_leader.read_holder,
+        )
     )
 
     from server.core.background import register_buffer_drainer
-    from server.insights.app.provider_barrier import register_process
 
     register_buffer_drainer("boot-writes", boot.drain_writes)
     from server.insights.app.provider_runtime import load_active_configuration, refresh_loop
 
-    await register_process()
     await load_active_configuration()
 
     emitter = get_emitter()
@@ -234,24 +288,29 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         boot.publish_deployment_config(ch)
     # This process verifies tokens: it loads the revoked set and the signing
     # keyring now and keeps both fresh.
-    auth_loops = await boot.start_token_state()
+    for task in await boot.start_token_state():
+        track(task)
     probe_listener = boot.start_probe_listener()
-    overrides_loop = boot.start_runtime_overrides()
+    track(boot.start_runtime_overrides())
     await probe_reader_user(ch)
     from server.insights.app import analysis as _analysis
 
     # Provisioned and probed in the background: the lease can wait for minutes.
-    analysis_loop = _analysis.start_probe_loop()
+    track(_analysis.start_probe_loop())
     from server.assistant.app import service as _assistant
 
     assistant_loop = _assistant.start_setup_loop()
-    tracker_sources_loop = boot.start_tracker_sources_refresher(ch)
+    if assistant_loop is not None:
+        track(assistant_loop)
+    track(boot.start_tracker_sources_refresher(ch))
     from server.code.app.index import repo_registry as _repo_registry
 
-    code_repos_loop = await _repo_registry.start_refresher(ch)
+    track(await _repo_registry.start_refresher(ch))
     from server.code.app.index import mirrors as _mirrors
 
-    _mirrors.start_warmup()  # this host's git mirrors, in the background
+    mirror_loop = _mirrors.start_warmup()
+    if mirror_loop is not None:
+        retirement.get_gate().track(mirror_loop)
     boot.publish_frontend_assets(ch)
     boot.mark_process_start(ch)
     await boot.probe_sandbox()
@@ -269,37 +328,22 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             "WorkerSupervisor: not started in pid %s — %s", os.getpid(), lease.reason
         )
     lease_loop = boot.start_lease_loop(lease, supervisor, ch)
+    if lease_loop is not None:
+        track(lease_loop)
 
     if not get_model_work_gate().closed:
         await boot.provider_report()
         await boot.probe_vector_capabilities(ch)
         await boot.calibrate_similarity_gates()
 
-    provider_refresh = asyncio.create_task(refresh_loop(), name="provider-configuration-refresh")
+    track(asyncio.create_task(refresh_loop(), name="provider-configuration-refresh"))
     # SIGTERM: not ready first, the port closes LOOM_SHUTDOWN_READY_DELAY_S later.
     boot.install_drain_on_sigterm()
 
     try:
         yield
     finally:
-        _readiness.begin_drain()
-        provider_refresh.cancel()
-        await asyncio.gather(provider_refresh, return_exceptions=True)
-        if lease_loop is not None:
-            lease_loop.cancel()
-        for loop in (*cell_loops, *auth_loops, overrides_loop):
-            loop.cancel()
-        if probe_listener is not None:
-            await probe_listener.stop()
-        tracker_sources_loop.cancel()
-        code_repos_loop.cancel()
-        analysis_loop.cancel()
-        if assistant_loop is not None:
-            assistant_loop.cancel()
-        _mirrors.stop_warmup()
-        embedder_calibration.stop_refresh_loop()
-        instances_loop.cancel()
-        boot.cancel_boot_tasks()
+        await _stop_background(probe_listener)
         await _shut_down(ch, lease, supervisor, emitter)
         await boot.close_storage_authority()
 
@@ -494,6 +538,10 @@ attach_browser_middleware(app)
 
 http_transport.attach(app)
 mcp_transport.attach(app)
+
+from server.transport.retirement import RetirementMiddleware  # noqa: E402
+
+app.add_middleware(RetirementMiddleware)
 
 from server.auth import login as _login  # noqa: E402
 from server.auth import oauth as _oauth  # noqa: E402

@@ -266,7 +266,7 @@ python scripts/codegen/docs_reference.py
 | `loom down` | Stop the local stack while preserving data; --delete-data performs a confirmed reset. | `--root`, `--file`, `--env-file`, `--delete-data`, `-y` |
 | `loom ch-setup` | Prepare a self-managed ClickHouse or a ClickHouse Cloud service for Loom: create the loom database and the read-only reader user, or print the SQL for an admin. | `--print-sql`, `--print-analyst-sql` |
 | `loom participant` | The Loom processes a provider change waits for. |  |
-| `loom participant retire` | Retire the provider participant of a process that died without shutting down (its id is `participant_id` in that process's /v1/health). | `--participant`, `--yes` |
+| `loom participant retire` | Verify exact physical death on this trusted host and retire its participant after all queries settle (the id is participant_id in /v1/health). | `--participant` |
 | `loom deployment` | The configuration every replica checks itself against. |  |
 | `loom deployment publish` | Publish this env's configuration as the deployment's, replacing its root secret or LOOM_EMBEDDING_MODEL/DIM on purpose. | `--yes`, `--check` |
 | `loom settings` | Every setting's value in force, and overrides of the live ones. |  |

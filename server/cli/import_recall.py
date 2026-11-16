@@ -781,22 +781,29 @@ async def _make_writer(
 
         return _http_writer, client.aclose
 
-    from server.cli._ch import connect_checked, disconnect
+    from server.cli._ch import check_acceptance, connect_verified, disconnect
     from server.core.ch import get_client
 
     handlers = inproc_ops()
     ch = get_client()
-    await connect_checked(ch, orgs=(args.org,))
+    await connect_verified(ch)
     from server import boot
     from server.core.background import register_buffer_drainer
     from server.insights.app.provider_command import model_command
 
     register_buffer_drainer("boot-writes", boot.drain_writes)
     command = model_command()
+    entered = False
     try:
         await command.__aenter__()
+        entered = True
+        await check_acceptance(orgs=(args.org,))
     except BaseException:
-        await disconnect(ch)
+        try:
+            if entered:
+                await command.__aexit__(None, None, None)
+        finally:
+            await disconnect(ch)
         raise
 
     async def _inproc_writer(op: str, payload: dict[str, Any]) -> None:
