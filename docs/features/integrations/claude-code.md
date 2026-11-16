@@ -35,8 +35,9 @@ end of this section are the exceptions. The plugin sends:
   redirected grep pattern (`code.symbol`); and the search query of a `gh` issue search the
   tracker shunt answers (`tracker.duplicate_check`), with the owner and name of a repository
   the command names (`code.repos`);
-- for each file read or grep the code shunt redirects or lets through, the tool name, file
-  path and line range, and an estimate of the tokens saved (`code.outcome`);
+- for each bulk file read or grep in an indexed repository that the code shunt redirects or
+  lets through, the tool name, file path and line range, and an estimate of the tokens it
+  kept out of the context or let in (`code.outcome`; `LOOM_SHUNT_REPORT=off` stops it);
 - chat turns (`conversation.append`), which the server stores only when the namespace has
   conversation logging on;
 - the session's last turns (up to 200), to `memory.set_from_messages`, which keeps them as
@@ -236,12 +237,14 @@ The wiring is `hooks/hooks.json`; `hooks/HOOKS.md` has per-hook notes.
 | SessionEnd                                        | `loom-run.mjs`              | closes the run (`run.complete`, `outcome: none`, the last reply as the final response)                                                                                                                                                                                                                                          | `LOOM_RUN_LEDGER=off`                                                                                       |
 | SessionEnd                                        | `loom-session-memory.mjs`   | hands the session's turns to `memory.set_from_messages(defer=true)`, which extracts facts and writes the session summary                                                                                                                                                                                                        | `LOOM_SESSION_MEMORY=off`                                                                                   |
 
-The plugin's hooks run `node`, `git` and `grep` on your machine: `git` reads the checkout's
-remotes, branch, `HEAD` commit, status and diffs, and `grep` searches uncommitted files for
-the pattern of a grep the plugin redirects to the code index. The test gate (the Stop hook
-that names the tests a change needs) runs no Python: for a pytest test it picks the
-interpreter of the checkout's virtualenv, the active one (`VIRTUAL_ENV`) or a `python3` or
-`python` on `PATH`, checking that the interpreter's file exists without running it.
+The plugin's hooks and its MCP header helper run `node`, `git` and `grep` on your machine:
+`git` reads the checkout's remotes, branch, `HEAD` commit, status and diffs, and `grep`
+searches uncommitted files for the pattern of a grep the plugin redirects to the code
+index. The `loom-session` skill's brief script also runs `git log` for the commits since
+the last brief. The test gate (the Stop hook that names the tests a change needs) runs no
+Python: for a pytest test it picks the interpreter of the checkout's virtualenv, the
+active one (`VIRTUAL_ENV`) or a `python3` or `python` on `PATH`, checking that the
+interpreter's file exists without running it.
 
 The plugin names the oldest Loom server its hooks support (`MIN_SERVER_VERSION` in `lib/server-version.mjs`). SessionStart reads the server's `version` from the `GET /v1/health` answer it already requests and, when that version is older, prints one `loom:` line naming both versions and asking for a server upgrade. The session goes on either way; an unreachable server, an answer other than 2xx, a server that reports no `version`, or a version that is not SemVer prints nothing. The `loom-status` skill (`bin/loom-client-status.mjs`) reports the same as a warning. The minimum rises with the release that first serves what a hook needs, so between that hook's merge and that release a server of the previous release gets no warning.
 

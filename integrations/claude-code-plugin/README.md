@@ -38,8 +38,10 @@ with (the two skills below are the exceptions). They send:
 - the symbol name from a grep that the plugin redirects to Loom's code index,
   and the search text of a `gh issue list --search` or `gh search issues`
   command it redirects to Loom, with the repository that command names;
-- for each file read or grep the plugin redirects or lets through, the tool
-  name, file path and line range, and an estimate of the tokens saved;
+- for each bulk file read or grep in an indexed repository that the plugin
+  redirects or lets through, the tool name, file path and line range, and an
+  estimate of the tokens it kept out of the context or let in
+  (`LOOM_SHUNT_REPORT=off` stops it);
 - chat turns and session briefs (the compaction summary and a log of asks and
   replies, commands, files and web addresses), stored only when the namespace
   has conversation logging on;
@@ -73,13 +75,15 @@ only if its operator configured one
 deleting data is covered in
 [retention and erasure](https://clickhouse.github.io/loom/features/memory/retention-and-erasure/).
 
-The plugin's hooks run `node`, `git` and `grep` on your machine: `git` reads the
-checkout's remotes, branch, `HEAD` commit, status and diffs, and `grep` searches
-uncommitted files for the pattern of a grep the plugin redirects to the code
-index. The test gate (the Stop hook that names the tests a change needs) runs no
-Python: for a pytest test it picks the interpreter of the checkout's virtualenv,
-the active one (`VIRTUAL_ENV`) or a `python3` or `python` on `PATH`, checking
-that the interpreter's file exists without running it.
+The plugin's hooks and its MCP header helper run `node`, `git` and `grep` on
+your machine: `git` reads the checkout's remotes, branch, `HEAD` commit, status
+and diffs, and `grep` searches uncommitted files for the pattern of a grep the
+plugin redirects to the code index. The `loom-session` skill's brief script also
+runs `git log` for the commits since the last brief. The test gate (the Stop
+hook that names the tests a change needs) runs no Python: for a pytest test it
+picks the interpreter of the checkout's virtualenv, the active one
+(`VIRTUAL_ENV`) or a `python3` or `python` on `PATH`, checking that the
+interpreter's file exists without running it.
 
 The plugin keeps the token it saves (a copy of the install token or a
 self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
@@ -89,12 +93,12 @@ self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
 Its files in the system temp directory, which can hold prompt and reply text,
 are also mode 0600. A queued write whose delivery process stopped before sending
 it stays until you replay or delete it (`loom-status` counts them and names the
-directory); one the server refuses or cannot be reached for is discarded, as is
-a batch of the per-file read and grep records above that fails to send; chat
-turns are sent again at the next Stop and a brief's events at the next save.
-Other state files are swept after a day untouched, and the log of which tool
-calls the plugin redirected or let through (no prompt or file content) stays
-until removed (`LOOM_SHUNT_LOG=off` stops it).
+directory); one the server refuses, or that cannot reach the server, is
+discarded, as is a batch of the per-file read and grep records above that fails
+to send; chat turns are sent again at the next Stop and a brief's events at the
+next save. Other state files are swept after a day untouched, and the log of
+which tool calls the plugin redirected or let through (no prompt or file
+content) stays until removed (`LOOM_SHUNT_LOG=off` stops it).
 
 Two skills reach other services when you run them. `loom-status` can install
 Node.js after you agree: on Linux, as root or with passwordless sudo, it
@@ -109,12 +113,11 @@ approve; the issue holds the report as shown to you: the server version,
 namespace, indexed commit and how much of the repository is indexed, and for
 each finding a reproduction with its queries, symbols and file names.
 
-Keep one Loom entry per session: a user-scope MCP entry that points at the same
-Loom server registers a second server beside the plugin. To remove it, run
-`claude mcp remove <name> -s user` with the name SessionStart's warning gives.
-SessionStart reads the user-scope MCP entries in `~/.claude.json`, on the
-machine only, to warn once a day when one does. The warning, which the session
-sees, names the entry; nothing else from that file is sent.
+Keep one Loom entry per session. SessionStart reads the user-scope MCP entries
+in `~/.claude.json`, on the machine only, and warns once a day when one points
+at the same Loom server, which registers a second server beside the plugin. The
+warning, which the session sees, names the entry; nothing else from that file is
+sent. To remove it, run `claude mcp remove <name> -s user`.
 
 ## What it wires
 
@@ -479,7 +482,8 @@ Codex's hook wiring — at
 `codex plugin marketplace add ClickHouse/loom && codex plugin add loom@loom`;
 the plugin bundles its MCP entry with the URL and
 `toolset=core,coding,tracker,tasks` fixed (Codex plugins have no install-time
-options). See [Codex](https://clickhouse.github.io/loom/features/integrations/codex/).
+options). See
+[Codex](https://clickhouse.github.io/loom/features/integrations/codex/).
 The scripts learn which client runs them from their third argument
 (`… PostToolUse codex`); unnamed, they are Claude Code's.
 
