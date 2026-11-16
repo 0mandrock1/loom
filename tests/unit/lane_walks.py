@@ -712,13 +712,12 @@ def judged_step(
     if listed or not (in_window and in_band):
         return "N", small, big, bs, bb
     # The N walk can fit in the CPU cache and the 4N one not, so that step can grow over 8
-    # times on a busy host; from 4N to 16N only a walk over linear does. A walk capped at
-    # a count between its 4N and 16N items looks linear there: the per-file caps in
-    # server/code/domain/extract are at most 10,000, reached by 4N at one item a repeat.
+    # times on a busy host; from 4N to 16N only a walk over linear does, unless a per-file
+    # count cap falls between its 4N and 16N items, which also bounds its real cost.
     huge, bh, lane, finished = cost(16 * n)
     if not (lane and finished):  # a parse or walk that stopped early looks cheap
         return "N, 16N unread", small, big, bs, bb
-    if RATIO * big < huge < BOUND_S:  # timed again while it looks over linear
+    if RATIO * big < huge < BOUND_S:  # timed twice more when it looks over linear
         again = (cost(16 * n), cost(16 * n))
         huge = min([huge] + [t for t, _, read, done in again if read and done])
     return "4N", big, huge, bb, bh
