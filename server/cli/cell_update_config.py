@@ -32,8 +32,8 @@ def read_target(path: Path, current: Settings) -> Settings:
     """Overlay FILE on the CLI's effective settings; install neither the file nor values."""
     try:
         values = read_settings_file(str(path), set(Settings.model_fields))
-    except (SettingsFileError, UnicodeError, TypeError):
-        # Reader messages may quote a version, YAML source, or an arbitrary mapping key.
+    except Exception:  # noqa: BLE001 — parser failures must not expose target file values.
+        # YAML constructors can raise builtin errors that contain their input.
         raise SettingsFileError(
             f"{path}: invalid target settings file; use version: 1, unique setting names "
             "and nonsecret values"

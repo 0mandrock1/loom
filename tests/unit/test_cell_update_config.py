@@ -145,6 +145,10 @@ def test_explicit_fingerprint_is_identical_to_the_process_and_uses_candidate_org
     "template",
     [
         "version: 1\nsettings:\n  openai_base_url: {marker}\n",
+        "version: 1\nsettings:\n  tracker_org: !!int {marker}\n",
+        "version: 1\nsettings:\n  tracker_org: !!float {marker}\n",
+        "version: 1\nsettings:\n  tracker_org: !!bool {marker}\n",
+        "version: 1\nsettings:\n  tracker_org: !!timestamp {marker}\n",
         "version: {marker}\nsettings: {{}}\n",
         "version: 1\nsettings:\n  jwt_secret: [\n  {marker}\n",
         "version: 1\nsettings:\n  memory_ask_deep_evidence_max_memories: {marker}\n",
