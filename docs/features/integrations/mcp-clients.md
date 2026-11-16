@@ -401,6 +401,22 @@ contains applies.
 | `invalid token:`, `untrusted issuer` or `has no … key`                     | a token cut short when pasted (it often reads `Signature verification failed`), or one minted by another Loom or with a retired key | paste the whole token; if it still fails, mint one on this server ([tokens and grants](../../guides/tokens-and-grants.md)) |
 | a `503` that says to retry shortly                                         | the server cannot check tokens yet (keys or revocation list not loaded or stale)                                                    | retry; the token may be good                                                                                               |
 
+## Use a local model for the coding agent
+
+The coding agent's model and Loom's server-side model jobs are configured separately.
+Selecting Ollama for Loom does not select the model that your coding agent uses.
+
+For an OpenCode agent, follow [Ollama's OpenCode configuration](https://docs.ollama.com/integrations/opencode)
+to select a local model and set the client's context window. Its documented command
+`ollama launch opencode --config` configures the integration without starting an
+interactive agent session. Then add Loom using the OpenCode MCP entry above and the
+[agent instructions](agent-instructions.md). The agent's model
+must support the client's tool use and fit the available hardware; the MCP checks
+above do not qualify a local model or measure a coding run.
+
+Configure [Loom's models and keys](../../getting-started/models-and-keys.md) separately
+for its server-side jobs.
+
 ## Clients that sign in by browser
 
 Needs `LOOM_OAUTH_ENABLED=true`. Loom then acts as an OAuth 2.1 authorization server: a
