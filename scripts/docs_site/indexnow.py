@@ -7,8 +7,9 @@ docs/ whose name is its own content; it is public by design.
 Usage: indexnow.py <changed path>...   (paths relative to the repository root)
 A changed or deleted page under docs/ maps to its URL. A change to what renders the pages
 (mkdocs.yml, the hooks, the theme overrides, the pinned builder, or
-scripts/codegen/page_summary.py, which writes the descriptions and sidebar) changes every
-page, so every page under docs/ is submitted; a change to this script alone submits none.
+scripts/codegen/page_summary.py, which supplies the descriptions and the sidebar order)
+changes every page, so every page under docs/ is submitted; a change to this script alone
+submits none.
 """
 
 from __future__ import annotations
