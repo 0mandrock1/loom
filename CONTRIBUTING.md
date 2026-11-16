@@ -146,24 +146,25 @@ An operation or field may be renamed or removed. Say so in the PR description an
 
 `i18n/<lang>/` holds machine translations of the README, the quickstart and the use-case pages. `scripts/i18n/translate.py` writes them and `.github/workflows/i18n.yml` runs it on main after an English page changes; never edit a translation by hand.
 
-The script calls Claude on Amazon Bedrock and signs each request with AWS credentials. It takes temporary credentials only: it requires `AWS_SESSION_TOKEN`. To run it yourself, sign in to an AWS account where Bedrock serves Claude Sonnet 5.5 and export temporary credentials (with an IAM user's access key, `aws sts get-session-token` returns them):
+The script calls Claude Sonnet 5.5 on Amazon Bedrock through the `anthropic` package's `AnthropicBedrock` client, which signs each request with the default AWS credential chain. To run it yourself, sign in to an AWS account where Bedrock serves the model and install the pinned client:
 
 ```bash
+python -m pip install --require-hashes --no-deps --only-binary=:all: -r scripts/i18n/requirements.txt
 aws sso login
-eval "$(aws configure export-credentials --format env)"
 export AWS_REGION=<region>
 python -m scripts.i18n.translate update
 ```
 
-The workflow gets its credentials from GitHub's OIDC token. Its job runs in the environment `i18n`, assumes an IAM role for one hour, and puts the credentials into the translating step's environment only. The role trusts the OIDC subject of that environment, so a job outside it cannot assume the role; any step inside the job could, which is why the environment is limited to `main`. While no role is configured, the job is skipped.
+The workflow stores no credential in GitHub. Its job runs on a self-hosted runner in AWS, and the SDK signs with that runner's EC2 instance role, which may invoke the one model and nothing else. Every step of the job can use the role, so the job only runs where no other code can reach it: on a push to main or a manual run on main, never on a pull request, in the environment `i18n`. While the repository variable `LOOM_I18N_RUNNER` is empty, the job is skipped.
 
 To turn translations on:
 
-1. Create the environment `i18n` with deployment branches set to `main` only (Settings → Environments), so a workflow on another branch cannot run in it. Do this before creating the role.
-2. Create the IAM role in an AWS account where Bedrock serves Claude Sonnet 5.5, with the trust and permission policies below.
-3. Set the repository variables `LOOM_I18N_AWS_ROLE_ARN` (the role) and `LOOM_I18N_AWS_REGION`. Set them on the repository, not on the environment: the job's `if:` reads them before the job enters the environment.
+1. Create the environment `i18n` with deployment branches set to `main` only (Settings → Environments).
+2. Get a runner group for this repository whose access is limited to the selected workflow `ClickHouse/loom/.github/workflows/i18n.yml@refs/heads/main` (runner group settings → Workflow access → Selected workflows), so no other workflow and no fork's pull request can schedule a job on it.
+3. Give the runners' instance role the policy below. In the account, accept Bedrock's model access for Claude Sonnet 5.5 once: the first call can otherwise fail with an access-denied error about `aws-marketplace:Subscribe`, and the role is not granted those Marketplace actions.
+4. Set the repository variable `LOOM_I18N_RUNNER` to the runner group's labels as a JSON list, for example `["self-hosted","<label>"]`.
 
-The trust policy names the subject GitHub puts in the job's token. This repository uses GitHub's immutable subject format, which carries the owner and repository ids; `gh api repos/ClickHouse/loom/actions/oidc/customization/sub` prints its prefix as `sub_claim_prefix`, and the environment's subject is that prefix followed by `:environment:i18n`:
+The job calls the model's global inference profile from the runner's `AWS_REGION`, or from `us-east-1` when the runner sets none. Bedrock authorizes a call through a global profile on three resources: the profile, the model in the calling region, and the model with no region. The policy names each, in that region:
 
 ```json
 {
@@ -171,33 +172,21 @@ The trust policy names the subject GitHub puts in the job's token. This reposito
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "arn:aws:bedrock:<region>:<account-id>:inference-profile/global.anthropic.claude-sonnet-5-5",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "<region>" } }
+    },
+    {
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": [
+        "arn:aws:bedrock:<region>::foundation-model/anthropic.claude-sonnet-5-5",
+        "arn:aws:bedrock:::foundation-model/anthropic.claude-sonnet-5-5"
+      ],
       "Condition": {
         "StringEquals": {
-          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:ClickHouse@54801242/loom@1410331061:environment:i18n"
+          "bedrock:InferenceProfileArn": "arn:aws:bedrock:<region>:<account-id>:inference-profile/global.anthropic.claude-sonnet-5-5"
         }
-      }
-    }
-  ]
-}
-```
-
-The permission policy allows inference on Claude Sonnet 5.5 (`anthropic.claude-sonnet-5-5`) only. Bedrock's `bedrock-mantle` endpoint authorizes inference on the account's project, so the policy names the model in a condition:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "bedrock-mantle:CreateInference",
-      "Resource": "arn:aws:bedrock-mantle:<region>:<account-id>:project/*",
-      "Condition": {
-        "StringEquals": { "bedrock-mantle:Model": "anthropic.claude-sonnet-5-5" }
       }
     }
   ]
