@@ -49,7 +49,8 @@ with (the two skills below are the exceptions). They send:
   (`LOOM_SESSION_MEMORY=off` stops it);
 - the file paths and diff outlines of uncommitted changes (a diff's outline is
   its file paths, hunk line ranges and usually the enclosing function's name; no
-  other part of a changed line is sent), run records and working-memory notes,
+  other part of a changed line is sent), a record of the session's first prompt
+  and last reply, a note with the goal, git status, files edited and last reply,
   token usage and the model name;
 - the repository's identity (each remote's owner and name, the branch and `HEAD`
   commit) and the working directory's absolute path;
@@ -89,11 +90,11 @@ Its files in the system temp directory, which can hold prompt and reply text,
 are also mode 0600. A queued write whose delivery process stopped before sending
 it stays until you replay or delete it (`loom-status` counts them and names the
 directory); one the server refuses or cannot be reached for is discarded, as is
-a batch of the redirect records above that fails to send; chat turns are sent
-again at the next Stop and a brief's events at the next save. Other state files
-are swept after a day untouched, and the log of which tool calls the plugin
-redirected or let through (no prompt or file content) stays until removed
-(`LOOM_SHUNT_LOG=off` stops it).
+a batch of the per-file read and grep records above that fails to send; chat
+turns are sent again at the next Stop and a brief's events at the next save.
+Other state files are swept after a day untouched, and the log of which tool
+calls the plugin redirected or let through (no prompt or file content) stays
+until removed (`LOOM_SHUNT_LOG=off` stops it).
 
 Two skills reach other services when you run them. `loom-status` can install
 Node.js after you agree: on Linux, as root or with passwordless sudo, it
