@@ -15,7 +15,7 @@
   <meta property="og:image" content="https://raw.githubusercontent.com/ClickHouse/loom/main/.github/social-preview.png">
   <meta name="twitter:card" content="summary_large_image">
   {% if page and page.file %}
-  {# The page's Markdown source, served beside it by hooks.py for agents that read Markdown. #}
+  {# The page's Markdown copy, served beside it by hooks.py for agents that read Markdown. #}
   <link rel="alternate" type="text/markdown" href="{{ config.site_url ~ page.file.src_uri }}">
   {% endif %}
   {% if page and page.is_homepage %}

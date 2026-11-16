@@ -175,8 +175,6 @@ _FULL_LAST = (
 )
 # A docs/ page named in llms.txt, not the tail of a longer path or URL.
 _DOCS_PAGE = re.compile(r"(?<![\w/.-])docs/([\w./-]*\.md)")
-# A link to the root llms-install.md.
-_ROOT_INSTALL = re.compile(r"\]\(llms-install\.md\)")
 
 
 def _with_source(body: str, site_url: str, uri: str) -> str:
@@ -224,7 +222,7 @@ def _site_llms_txt(llms: str, url: str) -> tuple[str, str]:
     finds it early. Also returns the rewritten part before the first section (title,
     summary and opening), which opens llms-full.txt too."""
     llms = _DOCS_PAGE.sub(lambda m: url + m.group(1), llms)
-    llms = _ROOT_INSTALL.sub(f"]({url}llms-install.md)", llms)
+    llms = llms.replace("](llms-install.md)", f"]({url}llms-install.md)")
     opening, sep, rest = llms.partition("\n\n## ")
     holds = _full_holds()
     head = (
@@ -242,8 +240,9 @@ def _site_llms_txt(llms: str, url: str) -> tuple[str, str]:
 
 def _site_install(install: str, url: str) -> str:
     """The site's llms-install.md: links resolve from the repository root, one level above
-    docs/, and past the title and opening paragraph (addressed to people, who want the
-    HTML pages) links to site pages go to their Markdown copies, as llms.txt's do."""
+    docs/, and a relative link to a docs page goes to its Markdown copy. Past the title and
+    opening paragraph (addressed to people, who want the HTML pages), an absolute link to a
+    site page goes to its Markdown copy too, as llms.txt's do; one in the opening stays."""
     install = _rewrite_links(install, "../llms-install.md", url, to_site=True)
     title, opening, steps = install.split("\n\n", 2)
     steps = re.sub(
