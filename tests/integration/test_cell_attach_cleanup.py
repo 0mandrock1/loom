@@ -45,7 +45,7 @@ async def test_attach_owner_releases_backend_locks_before_return(
             if query.startswith("SET LOCAL statement_timeout"):
                 return await execute(self, "SET LOCAL statement_timeout = '10000ms'")
             if query == "RAISE Python error":
-                raise ValueError("trigger statement failed")
+                raise asyncpg.LockNotAvailableError("trigger statement busy")
             if phase == "rollback" and query.startswith("ROLLBACK"):
                 await execute(self, "SELECT pg_sleep(10)")
             if owner == "mode" and query.startswith("LOCK TABLE"):
@@ -111,3 +111,44 @@ async def test_attach_owner_releases_backend_locks_before_return(
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_unexpected_trigger_error_reaches_owner_before_rollback(database, monkeypatch):
+    import asyncpg
+
+    from server.core import cell
+
+    conn, observer = database
+    pid = conn.get_server_pid()
+    await conn.execute("SELECT pg_advisory_lock($1)", cell.ATTACH_LOCK_KEY)
+    execute = asyncpg.Connection.execute
+    original = ValueError("unexpected trigger operation failed")
+
+    async def intercepted(self, query, *args, **kwargs):
+        if self is conn:
+            if query == "RAISE unexpected Python error":
+                assert await observer.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND locktype='advisory')",
+                    pid,
+                )
+                raise original
+            if query.startswith("ROLLBACK"):
+                await execute(self, "SELECT pg_sleep(10)")
+        return await execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(asyncpg.Connection, "execute", intercepted)
+    started = time.monotonic()
+    with pytest.raises(ValueError) as error:
+        await _owner(conn).call(
+            lambda: cell_triggers._run_ddl(
+                conn,
+                "probe",
+                ["SELECT * FROM probe FOR UPDATE", "RAISE unexpected Python error"],
+                attempts=1,
+                warn=False,
+            ),
+            total_s=0.5,
+        )
+    assert error.value is original
+    assert time.monotonic() - started < 0.5
+    await released(observer, pid)
