@@ -24,7 +24,10 @@ def test_a_changed_page_maps_to_the_url_the_site_serves_it_at() -> None:
     assert indexnow.page_url("docs/benchmarks/results.csv") is None
 
 
-def test_only_changed_pages_are_submitted_when_the_build_did_not_change() -> None:
+def test_only_changed_pages_are_submitted_without_translation_dependencies(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(indexnow, "DOCS", tmp_path / "docs")
     urls = indexnow.urls_for(["docs/a.md", "docs/a.md", "README.md", "docs/b/index.md"])
     assert urls == [SITE + "a/", SITE + "b/"]
 
@@ -66,7 +69,14 @@ def test_every_submitted_url_is_on_the_key_files_host_and_under_its_directory() 
     assert all(urlsplit(u).hostname == body["host"] for u in body["urlList"])
 
 
-def test_main_posts_only_the_changed_pages_and_posts_nothing_when_none_changed(monkeypatch) -> None:
+def test_main_posts_only_the_changed_pages_and_posts_nothing_when_none_changed(
+    tmp_path, monkeypatch
+) -> None:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    key = "a" * 32
+    (docs / f"{key}.txt").write_text(key)
+    monkeypatch.setattr(indexnow, "DOCS", docs)
     sent: list[dict] = []
 
     class _Resp:

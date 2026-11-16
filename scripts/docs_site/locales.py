@@ -179,6 +179,9 @@ def on_post_build(config):
             Path(entry["path"]).read_text(encoding="utf-8"), entry, pages, config.site_url
         )
         text = _with_source(body, config.site_url, uri)
-        for out in (site / uri, site / page_path(f"docs/{uri}") / "index.html.md"):
+        places = [site / uri, site / page_path(f"docs/{uri}") / "index.html.md"]
+        if uri.endswith("/index.md"):
+            places.append(site / f"{uri[: -len('/index.md')]}.md")
+        for out in places:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(text, encoding="utf-8")

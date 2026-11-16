@@ -69,8 +69,24 @@ def every_page() -> list[str]:
 
 
 def urls_for(paths: list[str]) -> list[str]:
+    from scripts.docs_site.locales import LANGUAGES, localized_page_path
+
     changed = {u for p in paths if (u := page_url(p))}
-    if any(p == i or (i.endswith("/") and p.startswith(i)) for p in paths for i in BUILD_INPUTS):
+    english = [p for p in paths if p.startswith("docs/") and p.endswith(".md")]
+    for source in english:
+        for language in LANGUAGES:
+            path = f"i18n/{language}/docs/{source[len('docs/') :]}"
+            if (DOCS.parent / path).is_file() and (url := page_url(path)):
+                changed.add(url)
+    # Translation links depend on target existence, and alternate sets and source
+    # notices depend on their peers. Include retained orphans when a source is deleted.
+    locale_change = any(localized_page_path(p) is not None for p in paths) or (
+        english
+        and any(any((DOCS.parent / "i18n" / lang / "docs").rglob("*.md")) for lang in LANGUAGES)
+    )
+    if locale_change or any(
+        p == i or (i.endswith("/") and p.startswith(i)) for p in paths for i in BUILD_INPUTS
+    ):
         # A deleted page is no longer in the tree, so keep the changed paths' URLs too.
         return sorted(changed | set(every_page()))
     return sorted(changed)

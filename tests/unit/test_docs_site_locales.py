@@ -192,3 +192,68 @@ def test_the_hook_loads_without_an_editable_repository_install():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_translation_changes_resubmit_pages_with_alternates_and_rewritten_links(
+    tmp_path, monkeypatch
+):
+    from scripts.docs_site import indexnow
+
+    blob = _source(tmp_path, "use-cases/index.md")
+    _source(tmp_path, "other.md")
+    _translation(tmp_path, "ja", "use-cases/index.md", blob)
+    monkeypatch.setattr(indexnow, "DOCS", tmp_path / "docs")
+    every = indexnow.every_page()
+    assert indexnow.urls_for(["docs/use-cases/index.md"]) == every
+    assert indexnow.urls_for(["i18n/ja/docs/use-cases/index.md"]) == every
+    deleted = "i18n/es/docs/use-cases/index.md"
+    assert indexnow.urls_for([deleted]) == sorted([*every, indexnow.SITE + "es/"])
+    assert indexnow.urls_for(["docs/other.md"]) == every
+
+
+def test_deleted_english_source_announces_removed_translated_routes(tmp_path, monkeypatch):
+    from scripts.docs_site import indexnow
+
+    _source(tmp_path, "other.md")
+    _translation(tmp_path, "ja", "use-cases/index.md", "0" * 40)
+    monkeypatch.setattr(indexnow, "DOCS", tmp_path / "docs")
+    assert indexnow.urls_for(["docs/use-cases/index.md"]) == [
+        indexnow.SITE + "ja/",
+        indexnow.SITE + "other/",
+        indexnow.SITE + "use-cases/",
+    ]
+
+
+def test_removed_untranslated_target_resubmits_translations_with_rewritten_links(
+    tmp_path, monkeypatch
+):
+    from scripts.docs_site import indexnow
+
+    blob = _source(tmp_path, "use-cases/index.md")
+    _source(tmp_path, "features/setup.md")
+    _translation(tmp_path, "ja", "use-cases/index.md", blob)
+    monkeypatch.setattr(indexnow, "DOCS", tmp_path / "docs")
+    monkeypatch.setattr(locales, "ROOT", tmp_path)
+    pages = locales.translations(tmp_path)
+    entry = pages["ja/index.md"]
+    body = f"<!-- stamp -->\n\n[setup]({locales.BLOB}docs/features/setup.md)"
+    assert f"]({URL}features/setup/)" in locales.translated_markdown(body, entry, pages, URL)
+    (tmp_path / "docs/features/setup.md").unlink()
+    assert locales.translated_markdown(body, entry, pages, URL) == body
+    assert indexnow.urls_for(["docs/features/setup.md"]) == sorted(
+        [*indexnow.every_page(), indexnow.SITE + "features/setup/"]
+    )
+
+
+def test_translated_section_index_serves_the_same_markdown_aliases(tmp_path, monkeypatch):
+    blob = _source(tmp_path, "use-cases/index.md")
+    _translation(tmp_path, "ja", "use-cases/index.md", blob)
+    pages = locales.translations(tmp_path)
+    site = tmp_path / "site"
+    monkeypatch.setattr(locales, "ROOT", tmp_path)
+    locales.on_post_build(
+        SimpleNamespace(site_dir=site, site_url=URL, extra={"locale_pages": pages})
+    )
+    body = (site / "ja/index.md").read_text()
+    assert (site / "ja.md").read_text() == body
+    assert (site / "ja/index.html.md").read_text() == body
