@@ -10,7 +10,7 @@ blast-radius questions with line-accurate units instead of whole-file reads.
 
 The tools and the hooks share one identity (org, namespace, agent) and the same
 conflict detection, blacklist and erasure. What the plugin sends, and where, is
-in [data handling](../../docs/features/integrations/claude-code.md#data-handling).
+under [data handling](#data-handling).
 
 The plugin also mounts the MCP tools: `.mcp.json` points at
 `${user_config.server_url}/mcp?toolset=${user_config.toolset}` (the
@@ -25,9 +25,54 @@ eight code tools, the duplicate check, bisect candidates, PR check and blast
 radius, `loom_search`, `loom_activate`, `loom_op`), ~9k
 tokens per `tools/list`; every other op runs through `loom_op {op, arguments}`. The
 `toolset` plugin setting selects another listing, including a union such as `coding+tracker`. See
-[docs/features/integrations/mcp-clients.md](../../docs/features/integrations/mcp-clients.md).
+[MCP clients](https://clickhouse.github.io/loom/features/integrations/mcp-clients/).
 
 > **Bare mode skips hooks.** `claude --bare` (chosen by some agent harnesses for prompt-cache and cost reasons) does not run PreToolUse hooks, so the token shunt and the outcome capture in this plugin do not fire there. A harness that wants the shunt under bare mode needs the SDK backend's hook path instead.
+
+## Data handling
+
+The plugin sends data only to the Loom server it is configured with:
+
+- prompts, tool calls' input and output, and the paths of files read or edited;
+- a symbol name taken from a redirected grep pattern, and the query of a `gh`
+  issue search with the repository it names;
+- chat turns and session briefs (the compaction summary and a log of asks,
+  commands, files and web addresses), stored only when the namespace has
+  conversation logging on;
+- the session's last 200 turns, which the server keeps as source evidence for
+  the facts it extracts whatever the logging setting is, with up to 80,000
+  characters of the session's Loom tool arguments and results
+  (`LOOM_SESSION_MEMORY=off` stops it);
+- the file paths and diff outlines of uncommitted changes, run records and
+  working-memory notes, token usage and the model name, and the repository's
+  identity;
+- what the agent passes to Loom's tools (memories, search and code queries);
+- on first use with no credential, the OS user name and host name; in agent
+  mode, the workload's identity token and `LOOM_CLIENT_ID`, exchanged for a Loom
+  token.
+
+Its hooks run `node`, `git` and `grep` on your machine: `git` reads the
+checkout's remotes, branch, status and diffs, and `grep` searches uncommitted
+files for a redirected grep pattern. At Stop, in an indexed checkout, they probe
+the checkout's Python for pytest (`LOOM_TEST_GATE=off` stops it).
+
+It keeps its token in `~/.loom/config.json` (mode 0600) and its other state in
+`~/.loom/` until you remove it. In the system temp directory, temp files with
+unsent data stay until sent, caches until swept, and a code-shunt decision log
+(no prompt or file content) stays until removed (`LOOM_SHUNT_LOG=off` stops it).
+
+Two skills reach other services when you run them. `loom-status` can install
+Node.js from NodeSource (apt, dnf or yum), apk or Homebrew, after you agree.
+`improve-loom-for-my-repo`, after building its report, searches the
+ClickHouse/loom GitHub issues for each finding's symbol or query without asking,
+and files a public issue there or comments on an existing one only after you
+approve.
+
+Install the plugin from one source, the Claude plugin directory or `loom@loom`,
+not both: both together register two MCP entries and run every hook twice.
+
+The full list is in
+[data handling](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling).
 
 ## What it wires
 
