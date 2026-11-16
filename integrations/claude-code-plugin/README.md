@@ -35,10 +35,11 @@ The hooks and scripts send data only to the Loom server the plugin is configured
 with (the two skills below are the exceptions). They send:
 
 - prompts, tool calls' input and output, and the paths of files read or edited;
-- the symbol name from a grep that the plugin answers from the code index
-  rather than running it, and the search text of a `gh issue list --search` or
-  `gh search issues` command it answers from Loom, with the repository that
-  command names;
+- the symbol name from a grep that the plugin redirects to Loom's code index,
+  and the search text of a `gh issue list --search` or `gh search issues`
+  command it redirects to Loom, with the repository that command names;
+- for each file read or grep the plugin redirects or lets through, the tool
+  name, file path and line range, and an estimate of the tokens saved;
 - chat turns and session briefs (the compaction summary and a log of asks and
   replies, commands, files and web addresses), stored only when the namespace
   has conversation logging on;
@@ -54,8 +55,9 @@ with (the two skills below are the exceptions). They send:
   commit) and the working directory's absolute path;
 - what the agent passes to Loom's tools (memories, search and code queries);
 - on first use with no credential, the OS user name and host name; in agent
-  mode, the workload's identity token and `LOOM_CLIENT_ID`, exchanged for a Loom
-  token.
+  mode (when `LOOM_CLIENT_ID` and `LOOM_WORKLOAD_TOKEN` or
+  `LOOM_WORKLOAD_TOKEN_FILE` are set), the workload's identity token and
+  `LOOM_CLIENT_ID`, exchanged for a Loom token.
 
 A client-side redaction removes common credential shapes from what the hooks
 send; it is best effort, not a guarantee, and MCP tool arguments and a brief the
@@ -64,19 +66,19 @@ off switch, is listed in
 [data handling](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling).
 
 The server keeps this in its own databases (ClickHouse, and Postgres when the
-operator makes it the memory authority) and passes text to an LLM or embedding
-provider only if its operator configured one
+operator stores memories there) and passes text to an LLM or embedding provider
+only if its operator configured one
 ([models and keys](https://clickhouse.github.io/loom/getting-started/models-and-keys/));
 deleting data is covered in
 [retention and erasure](https://clickhouse.github.io/loom/features/memory/retention-and-erasure/).
 
 The plugin's hooks run `node`, `git` and `grep` on your machine: `git` reads the
 checkout's remotes, branch, `HEAD` commit, status and diffs, and `grep` searches
-uncommitted files for the pattern of a grep the plugin answers from the code
-index. The test gate runs no Python: for a pytest test it picks the interpreter
-of the checkout's virtualenv, the active one (`VIRTUAL_ENV`) or a `python3` or
-`python` on `PATH`, checking that the interpreter's file exists without running
-it.
+uncommitted files for the pattern of a grep the plugin redirects to the code
+index. The test gate (the Stop hook that names the tests a change needs) runs no
+Python: for a pytest test it picks the interpreter of the checkout's virtualenv,
+the active one (`VIRTUAL_ENV`) or a `python3` or `python` on `PATH`, checking
+that the interpreter's file exists without running it.
 
 The plugin keeps the token it saves (a copy of the install token or a
 self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
@@ -84,10 +86,10 @@ self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
 `~/.loom/`, mode 0600, until you remove it.
 
 Its files in the system temp directory, which can hold prompt and reply text,
-are also mode 0600. A queued capture that was never delivered stays until you
-replay or delete it (`loom-status` counts them and names the directory). A
-capture whose delivery fails is discarded, as is a batch of the records of which
-tool calls the plugin redirected when it fails to send; chat turns are sent
+are also mode 0600. A capture whose delivery process stopped before sending it
+stays until you replay or delete it (`loom-status` counts them and names the
+directory); one the server refuses or cannot be reached for is discarded, as is
+a batch of the redirect records above that fails to send; chat turns are sent
 again at the next Stop and a brief's events at the next save. Other state files
 are swept after a day untouched, and the log of which tool calls the plugin
 redirected (no prompt or file content) stays until removed (`LOOM_SHUNT_LOG=off`
@@ -103,15 +105,15 @@ it runs `brew upgrade node || brew install node` as you.
 ClickHouse/loom GitHub issues for each finding's symbol or query without asking,
 and files a public issue there or comments on an existing one only after you
 approve; the issue holds the report as shown to you: the server version,
-namespace, indexed commit and corpus size, and each finding's queries, symbols
-and file units.
+namespace, indexed commit and how much of the repository is indexed, and for
+each finding a reproduction with its queries, symbols and file names.
 
 Keep one Loom entry per session: a user-scope MCP entry that points at the same
-Loom server registers a second server beside the plugin
-(`claude mcp remove <name> -s user`, with the name SessionStart's warning gives,
-removes it). SessionStart reads the user-scope MCP entries in `~/.claude.json`,
-on the machine only, to warn once a day when one does. The warning, which the
-session sees, names the entry; nothing else from that file is sent.
+Loom server registers a second server beside the plugin. To remove it, run
+`claude mcp remove <name> -s user` with the name SessionStart's warning gives.
+SessionStart reads the user-scope MCP entries in `~/.claude.json`, on the
+machine only, to warn once a day when one does. The warning, which the session
+sees, names the entry; nothing else from that file is sent.
 
 ## What it wires
 
