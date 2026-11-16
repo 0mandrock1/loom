@@ -401,7 +401,7 @@ NARROW_SAFE_OPS: dict[str, str] = {
     # Not cost.agent_summary: it has no user axis, and its session_id grouping lists
     # every user's sessions and spend.
     "cost.summary": "the caller's own cost counters (pinned through its user_id)",
-    "cost.budget_status": "the namespace's budget counters",
+    "cost.budget_status": "namespace counters, or the token-pinned user's counters",
     "cost.record_turns": "the caller's own model turns (usage rows, no memory)",
     # Not ops.projection_failures.*: a failure row has no user axis, and carries
     # other users' memory keys and payloads.

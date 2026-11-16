@@ -27,7 +27,6 @@ from server.insights.api.models_cost import (
     CostSummaryRow,
 )
 from server.insights.store import cost as cost_store
-from server.observability.budget import effective_cap
 
 log = logging.getLogger(__name__)
 
@@ -158,13 +157,25 @@ async def handle_budget_status(input: BudgetStatusInput) -> BudgetStatusOutput:
     """
     ch = get_client()
 
+    from server.core.errors import ValidationError
+    from server.observability.budget import budget_snapshot, named_user
+
+    user_id = named_user(input.user_id)
+    if user_id and not input.namespace:
+        raise ValidationError("namespace is required for a user budget")
     if input.namespace:
-        spent = await cost_store.namespace_spend_24h(input.org, input.namespace, ch=ch)
-        cap, source = effective_cap(
-            await cost_store.namespace_cap(input.org, input.namespace, ch=ch)
+        snapshot = await budget_snapshot(
+            input.org, input.namespace, user_id=user_id, read_uncapped=True, ch=ch
         )
+        cap = snapshot.user_cap if user_id else snapshot.cap
+        spent = snapshot.user_spent if user_id else snapshot.spent
+        source = snapshot.user_cap_source if user_id else snapshot.cap_source
         return BudgetStatusOutput(
             namespace=input.namespace,
+            user_id=user_id or None,
+            namespace_over_cap=(snapshot.cap > 0 and snapshot.spent >= snapshot.cap)
+            if user_id
+            else None,
             spent_24h_usd=round(spent, 6),
             cap_usd=round(cap, 4),
             cap_source=source,

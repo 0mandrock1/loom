@@ -3376,7 +3376,9 @@ CREATE TABLE IF NOT EXISTS loom.namespaces
     `retrieval_defaults` String DEFAULT '',
     `proposal_policy` String DEFAULT '',
     `code_change_policy` LowCardinality(String) DEFAULT '',
-    `released_aliases` Array(String) DEFAULT []
+    `released_aliases` Array(String) DEFAULT [],
+    `daily_user_cost_cap_usd` Float64 DEFAULT 0,
+    `budget_alert_inbox` String DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY org
@@ -4131,6 +4133,9 @@ CREATE TABLE IF NOT EXISTS loom.task_events
     `patch` String DEFAULT '{}',
     `note` String DEFAULT '',
     `ts` DateTime64(3) DEFAULT now64(3),
+    `user_id` String DEFAULT '-',
+    `session_id` String DEFAULT '-',
+    `source_class` LowCardinality(String) DEFAULT '',
     INDEX idx_from_subject from_subject TYPE bloom_filter GRANULARITY 4
 )
 ENGINE = MergeTree

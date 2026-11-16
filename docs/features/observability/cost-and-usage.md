@@ -94,6 +94,14 @@ Each namespace has a rolling 24-hour spend cap: its own `daily_cost_cap_usd` (se
 `namespace.register`) when above 0, else `LOOM_DEFAULT_DAILY_COST_CAP_USD` (`1.0`). 0 on
 both means uncapped.
 
+`daily_user_cost_cap_usd` sets the same separate allowance for each named logical
+`user_id` in the namespace. 0 inherits `LOOM_DEFAULT_DAILY_USER_COST_CAP_USD` (default 0);
+0 on both tiers disables user caps. `memory.ask` checks both ceilings and uses their
+largest spend fraction for budget-pressure routing. Workers and operations that record
+cost without a named user remain namespace-only. These are soft spend controls:
+concurrent calls can overshoot, and the logical user is the request's cost attribution,
+not the authenticated account or a billing identity.
+
 The guard (`namespace_over_cap` / `namespaces_over_cap` in
 `server/observability/budget.py`) gates LLM work. Over the cap, each of these skips its
 paid step:
@@ -112,11 +120,24 @@ spend read errors, the namespace reads as under its cap.
 | ------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | `spent_24h_usd`          | `sum(upstream_cost_usd)` over the last day                                                                  |
 | `cap_usd`, `cap_source`  | the effective cap and where it came from: `namespace`, `global`, `uncapped`, or `org` for the org-wide form |
-| `over_cap`, `pct_of_cap` | whether the guard would skip; share of the cap spent (`null` when uncapped)                                 |
+| `over_cap`, `pct_of_cap` | whether the selected cap is reached; share spent (`null` when uncapped)                                     |
 | `namespaces_with_spend`  | org-wide form only                                                                                          |
 
 Omit `namespace` for the org-wide form, which is always uncapped and sums the namespaces
-you can read.
+you can read. Supply both `namespace` and `user_id` for one user's allowance and spend;
+`cap_source` then reads `namespace_user`, `global_user`, or `uncapped`.
+`namespace_over_cap` separately reports whether the namespace ceiling blocks that user.
+A token pinned to one user cannot select another user's counters.
+
+Set `budget_alert_inbox` with `namespace.register` or the namespace settings dialog to
+an existing task inbox owned by that namespace. Empty disables warnings. A point budget
+check or `cost.budget_status` poll sends `budget.warning` when the observed spend reaches
+`LOOM_COST_BUDGET_ALERT_SHARE` (default 0.8) of a cap. Namespace checks warn for the
+namespace; user checks can also warn for that named user. There is no scan of every
+user's spend. Delivery is bounded and asynchronous: a failed delivery does not change
+the budget decision, and a later check retries it. Repeated checks deduplicate within
+each UTC day for the same scope, inbox, cap and share; the next day can send a reminder.
+Warnings wait until every live replica supports their erasure metadata.
 
 The $1 default stops a runaway extraction loop on a laptop. A production namespace that
 ingests heavily needs its own cap, or extraction stops partway through the day.

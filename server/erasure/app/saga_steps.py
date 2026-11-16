@@ -285,6 +285,7 @@ _LATE_STEPS_NS: tuple[NamespaceStep, ...] = (
     ("code_index.purge", _step_purge_code_index_by_ns),
 )
 _LATE_STEPS_USER: tuple[UserStep, ...] = (
+    ("tasks.delete", ledger_steps.delete_task_events_by_user),
     ("conversations.tombstone", ledger_steps.tombstone_conversations_by_user),
     ("context_blobs.tombstone", ledger_steps.tombstone_context_blobs_by_user),
     ("session_briefs.delete", ledger_steps.delete_session_briefs_by_user),

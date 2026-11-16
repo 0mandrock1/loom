@@ -863,6 +863,15 @@ async def _conversation_threads(ch: RecordingCH, c: dict[str, Any]) -> None:
     )
 
 
+async def _budget_warning_events(ch: RecordingCH, _v: dict[str, Any]) -> None:
+    from server.tasks.store import budget_notifications
+
+    await budget_notifications.event_seqs(ORG, "warnings", _UUID, ch=ch)
+    row = {"org": ORG, "inbox": "warnings", "task_id": _UUID, "seq": 1}
+    await budget_notifications.insert_event(row, ch=ch)
+    await budget_notifications.remove_event(row, ch=ch)
+
+
 async def _session_runs(ch: RecordingCH, c: dict[str, Any]) -> None:
     """The session-run ledger reads: the run under an id, the idle sweep, a
     run's spend over its window, and the time a re-sent turn is recorded with."""
@@ -1127,6 +1136,14 @@ def cases() -> list[Case]:
         )
     )
     out.append(Case("session_runs.ledger", "server.tasks.store.runs", _session_runs, {}))
+    out.append(
+        Case(
+            "budget_warnings.events",
+            "server.tasks.store.budget_notifications",
+            _budget_warning_events,
+            {},
+        )
+    )
     out.append(
         Case(
             "provider_rebuild.session_chunks",

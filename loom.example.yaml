@@ -4879,6 +4879,14 @@ settings:
   # loom.namespaces.daily_cost_cap_usd; 0.0 disables on both tiers. [restart]
   # default_daily_cost_cap_usd: 1.0
 
+  # Separate rolling-24h cap per named user_id within a namespace, USD; 0 disables it. A
+  # namespace's daily_user_cost_cap_usd overrides this default when positive. [live]
+  # default_daily_user_cost_cap_usd: 0.0
+
+  # Fraction of a cap that warns its namespace's configured inbox on the next check.
+  # [live]
+  # cost_budget_alert_share: 0.8
+
   # True: reads call no LLM (ask synthesis: 409), skip the spelling-fix and
   # set-expansion embeddings, and rerank only as named, since a reranker is a model
   # call. [restart]

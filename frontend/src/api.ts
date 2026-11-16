@@ -1118,7 +1118,9 @@ export interface BudgetStatus {
   namespace: string;
   spent_24h_usd: number;
   cap_usd: number;
-  cap_source: "namespace" | "global" | "uncapped" | "org";
+  cap_source: "namespace" | "global" | "namespace_user" | "global_user" | "uncapped" | "org";
+  user_id?: string | null;
+  namespace_over_cap?: boolean | null;
   over_cap: boolean;
   pct_of_cap: number | null;
   namespaces_with_spend?: number;
