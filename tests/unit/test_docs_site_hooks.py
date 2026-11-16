@@ -237,6 +237,7 @@ def _site_tree(tmp_path: Path) -> tuple[Path, Path]:
         "# ClickHouse Loom\n\n> Summary.\n\nStart with docs/index.md, or [install](llms-install.md). Not a page: "
         "https://example.org/docs/x.md, agent-docs/y.md.\n\n## Getting started\n\n"
         "- [Overview](docs/getting-started/overview.md): Loom is a server.\n\n"
+        "## Use cases\n\n- [Agent memory](docs/use-cases/agent-memory.md): Memory for agents.\n\n"
         "## Optional\n\n- [CLI](docs/reference/cli.md): Every command.\n"
     )
     (root / "llms-install.md").write_text(
@@ -284,10 +285,12 @@ def test_the_site_serves_each_page_as_markdown_and_llms_files(
     assert "- [Overview](https://example.com/loom/getting-started/overview.md)" in llms
     # Only a docs/ path of its own is rewritten, not the tail of a URL or a longer path.
     assert "https://example.org/docs/x.md, agent-docs/y.md." in llms
-    # llms-full.txt is a section of its own, before the Optional one a reader may skip.
-    assert f"## Full text\n\n- [llms-full.txt]({url}llms-full.txt): The {holds}" in llms
+    # llms-full.txt is a section of its own, right after the use cases.
+    cases = f"- [Agent memory]({url}use-cases/agent-memory.md): Memory for agents.\n\n"
+    assert f"{cases}## Full text\n\n- [llms-full.txt]({url}llms-full.txt): The {holds}" in llms
     assert f"The full text of the {holds} is in one file: [llms-full.txt]" in llms.split("##")[0]
-    assert llms.index("## Getting started") < llms.index("## Full text") < llms.index("## Optional")
+    assert llms.index("## Full text") < llms.index("## Optional")
+    assert "\n\n\n" not in llms
 
     install = (site / "llms-install.md").read_text()
     assert f"[quickstart]({url}getting-started/quickstart.md)" in install

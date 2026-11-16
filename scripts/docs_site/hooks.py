@@ -243,12 +243,10 @@ def on_post_build(config):
     full = f"## Full text\n\n- [llms-full.txt]({url}llms-full.txt): The {holds}, in one file.\n\n"
     # Right after the use cases, where an agent reading the file from the top finds it early.
     lead, uc, after = rest.partition("\n## Use cases\n")
-    if uc:
-        cases, nxt, tail = after.partition("\n## ")
-        rest = f"{lead}{uc}{cases}\n\n{full}## {tail}" if nxt else f"{rest}\n\n{full}"
-    else:
-        body, opt, optional = rest.partition("## Optional\n")
-        rest = f"{body}{full}{opt}{optional}"
+    cases, nxt, tail = after.partition("\n## ")
+    if not (uc and nxt):
+        raise ValueError("llms.txt needs a Use cases section with another section after it")
+    rest = f"{lead}{uc}{cases.rstrip()}\n\n{full}## {tail}"
     (site / "llms.txt").write_text(f"{head}{sep}{rest}".rstrip("\n") + "\n", encoding="utf-8")
 
     # The install steps a coding agent follows, at the root as in the repository.

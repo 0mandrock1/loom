@@ -441,8 +441,8 @@ def render_llms_txt() -> str:
         out.append("")
 
     # What Loom is for and how to use it come first (getting started, use cases, FAQ and
-    # glossary, concepts, features, guides), then operations and reference; Development is
-    # last, as the Optional section the llms.txt format lets a reader skip.
+    # glossary, concepts, features, guides), then the remaining sections in SECTIONS order;
+    # Development is last, as the Optional section the llms.txt format lets a reader skip.
     titles = {sub: heading for heading, sub in SECTIONS}
     for sub in ("getting-started", "use-cases"):
         section(titles[sub], sub)
