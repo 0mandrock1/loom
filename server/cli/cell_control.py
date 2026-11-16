@@ -239,6 +239,8 @@ async def run[T](what: str, work: Callable[[Owner], Awaitable[T]]) -> T:
         raise
     try:
         await owner.close()
+    except _ForwardFatal as interrupted:
+        raise interrupted.fatal.error from None
     finally:
         await owner._stop(set(owner._tasks))
     return result

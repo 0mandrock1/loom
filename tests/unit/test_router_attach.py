@@ -1102,8 +1102,17 @@ def _stores(monkeypatch: pytest.MonkeyPatch, refusal: Any) -> list[str]:
         pass
 
     monkeypatch.setattr(cell_control, "paired", paired)
-    monkeypatch.setattr(cell_control, "session", lambda _what: contextlib.nullcontext(object()))
-    monkeypatch.setattr(cell_control, "transaction", lambda _conn: contextlib.nullcontext())
+
+    class Owner:
+        conn = object()
+
+        async def transaction(self, work):
+            return await work()
+
+    async def run(_what, work):
+        return await work(Owner())
+
+    monkeypatch.setattr(cell_control, "run", run)
     monkeypatch.setattr(cell_control, "check_lock", held)
     monkeypatch.setattr(cell, "read_state_if_present", state)
     return checked

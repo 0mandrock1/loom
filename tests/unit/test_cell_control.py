@@ -134,3 +134,153 @@ async def test_whole_router_request_is_bounded_even_without_a_transport_reply(mo
             "/claim",
             {},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sqlstate", ["55P03", "57014"])
+@pytest.mark.parametrize("where", ["UPDATE loom.tenancy_mode", "COMMIT"])
+async def test_mode_contention_is_busy_only_before_commit_after_acknowledged_rollback(
+    sqlstate, where
+):
+    from server.cli import cell_attach_pg as apg
+    from tests.unit.cell_control_owner import owner
+    from tests.unit.test_cell_attach import CURRENT, NEXT
+
+    class Busy(Exception):
+        pass
+
+    busy = Busy("expected contention")
+    busy.sqlstate = sqlstate
+    routes = [(where, busy)]
+    if where == "COMMIT":
+        routes.append(("UPDATE loom.tenancy_mode", "UPDATE 1"))
+    conn = FakeConn(routes)
+    owned = owner(conn)
+    marks = []
+    if where == "COMMIT":
+        with pytest.raises(Busy) as found:
+            await apg._mode_try(owned, 100, marks.append, "first", (CURRENT, NEXT))
+        assert found.value is busy
+        assert "ROLLBACK" not in conn.executed and marks == ["unknown"]
+        assert owned.closed
+    else:
+        assert not await apg._mode_try(owned, 100, marks.append, "first", (CURRENT, NEXT))
+        assert conn.executed[-1] == "ROLLBACK" and marks == ["unknown", "recording"]
+        assert not owned.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", ["rollback", "ownership", "update-status"])
+async def test_terminal_mode_failure_never_resets_unknown_or_retries(failed):
+    import asyncpg
+
+    from server.cli import cell_attach_pg as apg
+    from tests.unit.cell_control_owner import owner
+    from tests.unit.test_cell_attach import CURRENT, NEXT, _seq
+
+    original = ValueError("rollback failed")
+    routes = [("UPDATE loom.tenancy_mode", "UPDATE 0")]
+    if failed != "update-status":
+        routes = [("UPDATE loom.tenancy_mode", asyncpg.LockNotAvailableError("busy"))]
+    if failed == "rollback":
+        routes.append(("ROLLBACK", original))
+    if failed == "ownership":
+        routes.append((apg._HELD, _seq(True, False)))
+    conn, marks = FakeConn(routes), []
+    with pytest.raises(ValueError if failed == "rollback" else cell_control.Refused) as found:
+        await apg.commit_enforced(
+            owner(conn),
+            AsyncMock(),
+            AsyncMock(return_value=[]),
+            apg.Wait(0),
+            lambda _: None,
+            marks.append,
+            expected_cell="first",
+            expected_fp=(CURRENT, NEXT),
+        )
+    if failed == "rollback":
+        assert found.value is original
+    assert marks == ["unknown"] and conn.executed[-1] == "CLOSE"
+    assert conn.executed.count("BEGIN") == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_phase_does_not_receive_another_exit_allowance(monkeypatch):
+    import time
+
+    class StalledClose(FakeConn):
+        async def close(self, **kwargs):
+            self.timeouts = [kwargs["timeout"]]
+            self.executed.append("CLOSE START")
+            await asyncio.Future()
+
+    conn = StalledClose()
+
+    async def opening(self, _what):
+        self.conn = conn
+
+    monkeypatch.setattr(cell_control.Owner, "_open", opening)
+    monkeypatch.setattr(cell_control, "TRANSACTION_S", 0.04)
+
+    async def body(owned):
+        return await owned.transaction(lambda: asyncio.Future())
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        await cell_control.run("test", body)
+    assert time.monotonic() - started < 0.3
+    assert conn.executed.count("CLOSE START") == 1
+    assert 0 < conn.timeouts[0] <= 0.02
+    assert "TERMINATE" in conn.executed
+
+
+@pytest.mark.asyncio
+async def test_late_connection_is_discarded_without_starting_command_work(monkeypatch):
+    from server.core import pg
+
+    connected, discarded = asyncio.Event(), asyncio.Event()
+
+    class Late(FakeConn):
+        def terminate(self):
+            super().terminate()
+            discarded.set()
+
+    conn = Late()
+
+    async def connect(**_):
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            while not connected.is_set():
+                try:
+                    await connected.wait()
+                except asyncio.CancelledError:
+                    pass
+        return conn
+
+    monkeypatch.setattr(pg, "_connect_dedicated", connect)
+    monkeypatch.setattr(cell_control, "OPEN_S", 0.04)
+    body = AsyncMock()
+    with pytest.raises(TimeoutError):
+        await cell_control.run("late", body)
+    connected.set()
+    await asyncio.wait_for(discarded.wait(), 0.3)
+    body.assert_not_awaited()
+    assert conn.executed == ["TERMINATE"]
+
+
+@pytest.mark.asyncio
+async def test_successful_body_cannot_hide_failed_required_close(monkeypatch):
+    class Broken(FakeConn):
+        async def close(self, **_):
+            raise OSError("required close failed")
+
+    conn = Broken()
+
+    async def opening(self, _what):
+        self.conn = conn
+
+    monkeypatch.setattr(cell_control.Owner, "_open", opening)
+    with pytest.raises(OSError, match="required close failed"):
+        await cell_control.run("test", AsyncMock(return_value=7))
+    assert "TERMINATE" in conn.executed

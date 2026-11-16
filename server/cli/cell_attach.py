@@ -155,7 +155,7 @@ class Run:
         self.name = args.cell
         self.wait = apg.Wait(args.wait)
         self.lock_conn: Any = None
-        self._lock_cm: Any = None
+        self.owner: cell_control.Owner
         self.row: dict[str, Any] = {}
         self.mode = ""
         self.own_fp: tuple[dict[str, Any] | None, dict[str, Any] | None] = (None, None)
@@ -164,35 +164,6 @@ class Run:
         self.report: dict[str, Any] = {"cell": self.name}
 
     # -- the lock session --------------------------------------------------------------
-
-    async def open_lock(self) -> None:
-        self._lock_cm = cell_control.session("attach")
-        self.lock_conn = await self._lock_cm.__aenter__()
-
-    async def close_lock(self) -> None:
-        from server.core import pg
-
-        if self._lock_cm is not None:
-            cm, conn = self._lock_cm, self.lock_conn
-            self._lock_cm = self.lock_conn = None
-            closed = pg._lost(conn)
-            end = time.monotonic() + (0.0 if closed else pg._RELEASE_TIMEOUT_S)
-            try:
-                if not closed:
-                    await pg.close_owned(conn, end=end)
-            finally:
-                task = asyncio.create_task(cm.__aexit__(None, None, None))
-                task.add_done_callback(pg._retrieve_task)
-                try:
-                    done, _ = await asyncio.wait({task}, timeout=max(0.0, end - time.monotonic()))
-                    if not done:
-                        task.cancel()
-                        raise TimeoutError("attach lock cleanup deadline expired")
-                    task.result()
-                except BaseException:
-                    pg._terminate(conn)
-                    task.cancel()
-                    raise
 
     async def confirm_lock(self) -> None:
         """A lost backend ends the owner; a new run must claim and start again."""
@@ -417,7 +388,7 @@ class Run:
         }
 
     async def triggers(self) -> None:
-        if refusals := await apg.ensure_triggers(self.lock_conn, self.wait, self.log):
+        if refusals := await apg.ensure_triggers(self.owner, self.wait, self.log):
             raise Refused(refusals)
 
     # -- step 3 ------------------------------------------------------------------------
@@ -437,7 +408,7 @@ class Run:
             self.mode = mode
 
         await apg.commit_enforced(
-            self.lock_conn,
+            self.owner,
             self.confirm_lock,
             self.ready_for_commit,
             self.wait,
@@ -448,32 +419,16 @@ class Run:
         )
 
     async def durable(self) -> int:
-        """The durable read of `enforced`, retried within `--wait`; then X, the snapshot's
+        """The bounded durable read of `enforced`; then X, the snapshot's
         xmax, above the read's own xid."""
-        from server.core import pg, pg_profile
+        from server.core import pg_profile
 
         with self.wait.counting():
-            while True:
-                if await pg_profile.standby_now() != "synchronous":
-                    raise _refused("postgres standbys", "not synchronous before the durable read")
-                try:
-                    read = await apg.durable_read(self.lock_conn)
-                except Exception as e:
-                    # A try cut off by its bound, or an outage: its outcome is unknown, and
-                    # the next try reads again. Anything else is no reason to retry.
-                    outage = pg.is_outage(e) or isinstance(e, pg.PostgresUnavailableError)
-                    if not (isinstance(e, TimeoutError) or outage):
-                        raise
-                    await self.confirm_lock()
-                    self.log(f"the durable read failed ({type(e).__name__}); retrying")
-                    if not await self.wait.pause():
-                        raise _refused(
-                            "postgres durable read", "did not commit within --wait"
-                        ) from e
-                    continue
-                if await pg_profile.standby_now() != "synchronous":
-                    raise _refused("postgres standbys", "not synchronous after the durable read")
-                break
+            if await pg_profile.standby_now() != "synchronous":
+                raise _refused("postgres standbys", "not synchronous before the durable read")
+            read = await apg.durable_read(self.owner)
+            if await pg_profile.standby_now() != "synchronous":
+                raise _refused("postgres standbys", "not synchronous after the durable read")
         if read.mode in cell.MODES:
             self.mode = read.mode
         if read.first != (True, self.name) or read.mode != "enforced":
@@ -608,44 +563,36 @@ class Run:
             await self.done()
             self.report.update(state="serving", done=True)
             return 0
-        failure: BaseException | None = None
-        try:
-            await self.open_lock()
-            await self.read_own_row()
-            topology, names, listed = await self.refusals()
-            if self.args.dry_run:
-                return await self.dry_run(topology, listed)
-            self.row = await cell_control.claim(self.lock_conn, self.router.call, self.row)
-            await self.begin()
-            state, _ = await apg.read_mode(self.lock_conn)
-            self.mode = state
+        return await cell_control.run("attach", self._owned)
+
+    async def _owned(self, owner: cell_control.Owner) -> int:
+        self.owner, self.lock_conn = owner, owner.conn
+        await self.read_own_row()
+        topology, names, listed = await self.refusals()
+        if self.args.dry_run:
+            return await self.dry_run(topology, listed)
+        self.row = await cell_control.claim(self.lock_conn, self.router.call, self.row)
+        await self.begin()
+        state, _ = await apg.read_mode(self.lock_conn)
+        self.mode = state
+        await self.triggers()
+        if state == "recording":
+            found = await self.scan(topology, listed)
+            if found.too_long:
+                raise Refused(_too_long(found))
+            written = await apg.write_tenancy(found.orgs)
+            self.log(f"step 2: {len(found.orgs)} orgs found, {written} tenancy rows written")
             await self.triggers()
-            if state == "recording":
-                found = await self.scan(topology, listed)
-                if found.too_long:
-                    raise Refused(_too_long(found))
-                written = await apg.write_tenancy(found.orgs)
-                self.log(f"step 2: {len(found.orgs)} orgs found, {written} tenancy rows written")
-                await self.triggers()
-                await self.precommit(found)
-                await self.commit_mode()
-            else:
-                await self.mutate("/attach/enforced", {"deployment_id": self.row["deployment_id"]})
-            xmax = await self.durable()
-            await self.check_beats("ignore")
-            await self.step4(xmax, topology, names)
-            answer = await self.serving()
-            self.report.update(state=answer.get("state"), placed_orgs=answer.get("placed_orgs"))
-            return 0
-        except BaseException as error:
-            failure = error
-            raise
-        finally:
-            try:
-                await self.close_lock()
-            except BaseException:
-                if failure is None:
-                    raise
+            await self.precommit(found)
+            await self.commit_mode()
+        else:
+            await self.mutate("/attach/enforced", {"deployment_id": self.row["deployment_id"]})
+        xmax = await self.durable()
+        await self.check_beats("ignore")
+        await self.step4(xmax, topology, names)
+        answer = await self.serving()
+        self.report.update(state=answer.get("state"), placed_orgs=answer.get("placed_orgs"))
+        return 0
 
     async def precommit(self, found: cell_scan.ScanResult) -> None:
         from server.core import pg_profile

@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -16,7 +15,7 @@ from typing import Any
 import httpx
 import pytest
 
-from server.cli import cell_attach, cell_scan
+from server.cli import cell_attach, cell_control, cell_scan
 from server.cli import cell_attach_beats as beats
 from server.cli import cell_attach_pg as apg
 from server.cli.cell_ch import Refusal, Refused
@@ -24,6 +23,7 @@ from server.cli.cell_scan import Table
 from server.core import cell, instances
 from server.router.limits import ATTACH_BATCH, MAX_BODY_BYTES
 from server.settings import settings
+from tests.unit.cell_control_owner import owner as _owner
 
 FIELDS = {**cell.DEFAULTS, "deployment_id": "dep-1"}
 CURRENT = cell.as_value(FIELDS)
@@ -253,7 +253,7 @@ async def test_wait_is_wall_time_lock_tries_included_and_no_scan(clock: _Clock) 
     clock.now += 100  # a scan before the wait
     with pytest.raises(Refused, match="not taken within --wait"):
         await apg.commit_enforced(
-            conn,
+            _owner(conn),
             nothing,
             ready,
             wait,
@@ -287,7 +287,7 @@ async def test_the_trigger_pass_refuses_at_once_a_table_it_cannot_alter(
     monkeypatch.setattr(cell_triggers, "ensure_table", ensure_table)
     conn = FakeConn([("deadlock_timeout", 1000)])
     wait = apg.Wait(60, clock)
-    (refusal,) = await apg.ensure_triggers(conn, wait, lambda _t: None)
+    (refusal,) = await apg.ensure_triggers(_owner(conn), wait, lambda _t: None)
     assert refusal.subject == "postgres loom.scope_generations"
     assert "cannot alter it" in refusal.reason and wait.spent < 1
 
@@ -300,7 +300,7 @@ async def test_the_trigger_pass_refuses_at_once_a_table_it_cannot_alter(
     monkeypatch.setattr(cell_triggers, "ensure_table", busy)
     wait = apg.Wait(10, clock)
     logged: list[str] = []
-    (refusal,) = await apg.ensure_triggers(conn, wait, logged.append)
+    (refusal,) = await apg.ensure_triggers(_owner(conn), wait, logged.append)
     # The last try ran with the floor's lock wait, after --wait was all but spent.
     assert "not taken within --wait" in refusal.reason
     assert wait.spent <= 10 + apg.TRY_FLOOR_MS / 1000 + 1e-9
@@ -519,9 +519,6 @@ class FakeConn:
 
         return _Tx()
 
-    async def close(self, *, timeout: float) -> None:
-        self.executed.append("CLOSE")
-
     def terminate(self) -> None:
         self.executed.append("TERMINATE")
 
@@ -534,14 +531,14 @@ class FakeConn:
 
 
 def _short_phases(monkeypatch: pytest.MonkeyPatch, bounds: list[float] | None = None) -> None:
-    supervise = apg.supervise
+    supervise = cell_control.Owner.call
 
-    async def bounded(conn: Any, work: Any, *, end: float) -> Any:
+    async def bounded(self: Any, work: Any, *, total_s: float) -> Any:
         if bounds is not None:
-            bounds.append(end - time.monotonic())
-        return await supervise(conn, work, end=time.monotonic() + 0.01)
+            bounds.append(total_s)
+        return await supervise(self, work, total_s=0.01)
 
-    monkeypatch.setattr(apg, "supervise", bounded)
+    monkeypatch.setattr(cell_control.Owner, "call", bounded)
 
 
 def _seq(*values: Any) -> Callable[..., Any]:
@@ -722,7 +719,7 @@ async def test_the_mode_commit_retries_a_busy_lock_without_ending_other_backends
 
     logged: list[str] = []
     await apg.commit_enforced(
-        conn,
+        _owner(conn),
         confirm,
         ready,
         apg.Wait(10, clock),
@@ -747,6 +744,7 @@ async def test_the_mode_commit_refuses_past_wait_and_skips_a_try_while_booting(
 ) -> None:
     conn = FakeConn([("l.mode = 'ExclusiveLock'", [])])
     run = cell_attach.Run(None, _args(), None, lambda _t: None)  # type: ignore[arg-type]
+    run.owner = _owner(FakeConn())
     run.own_fp = (CURRENT, NEXT)
 
     async def read(_ch: Any) -> list[beats.Beat]:
@@ -759,7 +757,7 @@ async def test_the_mode_commit_refuses_past_wait_and_skips_a_try_while_booting(
 
     with pytest.raises(Refused) as error:
         await apg.commit_enforced(
-            conn,
+            _owner(conn),
             confirm,
             run.ready_for_commit,
             apg.Wait(wait_s, clock),
@@ -801,7 +799,7 @@ async def test_the_mode_try_bounds_a_commit_that_never_answers(
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(
             apg.commit_enforced(
-                conn,
+                _owner(conn),
                 confirm,
                 ready,
                 apg.Wait(wait_s, clock),
@@ -837,7 +835,9 @@ async def test_a_mode_deadline_never_waits_for_rollback(
     _short_phases(monkeypatch)
     marks: list[str] = []
     task = asyncio.create_task(
-        apg._mode_try(conn, 100, marks.append, expected_cell="first", expected_fp=(CURRENT, NEXT))
+        apg._mode_try(
+            _owner(conn), 100, marks.append, expected_cell="first", expected_fp=(CURRENT, NEXT)
+        )
     )
     done, _ = await asyncio.wait([task], timeout=0.2)
     if not done:
@@ -905,9 +905,9 @@ async def test_an_interrupt_waiting_for_the_mode_lock_leaves_recording(clock: _C
     async def ready() -> list[str]:
         return []
 
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(cell_control._ForwardFatal) as fatal:
         await apg.commit_enforced(
-            conn,
+            _owner(conn),
             confirm,
             ready,
             apg.Wait(2, clock),
@@ -916,6 +916,7 @@ async def test_an_interrupt_waiting_for_the_mode_lock_leaves_recording(clock: _C
             expected_cell="first",
             expected_fp=(CURRENT, NEXT),
         )
+    assert isinstance(fatal.value.fatal.error, KeyboardInterrupt)
     assert conn.executed[-1] == "CLOSE"
     assert "TERMINATE" not in conn.executed
     assert marks == []
@@ -932,6 +933,7 @@ async def test_the_durable_read_must_see_enforced_and_x_above_its_xid(
 
     monkeypatch.setattr(pg_profile, "standby_now", synchronous)
     run = cell_attach.Run(None, _args(), None, lambda _t: None)  # type: ignore[arg-type]
+    run.owner = _owner(FakeConn())
     run.lock_conn = FakeConn([("pg_snapshot_xmax", "100")])
 
     async def read(mode: str, xid: int) -> apg.Durable:
@@ -974,6 +976,7 @@ async def test_a_serving_row_is_done_only_once_the_cell_is_enforced(
     monkeypatch.setattr(pg, "dedicated", dedicated)
     monkeypatch.setattr(apg, "read_mode", read_mode)
     run = cell_attach.Run(None, _args(), None, lambda _t: None)  # type: ignore[arg-type]
+    run.owner = _owner(FakeConn())
     assert await run.done()
     state[0] = "recording"
     with pytest.raises(Refused, match="attach lowers and repairs neither"):
@@ -989,6 +992,7 @@ async def test_a_root_secret_change_during_attach_refuses_at_the_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run = cell_attach.Run(None, _args(), None, lambda _t: None)  # type: ignore[arg-type]
+    run.owner = _owner(FakeConn())
     run.begun_keys_fp = "before"
 
     async def settle(*_a: Any, **_kw: Any) -> beats.Verdict:
@@ -1021,6 +1025,7 @@ async def test_a_stop_between_a_landed_commit_and_the_durable_read_says_the_outc
         return {"cell": "first"}
 
     async def run(self: Any) -> int:
+        self.owner = _owner(FakeConn())
         self.row = {"deployment_id": "dep-1"}
         await self.commit_mode()
         raise failure  # what stops the run before the durable read finishes
@@ -1086,7 +1091,7 @@ async def test_the_ddl_lock_bound_is_taken_after_the_migration_lock(
     conn = FakeConn([("pg_advisory_lock", migration_lock), ("pg_advisory_unlock", "OK")])
     wait = apg.Wait(2, clock)
     with wait.counting():
-        outcome = await apg._ensure_one(conn, "scope_generations", 500, wait)
+        outcome = await apg._ensure_one(_owner(conn), "scope_generations", 500, wait)
     assert outcome.answer == "applied"
     assert asked == [f"{apg.TRY_FLOOR_MS}ms"]
 
@@ -1125,7 +1130,9 @@ async def test_a_trigger_try_deadline_covers_transaction_and_lock_cleanup(
     _short_phases(monkeypatch)
     monkeypatch.setattr(cell_triggers, "ensure_table", ensure_table)
     conn = _Stalled()
-    task = asyncio.create_task(apg._ensure_one(conn, "scope_generations", 100, apg.Wait(0, clock)))
+    task = asyncio.create_task(
+        apg._ensure_one(_owner(conn), "scope_generations", 100, apg.Wait(0, clock))
+    )
     done, _ = await asyncio.wait([task], timeout=0.2)
     try:
         assert task in done, f"trigger deadline is stuck at {stall}"
@@ -1162,7 +1169,7 @@ async def test_a_failed_trigger_try_does_not_mask_its_error_with_cleanup(
         ]
     )
     with pytest.raises(ValueError, match=f"{failed if failed == 'migration' else 'DDL'} failed"):
-        await apg._ensure_one(conn, "scope_generations", 100, apg.Wait(0, clock))
+        await apg._ensure_one(_owner(conn), "scope_generations", 100, apg.Wait(0, clock))
     assert conn.executed[-1] == "CLOSE"
     assert "TERMINATE" not in conn.executed
 
@@ -1194,7 +1201,7 @@ async def test_a_busy_migration_lock_is_named_as_such(
     monkeypatch.setattr(cell_triggers, "planned_tables", planned)
     monkeypatch.setattr(cell_triggers, "holders", no_holders)
     logged: list[str] = []
-    (refusal,) = await apg.ensure_triggers(conn, apg.Wait(2, clock), logged.append)
+    (refusal,) = await apg.ensure_triggers(_owner(conn), apg.Wait(2, clock), logged.append)
     named = "the migration lock (held by pid 42, loom, since t0)"
     assert logged == [f"loom.scope_generations: its lock is busy ({named}); retrying"]
     assert refusal.reason == f"its triggers were not created within --wait: {named}"
@@ -1224,7 +1231,7 @@ async def test_wait_0_runs_one_try_of_each_wait(
         pass
 
     await apg.commit_enforced(
-        conn,
+        _owner(conn),
         nothing,
         ok,
         apg.Wait(0, clock),
@@ -1233,7 +1240,7 @@ async def test_wait_0_runs_one_try_of_each_wait(
         expected_cell="first",
         expected_fp=(CURRENT, NEXT),
     )
-    assert marks == ["unknown"]
+    assert marks == ["unknown", "enforced"]
     assert any(f"lock_timeout = '{apg.TRY_FLOOR_MS}ms'" in sql for sql in conn.executed)
 
     async def planned(_c: Any) -> list[str]:
@@ -1253,7 +1260,7 @@ async def test_wait_0_runs_one_try_of_each_wait(
     monkeypatch.setattr(cell_triggers, "ensure_table", applied)
     monkeypatch.setattr(cell_triggers, "missing", no_defects)
     ddl = FakeConn([("deadlock_timeout", 1000)])
-    assert await apg.ensure_triggers(ddl, apg.Wait(0, clock), lambda _t: None) == []
+    assert await apg.ensure_triggers(_owner(ddl), apg.Wait(0, clock), lambda _t: None) == []
 
     async def read() -> list[beats.Beat]:
         return [_beat("a")]
@@ -1289,8 +1296,10 @@ async def test_a_mode_commit_refused_without_a_landed_try_says_recording(
         pass
 
     async def run(self: Any) -> int:
+        self.owner = _owner(FakeConn())
         self.row, self.mode = {"deployment_id": "dep-1"}, "recording"
         self.lock_conn = conn
+        self.owner = _owner(conn)
         self.wait = apg.Wait(2, clock)
         await self.commit_mode()
         return 0
@@ -1334,6 +1343,7 @@ async def test_a_router_refusal_of_attach_enforced_leaves_recording(
         raise Refused([Refusal("router", f"refused {path}")])
 
     async def run(self: Any) -> int:
+        self.owner = _owner(FakeConn())
         self.row, self.mode = {"deployment_id": "dep-1"}, "recording"
         await self.commit_mode()
         return 0
@@ -1358,6 +1368,7 @@ async def test_a_durable_read_that_sees_recording_says_recording(
         return apg.Durable(mode="recording", first=(True, "first"), xid=1)
 
     async def run(self: Any) -> int:
+        self.owner = _owner(FakeConn())
         self.mode = "unknown"  # a mode commit whose outcome was lost
         await self.durable()
         return 0
@@ -1385,6 +1396,7 @@ async def test_an_enforced_resume_refused_early_says_enforced(
         return "enforced", (True, "first")
 
     async def run(self: Any) -> int:
+        self.owner = _owner(FakeConn())
         self.row = {"is_first": True, "state": "attaching", "deployment_id": "dep-1"}
         self.lock_conn = FakeConn([("FROM loom.authority", "dep-1")])
         if refusals := await self.stores_refusals():
@@ -1408,6 +1420,7 @@ async def test_an_interrupt_prints_the_mode_line_and_goes_on(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     async def run(self: Any) -> int:
+        self.owner = _owner(FakeConn())
         self.mode = "unknown"
         raise KeyboardInterrupt
 

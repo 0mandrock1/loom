@@ -1,17 +1,16 @@
 """Attach owners close active sessions before cancelling transaction work."""
 
-import argparse
 import asyncio
-import contextlib
 import time
 
 import pytest
 
-from server.cli import cell_attach
 from server.cli import cell_attach_pg as apg
+from server.cli import cell_control
 from server.core import cell_triggers, pg
 from tests.integration.test_pg_owned_cleanup import database as database
 from tests.integration.test_pg_owned_cleanup import released, sleeping
+from tests.unit.cell_control_owner import owner as _owner
 
 pytestmark = pytest.mark.asyncio
 
@@ -52,7 +51,7 @@ async def test_attach_owner_releases_backend_locks_before_return(
             if owner == "mode" and query.startswith("LOCK TABLE"):
                 await execute(self, "SELECT * FROM probe FOR UPDATE")
                 if phase == "rollback":
-                    raise ValueError("mode statement failed")
+                    raise asyncpg.LockNotAvailableError("mode statement busy")
                 return await execute(self, "SELECT pg_sleep(10)")
             if owner == "direct" and query.startswith("BEGIN"):
                 await execute(self, query)
@@ -73,9 +72,8 @@ async def test_attach_owner_releases_backend_locks_before_return(
             conn, table, statements, kwargs["lock_timeout"], 1, warn=False
         )
 
-    @contextlib.asynccontextmanager
-    async def dedicated(**_):
-        yield conn
+    async def connect(**_):
+        return conn
 
     monkeypatch.setattr(asyncpg.Connection, "execute", intercepted)
     monkeypatch.setattr(asyncpg.Connection, "close", closing_session)
@@ -83,15 +81,19 @@ async def test_attach_owner_releases_backend_locks_before_return(
     monkeypatch.setattr(apg, "_TRIGGER_TRY_MARGIN_S", 0.4)
     monkeypatch.setattr(apg, "_MODE_STANDBY_S", 0.5)
     monkeypatch.setattr(apg, "_MODE_STATEMENT_MARGIN_MS", 0)
-    monkeypatch.setattr(cell_attach, "_LOCK_STATEMENT_MS", 600)
-    monkeypatch.setattr(pg, "dedicated", dedicated)
+    monkeypatch.setattr(cell_control, "OPEN_S", 0.6)
+    monkeypatch.setattr(pg, "_connect_dedicated", connect)
+    await apg.take_lock(conn, "cleanup test")
     if owner == "trigger":
-        work = apg._ensure_one(conn, "probe", 100, apg.Wait(0))
+        work = apg._ensure_one(_owner(conn), "probe", 100, apg.Wait(0))
     elif owner == "mode":
-        work = apg._mode_try(conn, 100, lambda _: None)
+        work = apg._mode_try(_owner(conn), 100, lambda _: None, "first", (None, None))
     else:
-        run = cell_attach.Run(None, argparse.Namespace(cell="test", wait=0), None, lambda _: None)
-        work = run.open_lock()
+
+        async def body(_owner):
+            raise AssertionError("direct checks unexpectedly completed")
+
+        work = cell_control.run("test", body)
     task = asyncio.create_task(work)
     try:
         await sleeping(observer, pid)

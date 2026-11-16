@@ -17,6 +17,7 @@ import pytest
 from server.core import cell
 from server.router import app, directory
 from server.settings import settings
+from tests.unit.cell_control_owner import owner as _owner
 
 TOKEN = "lco_fence-test"
 
@@ -222,7 +223,7 @@ async def test_dead_local_lock_backend_cannot_write_acceptance(local_control, wr
             with pytest.raises(
                 (asyncpg.InterfaceError, asyncpg.PostgresError, asyncpg.InternalClientError)
             ):
-                await apg._mode_try(dead, 100, lambda _m: None, "first", (fp, None))
+                await apg._mode_try(_owner(dead), 100, lambda _m: None, "first", (fp, None))
             assert await admin.fetchval("SELECT mode FROM loom.tenancy_mode") == "recording"
     finally:
         await successor.close()
@@ -232,7 +233,7 @@ async def test_dead_local_lock_backend_cannot_write_acceptance(local_control, wr
 @pytest.mark.asyncio
 async def test_same_session_prepare_and_mode_commit(local_control) -> None:
     from server.cli import cell_attach_pg as apg
-    from server.cli import cell_control, cell_prepare
+    from server.cli import cell_prepare
 
     conn, _ = local_control
     await apg.take_lock(conn, "test")
@@ -243,8 +244,8 @@ async def test_same_session_prepare_and_mode_commit(local_control) -> None:
     )
     assert written == ["first", "mode", "own"]
     assert await apg.lock_held(conn)
-    assert await apg._mode_try(conn, 100, lambda _m: None, "first", (fp, None))
-    result = await apg.durable_read(conn)
+    assert await apg._mode_try(_owner(conn), 100, lambda _m: None, "first", (fp, None))
+    result = await apg.durable_read(_owner(conn))
     assert result.mode == "enforced" and result.first == (True, "first")
     assert await apg.lock_held(conn)
     # No-op prepare remains a same-backend synchronous durability boundary.
@@ -253,8 +254,10 @@ async def test_same_session_prepare_and_mode_commit(local_control) -> None:
         await cell_prepare._write_rows(conn, rows, {"is_first": True, "mode": "enforced"}, fp, None)
         == []
     )
-    async with cell_control.transaction(conn):
-        assert await conn.fetchval("SELECT pg_backend_pid()") == conn.get_server_pid()
+    assert (
+        await _owner(conn).transaction(lambda: conn.fetchval("SELECT pg_backend_pid()"))
+        == conn.get_server_pid()
+    )
 
 
 @pytest.mark.asyncio
@@ -334,7 +337,6 @@ async def test_inflight_finalizer_cannot_release_after_new_owner_rewidens(
     from starlette.routing import Route
 
     from server.cli import cell_attach_pg as apg
-    from server.cli import cell_control
 
     client, directory_admin, _ = control_stores
     local_admin, local_dsn = local_control
@@ -387,9 +389,11 @@ async def test_inflight_finalizer_cannot_release_after_new_owner_rewidens(
         await local_admin.execute("SELECT pg_terminate_backend($1)", a.get_server_pid())
         await apg.take_lock(b, "new controller")
         newer = await claim(client, await read(client))
+
         # New owner claims BEFORE widening local acceptance, on the owned backend.
-        async with cell_control.transaction(b):
+        async def widen():
             await b.execute("UPDATE loom.cell_self SET current_fp = $1, next_fp = $2", current, nxt)
+
         if aba:
             await directory_admin.execute(
                 "UPDATE loom_router.cells SET current_fp = next_fp, next_fp = NULL"
@@ -399,6 +403,7 @@ async def test_inflight_finalizer_cannot_release_after_new_owner_rewidens(
                 json.dumps(current),
                 json.dumps(nxt),
             )
+        await _owner(b).transaction(widen)
         assert newer["mutation_generation"] != old["mutation_generation"]
         resume.set()
         response = await task
@@ -473,7 +478,7 @@ async def test_backout_closure_serializes_queued_placement(
                 await asyncio.sleep(0.01)
             else:
                 pytest.fail("placement did not acquire its org lock")
-            cleanup = asyncio.create_task(cell_control.backout(local_admin, call, original))
+            cleanup = asyncio.create_task(cell_control.backout(_owner(local_admin), call, original))
             for _ in range(100):
                 waiting = await directory_admin.fetchval(
                     "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
@@ -498,7 +503,7 @@ async def test_backout_closure_serializes_queued_placement(
                 directory.place("queued", "first", app.placement_refusal)
             )
             await wait_for_lock(directory._PLACE_LOCK)
-            await cell_control.backout(local_admin, call, original)
+            await cell_control.backout(_owner(local_admin), call, original)
             assert not await local_admin.fetchval("SELECT EXISTS(SELECT 1 FROM loom.cell_self)")
             await tx.commit()
             with pytest.raises(directory.PlacementRefused, match="closed"):
@@ -580,6 +585,7 @@ async def test_attach_lock_dies_between_confirmation_and_mode_write(local_contro
         None, argparse.Namespace(cell="first", wait=0), Router(), lambda _text: None
     )
     run.lock_conn = a
+    run.owner = _owner(a)
     run.mode = "recording"
     run.own_fp = (fp, None)
     run.row = {
@@ -658,7 +664,7 @@ async def test_backout_close_cannot_be_reopened_before_same_session_cleanup(
                 placement_error = str(exc)
         return answer
 
-    await cell_control.backout(local, call, await read(client))
+    await cell_control.backout(_owner(local), call, await read(client))
     assert opened.status_code == 409, opened.text
     assert "serving" in opened.json()["error"]
     assert placement_error and "closed" in placement_error
@@ -788,7 +794,7 @@ async def test_pending_attach_batch_cannot_escape_backout_claim(
         await asyncio.wait_for(entered.wait(), 3)
         await local.execute("SELECT pg_terminate_backend($1)", old_backend.get_server_pid())
         await apg.take_lock(local, "backout successor")
-        await cell_control.backout(local, call, await read(client))
+        await cell_control.backout(_owner(local), call, await read(client))
         assert await apg.lock_held(local)
         assert not await local.fetchval("SELECT EXISTS(SELECT 1 FROM loom.cell_self)")
         assert not await directory_admin.fetchval(

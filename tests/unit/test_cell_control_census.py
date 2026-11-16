@@ -102,16 +102,16 @@ def test_cell_control_migrations_are_classified():
 # Entries name every sink, including nested callbacks and dynamic table expressions.
 # A new sink, including another statement in an existing owner, requires classification.
 GUARDED_WRITERS = {
-    "server/cli/cell_attach_pg.py": {("_mode_try", "UPDATE", "loom.tenancy_mode"): 1},
+    "server/cli/cell_attach_pg.py": {("_mode_transaction", "UPDATE", "loom.tenancy_mode"): 1},
     "server/cli/cell_control.py": {
-        ("backout", "ALTER TABLE", "loom.cell_first"): 3,
-        ("backout", "DELETE FROM", "loom.{table}"): 1,
-        ("backout", "DROP TRIGGER", "loom.{table}"): 1,
+        ("backout.clear_state", "ALTER TABLE", "loom.cell_first"): 3,
+        ("backout.clear_state", "DELETE FROM", "loom.{table}"): 1,
+        ("backout.clear_triggers", "DROP TRIGGER", "loom.{table}"): 1,
     },
     "server/cli/cell_prepare.py": {
-        ("_write_rows", "INSERT INTO", "loom.cell_first"): 1,
-        ("_write_rows", "INSERT INTO", "loom.tenancy_mode"): 1,
-        ("_write_rows", "INSERT INTO", "loom.cell_self"): 1,
+        ("_write_rows.write", "INSERT INTO", "loom.cell_first"): 1,
+        ("_write_rows.write", "INSERT INTO", "loom.tenancy_mode"): 1,
+        ("_write_rows.write", "INSERT INTO", "loom.cell_self"): 1,
     },
     "server/router/directory.py": {
         ("set_limit.change", "UPDATE", "loom_router.cells"): 1,
@@ -307,35 +307,54 @@ def function(path: str, name: str) -> ast.AST:
 @pytest.mark.parametrize(
     ("path", "name", "required"),
     [
-        ("server/cli/cell_prepare.py", "attach_lock", ['cell_control.session("prepare")']),
+        (
+            "server/cli/cell_prepare.py",
+            "prepare",
+            [
+                'cell_control.run("prepare", lambda owner: _prepare_locked(ch, args, router, transport, owner))'
+            ],
+        ),
         (
             "server/cli/cell_prepare.py",
             "_prepare_locked",
             [
                 "cell_control.claim(conn, call, snapshot)",
-                "_write_rows(conn, rows, answer, current, nxt)",
+                "owner.call(lambda: _write_rows(conn, rows, answer, current, nxt), total_s=cell_control.TRANSACTION_S)",
             ],
         ),
         (
             "server/cli/cell_prepare.py",
             "_write_rows",
-            ["cell_control.transaction(conn)", "_read_rows(conn, count_tenancy=False)"],
+            ["cell_control.transaction(conn, write)", "_read_rows(conn, count_tenancy=False)"],
+        ),
+        ("server/cli/cell_attach.py", "Run.run", ['cell_control.run("attach", self._owned)']),
+        (
+            "server/cli/cell_attach_pg.py",
+            "_mode_try",
+            [
+                "owner.call(lambda: _mode_transaction(owner.conn, lock_ms, mark, expected_cell, expected_fp), total_s=bound_s)"
+            ],
+        ),
+        (
+            "server/cli/cell_control.py",
+            "Owner.transaction",
+            ["self.call(lambda: transaction(self.conn, work), total_s=TRANSACTION_S)"],
         ),
         (
             "server/cli/cell_attach.py",
-            "Run.run",
-            ["self.open_lock()", "cell_control.claim(self.lock_conn, self.router.call, self.row)"],
+            "Run._owned",
+            ["cell_control.claim(self.lock_conn, self.router.call, self.row)"],
         ),
         (
             "server/cli/cell_attach.py",
             "Run.commit_mode",
             [
-                "apg.commit_enforced(self.lock_conn, self.confirm_lock, self.ready_for_commit, self.wait, self.log, mark, expected_cell=self.name, expected_fp=self.own_fp)"
+                "apg.commit_enforced(self.owner, self.confirm_lock, self.ready_for_commit, self.wait, self.log, mark, expected_cell=self.name, expected_fp=self.own_fp)"
             ],
         ),
         (
             "server/cli/cell_attach_pg.py",
-            "_mode_try",
+            "_mode_transaction",
             ["cell_control.check_lock(conn)", "conn.transaction()", "tx.commit()"],
         ),
         (
@@ -354,7 +373,8 @@ def function(path: str, name: str) -> ast.AST:
             [
                 "claim(conn, call, row)",
                 'mutate(conn, call, row, "/limit", {"closed": True})',
-                "transaction(conn)",
+                "owner.transaction(clear_state)",
+                "owner.transaction(clear_triggers)",
                 "paired(conn, row)",
             ],
         ),
@@ -362,7 +382,7 @@ def function(path: str, name: str) -> ast.AST:
             "server/cli/cell.py",
             "_remove_locked",
             [
-                'cell_control.session("remove")',
+                'cell_control.run("remove", remove)',
                 "cell_control.claim(conn, call, row)",
                 "cell_control.check_lock(conn)",
             ],
@@ -483,7 +503,7 @@ def test_inventory_detects_new_literal_and_dynamic_writers(statement, expected):
 
 def test_acceptance_writer_callsites_are_classified():
     # Another caller of a checked writer still needs its own claim and ownership proof.
-    names = {"_write_rows", "_mode_try", "commit_enforced", "backout"}
+    names = {"_write_rows", "_mode_try", "_mode_transaction", "commit_enforced", "backout"}
     actual = Counter()
     for path in (ROOT / "server").rglob("*.py"):
         found = inventory(path.read_text())
@@ -498,6 +518,7 @@ def test_acceptance_writer_callsites_are_classified():
         {
             ("server/cli/cell_prepare.py", "_prepare_locked", "_write_rows"): 1,
             ("server/cli/cell_attach_pg.py", "commit_enforced", "_mode_try"): 1,
+            ("server/cli/cell_attach_pg.py", "_mode_try", "_mode_transaction"): 1,
             ("server/cli/cell_attach.py", "Run.commit_mode", "apg.commit_enforced"): 1,
         }
     )

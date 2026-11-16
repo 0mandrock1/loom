@@ -29,6 +29,7 @@ def _cell(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "storage_authority", "postgres")
     monkeypatch.setattr(settings, "pg_dsn", "postgresql://cell.internal/loom")
     monkeypatch.setattr(settings, "router_operator_token", OPERATOR)
+
     # The attach lock's session is Postgres's (tests/integration/test_cell_attach.py).
     class Owner:
         conn = None

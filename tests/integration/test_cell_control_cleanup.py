@@ -214,3 +214,82 @@ asyncio.run(main())
         if child.returncode is None:
             child.kill()
             await child.wait()
+
+
+@pytest.mark.parametrize("sqlstate", ["55P03", "57014"])
+async def test_mode_contention_retries_only_after_real_rollback_on_same_owned_backend(
+    native_database, monkeypatch, sqlstate
+):
+    import asyncpg
+
+    from server.cli import cell_attach_pg as apg
+    from tests.unit.cell_control_owner import owner
+
+    conn = await pg._connect_dedicated(statement_timeout_ms=10_000)
+    await pg.init_connection(conn)
+    await apg.take_lock(conn, "real mode contention")
+    await conn.execute("INSERT INTO loom.cell_first(is_first,cell) VALUES(true,'first')")
+    await conn.execute("INSERT INTO loom.tenancy_mode(mode) VALUES('recording')")
+    fp = {"v": 1}
+    await conn.execute("INSERT INTO loom.cell_self(current_fp) VALUES($1)", fp)
+    pid, marks, injected = conn.get_server_pid(), [], False
+    execute = asyncpg.Connection.execute
+
+    async def contend(self, query, *args, **kwargs):
+        nonlocal injected
+        if self is conn and query.startswith("UPDATE loom.tenancy_mode") and not injected:
+            injected = True
+            await execute(
+                self,
+                "DO $$ BEGIN RAISE EXCEPTION USING ERRCODE='"
+                + sqlstate
+                + "', MESSAGE='test contention'; END $$",
+            )
+        return await execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(asyncpg.Connection, "execute", contend)
+    owned = owner(conn)
+    try:
+        assert not await apg._mode_try(owned, 100, marks.append, "first", (fp, None))
+        assert conn.get_server_pid() == pid and await apg.lock_held(conn)
+        assert await conn.fetchval("SELECT mode FROM loom.tenancy_mode") == "recording"
+        assert marks == ["unknown", "recording"] and not owned.closed
+        assert await apg._mode_try(owned, 100, marks.append, "first", (fp, None))
+        assert await native_database.fetchval("SELECT mode FROM loom.tenancy_mode") == "enforced"
+        assert marks == ["unknown", "recording", "unknown", "enforced"]
+        assert conn.get_server_pid() == pid and await apg.lock_held(conn)
+    finally:
+        await owned.close()
+        await released(native_database, pid)
+
+
+async def test_native_attach_run_body_uses_sole_owner_on_cancellation(native_database, monkeypatch):
+    from uuid import UUID
+
+    from server.cli import cell_attach
+    from server.router.directory import CONTROL_FIELDS
+
+    observed, backend = asyncio.Event(), {}
+
+    class Router:
+        async def call(self, _path):
+            return {
+                **dict.fromkeys(CONTROL_FIELDS, ""),
+                "state": "attaching",
+                "mutation_generation": str(UUID(int=1)),
+            }
+
+    async def read(self):
+        backend["pid"] = self.lock_conn.get_server_pid()
+        observed.set()
+        await self.lock_conn.execute("BEGIN; SELECT * FROM probe FOR UPDATE; SELECT pg_sleep(10)")
+
+    monkeypatch.setattr(cell_attach.Run, "read_own_row", read)
+    run = cell_attach.Run(None, argparse.Namespace(cell="first", wait=0), Router(), lambda _: None)
+    task = asyncio.create_task(run.run())
+    await observed.wait()
+    await sleeping(native_database, backend["pid"])
+    task.cancel("native attach cancellation")
+    with pytest.raises(asyncio.CancelledError, match="native attach cancellation"):
+        await asyncio.wait_for(task, 1.3)
+    await released(native_database, backend["pid"])

@@ -1263,6 +1263,10 @@ cleanup. An unexpected transaction error propagates immediately; it never waits 
 rollback on a session the owner will discard. Uncapped command work retains the existing
 one-second session-exit allowance, which cannot extend an expired bounded phase. A
 transport abort remains an unknown outcome, not proof that the server backend ended.
+Mode-lock contention retries only after an acknowledged pre-COMMIT rollback and a check
+that the same backend still holds ATTACH. A COMMIT, rollback or ownership-check failure
+never becomes a busy retry. After attempting the mode update, the diagnostic stays
+unknown until rollback plus ownership or COMMIT is acknowledged.
 
 The source census for acceptance and operator directory writes is checked by
 `tests/unit/test_cell_control_census.py`, including dynamic cleanup tables, guarded
@@ -1271,7 +1275,7 @@ entry points and the named exceptions:
 | Writer                                                                                  | Fence                                                                                              |
 | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `cell_prepare._write_rows`                                                              | Fresh claim, observed local rows, exact lock backend                                               |
-| `cell_attach_pg._mode_try`                                                              | Attach's claim, recording/first/fingerprint comparison, exact lock backend                         |
+| `cell_attach_pg._mode_transaction`                                                      | Attach's claim, supervised mode try, recording/first/fingerprint comparison, exact lock backend    |
 | `cell_control.backout`                                                                  | Fresh claim, fenced close and zero-placement read, observed local rows, exact lock backend         |
 | `directory.attach_begin`, `attach_place`, `attach_enforced`, `attach_serving`, `remove` | Claimed generation, full registration and exact pair, including retries/no-ops                     |
 | `directory.set_limit`, `rotate_credential`                                              | Read and compare the current generation/registration/pair; do not claim or rotate                  |
