@@ -1039,6 +1039,81 @@ async def test_the_ddl_lock_bound_is_taken_after_the_migration_lock(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stall", ["migration", "reset", "ddl", "commit", "rollback", "unlock"])
+async def test_a_trigger_try_deadline_covers_transaction_and_lock_cleanup(
+    monkeypatch: pytest.MonkeyPatch, clock: _Clock, stall: str
+) -> None:
+    import asyncpg
+
+    from server.core import cell_triggers
+
+    class _Stalled(FakeConn):
+        async def execute(self, sql: str, *args: Any) -> str:
+            result = await super().execute(sql, *args)
+            if stall == "rollback" and sql == "CREATE TRIGGER stub":
+                raise asyncpg.LockNotAvailableError("busy")
+            needles = {
+                "migration": "SELECT pg_advisory_lock",
+                "reset": "RESET lock_timeout",
+                "ddl": "CREATE TRIGGER stub",
+                "commit": "COMMIT",
+                "rollback": "ROLLBACK",
+                "unlock": "SELECT pg_advisory_unlock",
+            }
+            if sql.startswith(needles[stall]) or (stall == "ddl" and sql == "ROLLBACK"):
+                await asyncio.Future()
+            return result
+
+    async def ensure_table(conn: Any, table: str, **kwargs: Any) -> Any:
+        return await cell_triggers._run_ddl(
+            conn, table, ["CREATE TRIGGER stub"], kwargs["lock_timeout"], 1, warn=False
+        )
+
+    timeout = asyncio.timeout
+    monkeypatch.setattr(apg.asyncio, "timeout", lambda _s: timeout(0))
+    monkeypatch.setattr(cell_triggers, "ensure_table", ensure_table)
+    conn = _Stalled()
+    task = asyncio.create_task(apg._ensure_one(conn, "scope_generations", 100, apg.Wait(0, clock)))
+    done, _ = await asyncio.wait([task], timeout=0.2)
+    try:
+        assert task in done, f"trigger deadline is stuck at {stall}"
+        assert isinstance(task.exception(), TimeoutError)
+        assert conn.executed[-1] == "TERMINATE"
+        if stall in {"migration", "ddl", "commit", "rollback"}:
+            assert apg._MIGRATION_UNLOCK not in conn.executed
+    finally:
+        for _ in range(3):
+            if task.done():
+                break
+            task.cancel()
+            await asyncio.wait([task], timeout=0.01)
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", ["migration", "ddl"])
+async def test_a_failed_trigger_try_does_not_mask_its_error_with_cleanup(
+    monkeypatch: pytest.MonkeyPatch, clock: _Clock, failed: str
+) -> None:
+    from server.core import cell_triggers
+
+    async def ensure_table(*_a: Any, **_kw: Any) -> Any:
+        raise ValueError("DDL failed")
+
+    monkeypatch.setattr(cell_triggers, "ensure_table", ensure_table)
+    conn = FakeConn(
+        [
+            ("pg_advisory_lock", ValueError("migration failed") if failed == "migration" else "OK"),
+            ("RESET", RuntimeError("reset failed") if failed == "migration" else "OK"),
+            ("pg_advisory_unlock", RuntimeError("unlock failed")),
+        ]
+    )
+    with pytest.raises(ValueError, match=f"{failed if failed == 'migration' else 'DDL'} failed"):
+        await apg._ensure_one(conn, "scope_generations", 100, apg.Wait(0, clock))
+    assert conn.executed[-1] == "TERMINATE"
+
+
+@pytest.mark.asyncio
 async def test_a_busy_migration_lock_is_named_as_such(
     monkeypatch: pytest.MonkeyPatch, clock: _Clock
 ) -> None:
