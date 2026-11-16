@@ -337,7 +337,10 @@ async def _run_ddl(
                 await conn.execute(f"SET LOCAL lock_timeout = '{lock_timeout}'")
                 for sql in sqls:
                     await conn.execute(sql)
-            except Exception:
+            except (
+                asyncpg.exceptions.InsufficientPrivilegeError,
+                asyncpg.exceptions.LockNotAvailableError,
+            ):
                 await tx.rollback()
                 rolled_back = True
                 raise
