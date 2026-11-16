@@ -57,7 +57,8 @@ into one place.
   [Multi-user mode](./docs/getting-started/quickstart.md#start-in-multi-user-mode) ·
   [Namespaces and sharing](./docs/features/namespaces-and-sharing.md)
 - **A code index of your repositories** that coding agents query for definitions,
-  callers and change impact. [Code index](./docs/use-cases/code-intelligence.md)
+  callers and change impact. [Code index](./docs/use-cases/code-intelligence.md) ·
+  [Language support and limits](./docs/features/code-index/overview.md#language-support)
 - **Memories linked to the code they are about**, which follow it through refactors, are
   flagged when it changes and appear when an agent reads or edits it.
   [Memory linked to code](./docs/use-cases/memory-linked-to-code.md)

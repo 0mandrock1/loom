@@ -8,6 +8,9 @@ rows, so a repository is parsed and embedded once per merge, not once per sessio
 the index is built is in
 [code index architecture](../../architecture/code-index-architecture.md).
 
+The [language support table](#language-support) distinguishes fast-tier symbols and
+edges from compiler-tier coverage.
+
 The code workers are off by default; a deployment turns them on per repository
 ([repositories](repositories.md)). The default `core` MCP toolset lists no code tools
 unless `LOOM_MCP_CODE_TOOLS=true`; `?toolset=coding` always does.
