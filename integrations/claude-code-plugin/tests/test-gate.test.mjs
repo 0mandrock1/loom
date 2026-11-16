@@ -354,7 +354,7 @@ test("checkoutPython runs no pytest.py planted in the checkout", () => {
   const marker = path.join(root, "ran");
   fs.writeFileSync(path.join(root, "pytest.py"), `open(${JSON.stringify(marker)}, "w").write("x")\n`);
   const cwd = process.cwd();
-  process.chdir(root); // where the hook used to start its probe
+  process.chdir(root); // a Stop hook runs with the checkout as working directory
   try {
     checkoutPython(root, { env: { PATH: process.env.PATH } });
     assert.equal(fs.existsSync(marker), false);

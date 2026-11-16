@@ -179,7 +179,7 @@ export function checkoutPython(root, { env = process.env } = {}) {
     if (isFile(c)) return pathUnder(root, c) ?? c;
   }
   const dirs = (env.PATH ?? "")
-    .split(win ? ";" : ":")
+    .split(path.delimiter)
     .map((d) => (win ? d.replace(/^"(.*)"$/, "$1") : d))
     .filter(Boolean);
   // Windows: python first, since python.org installs ship no python3.exe;
