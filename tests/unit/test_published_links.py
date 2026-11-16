@@ -77,6 +77,7 @@ def test_published_links_resolve() -> None:
             "sdk/typescript/README.md",
             # A plugin directory serves this README without the rest of the repository.
             "integrations/claude-code-plugin/README.md",
+            "integrations/codex-plugin/README.md",
         )
     )
     links = re.findall(
