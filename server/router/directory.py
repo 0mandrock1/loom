@@ -12,7 +12,8 @@ Every statement the router runs against it is here. Three things serialize place
   placing one org at once agree on the winner, and a retry of the same call answers the
   same; a batch takes none, since no other cell exists while it runs;
 - the placements' primary key, as a backstop: every insert is `ON CONFLICT DO NOTHING`, and
-  only a row it returns is counted and audited.
+  only a row it returns is counted. Every successful call writes an audit row before
+  committing, so a duplicate winner waits for synchronous durability too.
 """
 
 from __future__ import annotations
@@ -59,6 +60,10 @@ def _bound_s(statements: int) -> int:
     return STATEMENT_TIMEOUT_S + (statements + 1) * (STATEMENT_TIMEOUT_S + 1)
 
 
+# New placement: BEGIN, org lock, winner, cell lock, winner, insert, counter, winner,
+# audit, COMMIT. The audit also gives duplicate winners a synchronous durability fence.
+PLACE_STATEMENTS = 10
+PLACE_MAX_S = _bound_s(PLACE_STATEMENTS)  # not a setting: derived
 # The longest a limit or credential change can take: eight statements (begin, lock, row,
 # check, update, audit, read-back, commit). Registration has its own bound, below.
 OPERATOR_CHANGE_MAX_S = _bound_s(8)  # not a setting: derived from the bound above
@@ -635,39 +640,49 @@ async def first_cell_named(cell_name: str) -> Cell | None:
     return _cell(row) if row else None
 
 
-async def place(org: str, cell_name: str, refusal: Callable[[Cell], str]) -> tuple[str, str]:
-    """Place `org` in `cell_name` unless it is placed already; the (cell, deployment id)
-    that holds it. An org placed already answers its cell, whatever the cell's state.
-    Otherwise the cell's row is locked, the winner read again (an attach batch holds the row
-    lock, not the org's), and the row judged (`refusal`, then its quota), so a change to it
-    waits for the placement and the quota holds across router replicas; a refused placement
-    raises PlacementRefused and writes nothing, and a new org name longer than
-    `cell.ORG_MAX_BYTES` raises OrgTooLong (one placed before the limit answers its cell, as
-    any placed org does)."""
+async def place(
+    org: str,
+    cell_name: str,
+    refusal: Callable[[Cell], str],
+    *,
+    actor: str,
+    verify: Callable[[Cell], str] | None = None,
+) -> tuple[str, str]:
+    """The permanent winner of `org`, with every successful call audited and committed
+    synchronously. `verify` judges the requested cell's locked identity even for a winner
+    already there; `refusal` and quota judge new placements only. A winner elsewhere needs
+    neither check. The org lock and cell row lock serialize live and attach placements."""
     async with _reading(), _connection() as conn, conn.transaction():
-        # Placements of one org run one at a time, whichever cell asks: the later one
-        # reads the earlier one's winner.
         await conn.execute("SELECT pg_advisory_xact_lock($1, hashtext($2))", _PLACE_LOCK, org)
         row = await conn.fetchrow(_WINNER, org)
-        if row is None:
-            _refuse_long([org])
+        if row is None or (verify is not None and row["cell"] == cell_name):
+            if row is None:
+                _refuse_long([org])
             locked = await conn.fetchrow(f"{_CELL} WHERE cell = $1 FOR UPDATE", cell_name)
             if locked is None:
                 raise PlacementRefused(f"cell {cell_name!r} is not in the directory")
-            # An attach batch of this cell, which holds the row lock and not the org's, may
-            # have placed the org since the first read: it is answered as placed.
+            candidate = _cell(locked)
+            # An attach batch holds this row's lock rather than the org's.
             row = await conn.fetchrow(_WINNER, org)
+            if (row is None or row["cell"] == cell_name) and verify is not None:
+                if reason := verify(candidate):
+                    raise PlacementRefused(reason)
             if row is None:
-                await _place_one(conn, org, cell_name, _cell(locked), refusal)
+                await _place_one(conn, org, cell_name, candidate, refusal)
                 row = await conn.fetchrow(_WINNER, org)
-    return str(row["cell"]), str(row["deployment_id"])
+        winner = str(row["cell"]), str(row["deployment_id"])
+        await conn.execute(
+            "INSERT INTO loom_router.audit (actor, action, detail) VALUES ($1, 'place', $2)",
+            actor,
+            {"org": org, "cell": winner[0]},
+        )
+    return winner
 
 
 async def _place_one(
     conn: Any, org: str, cell_name: str, candidate: Cell, refusal: Callable[[Cell], str]
 ) -> None:
-    """Judge the locked row (`refusal`, then its quota) and insert the placement; its count
-    and audit row only when the insert wrote it."""
+    """Judge the locked row and insert the placement, counted only when written."""
     if reason := refusal(candidate):
         raise PlacementRefused(reason)
     quota = candidate.placements_max
@@ -683,11 +698,6 @@ async def _place_one(
         return
     await conn.execute(
         "UPDATE loom_router.cells SET placed = placed + 1 WHERE cell = $1", cell_name
-    )
-    await conn.execute(
-        "INSERT INTO loom_router.audit (actor, action, detail) VALUES ($1, 'place', $2)",
-        f"cell:{cell_name}",
-        {"org": org, "cell": cell_name},
     )
 
 

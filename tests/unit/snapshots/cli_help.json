@@ -434,8 +434,8 @@
   "options: -h, --help show this help message and exit"
  ],
  "loom cell": [
-  "usage: loom cell [-h] {credential,limit,which,remove,prepare,attach} ...",
-  "positional arguments: {credential,limit,which,remove,prepare,attach} credential Make a router credential, or rotate a cell's. limit Close, reopen or bound a cell to new orgs. which Print the lookup's cell and host for an org (the first cell if not placed). remove Remove the directory row of a cell attaching with no placement. prepare Register this cell in the router's directory and write its rows. attach Attach the prepared first cell: place its orgs, serve.",
+  "usage: loom cell [-h] {credential,limit,which,remove,place,prepare,attach} ...",
+  "positional arguments: {credential,limit,which,remove,place,prepare,attach} credential Make a router credential, or rotate a cell's. limit Close, reopen or bound a cell to new orgs. which Print the lookup's cell and host for an org (the first cell if not placed). remove Remove the directory row of a cell attaching with no placement. place Place an org in this cell and record its tenancy. prepare Register this cell in the router's directory and write its rows. attach Attach the prepared first cell: place its orgs, serve.",
   "options: -h, --help show this help message and exit"
  ],
  "loom cell credential": [
@@ -454,6 +454,10 @@
  "loom cell remove": [
   "usage: loom cell remove [-h] --cell CELL [--router ROUTER]",
   "options: -h, --help show this help message and exit --cell CELL The cell to remove (its LOOM_CELL) --router ROUTER The router's URL (default: LOOM_CELL_ROUTER_URL)"
+ ],
+ "loom cell place": [
+  "usage: loom cell place [-h] --cell CELL --org ORG [--router ROUTER]",
+  "options: -h, --help show this help message and exit --cell CELL This cell's name (LOOM_CELL) --org ORG The org to place --router ROUTER The router's URL (default: LOOM_CELL_ROUTER_URL)"
  ],
  "loom cell prepare": [
   "usage: loom cell prepare [-h] --cell CELL --host HOST --credential-sha256 SHA256 [--probe-url PROBE_URL] [--wait WAIT] [--router ROUTER]",

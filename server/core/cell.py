@@ -415,10 +415,9 @@ def _unset_reason(view: _View) -> str:
     )
 
 
-# The fingerprint fields a CLI's gate judges: the stores it would write. A CLI verifies
-# no token and its fingerprint never reaches the router, so the rest of the servers'
-# fingerprint is not its to match (docs/architecture/cells.md, "The CLI declares its
-# orgs").
+# An org-declaring CLI's gate checks the stores it would write: it verifies no token
+# and sends no fingerprint to the router. Operator placement checks the full fingerprint
+# separately (docs/architecture/cells.md, "The CLI declares its orgs").
 _STORE_FIELDS = ("deployment_id", "bucket", "bucket_prefix")
 
 

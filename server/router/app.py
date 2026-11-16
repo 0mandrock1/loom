@@ -14,6 +14,8 @@
 - `POST /cells/v1/operator/cells/<cell>/limit` and `.../credential`: the operator's changes
   to a cell's row (`loom cell limit`, `loom cell credential`), with the router's operator
   credential;
+- `POST /cells/v1/operator/cells/<cell>/place`: `loom cell place` places an org with the
+  operator credential, verifying the requested cell's deployment id and fingerprint;
 - `POST /cells/v1/operator/cells/<cell>/register`: `loom cell prepare` registers a cell,
   once the probe listener (the first cell's at LOOM_ROUTER_UPSTREAM_PROBE_URL, a later
   cell's at its `probe_url`) answers its deployment id, prepare's nonces and the bucket and
@@ -28,9 +30,9 @@
 Every refusal of a placement writes nothing. A malformed placement body answers 400; the
 directory's refusals answer 503, so the cell's request answers 503 and its retry is safe,
 except a new org longer than `cell.ORG_MAX_BYTES`, which answers 400 `ORG_TOO_LONG` and no
-retry places; a credential that names no cell, or not this one, answers 401. An operator
-route answers a cell the directory does not hold 404 with the code `NO_SUCH_CELL`, so a 404
-without it is a router of an earlier build.
+retry places; a credential that names no cell, or not this one, answers 401. Operator
+placement refusals answer 409; the other operator routes answer a cell the directory does
+not hold 404 with `NO_SUCH_CELL`, so a 404 without it is a router of an earlier build.
 """
 
 from __future__ import annotations
@@ -301,7 +303,7 @@ class Router:
             return ""
 
         try:
-            winner, deployment_id = await directory.place(org, name, refusal)
+            winner, deployment_id = await directory.place(org, name, refusal, actor=f"cell:{name}")
         except directory.OrgTooLong as e:
             return _refused(400, e.reason, code="ORG_TOO_LONG")
         except (directory.PlacementRefused, directory.DirectoryUnavailable) as e:
@@ -313,6 +315,41 @@ class Router:
             return _refused(503, e.reason)
         log.info("placement of %s: %s (asked by %s)", org, winner, name)
         return JSONResponse({"cell": winner, "deployment_id": deployment_id})
+
+    async def operator_place(self, request: Request) -> JSONResponse:
+        """Place with the operator credential. The CLI checks its local Postgres mode;
+        this route trusts that check and verifies the directory's locked identity."""
+        body = await self._operator_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        org = cell_state.named_org(body.get("org"))
+        deployment_id = _text(body, "deployment_id", needed=True)
+        if (
+            set(body) != {"org", "deployment_id", "fingerprint"}
+            or org is None
+            or deployment_id is None
+        ):
+            return _refused(400, "a placement names org, deployment_id and fingerprint")
+        if reason := cell_state.org_name_refusal(org):
+            return _refused(400, reason, code="ORG_TOO_LONG")
+        name = request.path_params["cell"]
+
+        def verify(locked: directory.Cell) -> str:
+            if locked.deployment_id != deployment_id:
+                return "the calling process names another deployment id"
+            if not fingerprint_matches(locked, body["fingerprint"]):
+                return f"the calling process's configuration matches no value of {name!r}"
+            return ""
+
+        try:
+            winner, deployment = await directory.place(
+                org, name, placement_refusal, actor="operator", verify=verify
+            )
+        except directory.PlacementRefused as e:
+            return _refused(409, e.reason)
+        except directory.DirectoryUnavailable as e:
+            return _refused(503, e.reason, code="BACKEND_UNAVAILABLE")
+        return JSONResponse({"org": org, "cell": winner, "deployment_id": deployment})
 
     async def cell_state(self, request: Request) -> JSONResponse:
         """`GET /cells/v1/cells/<cell>`: the first cell's state, for its own credential
@@ -1365,6 +1402,7 @@ def build_app(router: Router | None = None) -> Starlette:
     return Starlette(
         routes=[
             Route("/cells/v1/placements", router.place, methods=["POST"]),
+            Route("/cells/v1/operator/cells/{cell}/place", router.operator_place, methods=["POST"]),
             Route("/cells/v1/cells/{cell}", router.cell_state, methods=["GET"]),
             Route("/cells/v1/operator/cells/{cell}/limit", router.set_limit, methods=["POST"]),
             Route("/cells/v1/operator/cells/{cell}/register", router.register, methods=["POST"]),
