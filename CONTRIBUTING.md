@@ -149,6 +149,8 @@ An operation or field may be renamed or removed. Say so in the PR description an
 The script calls Claude Sonnet 5.5 on Amazon Bedrock through the `anthropic` package's `AnthropicBedrock` client, which signs each request with the default AWS credential chain. To run it yourself, sign in to an AWS account where Bedrock serves the model and install the pinned client:
 
 ```bash
+# A separate virtualenv: the lock pins versions that differ from Loom's own.
+python -m venv .venv-i18n && . .venv-i18n/bin/activate
 python -m pip install --require-hashes --no-deps --only-binary=:all: -r scripts/i18n/requirements.txt
 aws sso login
 export AWS_REGION=<region>

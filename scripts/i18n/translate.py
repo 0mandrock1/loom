@@ -600,8 +600,7 @@ def call(client: Any, model: str, system: str, messages: list[dict[str, str]]) -
                 output_config={"effort": "low"},
                 timeout=600,
             )
-            data: dict[str, Any] = reply.to_dict()
-            return data
+            return reply.to_dict()
         except anthropic.APITimeoutError as e:
             # The request was sent and may be billed; a retry would spend unseen tokens.
             raise SystemExit(f"Bedrock timed out: {e}") from e
