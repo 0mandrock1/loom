@@ -86,3 +86,10 @@ def test_page_key_orders_a_section_as_the_sidebar_does() -> None:
         "getting-started/quickstart.md",
         "getting-started/evaluate.md",
     ]
+
+
+def test_no_docs_folder_has_both_an_index_and_an_overview() -> None:
+    # page_key leads a folder with either one; both would tie.
+    docs = Path(__file__).resolve().parents[2] / "docs"
+    both = [p.parent for p in docs.rglob("overview.md") if (p.parent / "index.md").exists()]
+    assert both == []
