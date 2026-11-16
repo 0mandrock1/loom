@@ -166,7 +166,7 @@ To turn translations on:
 3. Give the runners' instance role the policy below. In the account, accept Bedrock's model access for Claude Sonnet 5.5 once: the first call can otherwise fail with an access-denied error about `aws-marketplace:Subscribe`, and the role is not granted those Marketplace actions.
 4. Set the repository variable `LOOM_I18N_RUNNER` to the runner group's labels as a JSON list, for example `["self-hosted","<label>"]`.
 
-The job calls the model's global inference profile from the runner's `AWS_REGION`, else its `AWS_DEFAULT_REGION`, else `us-east-1`. Bedrock authorizes a call through a global profile on three resources: the profile, the model in the calling region, and the model with no region. The policy names each, in that region:
+The job calls the model's global inference profile from the runner's `AWS_REGION`, else its `AWS_DEFAULT_REGION`, else `us-east-1`. Bedrock authorizes a call through a global profile on three resources: the profile, the model in the calling region, and the model with no region. The policy names each; `<region>` is the calling region:
 
 ```json
 {
