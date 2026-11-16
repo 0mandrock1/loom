@@ -82,7 +82,7 @@ async def main():
         if not recorded or recorded["authority"] != "postgres":
             raise RuntimeError("the configured stores do not record Postgres authority")
         pg.expect_deployment((str(recorded["deployment_id"]), int(recorded["epoch"])))
-        url = cell_cli.operator_router(argparse.Namespace(router=None))
+        url = cell_cli._cell_router(argparse.Namespace(router=None, cell=settings.cell))
         if not isinstance(url, httpx.URL):
             raise RuntimeError("the router URL or operator credential was refused")
 
