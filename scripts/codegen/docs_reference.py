@@ -397,6 +397,24 @@ LLMS_TXT = ROOT / "llms.txt"
 _AGENT_SETUP_TXT = "https://github.com/ClickHouse/loom/releases/latest/download/agent-setup.txt"
 
 
+# llms.txt's sections in order: what Loom is for and how to use it first ("faq" is the FAQ and
+# glossary block), then operations and reference; Development is last, as the Optional section
+# the llms.txt format lets a reader skip.
+_LLMS_ORDER = (
+    "getting-started",
+    "use-cases",
+    "faq",
+    "concepts",
+    "features",
+    "guides",
+    "operations",
+    "reference",
+    "architecture",
+    "benchmarks",
+    "development",
+)
+
+
 def render_llms_txt() -> str:
     """The llms.txt index agents read: every doc page, grouped, with its outcome line."""
     docs = ROOT / "docs"
@@ -420,7 +438,19 @@ def render_llms_txt() -> str:
         "",
     ]
 
-    def section(heading: str, sub: str) -> None:
+    def entry(path: Path) -> str:
+        title, outcome = page_summary(path)
+        rel = path.relative_to(ROOT).as_posix()
+        return f"- [{title}]({rel})" + (f": {outcome}" if outcome else "")
+
+    titles = {sub: heading for heading, sub in SECTIONS}
+    if set(_LLMS_ORDER) - {"faq"} != set(titles):
+        raise ValueError("_LLMS_ORDER must name every section in SECTIONS once")
+    for sub in _LLMS_ORDER:
+        if sub == "faq":
+            out.append("## FAQ and glossary\n")
+            out += [entry(docs / "faq.md"), entry(docs / "glossary.md"), ""]
+            continue
         # In the sidebar's order (page_key); the per-group operation pages are reached through
         # docs/reference/operations.md.
         pages = sorted(
@@ -428,40 +458,13 @@ def render_llms_txt() -> str:
             key=lambda p: page_key(p.relative_to(docs).as_posix()),
         )
         if not pages:
-            return
-        out.append(f"## {heading}\n")
-        for p in pages:
-            title, outcome = page_summary(p)
-            rel = p.relative_to(ROOT).as_posix()
-            out.append(f"- [{title}]({rel})" + (f": {outcome}" if outcome else ""))
+            continue
+        out.append(f"## {'Optional' if sub == 'development' else titles[sub]}\n")
+        out += [entry(p) for p in pages]
         if sub == "getting-started":
             # The other install route, for clients without a Loom plugin, closes the section.
-            title, outcome = page_summary(ROOT / "llms-install.md")
-            out.append(f"- [{title}](llms-install.md)" + (f": {outcome}" if outcome else ""))
+            out.append(entry(ROOT / "llms-install.md"))
         out.append("")
-
-    # What Loom is for and how to use it come first (getting started, use cases, FAQ and
-    # glossary, concepts, features, guides), then the remaining sections in SECTIONS order;
-    # Development is last, as the Optional section the llms.txt format lets a reader skip.
-    titles = {sub: heading for heading, sub in SECTIONS}
-    for sub in ("getting-started", "use-cases"):
-        section(titles[sub], sub)
-    out.append("## FAQ and glossary\n")
-    for p in (docs / "faq.md", docs / "glossary.md"):
-        if p.exists():
-            title, outcome = page_summary(p)
-            out.append(
-                f"- [{title}]({p.relative_to(ROOT).as_posix()})"
-                + (f": {outcome}" if outcome else "")
-            )
-    out.append("")
-    lead = ("concepts", "features", "guides")
-    for sub in lead:
-        section(titles[sub], sub)
-    for heading, sub in SECTIONS:
-        if sub not in ("getting-started", "use-cases", *lead, "development"):
-            section(heading, sub)
-    section("Optional", "development")
     return "\n".join(out).rstrip("\n") + "\n"
 
 
