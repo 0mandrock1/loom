@@ -32,16 +32,21 @@ def key() -> str:
     raise SystemExit("no IndexNow key file in docs/")
 
 
+def page_path(path: str) -> str:
+    """The path under the site a docs/ Markdown file is served at ("" for the home page)."""
+    rel = path[len("docs/") : -len(".md")]
+    if rel == "index":
+        return ""
+    if rel.endswith("/index"):
+        rel = rel[: -len("/index")]
+    return f"{rel}/"
+
+
 def page_url(path: str) -> str | None:
     """The site URL a docs/ Markdown file is served at, or None for other files."""
     if not (path.startswith("docs/") and path.endswith(".md")):
         return None
-    rel = path[len("docs/") : -len(".md")]
-    if rel == "index":
-        return SITE
-    if rel.endswith("/index"):
-        rel = rel[: -len("/index")]
-    return f"{SITE}{rel}/"
+    return SITE + page_path(path)
 
 
 def every_page() -> list[str]:

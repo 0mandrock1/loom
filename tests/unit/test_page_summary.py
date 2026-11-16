@@ -64,6 +64,7 @@ def test_page_key_orders_a_section_as_the_sidebar_does() -> None:
         "features/index.md",
         "features/alpha.md",
         "features/code-index/overview.md",
+        "features/code-index/freshness.md",
         "getting-started/evaluate.md",
         "getting-started/quickstart.md",
         "getting-started/overview.md",
@@ -73,7 +74,9 @@ def test_page_key_orders_a_section_as_the_sidebar_does() -> None:
         "features/index.md",
         "features/alpha.md",
         "features/zeta.md",
+        # A folder without an index.md is led by its overview.md.
         "features/code-index/overview.md",
+        "features/code-index/freshness.md",
         "features/integrations/index.md",
         "features/integrations/grep-shim.md",
     ]

@@ -29,8 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.codegen.page_summary import SECTIONS, page_key, page_summary, shorten  # noqa: E402
-from scripts.docs_site.indexnow import SITE as INDEXNOW_SITE  # noqa: E402
-from scripts.docs_site.indexnow import page_url  # noqa: E402
+from scripts.docs_site.indexnow import page_path  # noqa: E402
 
 BLOB = "https://github.com/ClickHouse/loom/blob/main/"
 RAW = "https://raw.githubusercontent.com/ClickHouse/loom/main/"
@@ -173,17 +172,12 @@ _DOCS_PAGE = re.compile(r"(?<![\w/.-])docs/([\w./-]*\.md)")
 _ROOT_INSTALL = re.compile(r"\]\(llms-install\.md\)")
 
 
-def _html_url(site_url: str, uri: str) -> str:
-    """The HTML page MkDocs builds from the docs/ file at `uri`, by the rule IndexNow uses."""
-    return site_url + (page_url(f"docs/{uri}") or "")[len(INDEXNOW_SITE) :]
-
-
 def _with_source(body: str, site_url: str, uri: str) -> str:
     """A copied page with a quoted line under its title naming its HTML page, which a
     citation should point at, so the title stays the first line."""
-    source = f"> Source: {_html_url(site_url, uri)} (Markdown: {site_url}{uri})"
+    source = f"> Source: {site_url}{page_path(f'docs/{uri}')} (Markdown: {site_url}{uri})"
     body = body.strip()
-    title, nl, rest = body.partition("\n")
+    title, _, rest = body.partition("\n")
     if not title.startswith("# "):
         return f"{source}\n\n{body}\n"
     return f"{title}\n\n{source}\n{rest}\n"
@@ -222,7 +216,7 @@ def on_post_build(config):
         # index.html.md, where the llms.txt format looks for a page's Markdown.
         body = _rewrite_links(src.read_text(encoding="utf-8"), uri, url, to_site=True)
         text = copies[uri] = _with_source(body, url, uri)
-        places = [site / uri, site / _html_url("", uri) / "index.html.md"]
+        places = [site / uri, site / page_path(f"docs/{uri}") / "index.html.md"]
         # A section index is also at its URL with the slash swapped for `.md`
         # (`use-cases/` -> `use-cases.md`), where agents guess a page's Markdown.
         if uri.endswith("/index.md"):
