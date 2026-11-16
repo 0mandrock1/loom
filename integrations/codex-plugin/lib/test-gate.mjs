@@ -165,29 +165,36 @@ export function venvPython(dir, platform = process.platform) {
 }
 
 /** The interpreter that runs this checkout's pytest: its own virtualenv
- *  first, then an active one, then the first python3 or python on PATH; ""
- *  when there is none. Nothing is run to check for pytest: a Python started
- *  to ask would run what the checkout puts on its path at startup. */
-export function checkoutPython(root, { pathEnv = process.env.PATH ?? "", platform = process.platform } = {}) {
+ *  first, then an active one, then a python3 or python on PATH; "" when there
+ *  is none. Nothing is run to check for pytest: a Python started to ask would
+ *  run what the checkout puts on its path at startup. */
+export function checkoutPython(root, { env = process.env, platform = process.platform } = {}) {
+  const win = platform === "win32";
   const cands = [
     venvPython(path.join(root, ".venv"), platform),
     venvPython(path.join(root, "venv"), platform),
-    process.env.VIRTUAL_ENV ? venvPython(process.env.VIRTUAL_ENV, platform) : "",
+    env.VIRTUAL_ENV ? venvPython(env.VIRTUAL_ENV, platform) : "",
   ].filter(Boolean);
   for (const c of cands) {
     if (isFile(c)) return pathUnder(root, c) ?? c;
   }
-  const ext = platform === "win32" ? ".exe" : "";
-  const dirs = pathEnv.split(platform === "win32" ? ";" : ":").filter(Boolean);
-  for (const py of ["python3", "python"]) {
-    if (dirs.some((d) => isFile(path.join(d, py + ext)))) return py;
+  const dirs = (env.PATH ?? "")
+    .split(win ? ";" : ":")
+    .map((d) => (win ? d.replace(/^"(.*)"$/, "$1") : d))
+    .filter(Boolean);
+  // Windows: python.exe first. python.org installs ship no python3.exe, and
+  // the Store's python3.exe alias only offers to install Python.
+  for (const py of win ? ["python", "python3"] : ["python3", "python"]) {
+    if (dirs.some((d) => isFile(path.join(d, win ? `${py}.exe` : py), !win))) return py;
   }
   return "";
 }
 
-function isFile(p) {
+function isFile(p, executable = false) {
   try {
-    return fs.statSync(p).isFile();
+    if (!fs.statSync(p).isFile()) return false;
+    if (executable) fs.accessSync(p, fs.constants.X_OK);
+    return true;
   } catch {
     return false;
   }

@@ -13,6 +13,7 @@ import {
   sessionScope,
   venvPython,
 } from "../lib/test-gate.mjs";
+
 const GATE = {
   obligations: true,
   counts_floor: true,
@@ -273,26 +274,78 @@ test("nothing to run asks for a test, not for running tests", () => {
 test("checkoutPython names a PATH python without running it", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "loom-path-"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
-  const venv = process.env.VIRTUAL_ENV;
-  delete process.env.VIRTUAL_ENV; // an active virtualenv is named before PATH is read
   const marker = path.join(dir, "ran");
+  const win = process.platform === "win32";
+  const write = (name, mode = 0o755) =>
+    fs.writeFileSync(path.join(dir, win ? `${name}.exe` : name), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, {
+      mode,
+    });
+  const env = { PATH: `${path.delimiter}${win ? `"${dir}"` : dir}` };
   try {
-    for (const platform of ["linux", "win32"]) {
-      const ext = platform === "win32" ? ".exe" : "";
-      const sep = platform === "win32" ? ";" : ":";
-      const write = (name) =>
-        fs.writeFileSync(path.join(dir, name + ext), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, { mode: 0o755 });
-      assert.equal(checkoutPython(root, { pathEnv: `${sep}${dir}`, platform }), "");
-      write("python");
-      assert.equal(checkoutPython(root, { pathEnv: `${sep}${dir}`, platform }), "python");
-      write("python3");
-      assert.equal(checkoutPython(root, { pathEnv: `${sep}${dir}`, platform }), "python3");
-      for (const f of fs.readdirSync(dir)) fs.rmSync(path.join(dir, f));
+    assert.equal(checkoutPython(root, { env }), "");
+    write("python");
+    assert.equal(checkoutPython(root, { env }), "python");
+    write("python3");
+    // Windows prefers python.exe: the Store's python3.exe alias only offers an install.
+    assert.equal(checkoutPython(root, { env }), win ? "python" : "python3");
+    assert.equal(fs.existsSync(marker), false);
+    if (!win) {
+      fs.chmodSync(path.join(dir, "python3"), 0o644); // a shell would not run it
+      assert.equal(checkoutPython(root, { env }), "python");
     }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("checkoutPython prefers the checkout's virtualenvs, then an active one, then PATH", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
+  const active = fs.mkdtempSync(path.join(os.tmpdir(), "loom-venv-"));
+  const make = (venv) => {
+    const py = venvPython(venv);
+    fs.mkdirSync(path.dirname(py), { recursive: true });
+    fs.writeFileSync(py, "");
+    return py;
+  };
+  const env = { PATH: "", VIRTUAL_ENV: active };
+  try {
+    assert.equal(checkoutPython(root, { env }), "");
+    const activePy = make(active);
+    assert.equal(checkoutPython(root, { env }), activePy);
+    make(path.join(root, "venv"));
+    assert.equal(
+      checkoutPython(root, { env }),
+      path
+        .relative(root, venvPython(path.join(root, "venv")))
+        .split(path.sep)
+        .join("/"),
+    );
+    make(path.join(root, ".venv"));
+    assert.equal(
+      checkoutPython(root, { env }),
+      path
+        .relative(root, venvPython(path.join(root, ".venv")))
+        .split(path.sep)
+        .join("/"),
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(active, { recursive: true, force: true });
+  }
+});
+
+test("checkoutPython runs no pytest.py planted in the checkout", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
+  const marker = path.join(root, "ran");
+  fs.writeFileSync(path.join(root, "pytest.py"), `open(${JSON.stringify(marker)}, "w").write("x")\n`);
+  const cwd = process.cwd();
+  process.chdir(root); // where the hook used to start its probe
+  try {
+    checkoutPython(root, { env: { PATH: process.env.PATH } });
     assert.equal(fs.existsSync(marker), false);
   } finally {
-    if (venv !== undefined) process.env.VIRTUAL_ENV = venv;
-    fs.rmSync(dir, { recursive: true, force: true });
+    process.chdir(cwd);
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
