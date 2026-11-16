@@ -2,8 +2,8 @@
 
 `ingest.sh` hands one exported chat transcript to `loom ingest-transcript`,
 which posts each turn to `conversation.append` as one thread. Use it for any
-tool that can export a chat to a file (Aider, Continue (final release 2.0.0),
-OpenCode, JetBrains AI), after the session or from that tool's own hook.
+tool that can export a chat to a file (Aider, Continue, OpenCode, JetBrains AI),
+after the session or from that tool's own hook. Continue's final release is 2.0.0.
 
 ```bash
 LOOM_NAMESPACE=my-namespace integrations/generic/ingest.sh --dry-run session.md
