@@ -487,6 +487,16 @@ that for collections, since one missed path leaks.
   figures and cut flags. A failed mirrored turn contributes only `SYNC_FAILED`, for
   every cause; returned turn details remain private. Mirrored per-file failures emit
   no log record, since the number of records would disclose a document figure.
+  A sync turn enters its private diagnostic scope before taking its source lease or
+  listing files. That scope suppresses client and provider instrumentation, database
+  work figures, shared metric calls and log records, including their volume. Provider
+  health and embedding caches receive no private contribution. The extractor receives
+  a generic filename; its service emits no per-request access, stderr or fault logs.
+  A pass that touched private work records codes without duration, outcome figures or
+  failure counters, including when invoked from the CLI. Its retry history cannot
+  advance a later ordinary pass's diagnostic streak. Ordinary work keeps its own cost
+  accumulator; private spend is written directly under the mirror, without entering
+  the shared event queue or its statistics.
 - **No scope reaches a mirror.** Every statement a request runs that reads a table
   holding mirror rows other than by a namespace the caller names leaves out the
   `acl-[0-9a-f]{24}` form; the workers named here are the exception, since they must

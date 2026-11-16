@@ -111,7 +111,7 @@ from server.core.errors import OverloadedError, ValidationError
 from server.core.hashing import sha256_text
 from server.core.pg_lease import PublicationPending
 from server.knowledge.api.models_knowledge import KnowledgeDeleteInput, KnowledgeUpsertInput
-from server.knowledge.app import extractors, writes
+from server.knowledge.app import extractors, private_sync, writes
 from server.knowledge.app import source_gdrive_items as gdrive_items
 from server.knowledge.app import sources as source_ops
 from server.knowledge.domain import access_list, convert
@@ -280,6 +280,7 @@ class TurnResult:
 class PassResult:
     """Public pass summary; mirrored turns contribute codes, never document figures."""
 
+    private_work: bool = False
     sources: int = 0
     synced: int = 0
     changed: int = 0
@@ -458,6 +459,16 @@ async def _source_turn(src: KnowledgeSource) -> AsyncIterator[leases.Lease]:
 
 
 async def _sync_one(
+    src: KnowledgeSource, state: dict[str, str], run: Pass, result: PassResult
+) -> TurnResult | None:
+    if not mirror_synced(src):
+        return await _sync_turn(src, state, run, result)
+    result.private_work = True
+    with private_sync.scope():
+        return await _sync_turn(src, state, run, result)
+
+
+async def _sync_turn(
     src: KnowledgeSource, state: dict[str, str], run: Pass, result: PassResult
 ) -> TurnResult | None:
     try:
@@ -1178,9 +1189,10 @@ async def _fetch(token: str, f: dict[str, Any]) -> _Fetched:
         return _Fetched(convert.presentation_markdown(deck), "slides")
     fmt = _FORMAT_OF_MIME[mime]
     data = await gdrive.download(token, file_id, max_bytes=max_bytes)
-    artifact = await extractors.extract(
-        data, name=str(f.get("name") or file_id), media_type=mime, declared_format=fmt
-    )
+    from server.core.diagnostics import codes_only
+
+    name = f"source.{fmt}" if codes_only() else str(f.get("name") or file_id)
+    artifact = await extractors.extract(data, name=name, media_type=mime, declared_format=fmt)
     return _Fetched(convert.artifact_markdown(artifact), fmt, data, convert.coverage_of(artifact))
 
 

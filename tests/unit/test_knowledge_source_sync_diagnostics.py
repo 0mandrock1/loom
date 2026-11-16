@@ -64,7 +64,7 @@ def test_document_figures_stay_in_private_turn(
         assert boundary["states"][-1] is turn
         answers.append(outcome(result))
         if mirrored:
-            assert result == sync.PassResult(sources=1)
+            assert result == sync.PassResult(sources=1, private_work=True)
         else:
             assert result.changed == count and result.cut
     assert (answers[0] == answers[1]) is mirrored
