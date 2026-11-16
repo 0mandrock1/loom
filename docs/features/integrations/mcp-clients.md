@@ -311,8 +311,8 @@ same network. On the same machine, `loom install --client claude-desktop` writes
   no client secret.
 - **Le Chat** (Mistral's connector docs call the app Work): an admin adds it under
   Connectors → Add Connector → Custom MCP Connector; Mistral documents that it detects the
-  authentication type from the URL, with bearer token, Basic and OAuth among the types;
-  choose the bearer token type, since Loom does not accept Basic
+  authentication method from the URL. Choose **HTTP Bearer Token / Basic Auth** and enter
+  the token as a bearer token, since Loom does not accept Basic
   ([telling which](#bearer-or-bare-token)).
 
 ### Bearer or bare token
