@@ -98,6 +98,8 @@ These pages are rendered from the code. Edit the source, then run the generator.
 
 On the documentation site, `scripts/docs_site/hooks.py` serves each page's Markdown copy beside the page, at its URL plus `index.html.md` and, for a section index, at `<folder>.md`, named by a `<link rel="alternate" type="text/markdown">` tag on the page; `llms.txt` with its links pointing at those copies; `llms-full.txt` (the pages that say what Loom is and how to start); and the repository's `llms-install.md`.
 
+The site also publishes the generated pages under `i18n/<language>/docs/`. Each language's use-case index lives at `/<language>/`; its other pages keep their docs-relative paths under that prefix. Each translated page links to its English source and to the available equivalent translations. A notice marks translations whose source blob differs from the current English page. Translation generation stays in `scripts/i18n/translate.py`; the site build does not call a translation provider.
+
 The SDK op tables (`sdk/python/loom/ops.py`, `sdk/typescript/src/generated/ops.ts`) come from `scripts/codegen/sdk_py_gen.py` and `sdk_ts_gen.py` ([code generation](code-generation.md)).
 
 ## Before you push

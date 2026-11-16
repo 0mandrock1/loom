@@ -23,11 +23,15 @@ from pathlib import Path
 
 SITE = "https://clickhouse.github.io/loom/"
 ENDPOINT = "https://api.indexnow.org/indexnow"
-DOCS = Path(__file__).resolve().parents[2] / "docs"
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+DOCS = ROOT / "docs"
 BUILD_INPUTS = (
     "mkdocs.yml",
     "scripts/codegen/page_summary.py",
     "scripts/docs_site/hooks.py",
+    "scripts/docs_site/locales.py",
     "scripts/docs_site/requirements.txt",
     "scripts/docs_site/overrides/",
 )
@@ -52,15 +56,23 @@ def page_path(path: str) -> str:
 
 def page_url(path: str) -> str | None:
     """The site URL a docs/ Markdown file is served at, or None for other files."""
+    if path.startswith("i18n/"):
+        from scripts.docs_site.locales import localized_page_path
+
+        localized = localized_page_path(path)
+        return SITE + localized if localized is not None else None
     if not (path.startswith("docs/") and path.endswith(".md")):
         return None
     return SITE + page_path(path)
 
 
 def every_page() -> list[str]:
-    return sorted(
-        u for p in DOCS.rglob("*.md") if (u := page_url(f"docs/{p.relative_to(DOCS).as_posix()}"))
-    )
+    from scripts.docs_site.locales import translations
+
+    paths = [f"docs/{p.relative_to(DOCS).as_posix()}" for p in DOCS.rglob("*.md")]
+    english = [u for p in paths if (u := page_url(p))]
+    localized = [SITE + page_path(f"docs/{uri}") for uri in translations(DOCS.parent)]
+    return sorted([*english, *localized])
 
 
 def urls_for(paths: list[str]) -> list[str]:
