@@ -30,16 +30,24 @@ class _Target(Settings):
 
 def read_target(path: Path, current: Settings) -> Settings:
     """Overlay FILE on the CLI's effective settings; install neither the file nor values."""
-    values = read_settings_file(str(path), set(Settings.model_fields))
+    try:
+        values = read_settings_file(str(path), set(Settings.model_fields))
+    except (SettingsFileError, UnicodeError, TypeError):
+        # Reader messages may quote a version, YAML source, or an arbitrary mapping key.
+        raise SettingsFileError(
+            f"{path}: invalid target settings file; use version: 1, unique setting names "
+            "and nonsecret values"
+        ) from None
     checked: dict[str, Any] = {}
     for name, value in values.items():
         try:
             checked[name] = coerce(Settings, name, value)
-        except ValidationError as error:
-            rule = error.errors(include_input=False)[0]["msg"]
-            raise SettingsFileError(f"{path}: {name} has an invalid value ({rule})") from None
+        except ValidationError:
+            raise SettingsFileError(f"{path}: {name} has an invalid target value") from None
     try:
         return _Target(**(current.model_dump() | checked))
-    except ValidationError as error:
-        # Settings hides inputs, including a model-level validator's complete input.
-        raise SettingsFileError(f"{path}: invalid target configuration ({error})") from None
+    except ValidationError:
+        # Validators can embed supplied values in their own messages despite hidden inputs.
+        raise SettingsFileError(
+            f"{path}: invalid target configuration; check the setting constraints"
+        ) from None

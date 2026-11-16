@@ -57,7 +57,10 @@ def test_invalid_overlay_fields_refuse_without_echoing_values(
     path.write_text("version: 1\nsettings:\n" + body)
     with pytest.raises(SettingsFileError) as exc:
         read_target(path, current)
-    assert field in str(exc.value)
+    if field == "memory_ask_deep_evidence_max_memories":
+        assert field in str(exc.value)
+    else:
+        assert "invalid target settings file" in str(exc.value)
     assert "do-not-copy-this-value" not in str(exc.value)
 
 
@@ -74,7 +77,7 @@ def test_full_model_rules_apply_and_unknown_settings_keep_the_normal_warning(
     path.write_text(
         "version: 1\nsettings:\n  inference_token_audience: own-audience\n  public_base_url: ''\n"
     )
-    with pytest.raises(SettingsFileError, match="LOOM_INFERENCE_TOKEN_URL"):
+    with pytest.raises(SettingsFileError, match="invalid target configuration"):
         read_target(path, current)
 
 
@@ -136,3 +139,36 @@ def test_explicit_fingerprint_is_identical_to_the_process_and_uses_candidate_org
     assert "target-repo" in changed["configured_orgs"]
     assert "before" not in changed["configured_orgs"]
     assert cell.fingerprint("deployment") == fields
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "version: 1\nsettings:\n  openai_base_url: {marker}\n",
+        "version: {marker}\nsettings: {{}}\n",
+        "version: 1\nsettings:\n  jwt_secret: [\n  {marker}\n",
+        "version: 1\nsettings:\n  memory_ask_deep_evidence_max_memories: {marker}\n",
+        "version: 1\nsettings:\n  {marker}: first\n  {marker}: second\n",
+        "version: 1\nsettings:\n  tracker_org: 'next'\n{marker}: extra\n",
+    ],
+)
+def test_invalid_target_errors_never_echo_supplied_values(tmp_path: Path, template: str) -> None:
+    from server.cli.cell_update_config import read_target
+
+    marker = "private-overlay-regression-marker"
+    path = tmp_path / "target.yaml"
+    path.write_text(template.format(marker=marker))
+    with pytest.raises(SettingsFileError) as error:
+        read_target(path, _config())
+    assert marker not in str(error.value)
+    assert error.value.__suppress_context__
+    assert "target" in str(error.value)
+
+
+def test_malformed_target_encoding_is_a_safe_configuration_refusal(tmp_path: Path) -> None:
+    from server.cli.cell_update_config import read_target
+
+    path = tmp_path / "target.yaml"
+    path.write_bytes(b"version: 1\nsettings:\n  tracker_org: \xff\n")
+    with pytest.raises(SettingsFileError, match="invalid target settings file"):
+        read_target(path, _config())
