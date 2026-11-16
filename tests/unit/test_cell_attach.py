@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -496,6 +497,24 @@ class FakeConn:
     def terminate(self) -> None:
         self.executed.append("TERMINATE")
 
+    async def close(self, **kwargs: Any) -> None:
+        assert kwargs["timeout"] > 0
+        self.executed.append("CLOSE")
+
+    def is_closed(self) -> bool:
+        return bool(self.executed and self.executed[-1] in {"CLOSE", "TERMINATE"})
+
+
+def _short_phases(monkeypatch: pytest.MonkeyPatch, bounds: list[float] | None = None) -> None:
+    supervise = apg.supervise
+
+    async def bounded(conn: Any, work: Any, *, end: float) -> Any:
+        if bounds is not None:
+            bounds.append(end - time.monotonic())
+        return await supervise(conn, work, end=time.monotonic() + 0.01)
+
+    monkeypatch.setattr(apg, "supervise", bounded)
+
 
 def _seq(*values: Any) -> Callable[..., Any]:
     pending = list(values)
@@ -750,13 +769,7 @@ async def test_the_mode_try_bounds_a_commit_that_never_answers(
 
     conn = _StalledCommit([("UPDATE loom.tenancy_mode", "UPDATE 1")])
     bounds: list[float] = []
-    timeout = asyncio.timeout
-
-    def bounded(seconds: float) -> Any:
-        bounds.append(seconds)
-        return timeout(0)
-
-    monkeypatch.setattr(apg.asyncio, "timeout", bounded)
+    _short_phases(monkeypatch, bounds)
     marks: list[str] = []
 
     async def confirm() -> None:
@@ -773,8 +786,9 @@ async def test_the_mode_try_bounds_a_commit_that_never_answers(
             timeout=0.2,
         )
     assert "COMMIT" in conn.executed
-    assert conn.executed[-1] == "TERMINATE"
-    assert bounds == [bound_s]
+    assert conn.executed[-1] == "CLOSE"
+    assert "TERMINATE" not in conn.executed
+    assert bounds == pytest.approx([bound_s], abs=0.001)
     assert marks == ["unknown"]
 
 
@@ -793,8 +807,7 @@ async def test_a_mode_deadline_never_waits_for_rollback(
             return result
 
     conn = _StalledRollback()
-    timeout = asyncio.timeout
-    monkeypatch.setattr(apg.asyncio, "timeout", lambda _s: timeout(0))
+    _short_phases(monkeypatch)
     marks: list[str] = []
     task = asyncio.create_task(apg._mode_try(conn, 100, marks.append))
     done, _ = await asyncio.wait([task], timeout=0.2)
@@ -804,7 +817,8 @@ async def test_a_mode_deadline_never_waits_for_rollback(
             await task
     assert task in done, "mode deadline is stuck awaiting rollback"
     assert isinstance(task.exception(), TimeoutError)
-    assert conn.executed[-1] == "TERMINATE"
+    assert conn.executed[-1] == "CLOSE"
+    assert "TERMINATE" not in conn.executed
     assert marks == (["unknown"] if stall == "UPDATE" else [])
 
 
@@ -846,7 +860,8 @@ async def test_a_failed_direct_session_read_never_waits_for_rollback(
         assert task.cancelled()
     else:
         assert isinstance(task.exception(), ValueError)
-    assert conn.executed[-1] == "TERMINATE"
+    assert "CLOSE" not in conn.executed
+    assert "TERMINATE" not in conn.executed
     assert "ROLLBACK" not in conn.executed
 
 
@@ -865,7 +880,8 @@ async def test_an_interrupt_waiting_for_the_mode_lock_leaves_recording(clock: _C
         await apg.commit_enforced(
             conn, confirm, ready, apg.Wait(2, clock), lambda _t: None, marks.append
         )
-    assert conn.executed[-1] == "TERMINATE"
+    assert conn.executed[-1] == "CLOSE"
+    assert "TERMINATE" not in conn.executed
     assert marks == []
 
 
@@ -1069,8 +1085,7 @@ async def test_a_trigger_try_deadline_covers_transaction_and_lock_cleanup(
             conn, table, ["CREATE TRIGGER stub"], kwargs["lock_timeout"], 1, warn=False
         )
 
-    timeout = asyncio.timeout
-    monkeypatch.setattr(apg.asyncio, "timeout", lambda _s: timeout(0))
+    _short_phases(monkeypatch)
     monkeypatch.setattr(cell_triggers, "ensure_table", ensure_table)
     conn = _Stalled()
     task = asyncio.create_task(apg._ensure_one(conn, "scope_generations", 100, apg.Wait(0, clock)))
@@ -1078,7 +1093,8 @@ async def test_a_trigger_try_deadline_covers_transaction_and_lock_cleanup(
     try:
         assert task in done, f"trigger deadline is stuck at {stall}"
         assert isinstance(task.exception(), TimeoutError)
-        assert conn.executed[-1] == "TERMINATE"
+        assert conn.executed[-1] == "CLOSE"
+        assert "TERMINATE" not in conn.executed
         if stall in {"migration", "ddl", "commit", "rollback"}:
             assert apg._MIGRATION_UNLOCK not in conn.executed
     finally:
@@ -1110,7 +1126,8 @@ async def test_a_failed_trigger_try_does_not_mask_its_error_with_cleanup(
     )
     with pytest.raises(ValueError, match=f"{failed if failed == 'migration' else 'DDL'} failed"):
         await apg._ensure_one(conn, "scope_generations", 100, apg.Wait(0, clock))
-    assert conn.executed[-1] == "TERMINATE"
+    assert conn.executed[-1] == "CLOSE"
+    assert "TERMINATE" not in conn.executed
 
 
 @pytest.mark.asyncio

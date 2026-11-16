@@ -467,11 +467,17 @@ async def attach_lock() -> AsyncIterator[None]:
 
     async with pg.dedicated(statement_timeout_ms=_LOCK_STATEMENT_MS) as conn:
         try:
-            refusals = await cell_attach_pg.direct_refusals(conn, "prepare")
-            refusals += await cell_attach_pg.encoding_refusals(conn)
-            if refusals:
-                raise Stopped(refusals)
-            await cell_attach_pg.take_lock(conn, "prepare")
+
+            async def take() -> None:
+                refusals = await cell_attach_pg.direct_refusals(conn, "prepare")
+                refusals += await cell_attach_pg.encoding_refusals(conn)
+                if refusals:
+                    raise Stopped(refusals)
+                await cell_attach_pg.take_lock(conn, "prepare")
+
+            await cell_attach_pg.supervise(
+                conn, take(), end=time.monotonic() + _LOCK_STATEMENT_MS / 1000
+            )
         except Stopped as e:
             raise Refused(str(e)) from None
         yield

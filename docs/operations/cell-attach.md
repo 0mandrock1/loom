@@ -92,6 +92,11 @@ one try of each wait with no retry. The final heartbeat checks get at least two 
 plus the router timeout, with one extension for a process first seen booting; this floor
 is not charged to `--wait`. `--scan-budget` (default 7200 s) bounds each full scan, and
 step 2 must take at most half of it, since step 4 reads the same tables again.
+Each Postgres mode or trigger try reserves cleanup time inside its client deadline.
+On interruption its owner closes the session before cancelling transaction work.
+A close that cannot complete uses transport abort and reports failure; that abort
+does not establish that server locks or an unacknowledged commit have disappeared.
+Retry the command to resolve an unknown commit through its durable state checks.
 
 A refusal names what to fix. Rerun attach after fixing it: every step is idempotent, and a
 rerun resumes by the directory row and the cell's mode. On a `serving` row it prints that it
