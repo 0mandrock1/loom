@@ -72,8 +72,8 @@ The plugin's hooks run `node`, `git` and `grep` on your machine: `git` reads the
 checkout's remotes, branch, `HEAD` commit, status and diffs, and `grep` searches
 uncommitted files for a redirected grep pattern. The test gate runs no Python:
 for a pytest test it picks the interpreter of the checkout's virtualenv, the
-active one (`VIRTUAL_ENV`) or a `python3` or `python` on `PATH`, checking only
-that the file exists.
+active one (`VIRTUAL_ENV`) or a `python3` or `python` on `PATH`, looking at the
+file without running it.
 
 The plugin keeps the token it saves (a copy of the install token or a
 self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in

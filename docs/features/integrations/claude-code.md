@@ -237,7 +237,7 @@ On your machine the hooks run `node`, `git` and `grep`: `git` reads the checkout
 branch, `HEAD` commit, status and diffs, and `grep` searches uncommitted files for a
 redirected grep pattern. The test gate runs no Python: for a pytest test it picks the
 interpreter of the checkout's virtualenv, the active one (`VIRTUAL_ENV`) or a `python3` or
-`python` on `PATH`, checking only that the file exists.
+`python` on `PATH`, looking at the file without running it.
 
 The plugin names the oldest Loom server its hooks support (`MIN_SERVER_VERSION` in `lib/server-version.mjs`). SessionStart reads the server's `version` from the `GET /v1/health` answer it already requests and, when that version is older, prints one `loom:` line naming both versions and asking for a server upgrade. The session goes on either way; an unreachable server, an answer other than 2xx, a server that reports no `version`, or a version that is not SemVer prints nothing. The `loom-status` skill (`bin/loom-client-status.mjs`) reports the same as a warning. The minimum rises with the release that first serves what a hook needs, so between that hook's merge and that release a server of the previous release gets no warning.
 
