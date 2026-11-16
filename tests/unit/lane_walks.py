@@ -724,10 +724,9 @@ def judged_step(
 
 def registry_cost(lang: str) -> list[tuple[str, str, float, float, int, int]]:
     """`judged_step` per shape the lane reads as its own (a manifest shape can read as a
-    template), with the shape's name first.
-    The parses' time is not counted, since each has its own CPU deadline (`bounded_parse`);
-    the bytes they read are returned, so a walk that parses the file again per block is
-    still seen."""
+    template), with the shape's name first. The parses' time is not counted, since each
+    has its own CPU deadline (`bounded_parse`); the bytes they read are returned, so a walk
+    that parses the file again per block is still seen."""
     from server.code.domain.extract import bounded_parse
 
     path, head, as_lang = SAMPLES[lang]

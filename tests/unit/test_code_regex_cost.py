@@ -436,11 +436,11 @@ def test_a_registered_lane_costs_linear_time(lang: str) -> None:
         if big < LANE_FLOOR_S and big < 4 * small:
             linear.add(shape)
         if parsed_big > 6 * parsed_small + 1000:  # the larger file is 4 times the bytes
-            reparsed[shape] = (parsed_small, parsed_big)
+            reparsed[shape] = (step, parsed_small, parsed_big)
     new = {shape: t for shape, t in slow.items() if shape not in known}
     assert not new and not reparsed, (
         f"{lang}, from the step's smaller size (N or 4N) to 4 times it: (step, s, s) {new}; "
-        f"(bytes, bytes) {reparsed}"
+        f"(step, bytes, bytes) {reparsed}"
     )
     fixed = sorted(set(known) & linear)  # clearly linear now, not a timer's doubt
     assert not fixed, f"{lang}: {fixed} run in linear time; drop them from KNOWN_SLOW"
