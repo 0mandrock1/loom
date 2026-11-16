@@ -2830,6 +2830,10 @@ settings:
   # [live]
   # knowledge_source_mirror_documents_per_pass: 40
 
+  # Documents of stopped mirrored sources retired per cleanup pass, independently of the
+  # content-sync budget. Cleanup continues while syncing is switched off. [live]
+  # knowledge_source_retire_documents_per_pass: 40
+
   # Documents one source holds: its stored ones plus the new ones a turn writes. At it a
   # turn tries no new file, notes how many as `too_many_documents`, and still updates
   # and retires. At most 200,000: each read of the stored copies grows with its square.

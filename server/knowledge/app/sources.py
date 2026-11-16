@@ -896,7 +896,7 @@ async def handle_knowledge_source_remove(
                     code="SOURCE_NOT_FOUND",
                 )
             pending = 0
-            if input.delete_documents:
+            if input.delete_documents and src.access != domain.MIRRORED_ACCESS:
                 pending = await store.count_documents(
                     src.org, src.namespace, domain.source_tag(src.name)
                 )
@@ -904,12 +904,15 @@ async def handle_knowledge_source_remove(
         # write touches. It is recorded even with no documents counted now: a sync
         # turn running meanwhile may still write one, and the worker clears the
         # request once none is left.
+        pending_delete = input.delete_documents
+        if src.access == domain.MIRRORED_ACCESS:
+            pending_delete = await _queue_retirement(src)
         retired = dataclasses.replace(
             src,
             active=False,
             credential_enc="",
             secret_enc="",
-            pending_delete=input.delete_documents,
+            pending_delete=pending_delete,
         )
         await store.insert_source(retired)
     return KnowledgeSourceRemoveOutput(name=src.name, documents_pending=pending)
@@ -991,10 +994,31 @@ async def deactivate_namespace_sources(org: str, namespace: str) -> list[str]:
     with sequential_reads():
         found = await store.list_sources(org, namespace)
     for src in found:
+        pending = await _queue_retirement(src) if src.access == domain.MIRRORED_ACCESS else False
         await store.insert_source(
-            dataclasses.replace(src, active=False, credential_enc="", secret_enc="")
+            dataclasses.replace(
+                src,
+                active=False,
+                credential_enc="",
+                secret_enc="",
+                pending_delete=pending or src.pending_delete,
+            )
         )
     return sorted(src.name for src in found)
+
+
+async def _queue_retirement(src: KnowledgeSource) -> bool:
+    """Called under the sources lease, before inactivation; never creates a mirror."""
+    from server.knowledge.app.mirrors import live_mirror
+    from server.knowledge.store.source_retirements import Retirement, write
+
+    mirror = await live_mirror(src.org, src.namespace)
+    if not mirror:
+        return False  # inactivation fences the first mirror's creation under this lease
+    await write(
+        Retirement(src.org, src.namespace, src.name, src.source_id, src.kind, mirror), pending=True
+    )
+    return True
 
 
 async def retire_sources_of(org: str, namespaces: list[str], *, wait_s: float) -> int:

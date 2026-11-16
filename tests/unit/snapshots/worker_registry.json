@@ -549,6 +549,20 @@
    }
   },
   {
+   "deadline_seconds()": 60.0,
+   "due_scope": null,
+   "first_pass_due": null,
+   "has_first_pass_hook": false,
+   "idle_interval_seconds": 1800,
+   "interval_seconds": 900,
+   "max_pass_seconds": 60.0,
+   "name": "knowledge_source_retire",
+   "owned_tables": [],
+   "pass_callable": {
+    "id": "server.knowledge.workers.source_retirements:run_pass"
+   }
+  },
+  {
    "deadline_seconds()": 120.0,
    "due_scope": null,
    "first_pass_due": null,
@@ -1182,6 +1196,20 @@
    }
   },
   {
+   "deadline_seconds()": 60.0,
+   "due_scope": null,
+   "first_pass_due": null,
+   "has_first_pass_hook": false,
+   "idle_interval_seconds": 1800,
+   "interval_seconds": 900,
+   "max_pass_seconds": 60.0,
+   "name": "knowledge_source_retire",
+   "owned_tables": [],
+   "pass_callable": {
+    "id": "server.knowledge.workers.source_retirements:run_pass"
+   }
+  },
+  {
    "deadline_seconds()": 900.0,
    "due_scope": {
     "id": "server.tracker.workers.test_daily:due_scope"
@@ -1810,6 +1838,20 @@
    "owned_tables": [],
    "pass_callable": {
     "id": "server.code.workers.pr_history:run_pass"
+   }
+  },
+  {
+   "deadline_seconds()": 60.0,
+   "due_scope": null,
+   "first_pass_due": null,
+   "has_first_pass_hook": false,
+   "idle_interval_seconds": 1800,
+   "interval_seconds": 900,
+   "max_pass_seconds": 60.0,
+   "name": "knowledge_source_retire",
+   "owned_tables": [],
+   "pass_callable": {
+    "id": "server.knowledge.workers.source_retirements:run_pass"
    }
   },
   {

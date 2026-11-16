@@ -649,7 +649,7 @@ Retire a registered document source: its registry row goes inactive and its cred
 | `namespace` | `str` | required | The namespace the source's documents live in. |
 | `name` | `str` | required | The source name. |
 | `confirm` | `str` | required | Type the source name to confirm. |
-| `delete_documents` | `bool` | `False` | Record a request to retire the source's documents (default keep them). |
+| `delete_documents` | `bool` | `False` | Retire a namespace source's documents (default keep); implied for mirrored sources. |
 
 | Output field | Type | Meaning |
 | --- | --- | --- |
