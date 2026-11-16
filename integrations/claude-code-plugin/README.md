@@ -32,7 +32,10 @@ tokens per `tools/list`; every other op runs through `loom_op {op, arguments}`. 
 ## Data handling
 
 The hooks and scripts send data only to the Loom server the plugin is configured
-with (the two skills below are the exceptions). They send:
+with (the two skills below are the exceptions). Two terms first: the plugin
+*redirects* a bulk file read or grep by answering it from Loom's code index
+instead, and a `gh` issue search by answering it from Loom; a *namespace* is the
+space on the server that your token writes to. The hooks and scripts send:
 
 - prompts, tool calls' input and output, and the paths of files read or edited;
 - the symbol name from a grep that the plugin redirects to Loom's code index,
@@ -45,8 +48,8 @@ with (the two skills below are the exceptions). They send:
 - chat turns and session briefs (the compaction summary and a log of asks and
   replies, commands, files and web addresses), stored only when the namespace
   has conversation logging on;
-- up to the session's last 200 turns, which the server keeps as source evidence
-  for the facts it extracts whatever the logging setting is, with up to 80,000
+- up to the session's last 200 turns, which the server keeps as the source of
+  the facts it extracts whatever the logging setting is, with up to 80,000
   characters of the session's Loom tool arguments and results
   (`LOOM_SESSION_MEMORY=off` stops it);
 - the file paths and diff outlines of uncommitted changes (a diff's outline is
@@ -58,9 +61,9 @@ with (the two skills below are the exceptions). They send:
   commit) and the working directory's absolute path;
 - what the agent passes to Loom's tools (memories, search and code queries);
 - on first use with no credential, the OS user name and host name; in agent
-  mode (when `LOOM_CLIENT_ID` and `LOOM_WORKLOAD_TOKEN` or
-  `LOOM_WORKLOAD_TOKEN_FILE` are set), the workload's identity token and
-  `LOOM_CLIENT_ID`, exchanged for a Loom token.
+  mode (an automated agent whose platform gives it an identity token, set in
+  `LOOM_WORKLOAD_TOKEN` or `LOOM_WORKLOAD_TOKEN_FILE` with `LOOM_CLIENT_ID`),
+  that identity token and `LOOM_CLIENT_ID`, exchanged for a Loom token.
 
 A client-side redaction removes common credential shapes from what the hooks
 send; it is best effort, not a guarantee, and MCP tool arguments and a brief the
@@ -74,16 +77,20 @@ only if its operator configured one
 ([models and keys](https://clickhouse.github.io/loom/getting-started/models-and-keys/));
 deleting data is covered in
 [retention and erasure](https://clickhouse.github.io/loom/features/memory/retention-and-erasure/).
+Anyone the server grants access to that namespace, such as teammates, and the
+server's operator can read what is stored there
+([namespaces and sharing](https://clickhouse.github.io/loom/features/namespaces-and-sharing/)).
 
-The plugin's hooks and its MCP header helper run `node`, `git` and `grep` on
-your machine: `git` reads the checkout's remotes, branch, `HEAD` commit, status
-and diffs, and `grep` searches uncommitted files for the pattern of a grep the
-plugin redirects to the code index. The `loom-session` skill's brief script also
-runs `git log` for the commits since the last brief. The test gate (the Stop
-hook that names the tests a change needs) runs no Python: for a pytest test it
-picks the interpreter of the checkout's virtualenv, the active one
-(`VIRTUAL_ENV`) or a `python3` or `python` on `PATH`, checking that the
-interpreter's file exists without running it.
+The plugin's hooks and its MCP header helper (the script that adds the token to
+Loom's MCP requests) run `node`, `git` and `grep` on your machine: `git` reads
+the checkout's remotes, branch, `HEAD` commit, status and diffs, and `grep`
+searches uncommitted files for the pattern of a grep the plugin redirects to the
+code index. The `loom-session` skill's brief script also runs `git log` for the
+commits since the last brief. The test gate (the hook that, when a reply ends,
+names the tests a change needs) runs no Python: for a pytest test it picks the
+interpreter of the checkout's virtualenv, the active one (`VIRTUAL_ENV`) or a
+`python3` or `python` on `PATH`, checking that the interpreter's file exists
+without running it.
 
 The plugin keeps the token it saves (a copy of the install token or a
 self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
@@ -92,13 +99,14 @@ self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
 
 Its files in the system temp directory, which can hold prompt and reply text,
 are also mode 0600. A queued write whose delivery process stopped before sending
-it stays until you replay or delete it (`loom-status` counts them and names the
-directory); one the server refuses, or that cannot reach the server, is
-discarded, as is a batch of the per-file read and grep records above that fails
-to send; chat turns are sent again at the next Stop and a brief's events at the
-next save. Other state files are swept after a day untouched, and the log of
-which tool calls the plugin redirected or let through (no prompt or file
-content) stays until removed (`LOOM_SHUNT_LOG=off` stops it).
+it stays until you replay or delete it; `loom-status` counts these and names the
+directory. A write the server refuses, or that cannot reach the server, is
+discarded. A batch of the per-file read and grep records above that fails to
+send is discarded too. Chat turns that fail are sent again at the end of the
+next reply, and a brief's events at the next brief save. Other state files are
+deleted after a day untouched. The log of which tool calls the plugin redirected
+or let through (no prompt or file content) stays until you remove it
+(`LOOM_SHUNT_LOG=off` stops it).
 
 Two skills reach other services when you run them. `loom-status` can install
 Node.js after you agree: on Linux, as root or with passwordless sudo, it
@@ -113,11 +121,11 @@ approve; the issue holds the report as shown to you: the server version,
 namespace, indexed commit and how much of the repository is indexed, and for
 each finding a reproduction with its queries, symbols and file names.
 
-Keep one Loom entry per session. SessionStart reads the user-scope MCP entries
-in `~/.claude.json`, on the machine only, and warns once a day when one points
-at the same Loom server, which registers a second server beside the plugin. The
-warning, which the session sees, names the entry; nothing else from that file is
-sent. To remove it, run `claude mcp remove <name> -s user`.
+SessionStart reads the user-scope MCP entries in `~/.claude.json`, on this
+machine only, and warns once a day when one points at the same Loom server: that
+entry registers a second Loom server beside the plugin's. The warning, which the
+session sees, names the entry; nothing else from that file is sent. To remove
+the duplicate, run `claude mcp remove <name> -s user`.
 
 ## What it wires
 

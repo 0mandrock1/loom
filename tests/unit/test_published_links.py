@@ -102,7 +102,7 @@ def test_plugin_readme_and_docs_page_name_the_same_local_commands() -> None:
     the same paragraph on what the hooks run locally; a change to one must reach both."""
 
     def paragraph(text: str) -> str:
-        start = text.index("The plugin's hooks and its MCP header helper run ")
+        start = text.index("The plugin's hooks and its MCP header helper ")
         return " ".join(text[start : text.index("\n\n", start)].split())
 
     readme = (CLAUDE / "README.md").read_text()
