@@ -286,7 +286,7 @@ test("checkoutPython names a PATH python without running it", () => {
     write("python");
     assert.equal(checkoutPython(root, { env }), "python");
     write("python3");
-    // Windows prefers python.exe: the Store's python3.exe alias only offers an install.
+    // Windows looks for python first: python.org installs ship no python3.exe.
     assert.equal(checkoutPython(root, { env }), win ? "python" : "python3");
     assert.equal(fs.existsSync(marker), false);
     if (!win) {

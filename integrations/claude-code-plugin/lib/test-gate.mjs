@@ -168,12 +168,12 @@ export function venvPython(dir, platform = process.platform) {
  *  first, then an active one, then a python3 or python on PATH; "" when there
  *  is none. Nothing is run to check for pytest: a Python started to ask would
  *  run what the checkout puts on its path at startup. */
-export function checkoutPython(root, { env = process.env, platform = process.platform } = {}) {
-  const win = platform === "win32";
+export function checkoutPython(root, { env = process.env } = {}) {
+  const win = process.platform === "win32";
   const cands = [
-    venvPython(path.join(root, ".venv"), platform),
-    venvPython(path.join(root, "venv"), platform),
-    env.VIRTUAL_ENV ? venvPython(env.VIRTUAL_ENV, platform) : "",
+    venvPython(path.join(root, ".venv")),
+    venvPython(path.join(root, "venv")),
+    env.VIRTUAL_ENV ? venvPython(env.VIRTUAL_ENV) : "",
   ].filter(Boolean);
   for (const c of cands) {
     if (isFile(c)) return pathUnder(root, c) ?? c;
@@ -182,9 +182,11 @@ export function checkoutPython(root, { env = process.env, platform = process.pla
     .split(win ? ";" : ":")
     .map((d) => (win ? d.replace(/^"(.*)"$/, "$1") : d))
     .filter(Boolean);
-  // Windows: python.exe first, since python.org installs ship no python3.exe.
+  // Windows: python first, since python.org installs ship no python3.exe;
+  // .bat and .cmd are shims such as pyenv-win's, which the shell runs too.
+  const exts = win ? [".exe", ".bat", ".cmd"] : [""];
   for (const py of win ? ["python", "python3"] : ["python3", "python"]) {
-    if (dirs.some((d) => isProgram(path.join(d, win ? `${py}.exe` : py), win))) return py;
+    if (dirs.some((d) => exts.some((e) => isProgram(path.join(d, py + e), win)))) return py;
   }
   return "";
 }
