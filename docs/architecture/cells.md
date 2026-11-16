@@ -1248,6 +1248,15 @@ cleanup have explicit bounds; an interrupted or uncertain local transaction neve
 continues on another connection. No operation record, persistent census, phase or lease
 is added. The UUID is coordination metadata and holds no memory content.
 
+One ephemeral owner supervises the command's raw session and child work. Opening keeps
+its 75-second bound and each local control transaction keeps its 60-second bound,
+reserving cleanup time inside that bound. On failure it sends public connection close
+before cancelling child work, so active statements and rollback cannot prevent bounded
+cleanup. An unexpected transaction error propagates immediately; it never waits for
+rollback on a session the owner will discard. Uncapped command work retains the existing
+one-second session-exit allowance, which cannot extend an expired bounded phase. A
+transport abort remains an unknown outcome, not proof that the server backend ended.
+
 The source census for acceptance and operator directory writes is checked by
 `tests/unit/test_cell_control_census.py`, including dynamic cleanup tables, guarded
 entry points and the named exceptions:

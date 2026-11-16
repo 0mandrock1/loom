@@ -5,7 +5,6 @@ The stores and the router together: tests/integration/test_cell_prepare.py."""
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 from datetime import UTC, datetime
 from typing import Any
@@ -31,7 +30,19 @@ def _cell(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "pg_dsn", "postgresql://cell.internal/loom")
     monkeypatch.setattr(settings, "router_operator_token", OPERATOR)
     # The attach lock's session is Postgres's (tests/integration/test_cell_attach.py).
-    monkeypatch.setattr(cell_prepare, "attach_lock", contextlib.nullcontext)
+    class Owner:
+        conn = None
+
+        async def transaction(self, work):
+            return await work()
+
+        async def call(self, work, **_):
+            return await work()
+
+    async def run(_what, work):
+        return await work(Owner())
+
+    monkeypatch.setattr(cell_control, "run", run)
 
 
 def _args(**over: Any) -> argparse.Namespace:
@@ -395,7 +406,6 @@ async def test_the_processes_live_after_the_wait_are_the_ones_judged(monkeypatch
         ("_write_rows", _write),
     ):
         monkeypatch.setattr(cell_prepare, name, fake)
-    monkeypatch.setattr(cell_control, "transaction", lambda _conn: contextlib.nullcontext())
 
     directory_mode = ["recording"]
 

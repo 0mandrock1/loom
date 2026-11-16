@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
-from typing import Any
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any, cast
 from uuid import UUID
 
 from server.cli import cell_attach_pg as apg
 from server.cli.cell_ch import Refusal
 from server.cli.cell_ch import Refused as Refused
+from server.core import pg
 from server.router.directory import CONTROL_FIELDS, CONTROL_MAX_S
 from server.settings import settings
 
@@ -95,53 +97,164 @@ async def mutate(
     return answer
 
 
-@asynccontextmanager
-async def transaction(conn: Any) -> AsyncIterator[Any]:
-    """Check, write and durably commit on the lock backend; cancellation ends ownership."""
-    settled = False
-    tx = conn.transaction()
+@dataclass(frozen=True)
+class _Fatal:
+    error: SystemExit | KeyboardInterrupt
+
+
+class _ForwardFatal(BaseException):
+    def __init__(self, fatal: _Fatal) -> None:
+        self.fatal = fatal
+
+
+async def _captured[T](work: Callable[[], Awaitable[T]]) -> T | _Fatal:
     try:
-        async with asyncio.timeout(TRANSACTION_S):
-            await tx.start()
+        return await work()
+    except (SystemExit, KeyboardInterrupt) as error:
+        return _Fatal(error)
+    except _ForwardFatal as error:
+        return error.fatal
+
+
+class Owner:
+    """One raw backend and one cleanup owner for a native control command."""
+
+    def __init__(self) -> None:
+        self.conn: Any = None
+        self.phase_end: float | None = None
+        self.close_end: float | None = None
+        self.closed = False
+        self._close_task: asyncio.Task[Any] | None = None
+        self._tasks: set[asyncio.Task[Any]] = set()
+
+    def _start[T](self, work: Callable[[], Awaitable[T]]) -> asyncio.Task[T | _Fatal]:
+        task = asyncio.create_task(_captured(work))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(pg._retrieve_task)
+        return task
+
+    async def _open(self, what: str) -> None:
+        self.conn = await pg._connect_dedicated(statement_timeout_ms=60_000)
+        if self.closed:
+            # A connector returning after cancellation cannot publish a usable session.
+            await pg.close_owned(self.conn, end=self.close_end or 0)
+            raise _refused("connection arrived after the control attempt ended")
+        try:
+            await pg._check_deployment(self.conn)
+            await pg.init_connection(self.conn)
+        except Exception as error:
+            pg._raise_if_unavailable(error)
+            raise
+        refused = await apg.direct_refusals(self.conn, what)
+        refused += await apg.encoding_refusals(self.conn)
+        if refused:
+            raise Refused(refused)
+        await apg.take_lock(self.conn, what)
+
+    async def close(self) -> None:
+        if not self.closed:
+            self.closed = True
+            self.close_end = self.phase_end or (time.monotonic() + pg._RELEASE_TIMEOUT_S)
+        if self.conn is None:
+            return
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(
+                _captured(lambda: pg.close_owned(self.conn, end=cast(float, self.close_end)))
+            )
+            self._close_task.add_done_callback(pg._retrieve_task)
+        try:
+            done, _ = await asyncio.wait(
+                {self._close_task}, timeout=max(0, cast(float, self.close_end) - time.monotonic())
+            )
+            if not done:
+                raise TimeoutError("cell control cleanup deadline expired; outcome unknown")
+            result = self._close_task.result()
+            if isinstance(result, _Fatal):
+                raise _ForwardFatal(result)
+        except BaseException:
+            pg._terminate(self.conn)
+            if not self._close_task.done():
+                self._close_task.cancel()
+            raise
+
+    async def _stop(self, tasks: set[asyncio.Task[Any]]) -> None:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        try:
+            if tasks:
+                await asyncio.wait(tasks, timeout=max(0, (self.close_end or 0) - time.monotonic()))
+        except BaseException:  # noqa: BLE001 — cleanup cannot replace the original failure.
+            if self.conn is not None:
+                pg._terminate(self.conn)
+
+    async def call[T](self, work: Callable[[], Awaitable[T]], *, total_s: float) -> T:
+        if self.closed or self.phase_end is not None:
+            raise _refused("a closed or active control phase cannot start another phase")
+        self.phase_end = time.monotonic() + total_s
+        task = self._start(work)
+        try:
+            done, _ = await asyncio.wait(
+                {task},
+                timeout=max(0, self.phase_end - min(1.0, total_s / 4) - time.monotonic()),
+            )
+            if not done:
+                raise TimeoutError(
+                    "cell control phase deadline expired; outcome unknown; stop and rerun"
+                )
+            result = task.result()
+            if isinstance(result, _Fatal):
+                raise _ForwardFatal(result)
+        except BaseException:
             try:
-                await conn.execute("SET LOCAL lock_timeout = '5s'")
-                await conn.execute("SET LOCAL statement_timeout = '10s'")
-                await check_lock(conn)
-                await conn.execute("SELECT pg_logical_emit_message(true, 'loom.control', '')")
-                yield conn
-            except Exception:
-                await tx.rollback()
-                settled = True
-                raise
-            else:
-                await tx.commit()
-                settled = True
-    finally:
-        if not settled:
-            # This includes cancellation during COMMIT/rollback. A later session is a new run.
-            conn.terminate()
+                await self.close()
+            except BaseException:  # noqa: BLE001 — keep the original phase failure/cancellation.
+                pass
+            await self._stop({task})
+            raise
+        self.phase_end = None
+        return result
+
+    async def transaction[T](self, work: Callable[[], Awaitable[T]]) -> T:
+        return await self.call(lambda: transaction(self.conn, work), total_s=TRANSACTION_S)
 
 
-@asynccontextmanager
-async def session(what: str) -> AsyncIterator[Any]:
-    """A direct, marked, UTF8 session holding ATTACH for its entire control run."""
-    from server.core import pg
-
-    cm = pg.dedicated(statement_timeout_ms=60_000)
-    conn = None
+async def run[T](what: str, work: Callable[[Owner], Awaitable[T]]) -> T:
+    """Run at the command boundary; fatal guard exceptions leave only after cleanup."""
+    owner = Owner()
     try:
-        async with asyncio.timeout(OPEN_S):
-            conn = await cm.__aenter__()
-            refused = await apg.direct_refusals(conn, what)
-            refused += await apg.encoding_refusals(conn)
-            if refused:
-                raise Refused(refused)
-            await apg.take_lock(conn, what)
-        yield conn
+        await owner.call(lambda: owner._open(what), total_s=OPEN_S)
+        result = await asyncio.shield(owner._start(lambda: work(owner)))
+        if isinstance(result, _Fatal):
+            raise _ForwardFatal(result)
+    except BaseException as original:
+        try:
+            await owner.close()
+        except BaseException:  # noqa: BLE001 — preserve the command's original failure.
+            pass
+        await owner._stop(set(owner._tasks))
+        if isinstance(original, _ForwardFatal):
+            raise original.fatal.error from None
+        raise
+    try:
+        await owner.close()
     finally:
-        if conn is not None:
-            # Use dedicated()'s bounded close; this does not prove the server backend ended.
-            await cm.__aexit__(None, None, None)
+        await owner._stop(set(owner._tasks))
+    return result
+
+
+async def transaction[T](conn: Any, work: Callable[[], Awaitable[T]]) -> T:
+    """Borrow the owner's backend; every failure discards it without a rollback wait."""
+    tx = conn.transaction()
+    await tx.start()
+    await conn.execute("SET LOCAL lock_timeout = '5s'")
+    await conn.execute("SET LOCAL statement_timeout = '10s'")
+    await check_lock(conn)
+    await conn.execute("SELECT pg_logical_emit_message(true, 'loom.control', '')")
+    result = await work()
+    await tx.commit()
+    return result
 
 
 async def request(
@@ -196,12 +309,12 @@ async def _acceptance(conn: Any) -> dict[str, Any]:
     }
 
 
-async def backout(conn: Any, call: Call, row: dict[str, Any]) -> None:
+async def backout(owner: Owner, call: Call, row: dict[str, Any]) -> None:
     """The runbook's exact state cleanup, fenced against queued controllers/placements."""
     from server.core.schema import pg_migrate
 
-    async with transaction(conn):
-        before = await _acceptance(conn)
+    conn = owner.conn
+    before = await owner.transaction(lambda: _acceptance(conn))
     first = before["first"]
     if first is not None and (first["cell"], first["is_first"]) != (row["cell"], row["is_first"]):
         raise _refused("the local first row names another registration")
@@ -218,7 +331,8 @@ async def backout(conn: Any, call: Call, row: dict[str, Any]) -> None:
     limited = await mutate(conn, call, row, "/limit", {"closed": True})
     if type(limited.get("placed_orgs")) is not int or limited["placed_orgs"] != 0:
         raise _refused("cell holds placements: cleanup refused; the cell remains closed")
-    async with transaction(conn):
+
+    async def clear_state() -> None:
         await paired(conn, row)
         if json.dumps(await _acceptance(conn), sort_keys=True) != json.dumps(
             before, sort_keys=True
@@ -232,9 +346,12 @@ async def backout(conn: Any, call: Call, row: dict[str, Any]) -> None:
         await conn.execute(
             "ALTER TABLE loom.cell_first ENABLE ALWAYS TRIGGER cell_first_no_truncate"
         )
+
+    await owner.transaction(clear_state)
+
     # Once state is open, a migrating boot cannot recreate the org triggers. The same
     # session still holds ATTACH; a retry repeats the durable state cleanup first.
-    async with transaction(conn):
+    async def clear_triggers() -> None:
         await conn.execute("SELECT pg_advisory_xact_lock($1)", pg_migrate._LOCK_KEY)
         triggers = await conn.fetch(
             "SELECT t.tgname, c.relname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid "
@@ -244,3 +361,5 @@ async def backout(conn: Any, call: Call, row: dict[str, Any]) -> None:
         for trigger in triggers:
             name, table = (str(trigger[k]).replace('"', '""') for k in ("tgname", "relname"))
             await conn.execute(f'DROP TRIGGER "{name}" ON loom."{table}"')
+
+    await owner.transaction(clear_triggers)

@@ -14,45 +14,58 @@ from tests.unit.test_cell_attach import FakeConn
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stall", ["COMMIT", "ROLLBACK"])
-async def test_uncertain_transaction_ends_owned_session_without_unbounded_cleanup(
-    monkeypatch, stall
-):
+async def test_uncertain_commit_closes_before_cancelling_work(monkeypatch):
     class Stalled(FakeConn):
         async def execute(self, sql: str, *args: Any) -> str:
             answer = await super().execute(sql, *args)
-            if sql == stall:
-                await asyncio.Future()
+            if sql == "COMMIT":
+                try:
+                    await asyncio.Future()
+                finally:
+                    self.executed.append("WORK ENDED")
             return answer
 
     conn = Stalled()
-    monkeypatch.setattr(cell_control, "TRANSACTION_S", 0.01)
+    owner = cell_control.Owner()
+    owner.conn = conn
+    monkeypatch.setattr(cell_control, "TRANSACTION_S", 0.04)
     with pytest.raises(TimeoutError):
-        async with cell_control.transaction(conn):
-            if stall == "ROLLBACK":
-                raise ValueError("refuse")
-    assert conn.executed[-1] == "TERMINATE"
-    assert stall in conn.executed
+        await owner.transaction(AsyncMock())
+    assert conn.executed.index("CLOSE") < conn.executed.index("WORK ENDED")
+    assert "TERMINATE" not in conn.executed and "ROLLBACK" not in conn.executed
     assert any("pg_logical_emit_message" in sql for sql in conn.executed)
 
 
 @pytest.mark.asyncio
-async def test_cancellation_during_body_never_waits_for_rollback():
+async def test_failure_never_starts_rollback_or_replaces_original():
     conn = FakeConn()
+    owner = cell_control.Owner()
+    owner.conn = conn
+    original = ValueError("original failure")
+    with pytest.raises(ValueError) as found:
+        await owner.transaction(AsyncMock(side_effect=original))
+    assert found.value is original
+    assert conn.executed[-1] == "CLOSE"
+    assert "ROLLBACK" not in conn.executed and "TERMINATE" not in conn.executed
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_body_closes_before_work_cancel():
+    conn = FakeConn()
+    owner = cell_control.Owner()
+    owner.conn = conn
     entered = asyncio.Event()
 
-    async def work():
-        async with cell_control.transaction(conn):
-            entered.set()
-            await asyncio.Future()
+    async def body():
+        entered.set()
+        await asyncio.Future()
 
-    task = asyncio.create_task(work())
+    task = asyncio.create_task(owner.transaction(body))
     await entered.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
+    task.cancel("original cancellation")
+    with pytest.raises(asyncio.CancelledError, match="original cancellation"):
         await task
-    assert conn.executed[-1] == "TERMINATE"
-    assert "ROLLBACK" not in conn.executed
+    assert conn.executed[-1] == "CLOSE" and "ROLLBACK" not in conn.executed
 
 
 def snapshot():

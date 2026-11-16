@@ -518,6 +518,9 @@ class FakeConn:
 
         return _Tx()
 
+    async def close(self, *, timeout: float) -> None:
+        self.executed.append("CLOSE")
+
     def terminate(self) -> None:
         self.executed.append("TERMINATE")
 

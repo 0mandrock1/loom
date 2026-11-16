@@ -26,13 +26,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import hashlib
 import json
 import secrets
 import sys
 import time
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -388,7 +386,8 @@ async def _write_rows(
     from `current` and `nxt`, in one transaction; the rows written."""
     is_first = bool(answer.get("is_first"))
     written = []
-    async with cell_control.transaction(conn):
+
+    async def write() -> list[str]:
         # A state CAS does not need to count every tenancy row again.
         fresh = await _read_rows(conn, count_tenancy=False)
         before = (rows.deployment_id, rows.first, rows.mode, rows.current, rows.next)
@@ -418,7 +417,9 @@ async def _write_rows(
                 nxt,
             )
             written.append("own")
-    return written
+        return written
+
+    return await cell_control.transaction(conn, write)
 
 
 def _answer_problem(rows: _CellRows, answer: dict[str, Any], beats: list[_Beat]) -> str:
@@ -457,19 +458,13 @@ async def prepare(
     router: httpx.URL,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> int:
-    """Prepare the cell, holding the attach lock for the run (`attach_lock`)."""
-    async with attach_lock() as conn:
-        return await _prepare_locked(ch, args, router, transport, conn)
-
-
-@contextlib.asynccontextmanager
-async def attach_lock() -> AsyncIterator[Any]:
-    """Hand the exact lock backend to every acceptance-state read and write."""
+    """Prepare on one independently supervised ATTACH-lock backend."""
     try:
-        async with cell_control.session("prepare") as conn:
-            yield conn
-    except cell_control.Refused as e:
-        raise Refused(str(e)) from None
+        return await cell_control.run(
+            "prepare", lambda owner: _prepare_locked(ch, args, router, transport, owner)
+        )
+    except cell_control.Refused as error:
+        raise Refused(str(error)) from None
 
 
 async def _prepare_locked(
@@ -477,10 +472,10 @@ async def _prepare_locked(
     args: argparse.Namespace,
     router: httpx.URL,
     transport: httpx.AsyncBaseTransport | None,
-    conn: Any,
+    owner: cell_control.Owner,
 ) -> int:
-    async with cell_control.transaction(conn):
-        rows = await _read_rows(conn)
+    conn = owner.conn
+    rows = await owner.transaction(lambda: _read_rows(conn))
     if not rows.deployment_id:
         raise Refused("this cell's Postgres records no deployment id: start the cell once first")
     if rows.first is not None and rows.first[1] != settings.cell:
@@ -527,7 +522,10 @@ async def _prepare_locked(
     if problem := _answer_problem(rows, snapshot, beats):
         raise Refused(problem)
     current, nxt = _own_rows(rows, snapshot, every)
-    written = await _write_rows(conn, rows, answer, current, nxt)
+    written = await owner.call(
+        lambda: _write_rows(conn, rows, answer, current, nxt),
+        total_s=cell_control.TRANSACTION_S,
+    )
     print(
         json.dumps(
             {

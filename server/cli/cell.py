@@ -366,7 +366,8 @@ async def _remove_locked(
     from server.cli import cell_control
     from server.core import cell
 
-    async with cell_control.session("remove") as conn:
+    async def remove(owner: cell_control.Owner) -> dict[str, Any]:
+        conn = owner.conn
 
         async def call(path: str, body: dict[str, Any]) -> dict[str, Any]:
             return await cell_control.request(router, args.cell, transport, path, body)
@@ -377,8 +378,7 @@ async def _remove_locked(
             raise cell_control._refused(reason)
         await cell_control.paired(conn, row)
         if row["is_first"]:
-            async with cell_control.transaction(conn):
-                state, _ = await cell.read_state_if_present(conn)
+            state, _ = await owner.transaction(lambda: cell.read_state_if_present(conn))
             if state != "open":
                 raise cell_control._refused(
                     f"the first cell's Postgres reads {state}: run the full-state cleanup "
@@ -389,6 +389,8 @@ async def _remove_locked(
         return await cell_control.request(
             router, args.cell, transport, "", cell_control.preconditions(row), method="DELETE"
         )
+
+    return await cell_control.run("remove", remove)
 
 
 def _cmd_which(args: argparse.Namespace) -> int:

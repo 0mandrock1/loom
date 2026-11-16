@@ -89,9 +89,11 @@ async def main():
         async def call(path, body):
             return await cell_control.request(url, settings.cell, None, path, body)
 
-        async with cell_control.session("state cleanup") as conn:
+        async def cleanup(owner):
             row = await cell_control.request(url, settings.cell, None, "", method="GET")
-            await cell_control.backout(conn, call, row)
+            await cell_control.backout(owner, call, row)
+
+        await cell_control.run("state cleanup", cleanup)
     finally:
         await ch.disconnect()
 

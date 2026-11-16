@@ -462,20 +462,13 @@ def may_have_committed(e: BaseException) -> bool:
     return isinstance(e, PostgresUnavailableError) and bool(e.extra.get("outcome_unknown"))
 
 
-@asynccontextmanager
-async def dedicated(*, statement_timeout_ms: int = 0, marked: bool = True) -> AsyncIterator[Any]:
-    """A connection of its own, outside the pool, with no client timeout and no server
-    statement timeout unless `statement_timeout_ms` asks for one: for work that runs as
-    long as it takes (migrations, an erasure's deletes).
-    A CLI process's first one checks the deployment (`expect_deployment`).
-    `statement_timeout_ms` bounds its statements as a startup value (a RESET ALL keeps
-    it); `marked` False leaves the tenancy marker out (`loom doctor` reads a session
-    without it)."""
+async def _connect_dedicated(*, statement_timeout_ms: int = 0, marked: bool = True) -> Any:
+    """Return the raw dedicated session before its owner initializes it."""
     import asyncpg
 
     _require_dsn()
     try:
-        conn = await asyncpg.connect(
+        return await asyncpg.connect(
             settings.pg_dsn,
             command_timeout=None,
             server_settings={
@@ -492,6 +485,20 @@ async def dedicated(*, statement_timeout_ms: int = 0, marked: bool = True) -> As
     except Exception as e:
         _raise_if_unavailable(e)
         raise
+
+
+@asynccontextmanager
+async def dedicated(*, statement_timeout_ms: int = 0, marked: bool = True) -> AsyncIterator[Any]:
+    """A connection of its own, outside the pool, with no client timeout and no server
+    statement timeout unless `statement_timeout_ms` asks for one: for work that runs as
+    long as it takes (migrations, an erasure's deletes).
+    A CLI process's first one checks the deployment (`expect_deployment`).
+    `statement_timeout_ms` bounds its statements as a startup value (a RESET ALL keeps
+    it); `marked` False leaves the tenancy marker out (`loom doctor` reads a session
+    without it)."""
+    import asyncpg
+
+    conn = await _connect_dedicated(statement_timeout_ms=statement_timeout_ms, marked=marked)
     # Opening includes the deployment check and the codecs (jsonb reads back as a dict, as
     # the pool's): an outage there is the 503; the block's own errors pass through as
     # they are (an erasure's deadlock reaches its retry).
