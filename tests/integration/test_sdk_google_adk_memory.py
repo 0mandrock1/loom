@@ -234,3 +234,20 @@ async def test_a_delete_reaches_the_key_in_each_session_it_is_served_from(agent)
     for memory_id in await eventually(two, description="both sessions' rows"):
         await service.delete_memory(app_name="travel", user_id="alice", memory_id=memory_id)
     assert await facts() == set()
+
+
+async def test_knowledge_is_shared_by_app_without_a_fact_deletion_id(agent) -> None:
+    service = LoomMemoryService(agent, app_name="travel", honour_abstain=False)
+    await agent.knowledge.upsert(
+        "Aisle seats are described in the travel guide.", source_uri="guide"
+    )
+
+    async def documents(user: str):
+        result = await service.search_memory(app_name="travel", user_id=user, query="aisle seats")
+        return [m for m in result.memories if m.custom_metadata["source"] == "knowledge"]
+
+    await eventually(lambda: documents("alice"), description="the app knowledge document")
+    for user in ("alice", "bob"):
+        found = await documents(user)
+        assert found and found[0].id is None
+        assert found[0].custom_metadata["source_uri"] == "guide"

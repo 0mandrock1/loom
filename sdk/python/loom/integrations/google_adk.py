@@ -80,8 +80,9 @@ class LoomMemoryService(BaseMemoryService):
     """ADK ``BaseMemoryService`` over a Loom ``Agent``, for one ADK app.
 
     Saved sessions and turns go to ``memory.set_from_messages``, ``add_memory`` to
-    ``memory.set`` and ``search_memory`` to ``memory.search`` of the ADK user's
-    memories; a returned memory's ``id`` names it for ``delete_memory``. ADK
+    ``memory.set``. ``search_memory`` reads the ADK user's memories first, then
+    fills its remaining slots from the app namespace's knowledge documents. A fact's
+    ``id`` names it for ``delete_memory``. ADK
     awaits its memory service, so the service takes a ``loom.Agent``. The mapping of
     each method is in ``docs/features/integrations/frameworks.md`` (Google ADK).
     """
@@ -170,28 +171,38 @@ class LoomMemoryService(BaseMemoryService):
             bodies="full",
             explain=False,
         )
-        hits = list(result)
+        hits = [] if self._honour_abstain and result.abstain else list(result)
         if self._honour_abstain:
-            if result.abstain:
-                return SearchMemoryResponse()
             # A response that does not abstain can still carry rows below the floor.
             hits = [hit for hit in hits if not hit.below_threshold]
-        return SearchMemoryResponse(
-            memories=[
+        memories = [
+            MemoryEntry(
+                # Only a fact is deleted by its key; a chunk outlives the fact it names
+                # and a summary has no key, so erasure removes both.
+                id=_entry_id(hit.memory_key, hit.session_id) if hit.source == "fact" else None,
+                content=types.Content(role="user", parts=[types.Part(text=hit.content_excerpt)]),
+                custom_metadata={"similarity": hit.similarity, "source": hit.source},
+                timestamp=hit.valid_at or None,
+            )
+            # Derived rows may come back above the top_k slice: cut after filtering.
+            for hit in hits[: self._top_k]
+        ]
+        if len(memories) < self._top_k:
+            documents = await self._agent.knowledge.search(
+                query, top_k=self._top_k - len(memories), namespace_scope="this"
+            )
+            memories.extend(
                 MemoryEntry(
-                    # Only a fact is deleted by its key; a chunk outlives the fact it names
-                    # and a summary has no key, so erasure removes both.
-                    id=_entry_id(hit.memory_key, hit.session_id) if hit.source == "fact" else None,
-                    content=types.Content(
-                        role="user", parts=[types.Part(text=hit.content_excerpt)]
-                    ),
-                    custom_metadata={"similarity": hit.similarity, "source": hit.source},
-                    timestamp=hit.valid_at or None,
+                    content=types.Content(role="user", parts=[types.Part(text=hit.content)]),
+                    custom_metadata={
+                        "source": "knowledge",
+                        "source_uri": hit.source_uri,
+                        "chunk_idx": hit.chunk_idx,
+                    },
                 )
-                # Derived rows may come back above the top_k slice: cut after filtering.
-                for hit in hits[: self._top_k]
-            ]
-        )
+                for hit in documents[: self._top_k - len(memories)]
+            )
+        return SearchMemoryResponse(memories=memories)
 
     async def delete_memory(
         self, *, app_name: str, user_id: str, memory_id: str | None = None
@@ -263,7 +274,9 @@ def _loom_session(user_id: str, session_id: str) -> str:
 def _digest(*parts: str) -> str:
     """The first 20 hex of the sha256 of `parts` as a JSON list, so two different tuples
     never hash the same text."""
-    return hashlib.sha256(json.dumps(parts).encode()).hexdigest()[:20]
+    return hashlib.sha256(
+        json.dumps(parts, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()[:20]
 
 
 def _iso_time(text: str | None) -> datetime | None:

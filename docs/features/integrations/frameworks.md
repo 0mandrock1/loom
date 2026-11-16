@@ -24,6 +24,7 @@ or needs another database, vector store or cache.
 | Claude API memory tool         | `loomMemoryTool`                                | TypeScript, `@clickhouse/loom/integrations/claude-memory` | `betaMemoryTool` from `@anthropic-ai/sdk`                                |
 | Microsoft Agent Framework      | `LoomContextProvider`                           | Python, `loom.integrations.agent_framework`               | `agent_framework.ContextProvider`                                        |
 | Google ADK                     | `LoomMemoryService`                             | Python, `loom.integrations.google_adk`                    | `google.adk.memory.BaseMemoryService`                    |
+| Google ADK (TypeScript)        | `LoomMemoryService`                             | TypeScript, `@clickhouse/loom/integrations/google-adk`    | `BaseMemoryService` from `@google/adk`                   |
 | Pydantic AI                    | `loom_toolset`                                  | Python, `loom.integrations.pydantic_ai`                   | `FunctionToolset`                                                        |
 | Mastra                         | `loomTools`                                     | TypeScript, `@clickhouse/loom/integrations/mastra`        | `createTool` from `@mastra/core`                                         |
 | AI SDK                         | `loomTools`                                     | TypeScript, `@clickhouse/loom/integrations/ai-sdk`        | `tool()` from `ai`                                                       |
@@ -572,14 +573,15 @@ another app; give each app its own namespace and service. The ADK user is the Lo
 Extraction runs under a Loom session derived from the user and the ADK session (`adk-`
 and a digest of the pair): Loom files a turn's verbatim chunks by session alone, and ADK
 makes a session id unique per user only. A search reads all of the user's memories in the
-namespace, from every session.
+namespace, from every session. Remaining result slots hold knowledge documents shared by
+the app namespace; documents carry no fact-deletion id.
 
 | ADK                     | Loom                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `add_session_to_memory` | the text of the session's events, without the ones a rewind took back, sent to `memory.set_from_messages` (400 messages a call, the op's cap); Loom extracts the facts and resolves duplicates and conflicts. A session added again is extracted again, so a callback that runs every turn, as `after_agent_callback` does, saves that turn's events, as in the example                                                                                                                                                                                                                                                                                                                                                       |
 | `add_events_to_memory`  | the same for the events given, such as the latest turn; a call without a `session_id` raises `ValueError`, since Loom files a turn's verbatim chunks by session. A turn saved before a later rewind keeps its memories: the app deletes its facts by the ids a search returns, and its verbatim passages stay until [erasure](../memory/retention-and-erasure.md) removes them                                                                                                                                                                                                                                                                                                                                                |
 | `add_memory`            | one `memory.set` per entry with text (an entry without text is skipped) under `<key_prefix>/<first 20 hex of sha256(user and text)>`, its `timestamp` as the memory's `valid_at` when it is ISO 8601 (one without a zone is read as local time, as ADK writes its own)                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `search_memory`         | `memory.search` of the user's memories; with `honour_abstain`, leaves out memories below Loom's floor and returns nothing when Loom abstains; each entry's `custom_metadata` carries `similarity` and `source`, and its `timestamp` is `valid_at` when the row has one                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `search_memory`         | `memory.search` of the user's memories, followed by `knowledge.search` for remaining slots; with `honour_abstain`, leaves out memories below Loom's floor and abstaining memory results; each entry's `custom_metadata` carries `similarity` and `source`, and its `timestamp` is `valid_at` when the row has one                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `delete_memory`         | `memory.delete` of the memory the entry's `id` names: the JSON pair of its key and its session, since users share extracted keys and a key alone finds the key's newest row, which can be another user's, and then deletes nothing. A verbatim passage or a session summary has no `id`: a conversation's passage outlives the facts extracted from it, and [erasure](../memory/retention-and-erasure.md) removes it; a call without an id does nothing, as in ADK's own memory service. A delete removes the fact, it does not refuse it: adding its session again extracts it again (the per-turn callback adds each turn once), and [`blacklist.add`](../memory/conflicts-and-refusal.md#refusal-the-blacklist) refuses it |
 
 Events keep their text parts only: the model's thoughts and tool calls and results are not
@@ -593,6 +595,45 @@ sent, and neither is `custom_metadata` or an entry's `author` and `id`.
 | `honour_abstain`             | `True`   | leave out memories below Loom's floor; nothing when Loom abstains                              |
 | `defer`                      | `True`   | queue the extraction on the server instead of waiting for it                                   |
 | `key_prefix`                 | `adk`    | the prefix of `add_memory`'s keys; an empty one is refused                                     |
+
+The TypeScript service implements `@google/adk` 2.5's `BaseMemoryService` interface
+(`npm install @google/adk@~2.5`). It exposes `addSessionToMemory` and `searchMemory`;
+that interface has no individual-memory deletion or event-append method. Both SDKs
+use the same derived Loom session for the same user and ADK session id. TypeScript
+options are `appName`, `topK`, `honourAbstain` and `defer`, with the Python defaults.
+
+```ts
+import { InMemorySessionService, LlmAgent, PRELOAD_MEMORY, Runner } from "@google/adk";
+import { LoomMemoryService } from "@clickhouse/loom/integrations/google-adk";
+
+const sessions = new InMemorySessionService();
+const memory = new LoomMemoryService(loomAgent, { appName: "support" });
+const runner = new Runner({
+  appName: "support",
+  agent: new LlmAgent({ name: "assistant", model: "gemini-flash-latest", tools: [PRELOAD_MEMORY] }),
+  sessionService: sessions,
+  memoryService: memory,
+  autoCreateSession: true,
+});
+for await (const event of runner.runAsync({
+  userId: "alice",
+  sessionId: "travel",
+  newMessage: { role: "user", parts: [{ text: "I prefer aisle seats" }] },
+})) {
+  /* consume the turn */
+}
+const session = await sessions.getSession({
+  appName: "support",
+  userId: "alice",
+  sessionId: "travel",
+});
+if (session) await memory.addSessionToMemory(session);
+```
+
+Save a completed TypeScript session once. Saving it again extracts it again; the
+TypeScript interface has no per-turn append operation. ADK's in-memory session
+service in these examples holds the running conversation only; Loom stores the
+extracted memories and searchable documents in the user's deployment.
 
 ## Pydantic AI
 

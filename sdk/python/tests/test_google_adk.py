@@ -25,6 +25,7 @@ from google.adk.tools import load_memory, preload_memory
 from google.genai import types
 from loom import Agent, SyncAgent
 from loom.integrations.google_adk import LoomMemoryService, _entry_id, _loom_session
+from loom.knowledge import SearchHit
 from loom.memory import MemorySearchHit, MemorySearchResult
 from pydantic import Field
 
@@ -54,9 +55,20 @@ class _FakeMemory:
         return True
 
 
+class _Knowledge:
+    def __init__(self, hits: list[SearchHit] | None = None) -> None:
+        self.hits = hits or []
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def search(self, query: str, **kw: Any) -> list[SearchHit]:
+        self.calls.append((query, kw))
+        return self.hits
+
+
 class _Agent:
-    def __init__(self, memory: _FakeMemory) -> None:
+    def __init__(self, memory: _FakeMemory, knowledge: _Knowledge | None = None) -> None:
         self.memory = memory
+        self.knowledge = knowledge or _Knowledge()
 
 
 class _ScriptedLlm(BaseLlm):
@@ -347,6 +359,31 @@ def test_add_memory_writes_content_keyed_memories() -> None:
     assert again[2]["valid_at"] is None
 
 
+def test_search_fills_remaining_slots_with_shared_app_knowledge() -> None:
+    docs = _Knowledge([SearchHit("guide", 2, "Shared travel policy", [], 0.1, 0.9)])
+    fake = _FakeMemory([_hit("seat", "Alice prefers aisle seats")])
+    service = LoomMemoryService(_Agent(fake, docs), app_name="travel", top_k=2)  # type: ignore[arg-type]
+    found = asyncio.run(service.search_memory(app_name="travel", user_id="alice", query="travel"))
+    assert [entry.content.parts[0].text for entry in found.memories] == [
+        "Alice prefers aisle seats",
+        "Shared travel policy",
+    ]
+    assert found.memories[1].id is None
+    assert found.memories[1].custom_metadata == {
+        "source": "knowledge",
+        "source_uri": "guide",
+        "chunk_idx": 2,
+    }
+    assert docs.calls == [("travel", {"top_k": 1, "namespace_scope": "this"})]
+
+
+def test_memory_abstention_does_not_hide_app_knowledge() -> None:
+    docs = _Knowledge([SearchHit("guide", 0, "App policy", [], 0.1, 0.9)])
+    service = LoomMemoryService(_Agent(_FakeMemory(abstain=True), docs), app_name="travel")  # type: ignore[arg-type]
+    found = asyncio.run(service.search_memory(app_name="travel", user_id="alice", query="policy"))
+    assert [entry.content.parts[0].text for entry in found.memories] == ["App policy"]
+
+
 def test_a_timestamp_without_a_zone_is_local_time() -> None:
     fake = _FakeMemory()
     entry = MemoryEntry(content=_user("Alice moved to Porto"), timestamp="2026-11-01T09:00:00")
@@ -456,11 +493,12 @@ def test_a_real_agent_posts_the_service_calls() -> None:
     paths = [p for p, _ in posts]
     assert paths == [
         "/v1/memory.search",
+        "/v1/knowledge.search",
         "/v1/memory.set_from_messages",
         "/v1/memory.set",
         "/v1/memory.delete",
     ]
-    search, extract, write, delete = (body for _, body in posts)
+    search, knowledge, extract, write, delete = (body for _, body in posts)
     assert (search["query"], search["top_k"], search["user_id"]) == ("seat", 3, "alice")
     assert (search["namespace_scope"], search["bodies"], search["explain"]) == (
         "this",
