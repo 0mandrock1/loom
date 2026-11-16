@@ -1251,8 +1251,10 @@ the own row stays as restored, including its absence. The command creates all or
 tenancy guards even with that approval absent; the cell remains gated. Its result names
 whether prepare is still required. Complete reconciliation first, then start gated
 processes and rerun prepare before serving if the own row is absent. A retained own
-fingerprint that differs from the running configuration needs the normal configuration
-update procedure.
+fingerprint that differs from the configured values is reported separately as
+`configuration_recovery_required`; the own row stays unchanged. Restore a matching
+configuration or follow the normal configuration update procedure before starting
+processes. `prepare_required` describes an absent own row and is not a readiness claim.
 
 The first cell can still hold orgs that attach has not placed yet, even after it records
 `enforced`: attach records directory enforcement before completing the placement

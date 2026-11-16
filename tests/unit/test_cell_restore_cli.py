@@ -231,3 +231,31 @@ async def test_budget_keeps_original_failure_when_owned_close_fails():
     with pytest.raises(ValueError, match="operation failure"):
         await budget.call(failing_work())
     assert conn.is_closed()
+
+
+def test_retained_configuration_mismatch_names_recovery_without_changing_prepare(
+    monkeypatch, capsys
+):
+    import json
+
+    from server.core import ch
+
+    monkeypatch.setattr(cell_restore, "_args_problem", lambda args: "")
+    monkeypatch.setattr(
+        cell_restore.cell_cli, "operator_router", lambda args: httpx.URL("https://router.test")
+    )
+    monkeypatch.setattr(cell_restore, "_connect", AsyncMock())
+    monkeypatch.setattr(cell_restore, "disconnect", AsyncMock())
+    monkeypatch.setattr(ch, "get_client", lambda: object())
+    monkeypatch.setattr(
+        cell_restore.Restore,
+        "run",
+        AsyncMock(
+            return_value={"prepare_required": False, "configuration_recovery_required": True}
+        ),
+    )
+    assert cell_restore.cmd_restore(argparse.Namespace(cell="first", wait=1)) == 0
+    printed = capsys.readouterr()
+    assert json.loads(printed.out)["prepare_required"] is False
+    assert "restore a matching configuration" in printed.err
+    assert "before starting processes" in printed.err

@@ -725,7 +725,7 @@ class Router:
             ),
             lambda value: value,
         )
-        if answer.status_code == 200 and "orgs" not in json.loads(answer.body):
+        if answer.status_code == 200 and "orgs" not in json.loads(bytes(answer.body)):
             answer.status_code = 409
         return answer
 

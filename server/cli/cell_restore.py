@@ -183,6 +183,7 @@ class Restore:
                         raise
 
     async def finish(self, first: dict[str, Any]) -> dict[str, Any]:
+        from server.cli import cell_restore_stores as stores
         from server.cli.cell_restore_triggers import repair
 
         while True:
@@ -206,12 +207,13 @@ class Restore:
                     "retained_local_only": extra,
                     "mode": rows["mode"],
                     "prepare_required": rows["own"] is None,
+                    "configuration_recovery_required": stores.configuration_recovery_required(
+                        rows["own"], self.recorded["deployment_id"]
+                    ),
                     "resume_attach": descriptor["state"] == "attaching",
                 }
             except protocol.SnapshotChanged:
                 first = await self.page(None, None)
-                from server.cli import cell_restore_stores as stores
-
                 try:
                     protocol.compare(descriptor, first["descriptor"])
                 except protocol.SnapshotChanged:
@@ -282,7 +284,7 @@ def cmd_restore(args: argparse.Namespace) -> int:
 
     try:
         result = asyncio.run(run())
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, KeyboardInterrupt):
         print(
             "loom cell restore: outcome may be unknown; "
             "rerun the same command before starting the cell",
@@ -296,6 +298,13 @@ def cmd_restore(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    if result["configuration_recovery_required"]:
+        print(
+            "loom cell restore: retained own does not accept this configuration; "
+            "restore a matching configuration or follow the cell configuration update "
+            "procedure before starting processes",
+            file=sys.stderr,
+        )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

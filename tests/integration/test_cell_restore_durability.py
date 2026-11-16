@@ -10,6 +10,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -20,6 +21,7 @@ import pytest
 from server.cli import cell_attach_pg as apg
 from server.cli import cell_restore, cell_restore_pg
 from server.core import cell, pg
+from server.core.paths import PG_MIGRATIONS_DIR
 from server.core.schema import pg_migrate
 from server.router import app, directory
 from server.settings import settings
@@ -102,13 +104,21 @@ class Drill:
             await pg.close_owned(conn, end=time.monotonic() + 1)
         await self.released(pid)
 
-    async def cancel_and_retry(self, work: Callable[[], Awaitable[Any]], application: str) -> Any:
+    async def cancel_and_retry(
+        self,
+        work: Callable[[], Awaitable[Any]],
+        application: str,
+        *,
+        visible: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
         first = self.task(work())
         pid = await self.waiting(first, application)
         first.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(first, 3)
         await self.released(pid)
+        if visible is not None:
+            await visible()
         retry = self.task(work())
         await self.waiting(retry, application)
         await self.resume()
@@ -233,7 +243,11 @@ async def _migrate(conn: Any, _descriptor: Any, _recorded: Any) -> None:
     await cell_restore._migrate(conn)
 
 
-async def _promote_and_verify(drill: Drill, descriptor: dict[str, Any]) -> None:
+async def _promote_and_verify(
+    drill: Drill,
+    descriptor: dict[str, Any],
+    pending: Path,
+) -> None:
     drill.observer.terminate()
     await _docker("kill", "--signal", "KILL", PRIMARY)
     await _docker(
@@ -286,12 +300,18 @@ async def _promote_and_verify(drill: Drill, descriptor: dict[str, Any]) -> None:
         )
     )
     assert ledger == {path.name: pg_migrate.checksum(path) for path in pg_migrate.migration_files()}
+    assert ledger[pending.name] == pg_migrate.checksum(pending)
+    assert await _sql(STANDBY, local_name, "SELECT value FROM loom.restore_pending_probe") == "42"
 
 
 @pytest.mark.asyncio
 @pytest.mark.recovery
 @pytest.mark.destructive
-async def test_restore_fences_survive_physical_standby_promotion(drill: Drill) -> None:
+async def test_restore_fences_survive_physical_standby_promotion(
+    drill: Drill,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def place(conn):
         await conn.execute("INSERT INTO loom_router.placements(org,cell) VALUES($1,'first')", ORG)
         await conn.execute("UPDATE loom_router.cells SET placed=1 WHERE cell='first'")
@@ -326,4 +346,40 @@ async def test_restore_fences_survive_physical_standby_promotion(drill: Drill) -
     await drill.cancel_and_retry(
         lambda: _local_work(descriptor, "restore-schema", _migrate), "restore-schema"
     )
-    await _promote_and_verify(drill, descriptor)
+    # The acknowledged shipped schema is a genuine prefix of this test-only journal.
+    pending = tmp_path / "999_restore_pending_probe.sql"
+    pending.write_text(
+        "CREATE TABLE loom.restore_pending_probe(value integer PRIMARY KEY); "
+        "INSERT INTO loom.restore_pending_probe VALUES(42);"
+    )
+    real_files = pg_migrate.migration_files
+    files = [*real_files(), pending]
+    monkeypatch.setattr(
+        pg_migrate,
+        "migration_files",
+        lambda mig_dir=PG_MIGRATIONS_DIR: (
+            files if mig_dir == PG_MIGRATIONS_DIR else real_files(mig_dir)
+        ),
+    )
+    async with pg.dedicated() as conn:
+        applied = {
+            r["filename"]: r["checksum"]
+            for r in await conn.fetch("SELECT filename,checksum FROM loom.pg_migrations")
+        }
+        assert pg_migrate.plan(applied, files) == [pending]
+        assert await conn.fetchval("SELECT to_regclass('loom.restore_pending_probe')") is None
+
+    async def visible() -> None:
+        async with pg.dedicated() as conn:
+            assert await conn.fetchval("SELECT value FROM loom.restore_pending_probe") == 42
+            assert await conn.fetchval(
+                "SELECT checksum FROM loom.pg_migrations WHERE filename=$1", pending.name
+            ) == pg_migrate.checksum(pending)
+
+    await drill.pause()
+    await drill.cancel_and_retry(
+        lambda: _local_work(descriptor, "restore-pending-schema", _migrate),
+        "restore-pending-schema",
+        visible=visible,
+    )
+    await _promote_and_verify(drill, descriptor, pending)

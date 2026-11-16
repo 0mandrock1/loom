@@ -38,6 +38,14 @@ def descriptor(value: dict[str, Any], recorded: dict[str, Any]) -> None:
         raise ValueError("the CLI configuration matches neither directory fingerprint")
 
 
+def configuration_recovery_required(own: dict[str, Any] | None, deployment_id: str) -> bool:
+    """Report retained acceptance separately from the missing-own prepare step."""
+    if own is None:
+        return False
+    mine = cell.fingerprint(deployment_id)
+    return not any(cell.matches(mine, own[key]) for key in ("current_fp", "next_fp"))
+
+
 async def stopped_and_schema(ch: Any) -> None:
     from server.core.paths import MIGRATIONS_DIR
     from server.core.schema.journal import migration_number, sorted_migrations
@@ -55,7 +63,9 @@ async def stopped_and_schema(ch: Any) -> None:
     )
     if recent and int(recent["n"]):
         raise ValueError("a worker reports a recent pass; stop every worker before restore")
-    rows = await ch.query_all("SELECT filename, checksum FROM loom._migrations FINAL")
+    rows = await ch.query_all(
+        "SELECT filename, toString(checksum) AS checksum FROM loom._migrations FINAL"
+    )
     files = sorted_migrations(MIGRATIONS_DIR.glob("*.sql"))
     report = ledger_report({r["filename"]: r["checksum"] for r in rows}, files)
     last = max((migration_number(f.name) or 0 for f in files), default=0)

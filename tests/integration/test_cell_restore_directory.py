@@ -469,3 +469,53 @@ def test_public_cli_uses_real_org_free_gate_before_repair(
         if shape == "wrong_first":
             assert "first row names cell" in printed.err
     assert ch.connected is False
+
+
+@pytest.mark.parametrize("own_case", ["matching", "mismatching", "next_matches", "absent"])
+async def test_retained_own_configuration_recovery_is_reported_without_changing_approval(
+    stores, monkeypatch, own_case
+):
+    import argparse
+
+    import asyncpg
+
+    from server.settings import settings
+
+    monkeypatch.setattr(settings, "cell", "first")
+    monkeypatch.setattr(settings, "pg_dsn", stores["first"])
+    monkeypatch.setattr(settings, "document_s3_bucket", "")
+    async with directory._connection() as conn:
+        await conn.execute("DELETE FROM loom_router.hosts WHERE cell='second'")
+        await conn.execute("DELETE FROM loom_router.cells WHERE cell='second'")
+        await conn.execute(
+            "UPDATE loom_router.cells SET state='attaching',mode='recording',current_fp=NULL,next_fp=NULL WHERE cell='first'"
+        )
+    mine = cell.as_value(cell.fingerprint("dep-first"))
+    stale = cell.as_value({**cell.fingerprint("dep-first"), "public_host": "stale.example.test"})
+    conn = await asyncpg.connect(stores["first"])
+    try:
+        if own_case == "absent":
+            await conn.execute("DELETE FROM loom.cell_self")
+        else:
+            await conn.execute(
+                "UPDATE loom.cell_self SET current_fp=$1::jsonb,next_fp=$2::jsonb",
+                json.dumps(mine if own_case == "matching" else stale),
+                json.dumps(mine) if own_case == "next_matches" else None,
+            )
+        before = await conn.fetchrow(
+            "SELECT current_fp::text AS current,next_fp::text AS next FROM loom.cell_self"
+        )
+        result = await cell_restore.Restore(
+            argparse.Namespace(cell="first", wait=15), ROUTER, cell_restore.Budget(15)
+        ).run(OfflineClickHouse())
+        assert result["prepare_required"] is (own_case == "absent")
+        assert result["configuration_recovery_required"] is (own_case == "mismatching")
+        assert result["resume_attach"] is True
+        assert (
+            await conn.fetchrow(
+                "SELECT current_fp::text AS current,next_fp::text AS next FROM loom.cell_self"
+            )
+            == before
+        )
+    finally:
+        await conn.close(timeout=1)
