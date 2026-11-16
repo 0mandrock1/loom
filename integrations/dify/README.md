@@ -42,4 +42,5 @@ Tests use the actual SDK against a fake HTTP transport and a local Loom server w
 configured. No local Dify application or Dify Cloud runtime has been tested.
 
 Source: [ClickHouse/loom](https://github.com/ClickHouse/loom/tree/main/integrations/dify).
-See [privacy](PRIVACY.md). Report problems through the source repository's issues.
+See [privacy](PRIVACY.md).
+Contact: [source repository issues](https://github.com/ClickHouse/loom/issues).
