@@ -6,11 +6,15 @@ import hashlib
 import html
 import posixpath
 import re
+import sys
 from pathlib import Path
 
-from scripts.codegen.page_summary import page_summary
-from scripts.docs_site.hooks import _TOKEN, BLOB, ROOT, _with_source
-from scripts.docs_site.indexnow import page_path
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.codegen.page_summary import page_summary  # noqa: E402
+from scripts.docs_site.hooks import _TOKEN, BLOB, _with_source  # noqa: E402
+from scripts.docs_site.indexnow import page_path  # noqa: E402
 
 LANGUAGES = {
     "zh-CN": "简体中文",

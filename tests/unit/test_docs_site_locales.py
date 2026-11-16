@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -172,3 +174,21 @@ def test_open_graph_locales_require_a_language_and_territory(tmp_path):
         page = SimpleNamespace(file=SimpleNamespace(src_uri=uri), meta={})
         locales.on_page_markdown("# Page", page, config, None)
         assert page.meta.get("og_locale") == expected.get(page.meta["language"])
+
+
+def test_the_hook_loads_without_an_editable_repository_install():
+    hook = Path(__file__).resolve().parents[2] / "scripts/docs_site/locales.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            "import runpy, sys; runpy.run_path(sys.argv[1])",
+            str(hook),
+        ],
+        cwd=hook.parent,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
