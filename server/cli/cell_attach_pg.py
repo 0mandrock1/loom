@@ -397,7 +397,10 @@ SELECT need, held FROM (VALUES
   ('SELECT on loom.authority', has_table_privilege('loom.authority', 'SELECT')),
   ('INSERT on loom.tenancy', has_table_privilege('loom.tenancy', 'INSERT')),
   ('SELECT, INSERT, UPDATE and DELETE on loom.cell_probe',
-   has_table_privilege('loom.cell_probe', 'SELECT, INSERT, UPDATE, DELETE')),
+   has_table_privilege('loom.cell_probe', 'SELECT')
+   AND has_table_privilege('loom.cell_probe', 'INSERT')
+   AND has_table_privilege('loom.cell_probe', 'UPDATE')
+   AND has_table_privilege('loom.cell_probe', 'DELETE')),
   ('TEMPORARY on the database', has_database_privilege(current_database(), 'TEMPORARY'))
 ) v(need, held)
 WHERE NOT held
