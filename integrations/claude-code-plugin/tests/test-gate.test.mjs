@@ -1,7 +1,18 @@
 import "./temp-home.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { decideBlock, gatePayload, gateSignature, renderGate, sessionScope, venvPython } from "../lib/test-gate.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  checkoutPython,
+  decideBlock,
+  gatePayload,
+  gateSignature,
+  renderGate,
+  sessionScope,
+  venvPython,
+} from "../lib/test-gate.mjs";
 
 const GATE = {
   obligations: true,
@@ -258,4 +269,28 @@ test("nothing to run asks for a test, not for running tests", () => {
   assert.match(text, /no test reaches: server\.naming::validate_namespace_name/);
   assert.match(text, /Add a test that reaches it, or say why the change needs none/);
   assert.doesNotMatch(text, /Run the tests/);
+});
+
+test("checkoutPython's pytest probe never imports a pytest.py from the checkout", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
+  const marker = path.join(root, "ran");
+  fs.writeFileSync(path.join(root, "pytest.py"), `open(${JSON.stringify(marker)}, "w").write("x")\n`);
+  try {
+    checkoutPython(root);
+    assert.equal(fs.existsSync(marker), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("checkoutPython drops the working directory from sys.path before importing pytest", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
+  const calls = [];
+  try {
+    const py = checkoutPython(root, { exec: (cmd, args) => calls.push([cmd, args]) });
+    assert.equal(py, "python3");
+    assert.deepEqual(calls[0], ["python3", ["-c", "import sys; sys.path.pop(0); import pytest"]]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

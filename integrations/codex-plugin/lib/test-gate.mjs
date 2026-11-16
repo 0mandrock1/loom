@@ -15,7 +15,9 @@
 // shell command, so a tree left dirty before the session (a branch parked
 // mid-change, a teammate's edits) does not gate a turn that touched nothing.
 
+import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { commandText, extractFiles, normalizeToolName, pathUnder } from "./loom-client.mjs";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "str_replace_editor", "apply_patch"]);
@@ -161,6 +163,41 @@ export function commentOnlyDiff(diff) {
  *  Scripts\python.exe. */
 export function venvPython(dir, platform = process.platform) {
   return platform === "win32" ? path.win32.join(dir, "Scripts", "python.exe") : path.posix.join(dir, "bin", "python");
+}
+
+/** The interpreter that runs this checkout's pytest: its own virtualenv
+ *  first, then an active one, then a PATH python that imports pytest; ""
+ *  when none does, so the gate can say there is none instead of sending the
+ *  agent to look. The probe never imports from the checkout itself. */
+export function checkoutPython(root, { exec = execFileSync } = {}) {
+  const cands = [
+    venvPython(path.join(root, ".venv")),
+    venvPython(path.join(root, "venv")),
+    process.env.VIRTUAL_ENV ? venvPython(process.env.VIRTUAL_ENV) : "",
+  ].filter(Boolean);
+  for (const c of cands) {
+    try {
+      if (fs.statSync(c).isFile()) return pathUnder(root, c) ?? c;
+    } catch {
+      /* next */
+    }
+  }
+  for (const py of ["python3", "python"]) {
+    try {
+      // -c puts the working directory first on sys.path, so a pytest.py at the
+      // checkout root would run here: drop that entry before the import.
+      exec(py, ["-c", "import sys; sys.path.pop(0); import pytest"], {
+        cwd: root,
+        timeout: 1500,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      return py;
+    } catch {
+      /* next */
+    }
+  }
+  return "";
 }
 
 /** Stop-hook payload: block once with the reason; empty text = no output. */
