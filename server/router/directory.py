@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from datetime import datetime
 from typing import Any
 
 from server.core import cell as cell_state
+from server.core import pg
 from server.core.paths import ROUTER_MIGRATIONS_DIR
 from server.router.limits import MAX_BODY_BYTES
 from server.settings import settings
@@ -878,54 +880,106 @@ async def attach_read(cell_name: str, *, audited: bool = False) -> Attaching:
     return _attaching(found, other)
 
 
+async def _restore_page(
+    cm: Any,
+    owned: dict[str, Any],
+    cell_name: str,
+    deployment_id: str,
+    after: str | None,
+    expected_sha256: str | None,
+) -> dict[str, Any]:
+    from server.router import restore
+
+    conn = await cm.__aenter__()
+    owned["conn"] = conn
+    tx = conn.transaction()
+    await tx.start()
+    if not await conn.fetchval(
+        "SELECT indisvalid AND indisready FROM pg_index "
+        "WHERE indexrelid=to_regclass('loom_router.placements_by_cell_org')"
+    ):
+        raise OperatorRefused("restore needs the current directory schema: run loom router migrate")
+    row = await conn.fetchrow(f"{_CELL_REGISTERED} WHERE cell = $1 FOR UPDATE", cell_name)
+    if row is None:
+        raise NoSuchCell(f"cell {cell_name!r} is not in the directory")
+    if row["deployment_id"] != deployment_id:
+        raise OperatorRefused("the restored stores name another deployment")
+    descriptor = {k: row[k] for k in restore.DESCRIPTOR_KEYS if k != "sole_cell"}
+    descriptor["sole_cell"] = await conn.fetchval(_OTHER, cell_name) is None
+    restore.validate_descriptor(descriptor)
+    sha = restore.digest(descriptor)
+    if expected_sha256 is not None and sha != expected_sha256:
+        answer = {"descriptor": descriptor, "sha256": sha}
+    else:
+        predicate = " AND org > $2" if after is not None else ""
+        args = [cell_name, after] if after is not None else [cell_name]
+        rows = await conn.fetch(
+            "SELECT org FROM loom_router.placements WHERE cell = $1 "
+            + predicate
+            + " ORDER BY org LIMIT 501",
+            *args,
+        )
+        answer = restore.page(descriptor, [r["org"] for r in rows])
+    await _audit(conn, "restore_read", {"cell": cell_name, "after": after})
+    await tx.commit()
+    return answer
+
+
+async def _restore_wait(task: asyncio.Task[Any], end: float) -> Any:
+    done, _ = await asyncio.wait({task}, timeout=max(0, end - time.monotonic()))
+    if not done:
+        raise DirectoryUnavailable("restore-read reached its directory deadline")
+    return task.result()
+
+
+async def _restore_cleanup(
+    cm: Any,
+    owned: dict[str, Any],
+    work: asyncio.Task[Any],
+    end: float,
+) -> None:
+    try:
+        if (conn := owned.get("conn")) is not None:
+            await pg.close_owned(conn, end=end)
+    finally:
+        if not work.done():
+            work.cancel()
+        work.add_done_callback(pg._retrieve_task)
+        done, _ = await asyncio.wait({work}, timeout=max(0, end - time.monotonic()))
+        if not done:
+            raise TimeoutError("directory restore work did not stop before cleanup deadline")
+        release = asyncio.create_task(cm.__aexit__(None, None, None))
+        try:
+            await _restore_wait(release, end)
+        finally:
+            if not release.done():
+                release.cancel()
+            release.add_done_callback(pg._retrieve_task)
+
+
 async def restore_read(
     cell_name: str, deployment_id: str, after: str | None, expected_sha256: str | None
 ) -> dict[str, Any]:
-    """One audited, durably acknowledged page, serialized with new placements."""
-    from server.router import restore
-
+    """One audited page; one supervisor closes its session before pool release."""
+    end = time.monotonic() + RESTORE_READ_MAX_S
+    work_end = end - min(1.0, RESTORE_READ_MAX_S / 4)
+    cm = _connection()
+    owned: dict[str, Any] = {}
+    work = asyncio.create_task(
+        _restore_page(cm, owned, cell_name, deployment_id, after, expected_sha256)
+    )
     try:
-        async with asyncio.timeout(RESTORE_READ_MAX_S), _reading(), _connection() as conn:
+        async with _reading():
             try:
-                tx = conn.transaction()
-                await tx.start()
-                if not await conn.fetchval(
-                    "SELECT indisvalid AND indisready FROM pg_index "
-                    "WHERE indexrelid=to_regclass('loom_router.placements_by_cell_org')"
-                ):
-                    raise OperatorRefused(
-                        "restore needs the current directory schema: run loom router migrate"
-                    )
-                row = await conn.fetchrow(
-                    f"{_CELL_REGISTERED} WHERE cell = $1 FOR UPDATE", cell_name
-                )
-                if row is None:
-                    raise NoSuchCell(f"cell {cell_name!r} is not in the directory")
-                if row["deployment_id"] != deployment_id:
-                    raise OperatorRefused("the restored stores name another deployment")
-                descriptor = {k: row[k] for k in restore.DESCRIPTOR_KEYS if k != "sole_cell"}
-                descriptor["sole_cell"] = await conn.fetchval(_OTHER, cell_name) is None
-                restore.validate_descriptor(descriptor)
-                sha = restore.digest(descriptor)
-                if expected_sha256 is not None and sha != expected_sha256:
-                    answer = {"descriptor": descriptor, "sha256": sha}
-                else:
-                    predicate = " AND org > $2" if after is not None else ""
-                    args = [cell_name, after] if after is not None else [cell_name]
-                    rows = await conn.fetch(
-                        "SELECT org FROM loom_router.placements WHERE cell = $1 "
-                        + predicate
-                        + " ORDER BY org LIMIT 501",
-                        *args,
-                    )
-                    answer = restore.page(descriptor, [r["org"] for r in rows])
-                await _audit(conn, "restore_read", {"cell": cell_name, "after": after})
-                await tx.commit()
-                return answer
+                answer = await _restore_wait(work, work_end)
             except BaseException:
-                # Termination bounds failed statements, COMMIT and rollback alike.
-                conn.terminate()
+                try:
+                    await _restore_cleanup(cm, owned, work, end)
+                except BaseException:  # noqa: BLE001 — preserve the original failure/cancellation.
+                    pass
                 raise
+            await _restore_cleanup(cm, owned, work, end)
+            return dict(answer)
     except TimeoutError as error:
         raise DirectoryUnavailable("restore-read reached its directory deadline") from error
     except ValueError as error:

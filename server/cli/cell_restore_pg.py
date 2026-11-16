@@ -33,17 +33,13 @@ async def checked(conn: Any, descriptor: dict[str, Any], recorded: dict[str, Any
 
 
 async def transaction(conn: Any, work: Callable[[], Awaitable[Any]]) -> Any:
-    """A no-op batch must acknowledge fresh WAL, too; failures abort synchronously."""
-    try:
-        tx = conn.transaction()
-        await tx.start()
-        result = await work()
-        await conn.execute(pg._DURABLE_MESSAGE)
-        await tx.commit()
-        return result
-    except BaseException:
-        conn.terminate()
-        raise
+    """A no-op batch acknowledges fresh WAL; the session owner handles failure."""
+    tx = conn.transaction()
+    await tx.start()
+    result = await work()
+    await conn.execute(pg._DURABLE_MESSAGE)
+    await tx.commit()
+    return result
 
 
 async def tenancy(

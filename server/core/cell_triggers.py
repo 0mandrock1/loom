@@ -358,7 +358,8 @@ async def _run_ddl(
     two causes cells.md names kept it from applying (`busy`: its lock not taken, with the
     sessions it waited behind; `denied`: a table this role cannot alter), which a boot
     serves past; any other error fails it, as a failed read of the state does. `warn` logs
-    a busy table once, after its last try, with its DDL and holders (a boot's `ensure`)."""
+    a busy table once, after its last try, with its DDL and holders (a boot's `ensure`).
+    The borrowing caller owns failed-session cleanup, including cancellation/rollback."""
     import asyncpg
 
     for attempt in range(attempts):
@@ -378,7 +379,6 @@ async def _run_ddl(
             return Outcome("applied")
         except asyncpg.exceptions.InsufficientPrivilegeError as e:
             if not rolled_back:
-                conn.terminate()
                 raise
             log.warning(
                 "cell triggers: not applied on loom.%s (%s): this role cannot alter it", table, e
@@ -386,7 +386,6 @@ async def _run_ddl(
             return Outcome("denied")
         except asyncpg.exceptions.LockNotAvailableError as e:
             if not rolled_back:
-                conn.terminate()
                 raise
             # Short tries outlast a short transaction; an autovacuum is left to finish.
             if attempt < attempts - 1:
@@ -402,11 +401,6 @@ async def _run_ddl(
                     held,
                 )
             return Outcome("busy", held)
-        except BaseException:
-            if not rolled_back:
-                # Cancellation must not wait for another statement on this session.
-                conn.terminate()
-            raise
     return Outcome("busy")
 
 

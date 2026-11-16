@@ -216,8 +216,8 @@ which runs again what the restored store lost of the other's record.
 Before a ClickHouse restore with `LOOM_PG_PAYLOAD_CLEAR_ENABLED` on, stop the payload
 clearing and choose the backup as
 [the Postgres journal and a ClickHouse restore](#the-postgres-journal-and-a-clickhouse-restore)
-says. Once a clearing pass has run, run step 3's `loom reconcile` with a build that
-carries `010_revision_delivered_at.sql`, and start the deployment on that build in step 4
+says. Once a clearing pass has run, run step 4's `loom reconcile` with a build that
+carries `010_revision_delivered_at.sql`, and start the deployment on that build in step 5
 (rolling-upgrade [rule 43](../architecture/rolling-upgrades.md#the-rules)); then:
 
 1. Stop every server and worker of the deployment.
@@ -242,8 +242,8 @@ session: with every process of the cell stopped, run it as one command with the 
 while it stays stopped. That command applies pending Postgres schema and verifies the
 triggers before reconciliation and startup. A data-only `pg_restore --disable-triggers` into
 an existing schema ends by enabling every trigger as an origin trigger, which leaves
-`loom.cell_first`'s two triggers off under `session_replication_role = replica`; that pod's
-restore sets them back to `ALWAYS`, and `loom doctor` names them until it does.
+`loom.cell_first`'s two triggers off under `session_replication_role = replica`; `loom cell restore`
+sets them back to `ALWAYS`, and `loom doctor` names them until it does.
 
 On the Helm chart ([Kubernetes](kubernetes.md)), with release `loom`:
 
@@ -258,8 +258,10 @@ On the Helm chart ([Kubernetes](kubernetes.md)), with release `loom`:
    is on a build without `010_revision_delivered_at.sql`, first
    `helm upgrade ... --set image.tag=<a build that carries it>` (or `image.digest`, which
    wins when set) with step 2's new host and its three `--set` overrides, so no pod
-   starts, and keep that image in step 4. Run the reconcile in a Job made from the web
-   pod's own spec, so it has the release's environment, Secret and Postgres CA, its own
+   starts, and keep that image in step 4. For a cell, first run `loom cell restore`
+   in a Job with the cell's configuration and router operator credential, and wait for
+   it to complete while every process stays stopped. Run the reconcile in a Job made
+   from the web pod's own spec, so it has the release's environment, Secret and Postgres CA, its own
    component label (the NetworkPolicy selects it, the Service does not), and no probes:
 
    ```bash
@@ -433,7 +435,7 @@ ClickHouse may still hold versions the backup lacks:
    last horizon. With the default horizon that allows the newest backup or the one
    before, if they started on schedule. An older backup may lack a version whose payload
    is already cleared, and that version's content is then lost.
-5. Turn the switch back on when the deployment starts again at step 4 of
+5. Turn the switch back on when the deployment starts again at step 5 of
    [restoring one store](#restoring-one-store), and not before: by then
    `loom reconcile --apply` has owed a delivery again for every revision committed after
    the point, and a revision keeps its payload while it owes a delivery. First check
@@ -441,7 +443,7 @@ ClickHouse may still hold versions the backup lacks:
    against the backup schedule: the restore brought back their overrides from the
    backup's time, so re-apply any changed since. A version ClickHouse still lacks after
    the restore keeps its payload, and each pass that reaches it counts it in
-   `missing_in_clickhouse`, which can stay above zero. When step 4 of
+   `missing_in_clickhouse`, which can stay above zero. When step 5 of
    [restoring one store](#restoring-one-store) starts a build that carries
    `010_revision_delivered_at.sql` on a deployment that served one without it,
    the switch stays off until one clearing horizon after that build serves alone

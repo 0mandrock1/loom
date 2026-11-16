@@ -158,22 +158,135 @@ async def test_noop_tenancy_batch_is_marked_and_durable(cell_db):
 
 async def test_real_clickhouse_and_postgres_direct_nonce_round_trip(cell_db, monkeypatch):
     import os
+    import uuid
 
     from server.cli.cell_restore_stores import identity, nonces
     from server.core import cell_probe, leases, pg_profile
     from server.core.ch import get_client
-    if not os.environ.get('LOOM_CH_HOST'):
-        pytest.skip('LOOM_CH_HOST not set')
-    monkeypatch.setattr(settings, 'document_s3_bucket', '')
+
+    if not os.environ.get("LOOM_CH_HOST"):
+        pytest.skip("LOOM_CH_HOST not set")
+    monkeypatch.setattr(settings, "document_s3_bucket", "")
+    monkeypatch.setattr(settings, "storage_authority", "postgres")
     ch = get_client()
     await ch.connect()
+    table = f"loom.restore_nonce_authority_{uuid.uuid4().hex}"
+
+    class AuthorityTable:
+        # Isolate the singleton authority without replacing shared deployment identity.
+        async def query_one(self, sql, params=None):
+            if sql == pg_profile._CH_RECORD:
+                sql = sql.replace("loom.storage_authority", table)
+            return await ch.query_one(sql, params)
+
+        async def execute(self, sql, params=None):
+            return await ch.execute(sql, params)
+
     try:
-        recorded = await pg_profile.recorded_authority(ch)
-        assert recorded is not None
-        await cell_db.execute('UPDATE loom.authority SET deployment_id=$1, epoch=$2', recorded['deployment_id'], recorded['epoch'])
-        assert (await identity(ch, cell_db))['deployment_id'] == recorded['deployment_id']
-        await nonces(ch, cell_db)
-        assert await cell_db.fetchval('SELECT count(*) FROM loom.cell_probe WHERE name=$1', cell_probe.NONCE_NAME) == 0
-        assert await ch.query_one(f'SELECT holder FROM {leases.LOCK_TABLE} WHERE name={{name:String}}', {'name': cell_probe.NONCE_NAME}) is None
+        await ch.execute(f"CREATE TABLE {table} AS loom.storage_authority")
+        paired = AuthorityTable()
+        with pytest.raises(ValueError, match="records no Postgres authority"):
+            await identity(paired, cell_db)
+        for wrong in (
+            {**RECORDED, "deployment_id": "other-deployment"},
+            {**RECORDED, "epoch": 2},
+        ):
+            await ch.insert(table, [wrong])
+            with pytest.raises(pg.AuthorityMismatch):
+                await identity(paired, cell_db)
+            await ch.execute(f"TRUNCATE TABLE {table}")
+        assert await cell_db.fetchval("SELECT count(*) FROM loom.cell_probe") == 0
+        await ch.insert(table, [RECORDED])
+        assert await identity(paired, cell_db) == RECORDED
+        await nonces(paired, cell_db)
+        assert (
+            await cell_db.fetchval(
+                "SELECT count(*) FROM loom.cell_probe WHERE name=$1", cell_probe.NONCE_NAME
+            )
+            == 0
+        )
+        assert (
+            await ch.query_one(
+                f"SELECT holder FROM {leases.LOCK_TABLE} WHERE name={{name:String}}",
+                {"name": cell_probe.NONCE_NAME},
+            )
+            is None
+        )
     finally:
+        await ch.execute(f"DROP TABLE IF EXISTS {table}")
         await ch.disconnect()
+
+
+async def test_restore_budget_closes_real_backend_stalled_in_transaction_rollback(
+    cell_db, monkeypatch
+):
+    import asyncio
+    import time
+
+    import asyncpg
+
+    from server.cli import cell_restore
+
+    conn = cell_db
+    pid = conn.get_server_pid()
+    execute = asyncpg.Connection.execute
+    rolled_back = asyncio.Event()
+
+    async def stalled_rollback(self, query, *args, **kwargs):
+        if self is conn and query.startswith("ROLLBACK"):
+            rolled_back.set()
+            await execute(self, "SELECT pg_sleep(10)")
+        return await execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(asyncpg.Connection, "execute", stalled_rollback)
+
+    async def work():
+        async with conn.transaction():
+            raise ValueError("failure before rollback")
+
+    budget = cell_restore.Budget(0.2)
+    budget.conn = conn
+    observer = await asyncpg.connect(settings.pg_dsn)
+    try:
+        started = time.monotonic()
+        with pytest.raises(TimeoutError, match="--wait"):
+            await budget.call(work())
+        assert rolled_back.is_set() and time.monotonic() - started < 0.5
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1)", pid
+        )
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", pid
+        )
+    finally:
+        await observer.close(timeout=1)
+
+
+async def test_trigger_ddl_failure_leaves_public_close_to_restore_owner(cell_db):
+    import asyncio
+
+    import asyncpg
+
+    from server.cli import cell_restore
+
+    conn = cell_db
+    pid = conn.get_server_pid()
+    budget = cell_restore.Budget(1)
+    budget.conn = conn
+    observer = await asyncpg.connect(settings.pg_dsn)
+
+    async def work():
+        async with asyncio.timeout(0.05):
+            await cell_triggers._run_ddl(conn, "tenancy", ["SELECT pg_sleep(10)"], attempts=1)
+
+    try:
+        with pytest.raises(TimeoutError):
+            await budget.call(work())
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1)", pid
+        )
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", pid
+        )
+    finally:
+        await observer.close(timeout=1)

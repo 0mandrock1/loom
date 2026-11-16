@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import json
 import os
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -98,7 +99,7 @@ class Drill:
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(commit, 3)
         finally:
-            conn.terminate()
+            await pg.close_owned(conn, end=time.monotonic() + 1)
         await self.released(pid)
 
     async def cancel_and_retry(self, work: Callable[[], Awaitable[Any]], application: str) -> Any:

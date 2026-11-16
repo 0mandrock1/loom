@@ -8,8 +8,7 @@ import json
 import math
 import sys
 import time
-from collections.abc import AsyncIterator, Awaitable
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable
 from typing import Any
 
 import httpx
@@ -17,7 +16,7 @@ import httpx
 from server.cli import cell as cell_cli
 from server.cli import cell_attach_pg as apg
 from server.cli import cell_restore_pg as local
-from server.cli._ch import connect_declared, disconnect, writes
+from server.cli._ch import OrgNotHeld, connect_declared, disconnect, writes
 from server.core import cell, pg
 from server.router import directory
 from server.router import restore as protocol
@@ -25,11 +24,11 @@ from server.settings import settings
 
 
 class Budget:
-    """An independent waiter can terminate a session stuck unwinding a transaction."""
+    """One session owner reserves time for public close before cancelling work."""
 
     def __init__(self, seconds: float):
         self.end = time.monotonic() + seconds
-        self.reserve = min(0.2, seconds / 10)
+        self.reserve = min(1.0, seconds / 4)
         self.conn: Any = None
 
     def left(self, *, cleanup: bool = False) -> float:
@@ -42,15 +41,27 @@ class Budget:
             if not done:
                 raise TimeoutError("cell restore reached --wait")
             return task.result()
-        except BaseException:
-            if self.conn is not None:
-                self.conn.terminate()
-            task.cancel()
-            done, _ = await asyncio.wait({task}, timeout=self.left(cleanup=True))
-            if done:
-                # Retrieve driver errors produced by synchronous transport termination.
-                await asyncio.gather(task, return_exceptions=True)
+        except protocol.SnapshotChanged:
+            # Count-only directory growth restarts enumeration on the same session.
             raise
+        except BaseException:
+            try:
+                await self.close()
+            except BaseException:  # noqa: BLE001 — preserve the operation failure/cancellation.
+                pass
+            if not task.done():
+                task.cancel()
+            task.add_done_callback(pg._retrieve_task)
+            try:
+                await asyncio.wait({task}, timeout=self.left(cleanup=True))
+            except BaseException:  # noqa: BLE001 — preserve the first cancellation.
+                pass
+            raise
+
+    async def close(self) -> None:
+        conn, self.conn = self.conn, None
+        if conn is not None:
+            await pg.close_owned(conn, end=self.end)
 
 
 def _args_problem(args: argparse.Namespace) -> str:
@@ -110,11 +121,7 @@ async def _page(
 async def _migrate(conn: Any) -> None:
     from server.core.schema import pg_migrate
 
-    @asynccontextmanager
-    async def borrowed() -> AsyncIterator[Any]:
-        yield conn
-
-    await pg_migrate.migrate(connect=borrowed)
+    await pg_migrate.migrate_borrowed(conn)
     rows = await conn.fetch("SELECT filename, checksum FROM loom.pg_migrations")
     if pg_migrate.plan({r["filename"]: r["checksum"] for r in rows}, pg_migrate.migration_files()):
         raise ValueError("Postgres migrations remain pending")
@@ -165,8 +172,15 @@ class Restore:
             return await self.finish(first)
         finally:
             if self.conn is not None:
-                self.conn.terminate()
-                await self.budget.call(cm.__aexit__(None, None, None), cleanup=True)
+                failed = sys.exc_info()[0] is not None
+                try:
+                    try:
+                        await self.budget.close()
+                    finally:
+                        await self.budget.call(cm.__aexit__(None, None, None), cleanup=True)
+                except BaseException:
+                    if not failed:
+                        raise
 
     async def finish(self, first: dict[str, Any]) -> dict[str, Any]:
         from server.cli.cell_restore_triggers import repair
@@ -233,6 +247,14 @@ class Restore:
             after = answer["next"]
 
 
+async def _connect(ch: Any) -> None:
+    try:
+        await connect_declared(ch, org_free=writes("restores this cell's metadata"))
+    except OrgNotHeld as error:
+        # SystemExit in an independent task would stop its supervisor's event loop.
+        raise ValueError(str(error)) from error
+
+
 def cmd_restore(args: argparse.Namespace) -> int:
     if reason := _args_problem(args):
         print(f"loom cell restore: {reason}", file=sys.stderr)
@@ -248,12 +270,15 @@ def cmd_restore(args: argparse.Namespace) -> int:
         budget = Budget(args.wait)
         ch = get_client()
         try:
-            await budget.call(
-                connect_declared(ch, org_free=writes("restores this cell's metadata"))
-            )
+            await budget.call(_connect(ch))
             return await Restore(args, router, budget).run(ch)
         finally:
-            await budget.call(disconnect(ch), cleanup=True)
+            failed = sys.exc_info()[0] is not None
+            try:
+                await budget.call(disconnect(ch), cleanup=True)
+            except BaseException:
+                if not failed:
+                    raise
 
     try:
         result = asyncio.run(run())
