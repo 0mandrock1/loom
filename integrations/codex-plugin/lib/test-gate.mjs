@@ -19,7 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { commandText, extractFiles, normalizeToolName, pathUnder } from "./loom-client.mjs";
+import { commandText, extractFiles, normalizeToolName, pathUnder, realPath } from "./loom-client.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -168,19 +168,34 @@ export function venvPython(dir, platform = process.platform) {
   return platform === "win32" ? path.win32.join(dir, "Scripts", "python.exe") : path.posix.join(dir, "bin", "python");
 }
 
-/** PYTHONPATH without the entries that could import from `root`: relative and
- *  empty ones (they resolve against the working directory) and any under it. */
-export function outsidePythonPath(root, value = process.env.PYTHONPATH ?? "") {
+/** A PATH or PYTHONPATH `value` without the entries that could reach `root`:
+ *  empty and relative ones, which resolve against the working directory, and
+ *  any whose real path is under it. */
+export function outsideEntries(root, value = "") {
   return value
     .split(path.delimiter)
-    .filter((e) => path.isAbsolute(e) && pathUnder(root, e) === null)
+    .filter((e) => path.isAbsolute(e) && pathUnder(root, realPath(e)) === null)
     .join(path.delimiter);
 }
 
+// Exits 0 when pytest is installed outside the checkout (argv[1]). find_spec
+// locates the module without running it; an editable install's .pth file can
+// put the checkout on sys.path whatever the working directory.
+const FIND_PYTEST = `import importlib.util, os, sys
+spec = importlib.util.find_spec("pytest")
+origin = os.path.normcase(os.path.realpath(spec.origin)) if spec and spec.origin else ""
+root = os.path.normcase(os.path.realpath(sys.argv[1]))
+try:
+    inside = os.path.commonpath([origin, root]) == root
+except ValueError:
+    inside = False
+sys.exit(0 if origin and not inside else 1)`;
+
 /** The interpreter that runs this checkout's pytest: its own virtualenv
- *  first, then an active one, then a PATH python that imports pytest; ""
- *  when none does, so the gate can say there is none instead of sending the
- *  agent to look. The probe never imports from the checkout itself. */
+ *  first, then an active one, then a PATH python with pytest installed
+ *  outside the checkout; "" when none has, so the gate can say there is none
+ *  instead of sending the agent to look. The probe runs no file the checkout
+ *  puts on sys.path. */
 export function checkoutPython(root, { exec = execFileSync } = {}) {
   const cands = [
     venvPython(path.join(root, ".venv")),
@@ -198,10 +213,15 @@ export function checkoutPython(root, { exec = execFileSync } = {}) {
     try {
       // From the plugin's own directory, not the checkout: -c puts the working
       // directory on sys.path, and so does an empty or relative PYTHONPATH entry.
-      // PYTHONPATH keeps only absolute entries outside the checkout.
-      exec(py, ["-c", "import pytest"], {
+      // PATH and PYTHONPATH keep only absolute entries outside the checkout, so
+      // neither a python3 nor a sitecustomize.py there is run.
+      exec(py, ["-c", FIND_PYTEST, root], {
         cwd: HERE,
-        env: { ...process.env, PYTHONPATH: outsidePythonPath(root) },
+        env: {
+          ...process.env,
+          PATH: outsideEntries(root, process.env.PATH ?? ""),
+          PYTHONPATH: outsideEntries(root, process.env.PYTHONPATH ?? ""),
+        },
         timeout: 1500,
         stdio: "ignore",
         windowsHide: true,

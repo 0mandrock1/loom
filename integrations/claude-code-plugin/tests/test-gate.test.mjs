@@ -1,5 +1,6 @@
 import "./temp-home.mjs";
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,13 +8,24 @@ import path from "node:path";
 import {
   checkoutPython,
   decideBlock,
-  outsidePythonPath,
   gatePayload,
   gateSignature,
+  outsideEntries,
   renderGate,
   sessionScope,
   venvPython,
 } from "../lib/test-gate.mjs";
+import { pathUnder } from "../lib/loom-client.mjs";
+
+/** Whether `cmd` starts here, so a test of what the probe runs is not vacuous. */
+function runs(cmd) {
+  try {
+    execFileSync(cmd, ["-c", ""], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const GATE = {
   obligations: true,
@@ -272,7 +284,11 @@ test("nothing to run asks for a test, not for running tests", () => {
   assert.doesNotMatch(text, /Run the tests/);
 });
 
-test("checkoutPython's pytest probe never imports a pytest.py from the checkout", () => {
+test("checkoutPython's pytest probe never imports a pytest.py from the checkout", (t) => {
+  if (!runs("python3") && !runs("python")) {
+    t.skip("no python3 or python");
+    return;
+  }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
   const venv = process.env.VIRTUAL_ENV;
   delete process.env.VIRTUAL_ENV; // an active virtualenv is used before the probe runs
@@ -294,32 +310,110 @@ test("checkoutPython's pytest probe never imports a pytest.py from the checkout"
   }
 });
 
+const USER_SITE = "import site; print(site.ENABLE_USER_SITE); print(site.getusersitepackages())";
+
+test("checkoutPython neither runs nor accepts a pytest an editable install puts on sys.path", (t) => {
+  const userBase = fs.mkdtempSync(path.join(os.tmpdir(), "loom-userbase-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
+  const env = { VIRTUAL_ENV: process.env.VIRTUAL_ENV, PYTHONUSERBASE: process.env.PYTHONUSERBASE };
+  delete process.env.VIRTUAL_ENV;
+  process.env.PYTHONUSERBASE = userBase;
+  try {
+    let enabled, site;
+    try {
+      const out = execFileSync("python3", ["-c", USER_SITE], { cwd: userBase, encoding: "utf8" });
+      [enabled, site] = out.trim().split("\n");
+    } catch {
+      t.skip("no python3");
+      return;
+    }
+    if (enabled !== "True") {
+      t.skip("python3 reads no user site-packages");
+      return;
+    }
+    // An editable install's .pth file names the checkout; its pytest.py writes a marker.
+    fs.mkdirSync(site, { recursive: true });
+    fs.writeFileSync(path.join(site, "__editable__.checkout.pth"), `${root}\n`);
+    const marker = path.join(root, "ran");
+    fs.writeFileSync(path.join(root, "pytest.py"), `open(${JSON.stringify(marker)}, "w").write("x")\n`);
+    const calls = [];
+    const exec = (cmd, args, opts) => {
+      calls.push(cmd);
+      return execFileSync(cmd, args, opts);
+    };
+    const py = checkoutPython(root, { exec });
+    assert.equal(fs.existsSync(marker), false);
+    // The only pytest python3 finds is the checkout's, so python3 is not chosen.
+    assert.notEqual(py, "python3");
+    assert.ok(calls.includes("python3"));
+  } finally {
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(userBase, { recursive: true, force: true });
+  }
+});
+
+test("checkoutPython never starts a python3 that PATH finds in the checkout", (t) => {
+  if (process.platform === "win32") {
+    t.skip("a shell script is not an executable on Windows");
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
+  const env = { VIRTUAL_ENV: process.env.VIRTUAL_ENV, PATH: process.env.PATH };
+  delete process.env.VIRTUAL_ENV;
+  const marker = path.join(root, "ran");
+  fs.mkdirSync(path.join(root, "bin"));
+  for (const py of ["python3", "python"]) {
+    fs.writeFileSync(path.join(root, "bin", py), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, { mode: 0o755 });
+  }
+  process.env.PATH = [path.join(root, "bin"), env.PATH].join(path.delimiter);
+  try {
+    checkoutPython(root);
+    assert.equal(fs.existsSync(marker), false);
+  } finally {
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("checkoutPython runs its pytest probe outside the checkout", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
   const venv = process.env.VIRTUAL_ENV;
   delete process.env.VIRTUAL_ENV;
   const calls = [];
   try {
-    const py = checkoutPython(root, { exec: (cmd, args, opts) => calls.push([cmd, args, opts.cwd]) });
+    const py = checkoutPython(root, { exec: (cmd, args, opts) => calls.push([cmd, args, opts.cwd, opts.env]) });
     assert.equal(py, "python3");
-    const [cmd, args, cwd] = calls[0];
-    assert.deepEqual([cmd, args], ["python3", ["-c", "import pytest"]]);
-    assert.ok(!pathUnderRoot(root, cwd), cwd);
+    const [cmd, args, cwd, env] = calls[0];
+    assert.equal(env.PATH, outsideEntries(root, process.env.PATH ?? ""));
+    assert.equal(env.PYTHONPATH, outsideEntries(root, process.env.PYTHONPATH ?? ""));
+    assert.equal(cmd, "python3");
+    assert.deepEqual([args[0], args[2]], ["-c", root]);
+    assert.match(args[1], /find_spec\("pytest"\)/);
+    assert.equal(pathUnder(root, cwd), null, cwd);
   } finally {
     if (venv !== undefined) process.env.VIRTUAL_ENV = venv;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-function pathUnderRoot(root, p) {
-  const rel = path.relative(root, p);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-test("outsidePythonPath keeps only absolute PYTHONPATH entries outside the checkout", () => {
-  const root = path.join(os.tmpdir(), "checkout");
-  const other = path.join(os.tmpdir(), "lib");
-  const value = ["", ".", "src", root, path.join(root, "src"), other].join(path.delimiter);
-  assert.equal(outsidePythonPath(root, value), other);
-  assert.equal(outsidePythonPath(root, ""), "");
+test("outsideEntries keeps only absolute entries whose real path is outside the checkout", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "loom-lib-"));
+  const link = path.join(other, "vendor");
+  fs.symlinkSync(root, link, "junction");
+  try {
+    const value = ["", ".", "src", root, path.join(root, "src"), link, other].join(path.delimiter);
+    assert.equal(outsideEntries(root, value), other);
+    assert.equal(outsideEntries(root, ""), "");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true });
+  }
 });
