@@ -36,7 +36,8 @@ def test_both_plugins_link_the_data_handling_section() -> None:
 
 def test_published_links_resolve() -> None:
     """The registry listing, the plugin manifests, both pyproject files, the SDK packages
-    and their READMEs, the citation, the chart and the issue templates publish absolute
+    and their READMEs, the Claude Code plugin's README, the citation, the chart and the issue
+    templates publish absolute
     repository and site links, which the doc-link check does not follow; a renamed file
     breaks them."""
     text = "\n".join(
@@ -58,15 +59,20 @@ def test_published_links_resolve() -> None:
             ".github/ISSUE_TEMPLATE/80_documentation-issue.yaml",
             "sdk/python/README.md",
             "sdk/typescript/README.md",
+            # A plugin directory serves this README without the rest of the repository.
+            "integrations/claude-code-plugin/README.md",
         )
     )
     links = re.findall(
         r"https://(?:github\.com/ClickHouse/loom/blob/main|raw\.githubusercontent\.com/ClickHouse/loom/main)/([^\"#\s)]+)",
         text,
     )
+    folders = re.findall(r"https://github\.com/ClickHouse/loom/tree/main/([^\"#\s)]+)", text)
     site_links = re.findall(re.escape(SITE) + r"[^\"\s)]*", text)
     assert links and site_links
     for path in links:
         assert (ROOT / path).is_file(), path
+    for path in folders:
+        assert (ROOT / path).is_dir(), path
     for url in site_links:
         assert _site_page(url).is_file(), url

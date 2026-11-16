@@ -62,12 +62,15 @@ deleting data is covered in
 Its hooks run `node`, `git` and `grep` on your machine: `git` reads the
 checkout's remotes, branch, status and diffs, and `grep` searches uncommitted
 files for a redirected grep pattern. At Stop, in an indexed checkout, when the
-test gate names a pytest test, they look for the checkout's virtualenv Python
-and, when there is none, run `python3 -c "import pytest"` (then `python`) in the
-checkout (`LOOM_TEST_GATE=off` stops it).
+test gate names a pytest test, they look for the checkout's virtualenv or the
+active one (`VIRTUAL_ENV`) and, when there is none, run
+`python3 -c "import pytest"` (then `python`) to see whether pytest is installed
+(`LOOM_TEST_GATE=off` stops it).
 
-It keeps its token in `~/.loom/config.json` (mode 0600) and its other state in
-`~/.loom/` until you remove it. In the system temp directory, a capture job whose
+It keeps the token it saves (a copy of the install token or a self-signup token
+in `~/.loom/config.json`; in agent mode the exchanged one in
+`~/.loom/agent-token-<id>.json`) and its other state in `~/.loom/`, mode 0600,
+until you remove it. In the system temp directory, a capture job whose
 flusher died stays until you replay or delete it (`loom-status` names it); a job
 whose delivery fails and unsent code-shunt batches are discarded, and chat turns
 are sent again at the next Stop; other state files are swept after a day
@@ -75,15 +78,21 @@ untouched; and a code-shunt decision log (no prompt or file content) stays until
 removed (`LOOM_SHUNT_LOG=off` stops it).
 
 Two skills reach other services when you run them. `loom-status` can install
-Node.js after you agree: it downloads and runs NodeSource's setup script (apt,
-dnf or yum), or uses apk or Homebrew, as root or with passwordless sudo.
+Node.js after you agree: on Linux, as root or with passwordless sudo, it installs
+curl if missing, downloads and runs NodeSource's setup script and installs nodejs
+(apt, dnf or yum), or runs `apk add nodejs`; on macOS it runs
+`brew upgrade node || brew install node` as you.
 `improve-loom-for-my-repo`, after building its report, searches the
 ClickHouse/loom GitHub issues for each finding's symbol or query without asking,
 and files a public issue there or comments on an existing one only after you
-approve; the issue names the namespace and each finding's symbols and queries.
+approve; the issue holds the report as shown to you: the server version,
+namespace, indexed commit and corpus size, and each finding's queries, symbols
+and file units.
 
 Keep one Loom entry per session: a user-scope `loom` MCP entry beside the plugin
-registers a second server (`claude mcp remove loom` removes it).
+registers a second server (`claude mcp remove loom` removes it). SessionStart reads
+the user-scope MCP entries in `~/.claude.json`, on the machine only, to warn once
+a day when one points at the same Loom server; nothing from that file is sent.
 
 The full list is in
 [data handling](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling).
