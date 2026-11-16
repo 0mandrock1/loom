@@ -394,10 +394,11 @@ def test_a_lane_parse_that_fails_is_not_finished(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setitem(ingest_parse._PARSERS, "hcl", fails)
     pf, finished = _extract("a.tf", b"a = 1\n")
-    assert getattr(pf, "lang", "") == "hcl" and not finished  # reads as the lane, cheaply
+    # reads as the lane, but its parse failed
+    assert getattr(pf, "lang", "") == "hcl" and not finished
 
 
-def test_a_parse_a_walk_catches_is_not_finished(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_parse_error_a_walk_swallows_is_not_finished(monkeypatch: pytest.MonkeyPatch) -> None:
     from server.code.domain.extract import bounded_parse
     from tests.unit import lane_walks
 
