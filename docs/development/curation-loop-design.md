@@ -180,6 +180,7 @@ lists their defaults.
 The shared definition ceiling is `memory_shared_definitions_max` (default 500).
 Term-search bounds follow [governed definitions in
 search](../concepts/identities-and-namespaces.md#governed-definitions-in-search).
+
 - A definition's promotion, through `memory.promote` or `learnings.review`, reads the
   namespace's definition rows once, at most `memory_shared_definitions_max` plus one (past
   it the promotion is refused), to check its term and aliases; the review path runs the
