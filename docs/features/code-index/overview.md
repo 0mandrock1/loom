@@ -1,8 +1,4 @@
-# Code index
-
-The code workers are off by default; a deployment turns them on per repository
-([repositories](repositories.md)). The default `core` MCP toolset lists no code tools
-unless `LOOM_MCP_CODE_TOOLS=true`; `?toolset=coding` always does.
+# Code index for coding agents over MCP
 
 Loom indexes git repositories into ClickHouse and answers structure questions through
 the `code.*` operations: where a symbol is defined, who calls it, what a change
@@ -11,6 +7,10 @@ reaches, which merged PR touched a line. Agents call them over MCP, HTTP
 rows, so a repository is parsed and embedded once per merge, not once per session. How
 the index is built is in
 [code index architecture](../../architecture/code-index-architecture.md).
+
+The code workers are off by default; a deployment turns them on per repository
+([repositories](repositories.md)). The default `core` MCP toolset lists no code tools
+unless `LOOM_MCP_CODE_TOOLS=true`; `?toolset=coding` always does.
 
 ![The Repositories page: an indexed repository, its branches and its tracker](../../images/dashboard-repositories.png)
 

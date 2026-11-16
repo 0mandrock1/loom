@@ -9,7 +9,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Overview](docs/getting-started/overview.md): Loom is a server that stores memory, documents, conversations, an entity graph and a code index for AI agents, as rows in ClickHouse, with Postgres as an option for live memory and knowledge state.
 - [Quickstart](docs/getting-started/quickstart.md): This page boots Loom on a laptop and saves a first memory over HTTP, Python and MCP.
 - [Set up Loom with your coding agent](docs/getting-started/agent-setup.md): This page is for a coding agent, Claude Code or Codex, asked to install Loom on the machine it runs on and to prove that the install works.
-- [Connect a coding agent](docs/getting-started/connect-a-coding-agent.md): This page connects Claude Code, Codex, Cursor or another MCP client to a running Loom server.
+- [Shared memory for Claude Code, Codex and Cursor](docs/getting-started/connect-a-coding-agent.md): Loom gives Claude Code, Codex and Cursor shared long-term memory through plugins or MCP tools connected to the same self-hosted server.
 - [Evaluate Loom](docs/getting-started/evaluate.md): Evaluate the decision you need to make, not every harness in the repository.
 - [Your first agent](docs/getting-started/first-agent.md): This tutorial builds a small agent with the Python SDK.
 - [Configure models and API keys](docs/getting-started/models-and-keys.md): Your coding agent, Loom's internal LLM and Loom's embedding model are separate choices.
@@ -45,13 +45,13 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 
 - [Conversations and sessions](docs/features/conversations-and-sessions.md): Loom keeps three kinds of session state, each in its own plane:
 - [The dashboard](docs/features/dashboard.md): The dashboard is a React single-page app the Loom server serves at its root URL.
-- [Entity graph](docs/features/entity-graph.md): Entity communities are off by default (`LOOM_ENTITY_COMMUNITIES_ENABLED`).
+- [Entity graph](docs/features/entity-graph.md): Loom keeps an entity graph beside the memory rows, in the same ClickHouse database.
 - [Knowledge documents](docs/features/knowledge.md): A knowledge document is text an agent looks things up in: a runbook, a specification, a README.
 - [Namespaces and sharing](docs/features/namespaces-and-sharing.md): A namespace is the unit of isolation and sharing inside an org.
 - [Runs](docs/features/runs.md): A run is one execution of a task, such as "triage issue 1234".
 - [Tasks, decisions and policies](docs/features/tasks-and-decisions.md): Three planes sit beside memory for coordination between agents.
 - [Unified search and context packs](docs/features/unified-search.md): `loom_search` searches memory, profile, knowledge and past conversations across the caller's namespaces in one round trip.
-- [Code index](docs/features/code-index/overview.md): The code workers are off by default; a deployment turns them on per repository (repositories).
+- [Code index for coding agents over MCP](docs/features/code-index/overview.md): Loom indexes git repositories into ClickHouse and answers structure questions through the `code.*` operations: where a symbol is defined, who calls it, what a change reaches, which merged PR touched a line.
 - [Code index freshness](docs/features/code-index/freshness.md): The index trails the repository: it indexes merged commits on a configured branch, pass by pass, and each tier advances its own watermark.
 - [History, PRs and releases](docs/features/code-index/history-and-prs.md): These ops need merged-PR history; the `code_pr_history` worker is off by default (`LOOM_CODE_PR_HISTORY_ENABLED`).
 - [Code operations](docs/features/code-index/operations.md): This page maps questions to `code.*` ops.
@@ -81,7 +81,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Audit log](docs/features/observability/audit.md): Audit rows, the `audit_verifier` worker and the checkpoint chain are on by default.
 - [Cost and usage](docs/features/observability/cost-and-usage.md): Loom records every upstream dollar it spends on embedding and LLM calls against the operation that spent it, in the per-operation ledger `loom.agent_events`.
 - [Telemetry](docs/features/observability/telemetry.md): Loom reports on itself in three layers:
-- [Tracker plane](docs/features/tracker/overview.md): Nothing serves until `LOOM_TRACKER_ORG` is set and a source is registered.
+- [Issue duplicate checks and regression candidates for agents](docs/features/tracker/overview.md): Loom lets agents check whether a bug is already reported and rank changes that may have introduced a regression, using tracker records and indexed PR history.
 - [Tracker record contract](docs/features/tracker/record-contract.md): The `tracker.*` ops, and the tracker legs of `code.*` and `loom_search`, read a team's issues, pull requests and incidents live from the team's own ClickHouse with a read-only credential.
 
 ## Guides

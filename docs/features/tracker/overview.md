@@ -1,6 +1,10 @@
-# Tracker plane
+# Issue duplicate checks and regression candidates for agents
 
-Nothing serves until `LOOM_TRACKER_ORG` is set and a source is registered.
+Loom lets agents check whether a bug is already reported and rank changes that may
+have introduced a regression, using tracker records and indexed PR history.
+Tracker operations need `LOOM_TRACKER_ORG` set and a registered source. For a repository
+with indexed PR history and no tracker, use
+[code history and bisect candidates](../code-index/history-and-prs.md).
 
 A tracker is a team's record of issues, pull requests, incidents and CI runs, held in the
 team's own ClickHouse. Loom reads it live with a read-only credential and never copies it.
