@@ -22,9 +22,32 @@ function harness(replies: Record<string, unknown> = {}) {
   const agent = new Agent("o", "n", "bot", { baseUrl: "http://x", fetch, logLevel: "off" });
   return { calls, service: new LoomMemoryService(agent, { appName: "app", topK: 2, defer: false }), agent };
 }
-const fact = { memory_key: "seat", session_id: "s", content_excerpt: "aisle", source: "fact", similarity: 0.9 };
+const fact = {
+  agent: "writer-a",
+  memory_key: "seat",
+  session_id: "s",
+  content_excerpt: "aisle",
+  source: "fact",
+  similarity: 0.9,
+};
 
 describe("Google ADK LoomMemoryService", () => {
+  it("distinguishes writers of one key/session and leaves unknown rows without ids", async () => {
+    const { service } = harness({
+      "memory.search": {
+        results: [
+          { ...fact, agent: "writer-a" },
+          { ...fact, agent: "writer-b" },
+        ],
+      },
+    });
+    const found = await service.searchMemory({ appName: "app", userId: "alice", query: "seat" });
+    expect(found.memories[0].id).not.toBe(found.memories[1].id);
+    const unknown = harness({ "memory.search": { results: [{ ...fact, agent: "" }] } });
+    expect(
+      (await unknown.service.searchMemory({ appName: "app", userId: "alice", query: "seat" })).memories[0].id,
+    ).toBeUndefined();
+  });
   it("returns the user's memories then app knowledge in the bound namespace", async () => {
     const { service, calls } = harness({
       "memory.search": { results: [fact] },
@@ -32,7 +55,7 @@ describe("Google ADK LoomMemoryService", () => {
     });
     const { memories } = await service.searchMemory({ appName: "app", userId: "alice", query: "travel" });
     expect(memories.map((m) => m.content.parts?.[0].text)).toEqual(["aisle", "boarding guide"]);
-    expect(memories[0].id).toBe(JSON.stringify(["seat", "s"]));
+    expect(memories[0].id).toBe(JSON.stringify(["seat", "s", "writer-a"]));
     expect(memories[1].id).toBeUndefined();
     expect(calls[0].body).toMatchObject({ user_id: "alice", namespace_scope: "this", bodies: "full", top_k: 2 });
     expect(calls[1].body).toMatchObject({ namespace_scope: "this", top_k: 1 });

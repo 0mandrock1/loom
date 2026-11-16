@@ -16,7 +16,8 @@ another writer's row is never selected. The additive `agent` response field on
 memory search hits comes from the stored row identity, including parked pages.
 A hit without a known writer or version has no deletion id. Older clients ignore
 the extra field; exact ADK deletion requires a server that supplies it. This adds
-no persisted column or migration.
+no persisted column or migration. TypeScript returns writer-scoped informational
+ids; its installed framework interface has no deletion method.
 
 Search first calls `memory.search` for the bound user, then fills available result
 slots from namespace-scoped `knowledge.search`. Knowledge is shared application
