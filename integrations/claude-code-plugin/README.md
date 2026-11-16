@@ -57,8 +57,9 @@ with (the two skills below are the exceptions). They send:
 
 A client-side redaction removes common credential shapes from what the hooks
 send; it is best effort, not a guarantee, and MCP tool arguments and a brief the
-`loom-session` skill saves are sent without it. Each item's off switch is in the
-[full list](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling).
+`loom-session` skill saves are sent without it. What is sent, with each item's
+off switch, is listed in
+[data handling](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling).
 
 The server keeps this in its own databases (ClickHouse, and Postgres when the
 operator makes it the memory authority) and passes text to an LLM or embedding
@@ -68,12 +69,10 @@ deleting data is covered in
 [retention and erasure](https://clickhouse.github.io/loom/features/memory/retention-and-erasure/).
 
 The plugin's hooks run `node`, `git` and `grep` on your machine: `git` reads the
-checkout's remotes, branch, status and diffs, and `grep` searches uncommitted
-files for a redirected grep pattern. At Stop, in an indexed checkout, when the
-test gate names a pytest test, they look for the checkout's virtualenv or the
-active one (`VIRTUAL_ENV`) and, when there is none, run
-`python3 -c "import pytest"` (then `python`) to see whether pytest is installed
-(`LOOM_TEST_GATE=off` stops it).
+checkout's remotes, branch, `HEAD` commit, status and diffs, and `grep` searches
+uncommitted files for a redirected grep pattern. When the test gate names a
+pytest test, it names the checkout's virtualenv, the active one (`VIRTUAL_ENV`)
+or the first `python3` or `python` on `PATH`, checking only that the file exists.
 
 The plugin keeps the token it saves (a copy of the install token or a
 self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
@@ -82,17 +81,18 @@ self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
 
 Its files in the system temp directory, which can hold prompt and reply text,
 are also mode 0600. A capture job whose flusher died stays until you replay or
-delete it (`loom-status` names it). A job whose delivery fails is discarded, as
-are unsent code-shunt batches; chat turns are sent again at the next Stop and a
-brief's events at the next save. Other state files are swept after a day
-untouched, and a code-shunt decision log (no prompt or file content) stays until
-removed (`LOOM_SHUNT_LOG=off` stops it).
+delete it (`loom-status` counts them and names the directory). A job whose
+delivery fails is discarded, as is a code-shunt batch whose post fails; chat
+turns are sent again at the next Stop and a brief's events at the next save.
+Other state files are swept after a day untouched, and a code-shunt decision log
+(no prompt or file content) stays until removed (`LOOM_SHUNT_LOG=off` stops it).
 
 Two skills reach other services when you run them. `loom-status` can install
 Node.js after you agree: on Linux, as root or with passwordless sudo, it installs
 curl if missing, downloads and runs NodeSource's setup script and installs nodejs
 (apt, dnf or yum), or runs `apk add nodejs`; on macOS it runs
 `brew upgrade node || brew install node` as you.
+
 `improve-loom-for-my-repo`, after building its report, searches the
 ClickHouse/loom GitHub issues for each finding's symbol or query without asking,
 and files a public issue there or comments on an existing one only after you
@@ -104,11 +104,8 @@ Keep one Loom entry per session: a user-scope MCP entry that points at the same
 Loom server registers a second server beside the plugin
 (`claude mcp remove <name> -s user`, with the name SessionStart's warning gives,
 removes it). SessionStart reads the user-scope MCP entries in `~/.claude.json`,
-on the machine only, to warn once a day when one does; nothing from that file
-goes to the Loom server.
-
-The full list is in
-[data handling](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling).
+on the machine only, to warn once a day when one does. The warning, which the
+session sees, names the entry; nothing else from that file is sent.
 
 ## What it wires
 

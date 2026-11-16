@@ -8,6 +8,8 @@ import json
 import re
 from pathlib import Path
 
+from tests.unit.markdown_links import anchors
+
 ROOT = Path(__file__).resolve().parents[2]
 CLAUDE = ROOT / "integrations" / "claude-code-plugin"
 CODEX = ROOT / "integrations" / "codex-plugin"
@@ -74,4 +76,7 @@ def test_published_links_resolve() -> None:
     for path in folders:
         assert (ROOT / path).is_dir(), path
     for url in site_links:
-        assert _site_page(url).is_file(), url
+        page = _site_page(url)
+        assert page.is_file(), url
+        anchor = url.partition("#")[2]
+        assert not anchor or anchor in anchors(page), url

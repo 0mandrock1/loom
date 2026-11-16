@@ -234,11 +234,10 @@ The wiring is `hooks/hooks.json`; `hooks/HOOKS.md` has per-hook notes.
 | SessionEnd                                        | `loom-session-memory.mjs`   | hands the session's turns to `memory.set_from_messages(defer=true)`, which extracts facts and writes the session summary                                                                                                                                                                                                        | `LOOM_SESSION_MEMORY=off`                                                                                   |
 
 On your machine the hooks run `node`, `git` and `grep`: `git` reads the checkout's remotes,
-branch, status and diffs, and `grep` searches uncommitted files for a redirected grep
-pattern. At Stop, in an indexed checkout, when the test gate names a pytest test, it looks
-for the checkout's virtualenv or the active one (`VIRTUAL_ENV`) and, when there is none,
-runs `python3 -c "import pytest"` (then `python`) to see whether pytest is installed
-(`LOOM_TEST_GATE=off` stops it).
+branch, `HEAD` commit, status and diffs, and `grep` searches uncommitted files for a
+redirected grep pattern. When the test gate names a pytest test, it names the checkout's
+virtualenv, the active one (`VIRTUAL_ENV`) or the first `python3` or `python` on `PATH`,
+checking only that the file exists.
 
 The plugin names the oldest Loom server its hooks support (`MIN_SERVER_VERSION` in `lib/server-version.mjs`). SessionStart reads the server's `version` from the `GET /v1/health` answer it already requests and, when that version is older, prints one `loom:` line naming both versions and asking for a server upgrade. The session goes on either way; an unreachable server, an answer other than 2xx, a server that reports no `version`, or a version that is not SemVer prints nothing. The `loom-status` skill (`bin/loom-client-status.mjs`) reports the same as a warning. The minimum rises with the release that first serves what a hook needs, so between that hook's merge and that release a server of the previous release gets no warning.
 
