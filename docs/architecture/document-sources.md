@@ -488,7 +488,8 @@ that for collections, since one missed path leaks.
   every cause; returned turn details remain private. Mirrored per-file failures emit
   no log record, since the number of records would disclose a document figure.
   A sync turn enters its private diagnostic scope before taking its source lease or
-  listing files. That scope suppresses client and provider instrumentation, database
+  listing files; retirement enters it before reading its queue. That scope suppresses
+  client and provider instrumentation, database
   work figures, shared metric calls and log records, including their volume. Provider
   health and embedding caches receive no private contribution. The extractor receives
   a generic filename; its service emits no per-request access, stderr or fault logs.

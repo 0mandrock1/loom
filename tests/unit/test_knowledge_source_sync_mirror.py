@@ -946,7 +946,7 @@ def test_a_parked_publication_stays_out_of_worker_logs(
     world.files = [_file("doc1", DOCS, "2026-01-01T00:00:00.000Z", permissions=READERS)]
     with caplog.at_level("WARNING", logger="loom.knowledge.source_sync"):
         _turn(world, _mirrored())
-    assert "publication: a write is parked" in _detail(world)["error"]
+    assert "publication: a write is parked" in _own(world)["error"]
     assert caplog.records == []
 
 

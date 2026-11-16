@@ -414,7 +414,6 @@ async def _sync_mirrored(
 
     for src in sorted(mirrored, key=synced_at):
         if run.spent():
-            result.cut = True
             return
         await _sync_one(src, states.get(_cursor_of(src), {}), run, result)
 

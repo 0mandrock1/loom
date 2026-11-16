@@ -115,3 +115,18 @@ def test_private_provider_health_and_cost_contexts_restore_after_failure(
     assert cost_accumulator.current() is outer and outer.embed_tokens == 0
     provider_health.record_success("fake")
     assert provider_health.status()["providers"]["fake"]["failing"] is False
+
+
+def test_mirror_document_bound_never_sets_public_pass_cut(
+    world: Any, mirror: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.settings import settings
+    from tests.unit.test_knowledge_source_sync import DOCS, _source
+
+    monkeypatch.setattr(settings, "knowledge_source_mirror_documents_per_pass", 1)
+    world.sources = [_mirrored(name="first"), _mirrored(name="second"), _source(name="ordinary")]
+    world.files = [_file("doc", DOCS, "2026-01-01T00:00:00.000Z", permissions=READERS)]
+    result = asyncio.run(source_sync.run_sync())
+    assert [written.namespace for written, _ in world.upserts] == [MIRROR, _source().namespace]
+    assert result.changed == 1 and result.synced == 1
+    assert not result.cut
