@@ -2,8 +2,8 @@
 
 Loom links coding agents' memories to the functions, classes and files they name, follows
 them through refactors, and flags a memory when its code changes. By default, search
-leaves out a memory whose code is all gone, and every read that serves a lesson says when
-its code changed or is gone. It runs over MCP, HTTP and the SDKs on the repositories a
+leaves out a memory whose code is all gone unless a person pinned, locked or verified it,
+and every read that serves a lesson says when its code changed or is gone. It runs over MCP, HTTP and the SDKs on the repositories a
 self-hosted Loom indexes
 (the [code index](code-intelligence.md), `LOOM_CODE_INGEST_ENABLED=true`), and the
 `memory_code_links` worker that keeps the links is on by default.
@@ -28,10 +28,11 @@ self-hosted Loom indexes
   `retire_removed` (the default) leaves a memory whose code is all gone out of search and
   flags changed code; `flag` only flags; `revise` also leaves gone-code memories out, and
   has the model check a changed one's claim against the old and new code and suggest a
-  corrected claim. Under every policy, search ranks a memory whose code changed below the
-  next three results instead of hiding it, unless a person holds it.
-  [Policies](../concepts/memory.md#memories-linked-to-code) Loom never rewrites the memory
-  itself.
+  corrected claim. A memory a person pinned, locked or verified is never left out. Under
+  every policy, search usually ranks a memory whose code changed below the next three
+  results instead of hiding it; a held memory and a row found by name keep their place.
+  Loom never rewrites the memory itself.
+  [Policies](../concepts/memory.md#memories-linked-to-code)
 - **Lessons wherever the agent reads code.** `code.symbol` returns the memories linked to
   a definition as `lessons`; `code.search`, `code.callers`, `code.callees`, `code.impact`,
   `code.outline` and a task's `code.context_pack` attach the lessons for the files they
@@ -42,7 +43,8 @@ self-hosted Loom indexes
   [Codex plugin](../features/integrations/codex.md)
 - **Shared with the team.** Lessons are read from the repository's code namespace and the
   namespaces the call names (over MCP, the caller's own by default), so a lesson saved in
-  the repository's code namespace reaches every agent that may read that namespace.
+  the repository's code namespace reaches every agent that may read that namespace (a
+  token narrowed to its own user or session reads no lessons).
   [Memories linked to code](../concepts/memory.md#memories-linked-to-code)
 - **Branches read their own code.** On another branch, a lesson is checked against that
   branch's own definition, so a release branch that still has the old text reads `fresh`.
