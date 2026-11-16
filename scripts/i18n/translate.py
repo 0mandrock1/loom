@@ -577,7 +577,8 @@ def bedrock_client() -> Any:
     except ImportError as e:
         raise SystemExit(
             "translations need the anthropic package: "
-            "pip install --require-hashes --no-deps -r scripts/i18n/requirements.txt"
+            "pip install --require-hashes --no-deps --only-binary=:all: "
+            "-r scripts/i18n/requirements.txt"
         ) from e
     try:
         return AnthropicBedrock(max_retries=0)

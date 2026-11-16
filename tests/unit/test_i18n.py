@@ -461,9 +461,11 @@ class _FakeMessages:
 def _fake_anthropic(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     """A stand-in for the `anthropic` package, which the unit environment does not install."""
     module = types.ModuleType("anthropic")
-    module.APITimeoutError = type("APITimeoutError", (Exception,), {})  # type: ignore[attr-defined]
+    # As in the SDK, a timeout is a kind of connection error, so `call` must catch it first.
+    connection_error = type("APIConnectionError", (Exception,), {})
+    module.APIConnectionError = connection_error  # type: ignore[attr-defined]
+    module.APITimeoutError = type("APITimeoutError", (connection_error,), {})  # type: ignore[attr-defined]
     module.APIStatusError = _StatusError  # type: ignore[attr-defined]
-    module.APIConnectionError = type("APIConnectionError", (Exception,), {})  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "anthropic", module)
     monkeypatch.setattr(t.time, "sleep", lambda seconds: None)
     return module

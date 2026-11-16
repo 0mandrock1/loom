@@ -44,8 +44,8 @@ jobs:
     if: github.ref == 'refs/heads/main' && vars.LOOM_I18N_RUNNER != ''
     runs-on: ${{ fromJSON(vars.LOOM_I18N_RUNNER) }}
     timeout-minutes: 45
-    # Limited to main (Settings → Environments), so a workflow on another branch cannot run
-    # in it.
+    # Limited to main (Settings → Environments); it records each run. What keeps other
+    # workflows off the runner is the runner group's selected-workflow rule.
     environment: i18n
     permissions:
       contents: write

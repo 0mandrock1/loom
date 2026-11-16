@@ -155,16 +155,16 @@ export AWS_REGION=<region>
 python -m scripts.i18n.translate update
 ```
 
-The workflow stores no credential in GitHub. Its job runs on a self-hosted runner in AWS, and the SDK signs with that runner's EC2 instance role, which may invoke the one model and nothing else. Every step of the job can use the role, so the job only runs where no other code can reach it: on a push to main or a manual run on main, never on a pull request, in the environment `i18n`. While the repository variable `LOOM_I18N_RUNNER` is empty, the job is skipped.
+The workflow stores no credential in GitHub. Its job runs on a self-hosted runner in AWS, and the SDK signs with that runner's EC2 instance role, which may invoke the one model and nothing else. Every step of the job can use the role, so the job only runs on a push to main or a manual run on main, never on a pull request. The runner group's selected-workflow rule keeps every other workflow off the runner; the job's environment `i18n`, limited to main, records each run. While the repository variable `LOOM_I18N_RUNNER` is empty, the job is skipped.
 
 To turn translations on:
 
 1. Create the environment `i18n` with deployment branches set to `main` only (Settings → Environments).
-2. Get a runner group for this repository whose access is limited to the selected workflow `ClickHouse/loom/.github/workflows/i18n.yml@refs/heads/main` (runner group settings → Workflow access → Selected workflows), so no other workflow and no fork's pull request can schedule a job on it.
+2. Get a runner group for this repository with "Allow public repositories" ticked (a group serves only private repositories otherwise, and the job would wait in the queue) and access limited to the selected workflow `ClickHouse/loom/.github/workflows/i18n.yml@refs/heads/main` (runner group settings → Workflow access → Selected workflows), so no other workflow and no fork's pull request can schedule a job on it.
 3. Give the runners' instance role the policy below. In the account, accept Bedrock's model access for Claude Sonnet 5.5 once: the first call can otherwise fail with an access-denied error about `aws-marketplace:Subscribe`, and the role is not granted those Marketplace actions.
 4. Set the repository variable `LOOM_I18N_RUNNER` to the runner group's labels as a JSON list, for example `["self-hosted","<label>"]`.
 
-The job calls the model's global inference profile from the runner's `AWS_REGION`, or from `us-east-1` when the runner sets none. Bedrock authorizes a call through a global profile on three resources: the profile, the model in the calling region, and the model with no region. The policy names each, in that region:
+The job calls the model's global inference profile from the runner's `AWS_REGION`, else its `AWS_DEFAULT_REGION`, else `us-east-1`. Bedrock authorizes a call through a global profile on three resources: the profile, the model in the calling region, and the model with no region. The policy names each, in that region:
 
 ```json
 {
