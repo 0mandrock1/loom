@@ -278,6 +278,8 @@ class TurnResult:
 
 @dataclass
 class PassResult:
+    """Public pass summary; mirrored turns contribute codes, never document figures."""
+
     sources: int = 0
     synced: int = 0
     changed: int = 0
@@ -466,7 +468,8 @@ async def _sync_one(
                 log.info("knowledge_source_sync: %s was removed during its turn", _cursor_of(src))
                 return None
             except Exception as e:  # noqa: BLE001 — recorded as the source's failed turn
-                log.warning("knowledge_source_sync: %s failed: %s", _cursor_of(src), e)
+                if not mirror_synced(src):
+                    log.warning("knowledge_source_sync: %s failed: %s", _cursor_of(src), e)
                 turn = TurnResult()
                 turn.fail("failed", type(e).__name__)
             await _write_state(src, state, turn)
@@ -474,11 +477,18 @@ async def _sync_one(
         log.info("knowledge_source_sync: %s is being synced by another copy", _cursor_of(src))
         return None
     except Exception as e:  # noqa: BLE001 — one source's failure must not stop the others
+        if mirror_synced(src):
+            _mirror_failure(src, result)
+            return None
         result.errors.append(f"{_cursor_of(src)}: {type(e).__name__}")
         result.failed += 1
         log.warning("knowledge_source_sync: %s failed: %s", _cursor_of(src), e)
         pass_context.note_failure(e, _cursor_of(src))
         return None
+    if mirror_synced(src):
+        if turn.status != "ok":
+            _mirror_failure(src, result)
+        return turn
     result.synced += 1
     result.changed += turn.changed
     result.removed += turn.removed
@@ -490,6 +500,12 @@ async def _sync_one(
         result.errors.append(f"{_cursor_of(src)}: {turn.status} {turn.error}".strip())
         pass_context.note_failure(RuntimeError(turn.error or turn.status), _cursor_of(src))
     return turn
+
+
+def _mirror_failure(src: KnowledgeSource, result: PassResult) -> None:
+    """Report the same code for every cause without exporting turn details."""
+    result.errors.append(f"{_cursor_of(src)}: SYNC_FAILED")
+    pass_context.note_failure(RuntimeError("SYNC_FAILED"), _cursor_of(src))
 
 
 def _turn_of(src: KnowledgeSource) -> Callable[..., Awaitable[TurnResult]]:
@@ -1034,13 +1050,15 @@ async def _fetch_and_write(
         reason = f"http_{e.status}" if e.status else "unreachable"
         return wait(f, turn, reason, client_error(e))
     except extractors.ExtractionFailed as e:
-        log.info("knowledge_source_sync: %s not extracted: %s", f["id"], e.code)
+        if not mirror_synced(src):
+            log.info("knowledge_source_sync: %s not extracted: %s", f["id"], e.code)
         return give_up(f, turn, f"extraction_failed:{e.code}")
     except extractors.ExtractorUnavailable as e:
         # This one file's extraction: the format's other files may still go through.
         return wait(f, turn, "extractor_unavailable", f"extractor_unavailable: {e}")
     except Exception as e:  # noqa: BLE001 — one file's conversion must not stop the others
-        log.warning("knowledge_source_sync: reading %s failed: %s", f["id"], e)
+        if not mirror_synced(src):
+            log.warning("knowledge_source_sync: reading %s failed: %s", f["id"], e)
         return wait(f, turn, f"fetch_failed:{type(e).__name__}", type(e).__name__)
     await require_current(src)
     extra: dict[str, Any] = {"extraction_coverage": fetched.coverage} if fetched.coverage else {}
@@ -1071,7 +1089,8 @@ async def _fetch_and_write(
         # The write refuses this file whatever the pass: it will not go through.
         return give_up(f, turn, f"write_refused:{e.to_detail().get('code') or 'invalid'}")
     except Exception as e:  # noqa: BLE001 — one file's write must not stop the others
-        log.warning("knowledge_source_sync: writing %s failed: %s", f["id"], e)
+        if not mirror_synced(src):
+            log.warning("knowledge_source_sync: writing %s failed: %s", f["id"], e)
         return wait(f, turn, f"write_failed:{type(e).__name__}", type(e).__name__)
     return counted(turn, written)
 

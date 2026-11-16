@@ -91,7 +91,7 @@ def test_a_mirrored_file_lands_in_the_mirror_with_its_list(
     src = _mirrored()
     world.files = [_file("doc1", DOCS, "2026-01-01T00:00:00.000Z", permissions=READERS)]
     result = _turn(world, src)
-    assert result.synced == 1 and result.changed == 1
+    assert result.synced == 0 and result.changed == 0
     [(written, _)] = world.upserts
     address = source_sync.source_uri_of(world.files[0])
     assert written.namespace == MIRROR
@@ -147,7 +147,7 @@ def test_an_absent_file_reads_unread_before_it_is_retired(
     audits = len(world.audits)
     result = _turn(world, _mirrored())
     assert [r["access_json"] for r in mirror["rewrites"]] == [""]
-    assert result.removed == 1 and written.source_uri not in world.docs
+    assert result.removed == 0 and written.source_uri not in world.docs
     assert len(world.audits) == audits  # the audit log outlives an erasure: no address
 
 
@@ -354,7 +354,7 @@ def test_list_rewrites_go_on_past_the_pass_s_document_bound(
         f["modifiedTime"] = f["modifiedTime"].replace("2026-01-0", "2026-02-0")
         f["permissions"] = []
     result = _turn(world, _mirrored())
-    assert result.cut and len(world.upserts) == 3
+    assert not result.cut and len(world.upserts) == 3
     assert all(
         d["access_json"] == access_list.to_json(access_list.AccessList())
         for d in world.docs.values()
@@ -580,7 +580,7 @@ def test_a_failed_permission_read_does_not_hold_back_retirement(
     world.file_answers[gone["id"]] = httpx.Response(404)
     monkeypatch.setattr(settings, "knowledge_source_sync_full_interval_seconds", 0)
     result = _turn(world, _mirrored())
-    assert result.removed == 1 and len(world.docs) == 1
+    assert result.removed == 0 and len(world.docs) == 1
 
 
 def test_an_incomplete_search_leaves_an_unlisted_copy_s_list_as_it_was(
@@ -936,7 +936,7 @@ def test_a_parked_publication_is_shown_beside_a_failed_fetch(
     assert error.startswith("publication: a write is parked") and "503" in error
 
 
-def test_a_parked_publication_is_logged_with_its_source(
+def test_a_parked_publication_stays_out_of_worker_logs(
     world: Any, mirror: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     async def _parked(org: str, namespace: str, uri_suffix: str) -> str:
@@ -946,8 +946,8 @@ def test_a_parked_publication_is_logged_with_its_source(
     world.files = [_file("doc1", DOCS, "2026-01-01T00:00:00.000Z", permissions=READERS)]
     with caplog.at_level("WARNING", logger="loom.knowledge.source_sync"):
         _turn(world, _mirrored())
-    # No reader sees a mirror's sync state yet, so the operator learns it from the log.
-    assert any("decks" in r.getMessage() and "parked" in r.getMessage() for r in caplog.records)
+    assert "publication: a write is parked" in _detail(world)["error"]
+    assert caplog.records == []
 
 
 def test_home_refuses_an_access_this_build_does_not_know() -> None:

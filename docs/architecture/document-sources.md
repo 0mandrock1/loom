@@ -483,6 +483,10 @@ that for collections, since one missed path leaks.
   mirror's namespace and go with it when it is erased; whatever of a mirror leaves it (a
   source's status, a worker's pass notes, logs, spans and metrics, the extractor
   service's logs and traces) carries codes only (exceptions 3 and 4 apart).
+  Worker pass summaries exclude mirrored turns' completed-source counts, document
+  figures and cut flags. A failed mirrored turn contributes only `SYNC_FAILED`, for
+  every cause; returned turn details remain private. Mirrored per-file failures emit
+  no log record, since the number of records would disclose a document figure.
 - **No scope reaches a mirror.** Every statement a request runs that reads a table
   holding mirror rows other than by a namespace the caller names leaves out the
   `acl-[0-9a-f]{24}` form; the workers named here are the exception, since they must

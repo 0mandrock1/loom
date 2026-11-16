@@ -28,7 +28,6 @@ import asyncio
 import contextlib
 import dataclasses
 import functools
-import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -54,8 +53,6 @@ from server.knowledge.store import sources as store
 from server.llm import customer
 from server.workers import pass_context
 from server.workers.status import set_worker_identity
-
-log = logging.getLogger("loom.knowledge.source_sync")
 
 # Seconds between two files' permission reads: ten a second stay well under the store's
 # per-user rate limit.
@@ -164,10 +161,6 @@ async def _in_mirror(
     if held_back:
         cycle.keep(result)  # the lists read count for nothing: the cycle stays as it was
         note = _HELD_BACK[held_back]
-        if held_back == "parked":  # no reader sees a mirror's state yet: say it here
-            log.warning(
-                "knowledge_source_sync: %s/%s/%s: %s", src.org, src.namespace, src.name, note
-            )
         if result.error:  # the state shows the error alone: the note goes with it
             result.error = f"{note}; {result.error}"
         else:
