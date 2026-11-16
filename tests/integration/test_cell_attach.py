@@ -102,6 +102,21 @@ async def cell_stores(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[dict[str
     ch = get_client()
     await ch.connect()
     ids: list[str] = []
+    real_live, real_recent = instances.read_live, instances.read_recent
+
+    async def read_live(ch: Any, *, all_deployments: bool = False) -> list[dict[str, Any]]:
+        rows = await real_live(ch, all_deployments=all_deployments)
+        return [r for r in rows if r["instance_id"] in ids]
+
+    async def read_recent(
+        ch: Any, *, window_s: float, since: str | None = None
+    ) -> list[dict[str, Any]]:
+        rows = await real_recent(ch, window_s=window_s, since=since)
+        return [r for r in rows if r["instance_id"] in ids]
+
+    # The integration server shares ClickHouse and reports its own process heartbeats.
+    monkeypatch.setattr(instances, "read_live", read_live)
+    monkeypatch.setattr(instances, "read_recent", read_recent)
     try:
         await pg_migrate.migrate()
         await pg.execute(
@@ -667,6 +682,41 @@ async def test_doctor_reads_smallest_first_and_leaves_the_largest_unchecked(
     assert tag + "small" in lines["cell_stray_orgs"][1]
     grade, detail = lines["cell_stray_orgs_unchecked"]
     assert grade == "WARN" and detail.endswith(": loom.it_large")
+
+
+@pytest.mark.asyncio
+async def test_attach_requires_every_probe_privilege(cell_stores) -> None:
+    role = f"it_probe_{uuid.uuid4().hex[:6]}"
+    await _admin(f"CREATE ROLE {role} LOGIN")
+    privileges = ("SELECT", "INSERT", "UPDATE", "DELETE")
+    grants = [
+        ("SELECT",),
+        *(tuple(p for p in privileges if p != missing) for missing in privileges),
+        privileges,
+    ]
+    observed: dict[tuple[str, ...], list[str]] = {}
+    try:
+        async with pg.dedicated() as conn:
+            await conn.execute(f"GRANT USAGE ON SCHEMA loom TO {role}")
+            for held in grants:
+                await conn.execute(f"REVOKE ALL ON loom.cell_probe FROM {role}")
+                await conn.execute(f"GRANT {', '.join(held)} ON loom.cell_probe TO {role}")
+                await conn.execute(f"SET ROLE {role}")
+                refusals = await cell_attach_pg.own_role_refusals(conn, [])
+                await conn.execute("RESET ROLE")
+                observed[held] = [r.reason for r in refusals if "loom.cell_probe" in r.reason]
+        assert observed == {
+            held: (
+                []
+                if held == privileges
+                else ["attach's role lacks SELECT, INSERT, UPDATE and DELETE on loom.cell_probe"]
+            )
+            for held in grants
+        }
+    finally:
+        async with pg.dedicated() as conn:
+            await conn.execute(f"DROP OWNED BY {role}")
+        await _admin(f"DROP ROLE {role}")
 
 
 @pytest.mark.asyncio
