@@ -316,7 +316,7 @@ def test_the_site_serves_each_page_as_markdown_and_llms_files(
     opening = full.split("\n\n")[2]
     assert opening.startswith(f"Start with {url}index.md, or [install]({url}llms-install.md).")
     assert "llms-full.txt" not in opening
-    assert f"{url}llms.txt indexes every page" in full
+    assert f"{url}llms.txt lists the other pages" in full
     assert f"This file holds the {holds} in full" in full
     sources = [line for line in full.splitlines() if line.startswith("> Source: ")]
     # What Loom is for comes first, the setup steps last: fetchers often cut a file short.

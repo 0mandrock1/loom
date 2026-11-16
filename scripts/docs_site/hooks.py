@@ -204,9 +204,9 @@ def _full_text_pages(docs: Path) -> list[str]:
         for i, first in enumerate(_FULL_FIRST):
             if uri == first or (first.endswith("/") and uri.startswith(first)):
                 return i
-        return (
-            len(_FULL_FIRST) + 1 + _FULL_LAST.index(uri) if uri in _FULL_LAST else len(_FULL_FIRST)
-        )
+        if uri in _FULL_LAST:
+            return len(_FULL_FIRST) + 1 + _FULL_LAST.index(uri)
+        return len(_FULL_FIRST)
 
     return sorted(pages, key=rank)
 
@@ -217,23 +217,27 @@ def _full_holds() -> str:
     return f"{', '.join(names[:-1])} and {names[-1]} pages, the FAQ and the glossary"
 
 
-def _site_llms_txt(llms: str, url: str) -> str:
+def _site_llms_txt(llms: str, url: str) -> tuple[str, str]:
     """The site's llms.txt from the repository's: each docs/ path becomes its Markdown copy
     ("docs/use-cases/index.md" -> "<site>/use-cases/index.md"), and a Full text section
     names llms-full.txt right after the use cases, where an agent reading from the top
-    finds it early."""
+    finds it early. Also returns the rewritten part before the first section (title,
+    summary and opening), which opens llms-full.txt too."""
     llms = _DOCS_PAGE.sub(lambda m: url + m.group(1), llms)
     llms = _ROOT_INSTALL.sub(f"]({url}llms-install.md)", llms)
-    head, sep, rest = llms.partition("\n\n## ")
+    opening, sep, rest = llms.partition("\n\n## ")
     holds = _full_holds()
-    head += f" The full text of the {holds} is in one file: [llms-full.txt]({url}llms-full.txt)."
+    head = (
+        opening
+        + f" The full text of the {holds} is in one file: [llms-full.txt]({url}llms-full.txt)."
+    )
     full = f"## Full text\n\n- [llms-full.txt]({url}llms-full.txt): The {holds}, in one file.\n\n"
     lead, uc, after = rest.partition("\n## Use cases\n")
     cases, nxt, tail = after.partition("\n## ")
     if not (uc and nxt):
         raise ValueError("llms.txt needs a Use cases section with another section after it")
     rest = f"{lead}{uc}{cases.rstrip()}\n\n{full}## {tail}"
-    return f"{head}{sep}{rest}".rstrip("\n") + "\n"
+    return f"{head}{sep}{rest}".rstrip("\n") + "\n", opening
 
 
 def _site_install(install: str, url: str) -> str:
@@ -271,20 +275,17 @@ def on_post_build(config):
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(text, encoding="utf-8")
 
-    llms = _site_llms_txt((ROOT / "llms.txt").read_text(encoding="utf-8"), url)
+    llms, opening = _site_llms_txt((ROOT / "llms.txt").read_text(encoding="utf-8"), url)
     (site / "llms.txt").write_text(llms, encoding="utf-8")
     # The install steps a coding agent follows, at the root as in the repository.
     install = _site_install((ROOT / "llms-install.md").read_text(encoding="utf-8"), url)
     (site / "llms-install.md").write_text(install, encoding="utf-8")
 
-    # llms.txt's title, summary quote and opening paragraph (where to start and how to
-    # install) open llms-full.txt too, so a reader that cuts the file short still has them;
-    # the paragraph's last sentence, which names llms-full.txt itself, is left out.
-    title, summary, opening = llms.split("\n\n")[:3]
-    opening = opening.rsplit(" The full text of the ", 1)[0]
+    # llms.txt's title, summary quote and opening (where to start and how to install) open
+    # llms-full.txt too, so a reader that cuts the file short still has them.
     parts = [
-        f"{title}\n\n{summary}\n\n{opening}\n\nThis file holds the {_full_holds()} in full;"
-        f" {url}llms.txt indexes every page.\n"
+        f"{opening}\n\nThis file holds the {_full_holds()} in full; {url}llms.txt lists the"
+        " other pages.\n"
     ]
     for uri in _full_text_pages(docs):
         parts.append(copies[uri])
