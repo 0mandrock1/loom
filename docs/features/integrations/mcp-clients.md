@@ -306,10 +306,11 @@ same network. On the same machine, `loom install --client claude-desktop` writes
   say which authentication it takes. Where it asks for a token, enter `Bearer <JWT>`
   ([telling which](#bearer-or-bare-token)); otherwise use the
   [browser sign-in](#clients-that-sign-in-by-browser).
-- **Perplexity**: it documents OAuth and an API key for a custom remote connector, but
-  not which header the key goes in. Its OAuth route has not been checked against Loom,
-  whose [browser sign-in](#clients-that-sign-in-by-browser) registers public clients with
-  no client secret.
+- **Perplexity**: it documents OAuth and an API key for a custom remote connector.
+  Perplexity has been reported to refuse servers whose dynamic registration returns no
+  client secret, and Loom's [browser sign-in](#clients-that-sign-in-by-browser) registers
+  clients without one, so its OAuth route may fail; the header its API-key option uses is
+  not documented.
 - **Le Chat** (Mistral's connector docs call the app Work): an admin adds it under
   Connectors → Add Connector → Custom MCP Connector; Mistral documents that it detects the
   authentication method from the URL. Choose **HTTP Bearer Token / Basic Auth** and enter
@@ -324,10 +325,13 @@ shows reads `unauthenticated: …`, and the `WWW-Authenticate` header carries th
 `error_description` beside `error="invalid_token"`), the provider added its own prefix:
 enter the bare token instead. An error that says the header must be `` `Bearer <token>` ``
 means the provider sent no `Bearer` scheme: enter `Bearer <JWT>`, or choose the provider's
-bearer option. Any other `401` error, such as `token expired: …` or one that says the token
-is revoked, refuses the token itself: mint a new one
+bearer option. An error that says `missing bearer token` means no `Authorization` header
+arrived: check the header name, or the field the token went in, before minting a new token.
+Any other `401` error, such as `token expired: …` or one that says the token is revoked,
+refuses the token itself: mint a new one
 ([tokens and grants](../../guides/tokens-and-grants.md)). A `503` that says to retry shortly
-means the server is still loading its keys or revocation list: retry; the token may be good.
+means the server cannot check the token yet (its keys or revocation list are not loaded or
+are stale): retry; the token may be good.
 
 ## Clients that sign in by browser
 
