@@ -42,7 +42,7 @@ import httpx
 from server.cli import cell as cell_cli
 from server.cli import cell_attach_beats as beats
 from server.cli import cell_attach_pg as apg
-from server.cli import cell_scan
+from server.cli import cell_control, cell_scan
 from server.cli._ch import writes
 from server.cli.cell_ch import Refusal, Refused, read_topology
 from server.core import cell, cell_triggers
@@ -77,32 +77,15 @@ class Router:
     ) -> None:
         self.url, self.name, self.transport = url, name, transport
 
-    def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            timeout=cell_cli._OPERATOR_TIMEOUT,
-            trust_env=self.url.scheme == "https",
-            transport=self.transport,
-            headers={"Authorization": f"Bearer {settings.router_operator_token}"},
-        )
-
     async def call(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-        """The router's 200 answer naming the cell; Refused with its refusal otherwise."""
-        url = cell_cli.at(self.url, f"/cells/v1/operator/cells/{self.name}" + path)
-        try:
-            async with self._client() as client:
-                r = await (client.get(url) if body is None else client.post(url, json=body))
-        except httpx.HTTPError as e:
-            raise _refused("router", f"no answer ({type(e).__name__}): rerun attach") from None
-        answer = cell_cli.router_answer(r, {"cell": self.name}, cell_cli.OPERATOR_REFUSALS)
-        if answer is None:
-            raise _refused("router", cell_cli.not_the_router(r))
-        if r.status_code == 404 and answer.get("code") != "NO_SUCH_CELL":
-            raise _refused("router", f"a router replica is not upgraded: it does not answer {url}")
-        if r.status_code != 200:
-            raise _refused(
-                "router", f"refused {path or 'the read'} ({r.status_code}): {answer['error']}"
-            )
-        return answer
+        return await cell_control.request(
+            self.url,
+            self.name,
+            self.transport,
+            path,
+            body,
+            method="GET" if body is None else "POST",
+        )
 
     async def health(self, host: str) -> str:
         """The deployment id `https://<host>/v1/health/deployment` answers ('' when none)."""
@@ -183,13 +166,8 @@ class Run:
     # -- the lock session --------------------------------------------------------------
 
     async def open_lock(self) -> None:
-        from server.core import pg
-
-        self._lock_cm = pg.dedicated(statement_timeout_ms=_LOCK_STATEMENT_MS)
+        self._lock_cm = cell_control.session("attach")
         self.lock_conn = await self._lock_cm.__aenter__()
-        if refusals := await apg.direct_refusals(self.lock_conn, "attach"):
-            raise Refused(refusals)
-        await apg.take_lock(self.lock_conn, "attach")
 
     async def close_lock(self) -> None:
         if self._lock_cm is not None:
@@ -197,33 +175,14 @@ class Run:
             self._lock_cm = self.lock_conn = None
 
     async def confirm_lock(self) -> None:
-        """The lock is held still, or taken again (refusing when another run holds it now),
-        and the cell's state read again: a cleanup, a prepare rerun or another attach could
-        have run in the gap."""
-        try:
-            if await apg.lock_held(self.lock_conn):
-                return
-        except Exception as e:  # noqa: BLE001 — a lost session is taken again below
-            self.log(f"the lock session was lost ({type(e).__name__}); taking the lock again")
-        else:
-            self.log("the attach lock was lost; taking it again")
-        try:
-            await self.close_lock()
-        except Exception:  # noqa: BLE001 — the old session is gone either way
-            self._lock_cm = self.lock_conn = None
-        await self.open_lock()
-        state, first = await apg.read_mode(self.lock_conn)
-        if first != (True, self.name) or (self.mode == "enforced" and state != "enforced"):
-            raise _refused(
-                "cell state",
-                f"changed while the lock was lost (now {state}, first row {first}): rerun attach",
-            )
-        row = await self.router.call("")
-        if (
-            row.get("deployment_id") != self.row.get("deployment_id")
-            or row.get("state") != "attaching"
-        ):
-            raise _refused("directory row", "changed while the lock was lost: rerun attach")
+        """A lost backend ends the owner; a new run must claim and start again."""
+        await cell_control.check_lock(self.lock_conn)
+
+    async def mutate(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        answer = await cell_control.mutate(self.lock_conn, self.router.call, self.row, path, body)
+        if "mutation_generation" in answer:
+            self.row = {**self.row, **answer}
+        return answer
 
     # -- the refusals ------------------------------------------------------------------
 
@@ -406,6 +365,7 @@ class Run:
             "pg_allow_roles": sorted(self.args.pg_allow_role),
             "nonces": nonces,
         }
+        body.update(cell_control.preconditions(self.row))
         if (size := _encoded_size(body)) > ATTACH_BEGIN_MAX_BYTES:
             raise _refused(
                 "attach/begin",
@@ -414,7 +374,7 @@ class Run:
             )
         try:
             await _write_nonces(self.ch, nonces)
-            self.row = {**self.row, **await self.router.call("/attach/begin", body)}
+            self.row = {**self.row, **await self.mutate("/attach/begin", body)}
             self.begun_keys_fp = self.keys_fp
         finally:
             await _delete_nonces(self.ch, nonces)
@@ -451,28 +411,21 @@ class Run:
         return verdict.booting
 
     async def commit_mode(self) -> None:
-        from server.core import pg
-
-        await self.router.call("/attach/enforced", {"deployment_id": self.row["deployment_id"]})
+        await self.mutate("/attach/enforced", {"deployment_id": self.row["deployment_id"]})
 
         def mark(mode: str) -> None:
-            # `unknown` from a try's UPDATE on: only the durable read can say whether it
-            # landed; `recording` again when that try rolled back.
             self.mode = mode
 
-        try:
-            async with pg.dedicated(statement_timeout_ms=_LOCK_STATEMENT_MS) as conn:
-                await apg.commit_enforced(
-                    conn, self.confirm_lock, self.ready_for_commit, self.wait, self.log, mark
-                )
-        except Refused:
-            raise
-        except Exception as e:
-            if self.mode != "unknown":
-                raise  # no try was in flight: nothing to decide
-            self.log(f"the mode commit's outcome is unknown ({type(e).__name__}: {e})")
-            async with pg.dedicated(statement_timeout_ms=_LOCK_STATEMENT_MS) as conn:
-                await apg.end_mode_transactions(conn, self.confirm_lock)
+        await apg.commit_enforced(
+            self.lock_conn,
+            self.confirm_lock,
+            self.ready_for_commit,
+            self.wait,
+            self.log,
+            mark,
+            expected_cell=self.name,
+            expected_fp=self.own_fp,
+        )
 
     async def durable(self) -> int:
         """The durable read of `enforced`, retried within `--wait`; then X, the snapshot's
@@ -484,13 +437,14 @@ class Run:
                 if await pg_profile.standby_now() != "synchronous":
                     raise _refused("postgres standbys", "not synchronous before the durable read")
                 try:
-                    read = await apg.durable_read()
+                    read = await apg.durable_read(self.lock_conn)
                 except Exception as e:
                     # A try cut off by its bound, or an outage: its outcome is unknown, and
                     # the next try reads again. Anything else is no reason to retry.
                     outage = pg.is_outage(e) or isinstance(e, pg.PostgresUnavailableError)
                     if not (isinstance(e, TimeoutError) or outage):
                         raise
+                    await self.confirm_lock()
                     self.log(f"the durable read failed ({type(e).__name__}); retrying")
                     if not await self.wait.pause():
                         raise _refused(
@@ -573,7 +527,7 @@ class Run:
             placed = 0
             for batch in batches(orgs, self.row["deployment_id"]):
                 await self.confirm_lock()
-                answer = await self.router.call(
+                answer = await self.mutate(
                     "/attach/place", {"deployment_id": self.row["deployment_id"], "orgs": batch}
                 )
                 placed += int(answer.get("placed") or 0)
@@ -586,7 +540,9 @@ class Run:
         await self.final_checks(watch)
         row = await self.router.call("")
         current, nxt = self.own_fp
-        if (row.get("current_fp"), row.get("next_fp")) != (current, nxt):
+        if json.dumps((row.get("current_fp"), row.get("next_fp")), sort_keys=True) != json.dumps(
+            (current, nxt), sort_keys=True
+        ):
             raise _refused(
                 "postgres loom.cell_self",
                 "differs from the directory's fingerprints (a fingerprinted setting changed "
@@ -602,7 +558,7 @@ class Run:
         nonces = _new_nonces()
         try:
             await _write_nonces(self.ch, nonces)
-            return await self.router.call(
+            return await self.mutate(
                 "/attach/serving", {"deployment_id": self.row["deployment_id"], "nonces": nonces}
             )
         finally:
@@ -627,6 +583,7 @@ class Run:
 
     async def run(self) -> int:
         self.row = await self.router.call("")
+        cell_control.preconditions(self.row)
         if self.row.get("state") == "serving":
             await self.done()
             self.report.update(state="serving", done=True)
@@ -637,6 +594,7 @@ class Run:
             topology, names, listed = await self.refusals()
             if self.args.dry_run:
                 return await self.dry_run(topology, listed)
+            self.row = await cell_control.claim(self.lock_conn, self.router.call, self.row)
             await self.begin()
             state, _ = await apg.read_mode(self.lock_conn)
             self.mode = state
@@ -651,9 +609,7 @@ class Run:
                 await self.precommit(found)
                 await self.commit_mode()
             else:
-                await self.router.call(
-                    "/attach/enforced", {"deployment_id": self.row["deployment_id"]}
-                )
+                await self.mutate("/attach/enforced", {"deployment_id": self.row["deployment_id"]})
             xmax = await self.durable()
             await self.check_beats("ignore")
             await self.step4(xmax, topology, names)

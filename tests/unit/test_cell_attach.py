@@ -251,7 +251,16 @@ async def test_wait_is_wall_time_lock_tries_included_and_no_scan(clock: _Clock) 
     wait = apg.Wait(4, clock)
     clock.now += 100  # a scan before the wait
     with pytest.raises(Refused, match="not taken within --wait"):
-        await apg.commit_enforced(conn, nothing, ready, wait, lambda _t: None, lambda _m: None)
+        await apg.commit_enforced(
+            conn,
+            nothing,
+            ready,
+            wait,
+            lambda _t: None,
+            lambda _m: None,
+            expected_cell="first",
+            expected_fp=(CURRENT, NEXT),
+        )
     assert clock.now - 100 <= 4 and wait.spent <= 4
     # A 2 s try, a 1 s pause, then a try that waits only the second left.
     assert [a.split("'")[1] for a in asked] == ["2000ms", "1000ms"]
@@ -449,6 +458,22 @@ class FakeConn:
                 if isinstance(answer, BaseException):
                     raise answer
                 return answer(*args) if callable(answer) else answer
+        if sql.startswith("SELECT (SELECT is_first FROM loom.cell_first)"):
+            return {
+                "is_first": True,
+                "cell": "first",
+                "mode": "recording",
+                "has_own": True,
+                "has_tenancy": True,
+            }
+        if sql == apg._HELD:
+            return True
+        if sql == "SELECT mode FROM loom.tenancy_mode":
+            return "recording"
+        if sql == "SELECT is_first, cell FROM loom.cell_first":
+            return {"is_first": True, "cell": "first"}
+        if sql == "SELECT current_fp, next_fp FROM loom.cell_self":
+            return {"current_fp": CURRENT, "next_fp": NEXT}
         raise AssertionError(f"unrouted: {sql[:80]}")
 
     async def fetch(self, sql: str, *args: Any) -> Any:
@@ -642,7 +667,9 @@ class _Timeout(Exception):
 
 
 @pytest.mark.asyncio
-async def test_the_mode_commit_retries_a_busy_lock_and_ends_an_earlier_run(clock: _Clock) -> None:
+async def test_the_mode_commit_retries_a_busy_lock_without_ending_other_backends(
+    clock: _Clock,
+) -> None:
     tries = _seq(_Timeout(), "UPDATE 1")
 
     def lock(*_a: Any) -> str:
@@ -673,32 +700,20 @@ async def test_the_mode_commit_retries_a_busy_lock_and_ends_an_earlier_run(clock
 
     logged: list[str] = []
     await apg.commit_enforced(
-        conn, confirm, ready, apg.Wait(10, clock), logged.append, lambda _m: None
+        conn,
+        confirm,
+        ready,
+        apg.Wait(10, clock),
+        logged.append,
+        lambda _m: None,
+        expected_cell="first",
+        expected_fp=(CURRENT, NEXT),
     )
     assert logged == ["the mode's lock is busy; retrying"]
-    # Before each try and the one termination.
-    assert len(confirmed) == 3
+    # Before each try, with no termination of a different backend.
+    assert len(confirmed) == 2
     assert conn.executed.count("ROLLBACK") == 1
     assert "TERMINATE" not in conn.executed
-
-
-@pytest.mark.asyncio
-async def test_a_superusers_mode_transaction_is_named_not_ended() -> None:
-    conn = FakeConn(
-        [
-            (
-                "l.mode = 'ExclusiveLock'",
-                [{"pid": 5, "application_name": "psql", "xact_start": "t", "rolsuper": True}],
-            ),
-            ("rolsuper FROM pg_roles", False),
-        ]
-    )
-
-    async def confirm() -> None:
-        pass
-
-    with pytest.raises(Refused, match="a superuser must end it"):
-        await apg.end_mode_transactions(conn, confirm)
 
 
 @pytest.mark.asyncio
@@ -728,6 +743,8 @@ async def test_the_mode_commit_refuses_past_wait_and_skips_a_try_while_booting(
             apg.Wait(wait_s, clock),
             lambda _t: None,
             lambda _m: None,
+            expected_cell="first",
+            expected_fp=(CURRENT, NEXT),
         )
     assert [str(r) for r in error.value.refusals] == [
         "process a: still booting at the end of --wait",
@@ -768,7 +785,14 @@ async def test_the_mode_try_bounds_a_commit_that_never_answers(
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(
             apg.commit_enforced(
-                conn, confirm, ready, apg.Wait(wait_s, clock), lambda _t: None, marks.append
+                conn,
+                confirm,
+                ready,
+                apg.Wait(wait_s, clock),
+                lambda _t: None,
+                marks.append,
+                expected_cell="first",
+                expected_fp=(CURRENT, NEXT),
             ),
             timeout=0.2,
         )
@@ -796,7 +820,9 @@ async def test_a_mode_deadline_never_waits_for_rollback(
     timeout = asyncio.timeout
     monkeypatch.setattr(apg.asyncio, "timeout", lambda _s: timeout(0))
     marks: list[str] = []
-    task = asyncio.create_task(apg._mode_try(conn, 100, marks.append))
+    task = asyncio.create_task(
+        apg._mode_try(conn, 100, marks.append, expected_cell="first", expected_fp=(CURRENT, NEXT))
+    )
     done, _ = await asyncio.wait([task], timeout=0.2)
     if not done:
         task.cancel()
@@ -863,7 +889,14 @@ async def test_an_interrupt_waiting_for_the_mode_lock_leaves_recording(clock: _C
 
     with pytest.raises(KeyboardInterrupt):
         await apg.commit_enforced(
-            conn, confirm, ready, apg.Wait(2, clock), lambda _t: None, marks.append
+            conn,
+            confirm,
+            ready,
+            apg.Wait(2, clock),
+            lambda _t: None,
+            marks.append,
+            expected_cell="first",
+            expected_fp=(CURRENT, NEXT),
         )
     assert conn.executed[-1] == "TERMINATE"
     assert marks == []
@@ -885,13 +918,13 @@ async def test_the_durable_read_must_see_enforced_and_x_above_its_xid(
     async def read(mode: str, xid: int) -> apg.Durable:
         return apg.Durable(mode=mode, first=(True, "first"), xid=xid)
 
-    monkeypatch.setattr(apg, "durable_read", lambda: read("recording", 50))
+    monkeypatch.setattr(apg, "durable_read", lambda _conn: read("recording", 50))
     with pytest.raises(Refused, match="did not land"):
         await run.durable()
-    monkeypatch.setattr(apg, "durable_read", lambda: read("enforced", 100))
+    monkeypatch.setattr(apg, "durable_read", lambda _conn: read("enforced", 100))
     with pytest.raises(Refused, match="is not above 100"):
         await run.durable()
-    monkeypatch.setattr(apg, "durable_read", lambda: read("enforced", 99))
+    monkeypatch.setattr(apg, "durable_read", lambda _conn: read("enforced", 99))
     assert await run.durable() == 100
 
     async def waiting() -> str:
@@ -962,7 +995,7 @@ async def test_a_stop_between_a_landed_commit_and_the_durable_read_says_the_outc
     async def dedicated(**_kw: Any) -> Any:
         yield None
 
-    async def landed(*a: Any) -> None:
+    async def landed(*a: Any, **_kw: Any) -> None:
         a[-1]("unknown")  # the try sent its UPDATE; the commit landed, its answer may not have
 
     async def call(_self: Any, _path: str, _body: Any = None) -> dict[str, Any]:
@@ -976,6 +1009,7 @@ async def test_a_stop_between_a_landed_commit_and_the_durable_read_says_the_outc
     monkeypatch.setattr(pg, "dedicated", dedicated)
     monkeypatch.setattr(apg, "commit_enforced", landed)
     monkeypatch.setattr(cell_attach.Router, "call", call)
+    monkeypatch.setattr(cell_attach.Run, "mutate", call)
     monkeypatch.setattr(cell_attach.Run, "run", run)
     url = httpx.URL("http://127.0.0.1:7900")
     assert await cell_attach.attach(None, _args(), url) == 1
@@ -1169,7 +1203,16 @@ async def test_wait_0_runs_one_try_of_each_wait(
     async def nothing() -> None:
         pass
 
-    await apg.commit_enforced(conn, nothing, ok, apg.Wait(0, clock), lambda _t: None, marks.append)
+    await apg.commit_enforced(
+        conn,
+        nothing,
+        ok,
+        apg.Wait(0, clock),
+        lambda _t: None,
+        marks.append,
+        expected_cell="first",
+        expected_fp=(CURRENT, NEXT),
+    )
     assert marks == ["unknown"]
     assert any(f"lock_timeout = '{apg.TRY_FLOOR_MS}ms'" in sql for sql in conn.executed)
 
@@ -1227,6 +1270,7 @@ async def test_a_mode_commit_refused_without_a_landed_try_says_recording(
 
     async def run(self: Any) -> int:
         self.row, self.mode = {"deployment_id": "dep-1"}, "recording"
+        self.lock_conn = conn
         self.wait = apg.Wait(2, clock)
         await self.commit_mode()
         return 0
@@ -1241,32 +1285,12 @@ async def test_a_mode_commit_refused_without_a_landed_try_says_recording(
 
     monkeypatch.setattr(pg, "dedicated", dedicated)
     monkeypatch.setattr(cell_attach.Router, "call", call)
+    monkeypatch.setattr(cell_attach.Run, "mutate", call)
     monkeypatch.setattr(cell_attach.Run, "ready_for_commit", ready)
     monkeypatch.setattr(cell_attach.Run, "confirm_lock", confirm)
     monkeypatch.setattr(cell_attach.Run, "run", run)
     assert await cell_attach.attach(None, _args(), httpx.URL("http://127.0.0.1:7900")) == 1
     assert capsys.readouterr().err.splitlines()[-1] == "loom cell attach: the cell stays recording"
-
-
-@pytest.mark.asyncio
-async def test_a_mode_transaction_that_will_not_end_is_named(clock: _Clock) -> None:
-    held = [{"pid": 5, "application_name": "attach", "xact_start": "t", "rolsuper": False}]
-    conn = FakeConn(
-        [
-            ("l.mode = 'ExclusiveLock'", held),
-            ("rolsuper FROM pg_roles", False),
-            ("pg_terminate_backend", True),
-        ]
-    )
-
-    async def confirm() -> None:
-        pass
-
-    with pytest.raises(Refused) as e:
-        await apg.end_mode_transactions(conn, confirm)
-    (refusal,) = e.value.refusals
-    assert refusal.subject == "postgres backend 5"
-    assert "still holds loom.tenancy_mode's lock" in refusal.reason
 
 
 def _stub_attach(monkeypatch: pytest.MonkeyPatch, body: Any) -> None:
@@ -1295,6 +1319,7 @@ async def test_a_router_refusal_of_attach_enforced_leaves_recording(
         return 0
 
     monkeypatch.setattr(cell_attach.Router, "call", refuse)
+    monkeypatch.setattr(cell_attach.Run, "mutate", refuse)
     _stub_attach(monkeypatch, run)
     assert await cell_attach.attach(None, _args(), httpx.URL("http://127.0.0.1:7900")) == 1
     assert capsys.readouterr().err.splitlines()[-1] == "loom cell attach: the cell stays recording"
@@ -1309,7 +1334,7 @@ async def test_a_durable_read_that_sees_recording_says_recording(
     async def synchronous() -> str:
         return "synchronous"
 
-    async def read() -> apg.Durable:
+    async def read(_conn: Any) -> apg.Durable:
         return apg.Durable(mode="recording", first=(True, "first"), xid=1)
 
     async def run(self: Any) -> int:

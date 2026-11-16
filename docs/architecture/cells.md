@@ -1205,6 +1205,67 @@ which writes the directory alone, with the router's operator credential and none
 cell's stores, so it works while the cell is down; the router judges a placement from
 the directory row.
 
+## Control mutation fencing
+
+A cell controller holds the session-level attach lock on one direct, marked, UTF8
+Postgres connection for its whole run. Every write to `loom.cell_self`, `loom.cell_first`
+or `loom.tenancy_mode` checks that lock and its observed local state, then writes and
+commits on that exact connection. Prepare passes its lock connection to its row writer;
+attach commits mode on its lock connection. A lost connection ends the run. It cannot
+reconnect and continue an earlier claim. Terminating the client does not prove its
+server backend ended: another controller must actually acquire the attach lock before
+it starts, and an unresponsive backend can keep that lock until it is positively ended.
+
+The directory stores one opaque UUID, `cells.mutation_generation`, for each cell.
+`POST /cells/v1/operator/cells/<cell>/claim` takes the directory advisory lock and cell
+row lock, compares the full observed registration and exact current/next JSON pair,
+generates a fresh UUID on the server, audits it and commits synchronously before
+answering. Every execution generates another UUID, including a repeated HTTP request.
+The caller never proposes a replacement UUID. Registration assigns a fresh default;
+a registration rerun reads the existing value without resetting it. Removing and
+registering the same name therefore cannot restore an earlier generation.
+
+Before its first local acceptance write, prepare, attach or a recovery controller
+claims the generation while holding its local lock. Every subsequent directory
+mutation carries `expected`: cell, first-cell flag, host, deployment id, bucket, prefix,
+probe/upstream addresses, exact current/next pair and the claimed generation. The claim
+carries the same fields without a generation. The directory compares them under its
+locks before any mutation or no-op success. Canonical JSON comparison distinguishes
+`false`, `0` and `0.0`. A stale request cannot release a reservation after its local
+backend dies and another controller claims and widens acceptance, even if the directory
+pair later returns to its earlier values. A delayed claim can invalidate another
+controller's work; it cannot let a dead local session write acceptance state.
+
+A lost acknowledgement is an unknown outcome. Stop the attempt and rerun: obtain the
+local lock, read current state and claim a fresh UUID before recomputing the action.
+Do not copy a latest UUID onto an old action. A successful claim or control transaction
+waits through synchronous COMMIT. A no-op transaction emits transactional WAL so it
+also proves an observed earlier write durable. Acquisition, statements, COMMIT and
+cleanup have explicit bounds; an interrupted or uncertain local transaction never
+continues on another connection. No operation record, persistent census, phase or lease
+is added. The UUID is coordination metadata and holds no memory content.
+
+The source census for acceptance and operator directory writes is:
+
+| Writer                                                                                  | Fence                                                                                              |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `cell_prepare._write_rows`                                                              | Fresh claim, observed local rows, exact lock backend                                               |
+| `cell_attach_pg._mode_try`                                                              | Attach's claim, recording/first/fingerprint comparison, exact lock backend                         |
+| `cell_control.backout`                                                                  | Fresh claim, fenced close and zero-placement read, observed local rows, exact lock backend         |
+| `directory.attach_begin`, `attach_place`, `attach_enforced`, `attach_serving`, `remove` | Claimed generation, full registration and exact pair, including retries/no-ops                     |
+| `directory.set_limit`, `rotate_credential`                                              | Read and compare the current generation/registration/pair; do not claim or rotate                  |
+| `directory.register`                                                                    | Bootstrap default or immutable rerun lookup; never replaces existing acceptance or generation      |
+| `directory.place`                                                                       | Immutable placement only; keeps its org/cell locks and quota checks; never writes local acceptance |
+
+Read-only routes are exempt. Router migrations and an offline directory restore are
+maintenance operations. Future restore/update acceptance writers must use the same
+claim and lock-session helpers; a new directory mutation must use the common comparison
+before its no-op branch as well. Direct privileged SQL is not an online control writer.
+The [control upgrade and recovery procedure](../operations/cell-control.md) defines the
+required fleet turnover and offline restore of generations. N-1 data-plane builds can
+read and insert on the additive schema; old control clients and router handlers cannot
+participate in this protocol.
+
 ## Operations
 
 - `loom cell restore`, after any store restore and before `loom reconcile`, writes the

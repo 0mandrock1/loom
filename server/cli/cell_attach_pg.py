@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -581,21 +582,7 @@ def _busy_refusal(table: str, holders: list[Any]) -> Refusal:
 
 # The mode transaction in flight: the backend holding or waiting for the ExclusiveLock on
 # loom.tenancy_mode in this database, which only attach takes.
-_MODE_HOLDERS = """
-SELECT l.pid, a.application_name, a.xact_start, r.rolsuper, l.granted
-FROM pg_locks l
-JOIN pg_stat_activity a ON a.pid = l.pid
-LEFT JOIN pg_roles r ON r.oid = a.usesysid
-WHERE l.locktype = 'relation' AND l.relation = 'loom.tenancy_mode'::regclass
-  AND l.mode = 'ExclusiveLock'
-  AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
-  AND l.pid <> pg_backend_pid()
-"""
-
 _TIMED_OUT = frozenset({"55P03", "57014"})
-# How long attach waits for an ended mode transaction's lock to clear.
-_END_ROUNDS = 30  # not a setting: checks of the lock
-_END_PAUSE_S = 0.1  # not a setting: the pause between them
 
 
 async def commit_enforced(
@@ -605,22 +592,20 @@ async def commit_enforced(
     wait: Wait,
     log: Callable[[str], None],
     mark: Callable[[str], None],
+    *,
+    expected_cell: str,
+    expected_fp: tuple[dict[str, Any] | None, dict[str, Any] | None],
 ) -> None:
-    """Raise the mode to `enforced` on `conn` (a session of its own, never the lock
-    session): an EXCLUSIVE lock on loom.tenancy_mode a try, `_MODE_LOCK_MS` each (less
-    when `wait` has less left), within `wait`; `confirm_lock` before each try and each
-    termination (it refuses when another run holds the attach lock), and `ready` before
-    each try (the booting process ids skip the try). After a failed try the in-flight
-    mode transaction, found by its lock, is ended. `mark` hears `unknown` just before a try
-    sends its UPDATE and `recording` when that try rolled back. Raises Refused when `wait`
-    runs out; whether the commit landed is the durable read's to say."""
+    """Raise mode on the exact ATTACH-lock backend; an unknown COMMIT ends this run."""
     with wait.counting():
         while True:
             await confirm_lock()
             booting = await ready()
             if not booting:
                 try:
-                    done = await _mode_try(conn, wait.bound_ms(_MODE_LOCK_MS), mark)
+                    done = await _mode_try(
+                        conn, wait.bound_ms(_MODE_LOCK_MS), mark, expected_cell, expected_fp
+                    )
                 except Refused:
                     mark("recording")  # the UPDATE's transaction rolled back
                     raise
@@ -628,7 +613,6 @@ async def commit_enforced(
                     return
                 mark("recording")
                 log("the mode's lock is busy; retrying")
-                await end_mode_transactions(conn, confirm_lock)
             if not await wait.pause():
                 if booting:
                     raise Refused(
@@ -648,7 +632,13 @@ async def commit_enforced(
                 )
 
 
-async def _mode_try(conn: Any, lock_ms: int, mark: Callable[[str], None]) -> bool:
+async def _mode_try(
+    conn: Any,
+    lock_ms: int,
+    mark: Callable[[str], None],
+    expected_cell: str,
+    expected_fp: tuple[dict[str, Any] | None, dict[str, Any] | None],
+) -> bool:
     """One try including rollback or COMMIT, bounded by its lock and statement waits plus
     the standby allowance; False after a statement timeout rolls back, TimeoutError at
     the try's deadline."""
@@ -662,7 +652,22 @@ async def _mode_try(conn: Any, lock_ms: int, mark: Callable[[str], None]) -> boo
                 await conn.execute(
                     f"SET LOCAL statement_timeout = '{lock_ms + _MODE_STATEMENT_MARGIN_MS}ms'"
                 )
+                from server.cli import cell_control
+
+                await cell_control.check_lock(conn)
                 await conn.execute("LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE")
+                state, first = await read_mode(conn)
+                own = await conn.fetchrow("SELECT current_fp, next_fp FROM loom.cell_self")
+                observed = None if own is None else (own["current_fp"], own["next_fp"])
+                if (
+                    state != "recording"
+                    or first != (True, expected_cell)
+                    or json.dumps(observed, sort_keys=True)
+                    != json.dumps(expected_fp, sort_keys=True)
+                ):
+                    raise Refused(
+                        [Refusal("postgres acceptance rows", "changed: stop and rerun attach")]
+                    )
                 mark("unknown")
                 status = await conn.execute(
                     "UPDATE loom.tenancy_mode SET mode = 'enforced', since = now()"
@@ -684,49 +689,6 @@ async def _mode_try(conn: Any, lock_ms: int, mark: Callable[[str], None]) -> boo
         raise
 
 
-async def end_mode_transactions(conn: Any, confirm_lock: Callable[[], Any]) -> None:
-    """End an earlier run's mode transaction still in flight and wait, for up to
-    `_END_ROUNDS` checks `_END_PAUSE_S` apart, until its lock clears; Refused when its role
-    is a superuser and attach's is not, or when a backend still holds the lock after the
-    last check, naming it."""
-    rows: list[Any] = []
-    for _ in range(_END_ROUNDS):
-        rows = list(await conn.fetch(_MODE_HOLDERS))
-        if not rows:
-            return
-        superuser = bool(
-            await conn.fetchval("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
-        )
-        for r in rows:
-            if r["rolsuper"] and not superuser:
-                raise Refused(
-                    [
-                        Refusal(
-                            f"postgres backend {r['pid']}",
-                            f"an earlier mode transaction ({r['application_name'] or 'no name'}, "
-                            f"since {r['xact_start']}) runs as a superuser: a superuser must "
-                            "end it (pg_terminate_backend)",
-                        )
-                    ]
-                )
-            await confirm_lock()
-            await conn.fetchval("SELECT pg_terminate_backend($1)", r["pid"])
-        await _sleep(_END_PAUSE_S)
-    if not (rows := list(await conn.fetch(_MODE_HOLDERS))):
-        return
-    raise Refused(
-        [
-            Refusal(
-                f"postgres backend {r['pid']}",
-                f"still holds loom.tenancy_mode's lock after it was ended "
-                f"({r['application_name'] or 'no name'}, since {r['xact_start']}): rerun attach "
-                "once it has gone",
-            )
-            for r in rows
-        ]
-    )
-
-
 # -- the durable read -------------------------------------------------------------------
 
 _DURABLE_TRY_S = 10.0  # not a setting: one try's bound; a cancelled one is retried
@@ -742,11 +704,13 @@ class Durable:
     xid: int
 
 
-async def durable_read() -> Durable:
+async def durable_read(conn: Any) -> Durable:
     """The mode and the `first` row read in a transaction that emits a transactional
     logical message, whose commit waits for the synchronous standbys: once it returns, the
     mode read is on them. Refused when the message took no xid."""
-    async with asyncio.timeout(_DURABLE_TRY_S), pg.durable_transaction() as conn:
+    from server.cli import cell_control
+
+    async with asyncio.timeout(_DURABLE_TRY_S), cell_control.transaction(conn):
         await conn.execute("SELECT pg_logical_emit_message(true, 'loom.attach', '')")
         xid = await conn.fetchval("SELECT pg_current_xact_id_if_assigned()::text")
         mode = await conn.fetchval("SELECT mode FROM loom.tenancy_mode")

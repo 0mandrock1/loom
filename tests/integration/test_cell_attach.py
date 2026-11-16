@@ -532,8 +532,17 @@ async def test_the_mode_commit_waits_out_a_for_share_holder(cell_stores) -> None
             await tx.rollback()
 
         task = asyncio.create_task(release())
+        await cell_attach_pg.take_lock(conn, "mode test")
+        own = await conn.fetchrow("SELECT current_fp, next_fp FROM loom.cell_self")
         await cell_attach_pg.commit_enforced(
-            conn, ok, ok, cell_attach_pg.Wait(20), logged.append, lambda _m: None
+            conn,
+            ok,
+            ok,
+            cell_attach_pg.Wait(20),
+            logged.append,
+            lambda _m: None,
+            expected_cell="first",
+            expected_fp=(own["current_fp"], own["next_fp"]),
         )
         await task
     assert await _mode() == "enforced"
