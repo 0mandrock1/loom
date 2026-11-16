@@ -11,8 +11,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# The docs sections in reading order, as (title, folder under docs/): llms.txt lists them
-# in this order and the documentation site's sidebar follows it.
+# The docs sections, as (title, folder under docs/), in the documentation site's sidebar
+# order; llms.txt picks its own lead order from them (scripts/codegen/docs_reference.py).
 SECTIONS = (
     ("Getting started", "getting-started"),
     ("Use cases", "use-cases"),
@@ -25,6 +25,19 @@ SECTIONS = (
     ("Benchmarks", "benchmarks"),
     ("Development", "development"),
 )
+
+# The pages that open their section right after its index page (Getting started's is its
+# overview.md): llms.txt and the documentation site's sidebar list them in this order.
+LEAD_PAGES = ("getting-started/quickstart.md",)
+
+
+def page_key(uri: str) -> tuple[str, int, int, str]:
+    """Sort key for a page (path under docs/) within its section: the section's own pages,
+    then each subfolder's by folder name; within a folder, its index page (`index.md` or
+    `overview.md`; no folder has both), then `LEAD_PAGES`, then the rest by path."""
+    sub, _, name = uri.partition("/")[2].rpartition("/")
+    lead = LEAD_PAGES.index(uri) if uri in LEAD_PAGES else len(LEAD_PAGES)
+    return (sub, int(name not in ("index.md", "overview.md")), lead, uri)
 
 
 def shorten(text: str, limit: int) -> str:
