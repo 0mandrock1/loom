@@ -745,20 +745,19 @@ schema. These rules keep that safe. The operator procedure is in
     it holds, `code.repo.remove` for a repository and `namespace.delete`. The build that
     writes mirrors comes after this one, so the build beside it already refuses the
     form; the one gap is a name an N-1 process registers or writes after the migration
-    ran. This build writes no mirror, so no namespace of the form is taken for one; the
-    build that first writes a mirror must run the same check
-    (`server/core/schema/prechecks.py`) before that write.
-    `tests/unit/test_mirror_names_refused.py` checks N's side, and the mixed-version
-    gate does not check this rule.
+    ran. The mirror writer draws a new name again while the one it drew is in use
+    (`server/knowledge/app/mirrors.py`, rule 54), so no such namespace is ever taken
+    for a mirror. `tests/unit/test_mirror_names_refused.py` checks N's side, and the
+    mixed-version gate does not check this rule.
 52. **The mirror registry** (migration `098_knowledge_mirrors.sql`): N adds
     `loom.knowledge_mirrors` and the `access` column of `loom.knowledge_sources`, whose
     default (`namespace`) is what every row N-1 writes means. N stores a source whose
     `access` is `mirrored` with `kind` empty, so a build without items finds no probe or
-    credential for it. N serves none either: its sync pass skips one, its retire pass
-    leaves its delete request alone, and `check`, `rotate`, `update`, `sync_now` and an
-    `add` of a removed one's name refuse with `SOURCE_NOT_SERVED`. So beside the build
-    that writes mirrors, N never syncs a mirrored source into the named namespace or
-    orphans its documents.
+    credential for it. N serves none either: its sync pass skips one (rule 54's build
+    syncs a mirrored `gdrive` one into the mirror), its retire pass leaves its delete
+    request alone, and `check`, `rotate`, `update`, `sync_now` and an `add` of a removed
+    one's name refuse with `SOURCE_NOT_SERVED`. So beside the build that writes mirrors,
+    N never syncs a mirrored source into the named namespace or orphans its documents.
 
     On N, each namespace erasure step reads the registry, which keeps every mirror the
     named namespaces have had, so every run of the step, a resume's or a replay's
@@ -766,7 +765,8 @@ schema. These rules keep that safe. The operator procedure is in
     over the named namespaces and their mirrors, and the census counts it the same way.
     The last Loom step, `knowledge_mirrors.forget`, writes the mirrors `deleted`, and a
     live one keeps the name in use. N-1 runs no mirror pass and counts no registry row;
-    this build writes no mirror, so N-1 meets an empty registry.
+    N writes no mirror, so N-1 meets an empty registry, and the build that writes
+    mirrors (rule 54) runs beside N, which reads them.
     `tests/unit/test_knowledge_mirrors.py` and the mirrored cases in
     `tests/unit/test_knowledge_sources.py` and
     `tests/unit/test_knowledge_source_sync.py` check N's side.
@@ -782,6 +782,32 @@ schema. These rules keep that safe. The operator procedure is in
     N-1 would carry a list through its rewrites (rule 2). No op's input or output has
     the field. `tests/unit/test_access_list.py` and
     `tests/unit/test_document_row_builder.py` check N's side.
+54. **Mirrored folder sources sync** (migration `100_knowledge_source_listings.sql`):
+    N's sync worker runs a mirrored `gdrive` source, while its ops still refuse one
+    (`SOURCE_NOT_SERVED`, rule 52). Each turn lists every file with its permissions,
+    reading `permissions.list` for a file the listing leaves them out of, and writes
+    into the namespace's mirror (made under the namespace's sources lease when it has
+    none) at `<address>#<source id>`, tagged `source-id:<id>`. Once the turn starts, it
+    brings every stored copy's list to the store's (only narrowing a copy behind its
+    file's revision), or to `unread` for a copy a whole listing does not have at its
+    address, bounded by the pass's deadline only; then it fetches and writes each new or
+    changed file with its list, and at the full interval retires a copy whose file is
+    gone, with no audit row, since the audit log outlives an erasure. A pass whose
+    document bound is spent before the turn starts reaches no mirrored source. The
+    listing's start goes to `loom.knowledge_source_listings` once every stored copy's
+    list is written. No request can add a mirrored source yet, so N meets none it did
+    not write, and N runs every mirrored `gdrive` source as one shared service account:
+    the build that adds sources of another credential mode stores them in a form
+    `mirror_synced` rejects while N may run. By rule 52, N-1 serves no mirrored source,
+    and it reads no listing row; an N-1 namespace erasure has no listings step, so it
+    leaves the mirror's listing rows (source names and times, no memory content), which
+    the next erasure of the namespace on N removes, since its scope holds every mirror
+    the namespace has had. N counts a document as searchable when its chunks are those
+    of its version or of its revision, which a row-only rewrite (a new list, a metadata
+    edit) keeps, so such a rewrite stays until the file changes; N-1 checks the version
+    alone, so after a metadata edit it fetches and writes the file again, as it does
+    today. `tests/unit/test_knowledge_source_sync_mirror.py` and
+    `tests/unit/test_knowledge_source_revisions_sql.py` check N's side.
 
 ## What checks them
 

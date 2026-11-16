@@ -344,8 +344,9 @@ async def _source_or_404(org: str, namespace: str, name: str) -> KnowledgeSource
 
 
 def _require_served(src: KnowledgeSource) -> None:
-    """This build syncs only sources shown to every reader of the namespace: a mirrored
-    one, which a later build writes, is that build's to read."""
+    """This build's ops serve only sources shown to every reader of the namespace; its
+    sync worker writes a mirrored `gdrive` one into the mirror (`mirror_synced`), and
+    a later build serves it."""
     if not domain.served(src):
         raise ValidationError(
             f"source {src.name!r} is not served by this server yet (access "
@@ -377,8 +378,8 @@ def _answered_include(src: KnowledgeSource) -> list[str]:
     return domain.include_in(src.config) if src.kind == "gdrive" else []
 
 
-def _sync(state: dict[str, str] | None) -> KnowledgeSourceSync:
-    return KnowledgeSourceSync(**domain.sync_of((state or {}).get("detail", "")))
+def _sync(src: KnowledgeSource, state: dict[str, str] | None) -> KnowledgeSourceSync:
+    return KnowledgeSourceSync(**domain.sync_shown(src, (state or {}).get("detail", "")))
 
 
 async def handle_knowledge_source_list(
@@ -397,7 +398,7 @@ async def handle_knowledge_source_list(
                 config=domain.id_list_config(s) or {},
                 created_by=s.created_by,
                 created_at=_iso(s.created_at),
-                sync=_sync(states.get(s.name)),
+                sync=_sync(s, states.get(s.name)),
             )
             for s in found
         ],
@@ -410,7 +411,7 @@ async def handle_knowledge_source_inspect(
 ) -> KnowledgeSourceInspectOutput:
     src = await _source_or_404(input.org, input.namespace, input.name)
     states = await store.read_states(src.org, src.namespace, [src.name])
-    docs = await store.source_documents(src.org, src.namespace, src.name)
+    docs = await store.source_documents(src.org, src.namespace, domain.source_tag(src.name))
     return KnowledgeSourceInspectOutput(
         name=src.name,
         kind=src.kind,
@@ -419,7 +420,7 @@ async def handle_knowledge_source_inspect(
         config=domain.id_list_config(src) or {},
         created_by=src.created_by,
         created_at=_iso(src.created_at),
-        sync=_sync(states.get(src.name)),
+        sync=_sync(src, states.get(src.name)),
         documents=[
             KnowledgeSourceDocument(
                 source_uri=str(d.get("source_uri") or ""),
@@ -535,10 +536,11 @@ async def _require_free(org: str, namespace: str, name: str) -> None:
                 "(LOOM_KNOWLEDGE_SOURCES_MAX_PER_NAMESPACE); remove one first",
                 code="SOURCE_QUOTA",
             )
-        documents = await store.count_documents(org, namespace, name)
+        documents = await store.count_documents(org, namespace, domain.source_tag(name))
         earlier = await store.latest_source(org, namespace, name)
     # A new row under the name would orphan a removed mirrored source's documents and
-    # any delete request for them, which only the build that writes mirrors acts on.
+    # any delete request for them, which only the build that serves mirrored sources
+    # (their ops and their delete requests) acts on.
     if earlier is not None and not domain.served(earlier):
         raise ValidationError(
             f"the name {name!r} belongs to a removed source this server does not serve "
@@ -895,7 +897,9 @@ async def handle_knowledge_source_remove(
                 )
             pending = 0
             if input.delete_documents:
-                pending = await store.count_documents(src.org, src.namespace, src.name)
+                pending = await store.count_documents(
+                    src.org, src.namespace, domain.source_tag(src.name)
+                )
         # The delete request rides on the inactive registry row, which no sync-state
         # write touches. It is recorded even with no documents counted now: a sync
         # turn running meanwhile may still write one, and the worker clears the

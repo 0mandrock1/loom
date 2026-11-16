@@ -11,7 +11,7 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence, Set
 from datetime import UTC, datetime
-from typing import Any, TypedDict, cast
+from typing import Any, Literal, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -295,6 +295,35 @@ async def live_versions(
         params={"org": org, "ns": namespace, "uris": source_uris, "n": len(source_uris)},
     )
     return {str(r["source_uri"]): int(r["version"]) for r in rows}
+
+
+async def committed_lists(org: str, namespace: str, source_uris: list[str]) -> dict[str, str]:
+    """Each source's permission list as its committed head holds it under the Postgres
+    authority, a commit ClickHouse has not published yet included; empty under the
+    ClickHouse authority, where a sequential read of the rows is already current."""
+    from server.core import pg
+
+    if not pg.enabled():
+        return {}
+    from server.knowledge.store import pg_documents
+
+    return await pg_documents.head_lists(org, namespace, source_uris)
+
+
+async def publications_owed(
+    org: str, namespace: str, uri_suffix: str
+) -> Literal["parked", "owed", ""]:
+    """Whether a commit of the namespace's documents whose address ends in `uri_suffix`
+    still waits on its publication to ClickHouse, under the Postgres authority:
+    `parked`, `owed` or "" (`pg_documents.owed_ending`); "" under the ClickHouse
+    authority."""
+    from server.core import pg
+
+    if not pg.enabled():
+        return ""
+    from server.knowledge.store import pg_documents
+
+    return await pg_documents.owed_ending(org, namespace, uri_suffix)
 
 
 class DocumentListRow(TypedDict):
