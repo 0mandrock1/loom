@@ -311,6 +311,11 @@ def test_the_site_serves_each_page_as_markdown_and_llms_files(
 
     full = (site / "llms-full.txt").read_text()
     assert full.startswith("# ClickHouse Loom\n\n> Summary.\n\n")
+    # llms.txt's opening paragraph, with where to start and how to install, comes next,
+    # without its sentence naming llms-full.txt itself.
+    opening = full.split("\n\n")[2]
+    assert opening.startswith(f"Start with {url}index.md, or [install]({url}llms-install.md).")
+    assert "llms-full.txt" not in opening
     assert f"{url}llms.txt indexes every page" in full
     assert f"This file holds the {holds} in full" in full
     sources = [line for line in full.splitlines() if line.startswith("> Source: ")]

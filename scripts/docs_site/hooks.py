@@ -277,11 +277,14 @@ def on_post_build(config):
     install = _site_install((ROOT / "llms-install.md").read_text(encoding="utf-8"), url)
     (site / "llms-install.md").write_text(install, encoding="utf-8")
 
-    # The title and summary quote of llms.txt open llms-full.txt too.
-    intro = llms.split("\n\n")[:2]
+    # llms.txt's title, summary quote and opening paragraph (where to start and how to
+    # install) open llms-full.txt too, so a reader that cuts the file short still has them;
+    # the paragraph's last sentence, which names llms-full.txt itself, is left out.
+    title, summary, opening = llms.split("\n\n")[:3]
+    opening = opening.rsplit(" The full text of the ", 1)[0]
     parts = [
-        "\n\n".join(intro)
-        + f"\n\nThis file holds the {_full_holds()} in full; {url}llms.txt indexes every page.\n"
+        f"{title}\n\n{summary}\n\n{opening}\n\nThis file holds the {_full_holds()} in full;"
+        f" {url}llms.txt indexes every page.\n"
     ]
     for uri in _full_text_pages(docs):
         parts.append(copies[uri])
