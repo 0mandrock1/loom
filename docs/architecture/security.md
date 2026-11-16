@@ -56,6 +56,24 @@ are in [tokens and grants](../guides/tokens-and-grants.md).
   operation transport: 401 `AUTH_INVALID` for a missing, foreign-scheme or failing token;
   503 `AUTH_UNAVAILABLE` with `Retry-After` while revocation or the keyring is not loaded.
 
+**Mirrored reader identity.** `server/auth/reader_identity.py` selects the person a
+credential may read document permission lists as. A primary sign-in token with `sid`
+and no `creator` reads as its own subject. A delegated token reads as its creator only
+with the signed Boolean `reads_as_creator` claim. Missing means false; a non-Boolean
+claim refuses the token. An on-behalf request, an end-user identity and auth-off mode
+name nobody. A subject spelling proves neither a verified email nor a hosted domain.
+
+`POST /v1/me/personal_tokens.create` sets this claim only from a person's primary
+first-party sign-in session. It rejects service accounts, delegated tokens,
+third-party sessions and on-behalf headers before saving anything. Its grant ceilings,
+restricted grants, expiry and revocation follow the service-account mint; its saved
+row has `kind=personal_agent`. Row kind grants no access. The general
+`service_accounts.create` route ignores any body-supplied reader claim. Ordinary
+delegation never copies it. The assistant sets it explicitly for one answer only when
+its caller names the same person as the delegated creator; an answer's child loses it.
+Mirrored source registration remains unavailable while the document-access and session
+protections are incomplete ([document sources](document-sources.md#who-may-read)).
+
 **Signing keys.** `LOOM_JWT_SECRET` is the root secret: it signs as kid `default` and
 seals the private half of every other key in `loom.signing_keys`, so a database reader
 without it cannot mint tokens. Every process loads the keyring at boot and every

@@ -702,9 +702,9 @@ A token reads as one person, for both the `owner` entry and the emails, or as no
   session, with no `creator` claim) reads as that person; a token minted for a subject
   without one reads as nobody;
 - a token minted for one person alone that says so (a `reads_as_creator` claim, which
-  only the person's own signed-in session can mint, through the dashboard's flow that
-  connects their own agent, which the coding-agent plugins use; delegation never copies
-  it) reads as its creator;
+  only the person's own primary first-party sign-in session can mint through
+  `POST /v1/me/personal_tokens.create`, for the dashboard's own-agent connection flow;
+  delegation never copies it) reads as its creator;
 - the assistant's answer token, delegated from the caller's for that answer alone,
   carries a reads-as claim that the bridge sets at delegation to the person the caller's
   token reads as, or to nobody, and reads as that; the check never infers it from the
