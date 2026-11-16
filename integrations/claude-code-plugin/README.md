@@ -31,7 +31,8 @@ tokens per `tools/list`; every other op runs through `loom_op {op, arguments}`. 
 
 ## Data handling
 
-The plugin sends data only to the Loom server it is configured with:
+The hooks and scripts send data only to the Loom server the plugin is configured with; the
+two skills below are the exceptions:
 
 - prompts, tool calls' input and output, and the paths of files read or edited;
 - a symbol name taken from a redirected grep pattern, and the query of a `gh`
@@ -44,32 +45,45 @@ The plugin sends data only to the Loom server it is configured with:
   characters of the session's Loom tool arguments and results
   (`LOOM_SESSION_MEMORY=off` stops it);
 - the file paths and diff outlines of uncommitted changes, run records and
-  working-memory notes, token usage and the model name, and the repository's
-  identity;
+  working-memory notes, token usage and the model name;
+- the repository's identity (each remote's owner and name, the branch and `HEAD`
+  commit) and the working directory's absolute path;
 - what the agent passes to Loom's tools (memories, search and code queries);
 - on first use with no credential, the OS user name and host name; in agent
   mode, the workload's identity token and `LOOM_CLIENT_ID`, exchanged for a Loom
   token.
 
+The server keeps this in its own ClickHouse database and passes text to an LLM
+or embedding provider only if its operator configured one
+([models and keys](https://clickhouse.github.io/loom/getting-started/models-and-keys/));
+deleting data is covered in
+[retention and erasure](https://clickhouse.github.io/loom/features/memory/retention-and-erasure/).
+
 Its hooks run `node`, `git` and `grep` on your machine: `git` reads the
 checkout's remotes, branch, status and diffs, and `grep` searches uncommitted
-files for a redirected grep pattern. At Stop, in an indexed checkout, they probe
-the checkout's Python for pytest (`LOOM_TEST_GATE=off` stops it).
+files for a redirected grep pattern. At Stop, in an indexed checkout, when the
+test gate names a pytest test, they look for the checkout's virtualenv Python
+and, when there is none, run `python3 -c "import pytest"` (then `python`) in the
+checkout (`LOOM_TEST_GATE=off` stops it).
 
 It keeps its token in `~/.loom/config.json` (mode 0600) and its other state in
-`~/.loom/` until you remove it. In the system temp directory, temp files with
-unsent data stay until sent, caches until swept, and a code-shunt decision log
-(no prompt or file content) stays until removed (`LOOM_SHUNT_LOG=off` stops it).
+`~/.loom/` until you remove it. In the system temp directory, a capture job whose
+flusher died stays until you replay or delete it (`loom-status` names it); a job
+whose delivery fails and unsent code-shunt batches are discarded, and chat turns
+are sent again at the next Stop; other state files are swept after a day
+untouched; and a code-shunt decision log (no prompt or file content) stays until
+removed (`LOOM_SHUNT_LOG=off` stops it).
 
 Two skills reach other services when you run them. `loom-status` can install
-Node.js from NodeSource (apt, dnf or yum), apk or Homebrew, after you agree.
+Node.js after you agree: it downloads and runs NodeSource's setup script (apt,
+dnf or yum), or uses apk or Homebrew, as root or with passwordless sudo.
 `improve-loom-for-my-repo`, after building its report, searches the
 ClickHouse/loom GitHub issues for each finding's symbol or query without asking,
 and files a public issue there or comments on an existing one only after you
-approve.
+approve; the issue names the namespace and each finding's symbols and queries.
 
-Install the plugin from one source, the Claude plugin directory or `loom@loom`,
-not both: both together register two MCP entries and run every hook twice.
+Keep one Loom entry per session: a user-scope `loom` MCP entry beside the plugin
+registers a second server (`claude mcp remove loom` removes it).
 
 The full list is in
 [data handling](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling).
@@ -120,7 +134,7 @@ Codex wiring, `hooks.generic.json` and the skills' commands start Node through
 PATH, a version manager's default (or its newest install when the default
 cannot be read or is older than 18), and the usual install directories. With
 none, it exits 1 with one line naming the Node it found too old, or none, and
-`LOOM_NODE` (`docs/features/integrations/claude-code.md` has the platforms).
+`LOOM_NODE` ([requirements](https://clickhouse.github.io/loom/features/integrations/claude-code/#requirements) has the platforms).
 
 ## Safety model: fire-and-forget, hard-bounded
 
@@ -430,10 +444,10 @@ crystallization, on the ClickHouse substrate, not inline on every tool call.
 ## Other clients
 
 **Codex** has its own build of this plugin — the same scripts and skills,
-Codex's hook wiring — at `../codex-plugin/`: `codex plugin
+Codex's hook wiring — at [`integrations/codex-plugin/`](https://github.com/ClickHouse/loom/tree/main/integrations/codex-plugin): `codex plugin
 marketplace add ClickHouse/loom && codex plugin add loom@loom`; the plugin
 bundles its MCP entry with the URL and `toolset=core,coding,tracker,tasks`
-fixed (Codex plugins have no install-time options). See `docs/features/integrations/codex.md`. The scripts learn which client runs them
+fixed (Codex plugins have no install-time options). See [Codex](https://clickhouse.github.io/loom/features/integrations/codex/). The scripts learn which client runs them
 from their third argument (`… PostToolUse codex`); unnamed, they are Claude
 Code's.
 
@@ -447,4 +461,4 @@ absent.
 
 Captures POST to the `observe.record` wire op and crystallization to
 `observe.crystallize`. A failed POST is swallowed — the primer (`context.pack`)
-and the safety model work regardless. See `docs/features/integrations/claude-code.md`.
+and the safety model work regardless. See [Claude Code](https://clickhouse.github.io/loom/features/integrations/claude-code/).
