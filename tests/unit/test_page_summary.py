@@ -50,6 +50,9 @@ def test_a_long_link_target_does_not_push_the_cut_inside_the_link(tmp_path: Path
         ("one two three", 20, "one two three"),  # it fits
         ("one two three", 10, "one two…"),  # the slice ends inside "three"
         ("one two three four", 14, "one two three…"),  # the slice ends on a whole word
+        ("one two three, four", 14, "one two three…"),  # a word that ends at a comma fits
+        ("abcdefghij", 5, "abcd…"),  # a first word longer than the limit is cut
+        ("one two/ three", 10, "one two…"),  # a trailing slash goes with the cut
     ],
 )
 def test_shorten_keeps_whole_words_from_the_start(text, limit, cut) -> None:

@@ -43,9 +43,16 @@ def test_a_change_to_the_build_submits_every_page() -> None:
     for path in (
         "mkdocs.yml",
         "scripts/docs_site/overrides/main.html",
+        "scripts/docs_site/hooks.py",
+        "scripts/docs_site/requirements.txt",
         "scripts/codegen/page_summary.py",
     ):
         assert indexnow.urls_for([path]) == every
+    # Changing the submitter itself, or a file that only looks like a build input, renders
+    # nothing differently.
+    assert indexnow.urls_for(["scripts/docs_site/indexnow.py"]) == []
+    assert indexnow.urls_for(["mkdocs.yml.orig"]) == []
+    assert indexnow.urls_for(["scripts/docs_site/overrides-old/x.html"]) == []
     # A page deleted in the same push is not in the tree; its URL is still announced.
     assert SITE + "gone-page/" in indexnow.urls_for(["mkdocs.yml", "docs/gone-page.md"])
 
