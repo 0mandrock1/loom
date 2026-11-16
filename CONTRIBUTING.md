@@ -160,7 +160,7 @@ The workflow stores no credential in GitHub. Its job runs on a self-hosted runne
 To turn translations on:
 
 1. Create the environment `i18n` with deployment branches set to `main` only (Settings → Environments).
-2. Get a runner group for this repository with "Allow public repositories" ticked (a group serves only private repositories otherwise, and the job would wait in the queue) and access limited to the selected workflow `ClickHouse/loom/.github/workflows/i18n.yml@refs/heads/main` (runner group settings → Workflow access → Selected workflows), so no other workflow and no fork's pull request can schedule a job on it.
+2. Get a runner group for this repository with "Allow public repositories" ticked (a group serves only private repositories otherwise, and the job would wait in the queue) and access limited to the selected workflow `ClickHouse/loom/.github/workflows/i18n.yml@refs/heads/main` (runner group settings → Workflow access → Selected workflows), so no other workflow and no fork's pull request can schedule a job on it. The runner image needs an OS that `actions/setup-python` supports, `git`, `bash` and the `gh` CLI.
 3. Give the runners' instance role the policy below. In the account, accept Bedrock's model access for Claude Sonnet 5.5 once: the first call can otherwise fail with an access-denied error about `aws-marketplace:Subscribe`, and the role is not granted those Marketplace actions.
 4. Set the repository variable `LOOM_I18N_RUNNER` to the runner group's labels as a JSON list, for example `["self-hosted","<label>"]`.
 
@@ -173,8 +173,7 @@ The job calls the model's global inference profile from the runner's `AWS_REGION
     {
       "Effect": "Allow",
       "Action": "bedrock:InvokeModel",
-      "Resource": "arn:aws:bedrock:<region>:<account-id>:inference-profile/global.anthropic.claude-sonnet-5-5",
-      "Condition": { "StringEquals": { "aws:RequestedRegion": "<region>" } }
+      "Resource": "arn:aws:bedrock:<region>:<account-id>:inference-profile/global.anthropic.claude-sonnet-5-5"
     },
     {
       "Effect": "Allow",

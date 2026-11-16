@@ -230,7 +230,7 @@ def test_a_fatal_error_after_a_differing_page_still_names_that_page(
         if source == t.SOURCES[0]:
             raise t.TranslationDiffers("still differs after a retry")
         time.sleep(0.05)
-        raise SystemExit("Messages API 500")
+        raise SystemExit("Bedrock 500")
 
     monkeypatch.setattr(t, "bedrock_client", lambda: None)
     monkeypatch.setattr(t, "translate_page", fake_page)
@@ -239,7 +239,7 @@ def test_a_fatal_error_after_a_differing_page_still_names_that_page(
     with pytest.raises(SystemExit) as stopped:
         t.update(every=True, codes=["ja"])
     message = str(stopped.value)
-    assert "Messages API 500" in message and "not written: i18n/ja/README.md" in message
+    assert "Bedrock 500" in message and "not written: i18n/ja/README.md" in message
 
 
 def test_code_inside_an_html_link_is_not_a_label() -> None:
@@ -527,3 +527,11 @@ def test_a_missing_region_or_package_stops_with_what_to_do(
     monkeypatch.setitem(sys.modules, "anthropic", None)
     with pytest.raises(SystemExit, match="scripts/i18n/requirements.txt"):
         t.bedrock_client()
+
+
+def test_a_lost_connection_is_retried_up_to_four_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _fake_anthropic(monkeypatch)
+    messages = _FakeMessages([module.APIConnectionError("reset") for _ in range(4)])
+    with pytest.raises(SystemExit, match="unreachable"):
+        t.call(types.SimpleNamespace(messages=messages), "claude-sonnet-5-5", "s", [])
+    assert len(messages.sent) == 4
