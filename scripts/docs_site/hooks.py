@@ -12,10 +12,11 @@ Quickstart in Getting started; a generated page gets no edit button (its source 
 generator, not the page).
 
 After the build, the site also serves what agents fetch instead of HTML: each page's
-Markdown beside it (`use-cases/agent-memory.md`) and at the page URL plus `index.html.md`,
-`llms.txt` with its links pointing at those files, `llms-full.txt` with the full text of
-the pages that say what Loom is and how to start (the whole docs are several megabytes),
-and the repository's `llms-install.md`.
+Markdown beside it (`use-cases/agent-memory.md`) and at the page URL plus `index.html.md` (a
+section index also at `<folder>.md`, such as `use-cases.md`), `llms.txt` with its links
+pointing at those files, `llms-full.txt` with the full text of the pages that say what Loom
+is and how to start (the whole docs are several megabytes), and the repository's
+`llms-install.md`.
 """
 
 from __future__ import annotations

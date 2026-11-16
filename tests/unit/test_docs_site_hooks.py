@@ -358,3 +358,14 @@ def test_the_pages_named_for_llms_full_and_the_sidebar_exist() -> None:
     for entry in (*hooks._FULL_FIRST, *hooks._FULL_LAST, *LEAD_PAGES):
         # A renamed page would otherwise fall back to the default position unnoticed.
         assert (docs / entry).is_dir() if entry.endswith("/") else (docs / entry).is_file(), entry
+
+
+def test_every_page_named_for_llms_full_is_in_it() -> None:
+    # A page `_FULL_FIRST` or `_FULL_LAST` names outside the full sections would be ordered
+    # but never included.
+    pages = hooks._full_text_pages(ROOT / "docs")
+    for entry in (*hooks._FULL_FIRST, *hooks._FULL_LAST):
+        if entry.endswith("/"):
+            assert any(p.startswith(entry) for p in pages), entry
+        else:
+            assert entry in pages, entry
