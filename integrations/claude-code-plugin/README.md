@@ -35,9 +35,10 @@ The hooks and scripts send data only to the Loom server the plugin is configured
 with (the two skills below are the exceptions). They send:
 
 - prompts, tool calls' input and output, and the paths of files read or edited;
-- the symbol name in a grep the plugin answers from the code index instead, and
-  the search text of a `gh issue list --search` or `gh search issues` command
-  it answers from Loom, with the repository that command names;
+- the symbol name from a grep that the plugin answers from the code index
+  rather than running it, and the search text of a `gh issue list --search` or
+  `gh search issues` command it answers from Loom, with the repository that
+  command names;
 - chat turns and session briefs (the compaction summary and a log of asks and
   replies, commands, files and web addresses), stored only when the namespace
   has conversation logging on;
@@ -83,12 +84,14 @@ self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
 `~/.loom/`, mode 0600, until you remove it.
 
 Its files in the system temp directory, which can hold prompt and reply text,
-are also mode 0600. A capture job whose flusher died stays until you replay or
-delete it (`loom-status` counts them and names the directory). A job whose
-delivery fails is discarded, as is a code-shunt batch whose post fails; chat
-turns are sent again at the next Stop and a brief's events at the next save.
-Other state files are swept after a day untouched, and a code-shunt decision log
-(no prompt or file content) stays until removed (`LOOM_SHUNT_LOG=off` stops it).
+are also mode 0600. A queued capture that was never delivered stays until you
+replay or delete it (`loom-status` counts them and names the directory). A
+capture whose delivery fails is discarded, as is a batch of the records of which
+tool calls the plugin redirected when it fails to send; chat turns are sent
+again at the next Stop and a brief's events at the next save. Other state files
+are swept after a day untouched, and the log of which tool calls the plugin
+redirected (no prompt or file content) stays until removed (`LOOM_SHUNT_LOG=off`
+stops it).
 
 Two skills reach other services when you run them. `loom-status` can install
 Node.js after you agree: on Linux, as root or with passwordless sudo, it installs
