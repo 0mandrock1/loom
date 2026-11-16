@@ -583,8 +583,8 @@ def estimate_usd(model: str, chars: int) -> float:
 @dataclass(frozen=True)
 class AwsCredentials:
     access_key_id: str
-    secret_access_key: str
-    session_token: str
+    secret_access_key: str = field(repr=False)
+    session_token: str = field(repr=False)
     region: str
 
     @classmethod
