@@ -92,6 +92,13 @@ describe("Google ADK LoomMemoryService", () => {
     expect(calls[2].body.session_id).toBe(calls[3].body.session_id);
   });
 
+  it("caps the knowledge leg at its100-result wire limit", async () => {
+    const { agent, calls } = harness();
+    const service = new LoomMemoryService(agent, { appName: "app", topK: 500 });
+    await service.searchMemory({ appName: "app", userId: "alice", query: "guide" });
+    expect(calls[1].body.top_k).toBe(100);
+  });
+
   it("bounds topK and refuses empty session ids", async () => {
     const { agent, service } = harness();
     for (const topK of [0, 501, 1.5])

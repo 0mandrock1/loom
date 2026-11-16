@@ -268,7 +268,8 @@ system prompt of an agent with no plugin; `part="reference"` lists every plane.
 - `loom.integrations.google_adk.LoomMemoryService(agent, app_name=...)` is a
   Google ADK `BaseMemoryService` for one ADK app: a saved session or turn goes
   to `memory.set_from_messages`, `add_memory` is `memory.set`, `search_memory`
-  is `memory.search` scoped to the ADK user, and `delete_memory` is
+  uses `memory.search` scoped to the ADK user, then fills remaining slots with
+  up to 100 shared namespace documents from `knowledge.search`; `delete_memory` is
   `memory.delete`; install the `[google-adk]` extra.
 - `loom.integrations.pydantic_ai.loom_toolset(agent, user_id=...)` returns
   `AgentTools` as a Pydantic AI `FunctionToolset`; install the `[pydantic-ai]`

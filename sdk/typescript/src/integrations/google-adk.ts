@@ -91,7 +91,7 @@ export class LoomMemoryService implements BaseMemoryService {
     if (memories.length < this.topK) {
       const knowledge = await this.agent.call("knowledge.search", {
         query: request.query,
-        top_k: this.topK - memories.length,
+        top_k: Math.min(100, this.topK - memories.length),
         namespace_scope: "this",
       });
       return {

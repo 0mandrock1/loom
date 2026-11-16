@@ -548,3 +548,10 @@ def test_a_long_session_is_sent_in_batches_the_server_takes() -> None:
     sizes = [len(c[1][0]) for c in fake.calls if c[0] == "set_from_messages"]
     assert sizes == [400, 1]
     assert {c[2]["session_id"] for c in fake.calls} == {_loom_session("alice", "s1")}
+
+
+def test_knowledge_search_obeys_its_wire_cap():
+    agent = _Agent(_FakeMemory())
+    service = LoomMemoryService(agent, app_name="travel", top_k=500)
+    asyncio.run(service.search_memory(app_name="travel", user_id="alice", query="guide"))
+    assert agent.knowledge.calls[0][1]["top_k"] == 100

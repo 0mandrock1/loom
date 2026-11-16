@@ -573,7 +573,7 @@ another app; give each app its own namespace and service. The ADK user is the Lo
 Extraction runs under a Loom session derived from the user and the ADK session (`adk-`
 and a digest of the pair): Loom files a turn's verbatim chunks by session alone, and ADK
 makes a session id unique per user only. A search reads all of the user's memories in the
-namespace, from every session. Remaining result slots hold knowledge documents shared by
+namespace, from every session. Remaining result slots hold up to 100 knowledge documents shared by
 the app namespace; documents carry no fact-deletion id.
 
 | ADK                     | Loom                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -592,7 +592,7 @@ sent, and neither is `custom_metadata` or an entry's `author` and `id`.
 | `agent`                      | required | the `loom.Agent` the service calls; ADK awaits its memory service, so a `SyncAgent` is refused |
 | `app_name`                   | required | the ADK app the service serves; a call for another app raises `ValueError`                     |
 | `top_k`                      | 10       | memories per search, from 1 to 500                                                             |
-| `honour_abstain`             | `True`   | leave out memories below Loom's floor; nothing when Loom abstains                              |
+| `honour_abstain`             | `True`   | filter the memory leg below Loom's floor or on abstention; knowledge remains available         |
 | `defer`                      | `True`   | queue the extraction on the server instead of waiting for it                                   |
 | `key_prefix`                 | `adk`    | the prefix of `add_memory`'s keys; an empty one is refused                                     |
 

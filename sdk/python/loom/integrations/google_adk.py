@@ -189,7 +189,7 @@ class LoomMemoryService(BaseMemoryService):
         ]
         if len(memories) < self._top_k:
             documents = await self._agent.knowledge.search(
-                query, top_k=self._top_k - len(memories), namespace_scope="this"
+                query, top_k=min(100, self._top_k - len(memories)), namespace_scope="this"
             )
             memories.extend(
                 MemoryEntry(
