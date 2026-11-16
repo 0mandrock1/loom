@@ -327,7 +327,8 @@ then read Loom's answer if the connection fails. A refused token answers `401` w
 `unauthenticated: <reason>`, and its `WWW-Authenticate` header carries the reason as
 `error_description` beside `error="invalid_token"`. A request with no `Authorization` header
 answers `401` with `missing bearer token`, without the `unauthenticated:` prefix or an
-`error_description`.
+`error_description`. Read the table from the top: the first row whose text the error
+contains applies.
 
 | The error contains                                                         | It means                                                                                            | Then                                                                                           |
 | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -335,7 +336,7 @@ answers `401` with `missing bearer token`, without the `unauthenticated:` prefix
 | ``authorization header must be `Bearer <token>` ``                         | the provider sent no `Bearer` scheme (a bare token, or Basic), or the scheme with no token after it | enter `Bearer <JWT>` (check the token field is filled), or choose the provider's bearer option |
 | `missing bearer token`                                                     | no `Authorization` header arrived                                                                   | check the header name, or the field the token went in                                          |
 | `token expired`, says it is revoked, or says its sign-in session has ended | the token itself is refused                                                                         | mint a new one ([tokens and grants](../../guides/tokens-and-grants.md))                        |
-| `invalid token`, `untrusted issuer` or `has no … key`                      | a token minted by another Loom or with a retired key                                                | mint one on this server ([tokens and grants](../../guides/tokens-and-grants.md))               |
+| `invalid token:`, `untrusted issuer` or `has no … key`                     | a token minted by another Loom or with a retired key                                                | mint one on this server ([tokens and grants](../../guides/tokens-and-grants.md))               |
 | a `503` that says to retry shortly                                         | the server cannot check tokens yet (keys or revocation list not loaded or stale)                    | retry; the token may be good                                                                   |
 
 ## Clients that sign in by browser
