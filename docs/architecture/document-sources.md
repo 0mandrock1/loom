@@ -690,12 +690,20 @@ A reader sees a mirrored document when all of these hold:
 The reader's verified emails are its subject's directory emails that
 `VERIFIED_EMAIL_SQL` admits (an SSO account's or a linked one's,
 `server/core/grant_sql.py`), and nothing else: a subject that merely spells an address
-is not one, and neither is a connection's store email. The predicate's first arm admits
-any password-less row's `contact_email`; the implementing pull request confirms that
-only an SSO sign-in or a link writes such a row's `contact_email`, or narrows the
-predicate for this check. A domain matches only through the person's SSO account record,
-whose identity provider vouches for that domain (the store's hosted-domain claim, or the
-org's configured SSO domain), never a linked account's email or a bare verified address.
+is not one, and neither is a connection's store email. The predicate's passwordless
+arm covers nonempty contacts from verified SSO provisioning or operator linking.
+Password signup hashes the supplied password before storing its claimed address;
+ordinary namespace registration cannot write a contact address or password hash.
+The internal reader resolver retains the uncached canonical subject independently of
+verified emails and reads actual active contact rows for email proof.
+
+Signed hosted-domain evidence lives in `sso_links.hosted_domain` and `issuer`, written
+after the final SCIM check under the account ownership lock. A domain matches only
+through a current linked row naming the active passwordless account's contact, with the
+configured issuer and its signed hosted-domain claim. Empty defaults, missing claims,
+issuer changes and generic link changes deny domain access. Neither a linked password
+account's email nor a bare verified address proves domain membership. These identity
+inputs alone expose no mirrored document.
 A token reads as one person, for both the `owner` entry and the emails, or as nobody:
 
 - a person's own session token (a primary token whose own `sid` claim names a sign-in

@@ -671,7 +671,9 @@ NO_MEMORY_CONTENT: dict[str, str] = {
     "loom.machine_identities": "auth plane: registered bots and their public keys; no memory.",
     "loom.org_model_calls": "whether an org's data may go to a model, and who said so; no memory.",
     "loom.extraction_policies": "the operator's rules for what extraction stores; no memory.",
-    "loom.sso_links": "auth plane: which password accounts SSO sign-ins reach; no memory.",
+    "loom.sso_links": (
+        "auth plane: verified account links and signed issuer/domain evidence; no memory content."
+    ),
     "loom.scim_users": (
         "auth plane: the people the identity provider provisions (email, the emails "
         "list it sent, userName, active) and the subjects a deactivation revoked; no memory."

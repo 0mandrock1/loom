@@ -869,7 +869,13 @@ schema. These rules keep that safe. The operator procedure is in
     `agent_cost_rollup_daily`, before clearing the enablement latch. Stopping a client
     after its timeout does not prove a sent insert has completed.
 
-59. **Personal-agent reader claims**: N accepts the optional Boolean
+59. **Personal-agent reader claims and verified directory evidence** (migration
+    `102_sso_domain_evidence.sql`): N adds empty-default `hosted_domain` and `issuer`
+    String columns to `sso_links`. Direct verified sign-in writes them only for a fresh
+    active passwordless account under its ownership lock, after the SCIM check. N-1
+    ignores them and its ordinary link writes clear them to defaults; missing evidence
+    denies domain access. No backfill infers a domain from an email. N accepts the
+    optional Boolean
     `reads_as_creator` claim, absent meaning false. Only the primary first-party
     sign-in route `POST /v1/me/personal_tokens.create` and the assistant's one-answer
     bridge set it; ordinary delegation omits it. Saved personal tokens use the existing

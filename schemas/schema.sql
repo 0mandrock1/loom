@@ -4068,7 +4068,9 @@ CREATE TABLE IF NOT EXISTS loom.sso_links
     `linked` UInt8,
     `linked_by` String,
     `linked_at` DateTime64(3, 'UTC'),
-    `version` UInt64
+    `version` UInt64,
+    `hosted_domain` String DEFAULT '',
+    `issuer` String DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (email, org, namespace)

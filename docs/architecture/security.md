@@ -544,6 +544,17 @@ the account's claims and is still reached by a subject revocation
 of an account that registered someone else's address also revokes that address; release
 such an account instead.
 
+The mirrored-reader identity resolver reads verified contact rows without an alias
+cache. A canonical owner remains identifiable without a verified email; neither a raw
+email-shaped subject nor a connected-account address proves an email permission. Direct
+OIDC sign-in records the signed `iss` and valid `hd` in `sso_links`, after the SCIM check,
+under the account's ownership lock and a fresh passwordless-account check. Domain
+permissions require that same active contact and linked row, a passwordless account and
+the configured issuer. Email suffixes and the JIT domain allowlist prove no domain
+membership. A missing domain claim, link change, account release or issuer change denies
+the domain. These identity inputs do not expose mirrored documents; mirrored source
+creation remains unavailable until the read and session protections are complete.
+
 With `LOOM_SCIM_TOKEN` set, the provider deactivates people over SCIM 2.0 (`/scim/v2`,
 `server/auth/scim.py`); that bearer token, compared in constant time, is the only credential
 those routes take. Loom refuses to start with one shorter than 32 characters, and with
