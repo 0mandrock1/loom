@@ -90,6 +90,38 @@ def _retain_task_result(task: asyncio.Task[TermLeg]) -> None:
         task.exception()
 
 
+async def refresh_parked(
+    org: str, namespace: str, query: str, hits: list[_MemorySearchHit], *, whole: bool
+) -> list[_MemorySearchHit | None]:
+    """A parked governed hit is served only while the same text is governed for the
+    original query. Reuse the leg's source, name and promotion checks, with its wait bound."""
+    if not any(h.governed for h in hits):
+        return list(hits)
+    task = create_deferred_task(_read(org, namespace, query, set(), None, "", whole=True))
+    current = await outcome(task, settings.memory_term_leg_wait_ms / 1000)
+    values = {h.memory_key: h.content_excerpt for h in current.hits}
+    refreshed: list[_MemorySearchHit | None] = []
+    for h in hits:
+        if not h.governed:
+            refreshed.append(h)
+            continue
+        if (
+            h.namespace not in ("", namespace)
+            or h.memory_key not in values
+            or h.content_excerpt
+            not in (
+                values[h.memory_key],
+                build_excerpt(values[h.memory_key], memory_key=h.memory_key),
+            )
+        ):
+            refreshed.append(None)
+            continue
+        text = values[h.memory_key]
+        h.content_excerpt = text if whole else build_excerpt(text, memory_key=h.memory_key)
+        refreshed.append(h)
+    return refreshed
+
+
 async def outcome(task: asyncio.Task[TermLeg] | None, wait_s: float) -> TermLeg:
     """What the leg found, waiting at most `wait_s` more for it; a leg past that or whose
     reads failed adds nothing."""

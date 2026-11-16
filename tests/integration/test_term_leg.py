@@ -146,3 +146,71 @@ async def test_a_definition_in_another_script_is_served_as_written(
         whole = await a.memory.search("今月の売上は", top_k=5, bodies="unit")
         assert whole[0].governed and long_body in whole[0].content_excerpt
         assert not whole[0].body_truncated
+
+
+@pytest.mark.parametrize("change", ["edit", "demote"])
+@pytest.mark.asyncio
+async def test_a_parked_governed_definition_is_withheld_when_its_approval_lapses(
+    control_plane_url: str, mint_test_token: Any, change: str
+) -> None:
+    import asyncio
+    import time
+
+    from loom import Agent
+
+    from tests.integration._resources import unique_org
+
+    org, ns = unique_org("term-page"), f"term-{uuid.uuid4().hex[:8]}"
+    admin = mint_test_token(org=org, namespaces=["*"], roles=["admin", "writer"])
+    reader = mint_test_token(org=org, namespaces=[ns], roles=["writer"], read_user_id="alice")
+    async with (
+        Agent(org=org, namespace=ns, agent="bot", base_url=control_plane_url, api_key=admin) as a,
+        Agent(org=org, namespace=ns, agent="bot", base_url=control_plane_url, api_key=reader) as r,
+    ):
+        for term in ("ARR", "MRR"):
+            key = f"definition/{term.lower()}"
+            await a.memory.set(
+                key,
+                {**ARR, "term": term, "aliases": [], "body": "Revenue definition. " * 400},
+                "definition",
+                agent_id="-",
+            )
+            source = await a.memory.get(key, agent_id="-")
+            await a.memory.promote(key, agent_id="-", approved_sha256=source["content_sha256"])
+        first = await r.call(
+            "memory.search",
+            {"query": "what is ARR and MRR", "top_k": 1, "paging": True, "user_id": "alice"},
+        )
+        assert first["results"][0]["memory_key"] == "definition/arr" and first["next_page"]
+        page_args = {
+            "query": "what is ARR and MRR",
+            "top_k": 1,
+            "page": first["next_page"],
+            "bodies": "unit",
+            "body_budget_tokens": 200,
+        }
+        deadline = time.monotonic() + 15
+        while True:
+            page = await r.call("memory.search", page_args)
+            if page.get("abstain_code") != "page_expired" or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0.1)
+        assert (
+            page["results"][0]["memory_key"] == "definition/mrr" and page["results"][0]["governed"]
+        )
+        assert page["results"][0]["body_truncated"] and page["bodies_elided"] == 1
+        assert page["tokens_returned"] <= 200
+        expanded = await r.call("memory.search", {**page_args, "body_budget_tokens": 4000})
+        assert "Revenue definition. " * 400 in expanded["results"][0]["content_excerpt"]
+        assert not expanded["results"][0]["body_truncated"]
+        if change == "edit":
+            await a.memory.set(
+                "definition/mrr",
+                {**ARR, "term": "MRR", "body": "Edited"},
+                "definition",
+                agent_id="-",
+            )
+        else:
+            await a.call("memory.demote", {"memory_key": "definition/mrr", "agent": "-"})
+        after = await r.call("memory.search", page_args)
+        assert after["results"] == []

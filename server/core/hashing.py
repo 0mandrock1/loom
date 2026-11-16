@@ -58,8 +58,6 @@ def canonical_document_text(text: str) -> str:
 
     Callers pass `f"{title}\n{content}"` for a document and the bare text for
     a chunk."""
-    import unicodedata
-
     norm = unicodedata.normalize("NFKC", text.strip())
     return " ".join(norm.split())
 

@@ -747,14 +747,6 @@ async def _settle_window(run: _AskRun, *, token_budget: int | None) -> bool:
     return record_note
 
 
-def governed_first(pool: list[Any]) -> list[Any]:
-    """`pool` with its governed definitions first (after a computed row), from whichever
-    search served them, in their order; a stage that dropped one decided so."""
-    from server.memory.domain.search_types import governed_after_computed
-
-    return governed_after_computed(pool)
-
-
 def _read_time(run: _AskRun) -> tuple[str, bool, Any]:
     """How the ask reads time: whether the question is temporal, the
     synthesis "now" (as_of) and the computed timeline block. Returns

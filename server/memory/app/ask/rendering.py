@@ -13,6 +13,7 @@ from server.memory.app.ask.question_shapes import (
     _is_first_person_question,
 )
 from server.memory.app.ask.result import _keys_of
+from server.memory.domain.search_types import is_computed_row
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +65,14 @@ def evidence_order(memories: list[Any], intent: Any, question: str = "") -> tupl
         d = _recorded_date(m)
         return d if d != "undated" else ("9999" if mode == "chronological" else "0000")
 
-    # A governed definition is the admin's answer for its term: it leads, whatever its date.
-    governed = [m for m in memories if getattr(m, "governed", None)]
-    rest = [m for m in memories if not getattr(m, "governed", None)]
-    return governed + sorted(rest, key=_key, reverse=(mode == "reverse_chronological")), mode
+    if not any(getattr(m, "governed", None) for m in memories):
+        return sorted(memories, key=_key, reverse=(mode == "reverse_chronological")), mode
+    computed = [m for m in memories if is_computed_row(m)]
+    governed = [m for m in memories if getattr(m, "governed", None) and not is_computed_row(m)]
+    rest = [m for m in memories if not getattr(m, "governed", None) and not is_computed_row(m)]
+    return computed + governed + sorted(
+        rest, key=_key, reverse=(mode == "reverse_chronological")
+    ), mode
 
 
 def elision_note(omitted: list[Any], *, max_keys: int = 8) -> str:

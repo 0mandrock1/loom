@@ -14,6 +14,7 @@ from server.memory.app.search.request import apply_explain_default
 from server.memory.app.search.tiers import _reader_user_id
 from server.memory.app.search_tag_filter import read_row_tags as _read_row_tags
 from server.memory.domain.decision_schema import is_whole_row
+from server.memory.domain.excerpt import build_excerpt
 from server.memory.domain.search_types import SHARED_AGENT
 from server.memory.domain.sensitivity import reads_high
 
@@ -356,11 +357,16 @@ async def _expand_unit_bodies(
         if str(getattr(h, "source", "fact") or "fact") not in ("fact", "memory", "record"):
             continue
         if getattr(h, "governed", None):
-            # The leg served the admin's whole value: it counts within the budget as is.
             cost = max(1, len(str(h.content_excerpt)) // 4)
-            spent += cost
-            returned += 1
-            tokens += cost
+            if spent + cost <= budget:
+                spent += cost
+                returned += 1
+                tokens += cost
+            else:
+                h.content_excerpt = build_excerpt(h.content_excerpt)
+                h.body_truncated = True
+                h.next = "memory.search with the same arguments and a larger body_budget_tokens"
+                elided += 1
             continue
         body_row = _body_row(h)
         if body_row is None:

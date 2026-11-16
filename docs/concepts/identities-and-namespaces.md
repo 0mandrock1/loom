@@ -420,7 +420,11 @@ inside `memory.ask` and `context.pack`, and in `loom_search`'s memory section.
   appear in the query, the longer name first where two start together, then the latest
   promotion; a derived aggregate's computed row stays above them. Any other hit under the
   same key in the addressed namespace is left out. They count within `top_k` and are cut
-  last; what is cut, a governed hit or one it pushed out, leads the next page. No floor,
+  last; what is cut, a governed hit or one it pushed out, leads the next page. A parked
+  governed hit is checked again against the original query and current promotion and
+  source before it is served; an unread check withholds it. Whole bodies count within
+  `body_budget_tokens`; a definition that does not fit keeps an excerpt marked truncated.
+  No floor,
   threshold or later stage drops or reorders them: not `min_similarity`, the calibration,
   `loom_search`'s floors and answer-first rule, the tracker verdict's memory cap (within
   which they count), `context.pack`'s packing or `memory.ask`'s check for restated values.

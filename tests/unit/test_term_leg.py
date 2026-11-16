@@ -380,9 +380,12 @@ def test_a_dated_reading_order_keeps_governed_hits_first() -> None:
     governed.created_at = governed.valid_at = "2019-01-01"  # promoted long ago
     old, new = _hit("old", 0.5), _hit("new", 0.5)
     old.valid_at, new.valid_at = "2020-01-01", "2026-01-01"
-    ordered, mode = evidence_order([old, governed, new], None, "what is the latest ARR")
+    computed = _hit("derived_aggregate", 1.0, source="computed")
+    ordered, mode = evidence_order([old, governed, new, computed], None, "what is the latest ARR")
     assert mode == "reverse_chronological"
-    assert [h.memory_key for h in ordered] == ["definition/x", "new", "old"]
+    assert [h.memory_key for h in ordered] == ["derived_aggregate", "definition/x", "new", "old"]
+    ordinary, _ = evidence_order([computed, old, new], None, "what is the latest ARR")
+    assert [h.memory_key for h in ordinary] == ["new", "old", "derived_aggregate"]
 
 
 def test_restated_value_check_neither_retires_nor_is_retired_by_a_governed_hit() -> None:
@@ -397,16 +400,16 @@ def test_restated_value_check_neither_retires_nor_is_retired_by_a_governed_hit()
 
 
 def test_the_ask_pool_puts_governed_hits_first_whichever_search_served_them() -> None:
-    from server.memory.app.ask.pool import governed_first
+    from server.memory.domain.search_types import governed_after_computed
 
     governed = _governed("definition/x")
     governed.similarity = 0.0
     pool = [_hit(f"r{i}", 0.9) for i in range(30)]  # reranked past a 15-row window
     # a sub-search's governed hit, appended after the primary search's rows
-    ordered = governed_first([*pool, governed])
+    ordered = governed_after_computed([*pool, governed])
     assert ordered[0] is governed and len(ordered) == 31
     # a stage that dropped it decided so: it is not put back
-    assert governed_first(pool) == pool
+    assert governed_after_computed(pool) == pool
 
 
 async def test_join_waits_the_bound_and_a_re_entrant_pass_only_its_time_left(
@@ -558,9 +561,25 @@ async def test_whole_bodies_serve_a_long_definition_whole(store: dict[str, Any])
     assert (returned, elided) == (1, 0) and tokens > 0 and not hit.body_truncated
 
 
+@pytest.mark.parametrize("bodies", ["unit", "source"])
+async def test_a_governed_whole_body_must_fit_the_remaining_budget(bodies: str) -> None:
+    from server.memory.app.search import payload
+
+    first, second = _governed("definition/arr"), _governed("definition/mrr")
+    first.content_excerpt = "x" * 1400
+    second.content_excerpt = "y" * 1400
+    returned, elided, tokens = await payload._expand_unit_bodies(
+        [first, second], _input(bodies=bodies, body_budget_tokens=500)
+    )
+    assert (returned, elided, tokens) == (1, 1, 350)
+    assert first.content_excerpt == "x" * 1400 and not first.body_truncated
+    assert len(second.content_excerpt) <= 1200 and second.body_truncated
+    assert "memory.search" in second.next and "memory.get" not in second.next
+
+
 def test_loom_search_and_ask_keep_a_computed_row_above_governed_hits() -> None:
-    from server.memory.app.ask.pool import governed_first
     from server.memory.app.loom_search.answer_first import answer_first
+    from server.memory.domain.search_types import governed_after_computed
 
     count = {"memory_key": "derived_aggregate", "source": "computed", "similarity": 0.95}
     governed = {"memory_key": "definition/arr", "governed": True, "similarity": 0.0}
@@ -573,8 +592,10 @@ def test_loom_search_and_ask_keep_a_computed_row_above_governed_hits() -> None:
     ]
     hit = _governed("definition/arr")
     derived = _hit("derived_aggregate", 1.0, source="computed")
-    ordered = governed_first([_hit("a", 0.9), derived, hit])
+    ordered = governed_after_computed([_hit("a", 0.9), derived, hit])
     assert [h.memory_key for h in ordered] == ["derived_aggregate", "definition/arr", "a"]
+    ordinary = [_hit("a", 0.9), derived]
+    assert governed_after_computed(ordinary) == ordinary
 
 
 async def test_launch_serves_whole_bodies_when_the_search_asks_for_them(
@@ -588,3 +609,108 @@ async def test_launch_serves_whole_bodies_when_the_search_asks_for_them(
         assert task is not None
         (hit,) = (await term_leg.outcome(task, 5)).hits
         assert (body in hit.content_excerpt) is whole
+
+
+@pytest.mark.parametrize("lapse", ["", "changed", "superseded", "expired", "demoted", "renamed"])
+async def test_a_parked_definition_must_still_be_governed_for_its_query(
+    store: dict[str, Any], monkeypatch: pytest.MonkeyPatch, lapse: str
+) -> None:
+    from server.memory.app import search_pages
+    from server.memory.app.search import output
+
+    store["rows"] = [_row("definition/arr", "ARR")]
+    leg = await term_leg._read("o", "n", "what is ARR", set(), None, "m")
+    page = json.loads(
+        search_pages.encode_page(
+            query="what is ARR",
+            top_k=1,
+            candidates_total=1,
+            tail=leg.hits,
+            namespaces_searched=["n"],
+            namespaces_skipped=[],
+        )
+    )
+    if lapse == "changed":
+        store["rows"][0]["value"] = json.dumps({"term": "ARR", "aliases": [], "body": "Edited"})
+    elif lapse == "demoted":
+        store["rows"] = []
+    elif lapse == "renamed":
+        store["rows"] = [_row("definition/arr", "MRR")]
+    elif lapse:
+        store["lapsed"]["definition/arr"] = lapse
+
+    async def clear(*args: Any) -> list[bool]:
+        return [False] * len(args[-1])
+
+    monkeypatch.setattr(output, "_stale_flags", clear)
+    monkeypatch.setattr(output, "withheld_definition_flags", clear)
+    hits, next_offset, dropped = await output._parked_slice(_input(top_k=1), page, 0, {"n"})
+    assert [h.memory_key for h in hits] == ([] if lapse else ["definition/arr"])
+    assert next_offset == -1 and dropped == 0
+
+
+async def test_a_failed_or_timed_out_page_check_withholds_governed_hits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def failed(*args: Any, **kwargs: Any) -> term_leg.TermLeg:
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(term_leg, "_read", failed)
+    assert await term_leg.refresh_parked(
+        "o", "n", "ARR", [_governed("definition/arr")], whole=False
+    ) == [None]
+    monkeypatch.setattr(settings, "memory_term_leg_wait_ms", 0)
+    assert await term_leg.refresh_parked(
+        "o", "n", "ARR", [_governed("definition/arr")], whole=False
+    ) == [None]
+
+
+@pytest.mark.parametrize("parked_whole", [False, True])
+@pytest.mark.parametrize("bodies", ["unit", "source", "full", "none"])
+async def test_governed_pages_apply_the_requested_bodies_and_budget(
+    store: dict[str, Any], monkeypatch: pytest.MonkeyPatch, parked_whole: bool, bodies: str
+) -> None:
+    from server.memory.app import search_pages
+    from server.memory.app.search import output
+
+    store["rows"] = [_row("definition/arr", "ARR")]
+    store["rows"][0]["value"] = json.dumps({"term": "ARR", "aliases": [], "body": "x" * 8000})
+    leg = await term_leg._read("o", "n", "what is ARR", set(), None, "m", whole=parked_whole)
+    page = json.loads(
+        search_pages.encode_page(
+            query="what is ARR",
+            top_k=1,
+            candidates_total=1,
+            tail=leg.hits,
+            namespaces_searched=["n"],
+            namespaces_skipped=[],
+        )
+    )
+    parked_text = page["hits"][0]["content_excerpt"]
+
+    async def load(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return page
+
+    async def clear(*args: Any) -> list[bool]:
+        return [False] * len(args[-1])
+
+    monkeypatch.setattr(search_pages, "load_page", load)
+    monkeypatch.setattr(output, "_stale_flags", clear)
+    monkeypatch.setattr(output, "withheld_definition_flags", clear)
+    for budget in (200, 4000):
+        out = await output._serve_parked_page(
+            _input(
+                top_k=1, page="page/" + "a" * 20 + "@0", bodies=bodies, body_budget_tokens=budget
+            )
+        )
+        hit = out.results[0]
+        if bodies in ("unit", "source"):
+            assert hit.body_truncated is (budget == 200)
+            assert out.bodies_elided == (1 if budget == 200 else 0)
+            assert out.tokens_returned <= budget
+            assert ("x" * 8000 in hit.content_excerpt) is (budget == 4000)
+        elif bodies == "none":
+            assert hit.content_excerpt == ""
+        else:
+            assert len(hit.content_excerpt) <= 1200
+        assert page["hits"][0]["content_excerpt"] == parked_text

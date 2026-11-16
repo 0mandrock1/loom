@@ -441,6 +441,8 @@ def governed_after_computed(rows: list[Any]) -> list[Any]:
     def governed(h: Any) -> bool:
         return bool(h.get("governed") if isinstance(h, dict) else getattr(h, "governed", None))
 
+    if not any(governed(h) for h in rows):
+        return list(rows)
     computed = [h for h in rows if is_computed_row(h)]
     lead = [h for h in rows if governed(h) and not is_computed_row(h)]
     rest = [h for h in rows if not governed(h) and not is_computed_row(h)]
