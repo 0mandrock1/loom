@@ -94,7 +94,7 @@ async def turn(src: KnowledgeSource, state: dict[str, str], run: sync.Pass) -> s
         sync.start_waits(result, detail)
     result.mirror = mirror
     src = dataclasses.replace(src, mirror=mirror)
-    # What the turn spends is the mirror's, so no namespace's cost reads show it.
+    # Attribute the turn's model calls to the mirror.
     with customer.for_org(src.org, namespace=mirror):
         set_worker_identity(sync.WORKER, org=src.org, namespace=mirror)
         await _in_mirror(src, opened, detail, started, run, result)
