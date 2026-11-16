@@ -334,16 +334,22 @@ class AuthSettings(BaseModel):
     # `loom cell prepare`'s nonce keys (docs/architecture/cells.md); 0 = off.
     cell_probe_port: int = Field(default=0, ge=0, le=65535)
     # The router's base URL a cell calls to place a new org, and the `loom cell` commands'
-    # default router; "" = none: in `enforced`, a new org answers 503.
+    # default router; "" = none: in `enforced`, a new org answers 503. With LOOM_CELL set, a
+    # value other than an http(s) URL with a host, a port at most 65535 and no '?' or '#'
+    # refuses the boot.
     cell_router_url: str = ""
     # The credential a cell calls the router with: `lcr_` then `openssl rand -hex 64`
     # (never the length of a SHA-256); any other form is refused at boot. "" = none.
     cell_router_token: Annotated[str, Field(pattern=r"^(?:lcr_[0-9a-f]{128})?$")] = ""
-    # Seconds a whole placement call to the router may take before the request answers 503.
+    # Seconds a whole call to the router may take: a placement call, after which the request
+    # answers 503, and a cell's state read, which is also the margin past its read period
+    # before that read's answer counts as late.
     cell_router_timeout_s: float = Field(default=5.0, gt=0)
     # Seconds (at least 1) between reads of the cell state rows once the first read landed
     # (every second until then), in every process that reads them under the Postgres
-    # authority, and before an org read as not held is read again;
+    # authority, and before an org read as not held is read again; also the most a first
+    # cell's server process waits between reads of the router's state route (with
+    # LOOM_INSTANCE_HEARTBEAT_SECONDS) and the window of a process that reads it on demand.
     # LOOM_JWT_REVOCATION_MAX_STALE_SECONDS must be at least three times this.
     tenancy_mode_cache_s: float = Field(default=5.0, ge=1.0)
     # The router's directory, its own Postgres database (`loom router serve` and
@@ -351,8 +357,10 @@ class AuthSettings(BaseModel):
     router_pg_dsn: str = ""
     # Placement calls one cell may make in a minute, counted by each router replica.
     router_placements_per_minute: int = Field(default=60, ge=1)
-    # Seconds (at least 1) a router replica keeps the cells' credential hashes and a placed
-    # org's lookup answer before reading again; a new credential or host works within this.
+    # Seconds (at least 1) a router replica keeps the cells' credential hashes, a placed
+    # org's lookup answer and the first cell's state-route answer before reading again; a
+    # new credential or host works within this. A cell's processes carry the router's value:
+    # 401s from the state route last this long before the heartbeat's `router` turns false.
     router_directory_cache_s: float = Field(default=5.0, ge=1.0)
     # Org lookups one client address may make in a minute, counted by each router
     # replica (`GET /cells/lookup`).
@@ -2375,7 +2383,7 @@ class KnowledgeSettings(BaseModel):
             f"LOOM_DOCUMENT_EXTRACTORS_JSON {key[:64]!r}": url for key, url in routes.items()
         }
         for name, url in urls.items():
-            if url and not _is_http_url(url):
+            if url and not is_http_url(url):
                 raise ValueError(f"{name} is not an http(s) URL")
         # A token for a URL no route names would leave that service on the shared
         # token without a word: refused, as is a token that is not a string.
@@ -4284,10 +4292,11 @@ def url_host(url: str) -> str:
         return ""
 
 
-def _is_http_url(url: str) -> bool:
-    """An http(s) base URL with a host that the extractor client's httpx can
-    parse, and no query or fragment (the client appends `/v1/...`): a bad one is
-    refused at load, not on the first call."""
+def is_http_url(url: str) -> bool:
+    """Whether `url` is an http(s) base URL a client can append paths to: httpx parses it,
+    with a host and a port at most 65535, and it holds no `?` or `#` (no query or fragment).
+    A setting holding any other value is refused before its first call (at load, or at boot
+    for LOOM_CELL_ROUTER_URL)."""
     try:
         parsed = httpx.URL(url)
         urlsplit(url).port  # noqa: B018 — over 65535 raises, which httpx lets by
