@@ -35,6 +35,7 @@ or needs another database, vector store or cache.
 | Pipecat                        | `LoomMemoryService`                             | Python, `loom.integrations.pipecat`                       | recall and capture `FrameProcessor`s                                     |
 | Dify                           | Remember, Recall, Search knowledge              | `integrations/dify` standalone plugin                     | Native Dify tools                                                        |
 | Haystack                       | `LoomDocumentStore`, `LoomRetriever`            | Python, `loom.integrations.haystack`                      | `DocumentStore` protocol, retrieval component                            |
+| Agno                           | `LoomMemoryDb`                                  | Python, `loom.integrations.agno`                          | `BaseDb` user-memory methods                             |
 
 Any other framework that can call an HTTP endpoint or an MCP server uses Loom directly:
 see [agent integration](../../guides/agent-integration.md) and
@@ -691,6 +692,47 @@ Save a completed TypeScript session once. Saving it again extracts it again; the
 TypeScript interface has no per-turn append operation. ADK's in-memory session
 service in these examples holds the running conversation only; Loom stores the
 extracted memories and searchable documents in the user's deployment.
+
+## Agno
+
+`LoomMemoryDb` implements Agno 3.2's `BaseDb` user-memory methods for one user and
+store. Install `pip install 'clickhouse-loom[agno]'` (`agno>=3.2,<3.3`). Pass it to a
+`MemoryManager`; configure the agent's session database separately if needed.
+
+```python
+from agno.db.schemas.memory import UserMemory
+from agno.memory import MemoryManager
+from loom import SyncAgent
+from loom.integrations.agno import LoomMemoryDb
+
+with SyncAgent(org="acme", namespace="support", agent="assistant") as loom_agent:
+    manager = MemoryManager(db=LoomMemoryDb(loom_agent, user_id="alice"))
+    manager.add_user_memory(UserMemory(memory="Prefers aisle seats"), user_id="alice")
+    memories = manager.get_user_memories(user_id="alice")
+```
+
+The database stores each native memory, including its id, topics, agent/team attribution,
+input, feedback and timestamps, as an episodic Loom row. This keeps native identifiers
+and updates intact without fact extraction or semantic duplicate merging. Rows stay in
+the user's Loom deployment; the adapter adds no database, cache or vector store.
+
+Use one `LoomMemoryDb` per end user. An omitted user in a database method means its
+bound user; a different user is refused. Agno's manager defaults an omitted user to
+`default`, so pass the user to manager calls as in the example. Optional `store=`
+(default `default`) separates applications sharing that user. Keys and the derived
+Loom session include both user and store digests. Separate namespaces and restricted
+tokens remain the boundary for mutually untrusted applications.
+
+The database implements single/bulk upsert, get, list, content/topic/agent/team filters,
+sorting, pagination, topic listing, statistics and deletion. Reads hydrate full values
+and page through the bound store. Filters and sorting run over those rows locally;
+large stores therefore incur a full read. `clear_memories` clears only this bound store
+and user. Concurrent writes of one native id keep the later write; a bulk write or
+clear can partially finish when a request fails. Other `BaseDb` capabilities, including
+sessions, tracing and evaluation storage, raise `NotImplementedError`.
+
+Agno's memory manager can make model calls when it extracts or edits memories. This
+adapter makes no model call itself; its tests supply native memory objects directly.
 
 ## Pydantic AI
 

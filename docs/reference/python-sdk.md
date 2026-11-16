@@ -276,6 +276,8 @@ system prompt of an agent with no plugin; `part="reference"` lists every plane.
   calls `memory.delete_version` for the exact writer and version carried in the
   search entry id. Install the
   `[google-adk]` extra.
+- `loom.integrations.agno.LoomMemoryDb(sync_agent, user_id=...)` implements Agno
+  `BaseDb` user-memory methods over episodic Loom rows; install the `[agno]` extra.
 - `loom.integrations.pydantic_ai.loom_toolset(agent, user_id=...)` returns
   `AgentTools` as a Pydantic AI `FunctionToolset`; install the `[pydantic-ai]`
   extra.
