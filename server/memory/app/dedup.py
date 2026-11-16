@@ -41,6 +41,7 @@ from server.memory.api.models_graph import (
     _MemoryRelatedHit,
 )
 from server.memory.app import webhooks
+from server.memory.app.learning_access import candidate_visible
 from server.memory.domain import assistant_rules
 from server.memory.domain.memory_types import is_definition
 from server.memory.domain.promotion_source import parse_promotion_source
@@ -110,6 +111,10 @@ async def _lineage_from_memory_tags(input: MemoryLineageInput) -> MemoryLineageO
                 seeded_from_msg_id=(cand_row.get("seeded_from_msg_id") or ""),
             )
 
+    if candidate is not None and not await candidate_visible(
+        input.org, input.namespace, candidate.source_kind
+    ):
+        candidate = None
     return MemoryLineageOutput(
         found=True,
         memory_key=input.memory_key,
@@ -242,6 +247,10 @@ async def handle_memory_lineage(input: MemoryLineageInput) -> MemoryLineageOutpu
         for r in audit_rows
     ]
 
+    if candidate is not None and not await candidate_visible(
+        input.org, input.namespace, candidate.source_kind
+    ):
+        candidate = None
     return MemoryLineageOutput(
         found=True,
         memory_key=input.memory_key,

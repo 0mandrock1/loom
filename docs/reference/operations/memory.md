@@ -1444,6 +1444,7 @@ WHAT: Save a standing fact and protect it.
 | `pinned` | `bool` | `False` | True when written via memory.pin (explicit-save) |
 | `classify` | `bool` | `False` | Call the namespace's classify_endpoint to derive memory_type from `value`. |
 | `if_match_sha256` | `str` | `''` | Optimistic-concurrency precondition: 409 PRECONDITION_FAILED if the live row's SHA-256 doesn't match. |
+| `if_absent` | `bool` | `False` | Refuse with PRECONDITION_FAILED when an untombstoned row holds the key; off by default. |
 | `char_limit` | `int \| None` | `None` | Server-enforced char cap on the stringified value (422 on exceed). |
 | `sensitivity` | `Literal['', 'low', 'medium', 'high']` | `''` | Sensitivity tier. 'high' = never embedded, searched or in a recency pack; read by key only, audited. '' = detect from the value: credentials, card numbers, SSNs, PINs high; email, phone, IBAN medium. |
 | `dry_run` | `bool` | `False` | Run the conflict check and return its verdict, peers and `next` WITHOUT writing — no loom.memory row, no embedding row, no audit hash, no usage event, no supersession. |
@@ -2110,6 +2111,7 @@ Save a fact to Loom — shared across every AI tool the user runs; native memory
 | `pinned` | `bool` | `False` | True when written via memory.pin (explicit-save) |
 | `classify` | `bool` | `False` | Call the namespace's classify_endpoint to derive memory_type from `value`. |
 | `if_match_sha256` | `str` | `''` | Optimistic-concurrency precondition: 409 PRECONDITION_FAILED if the live row's SHA-256 doesn't match. |
+| `if_absent` | `bool` | `False` | Refuse with PRECONDITION_FAILED when an untombstoned row holds the key; off by default. |
 | `char_limit` | `int \| None` | `None` | Server-enforced char cap on the stringified value (422 on exceed). |
 | `sensitivity` | `Literal['', 'low', 'medium', 'high']` | `''` | Sensitivity tier. 'high' = never embedded, searched or in a recency pack; read by key only, audited. '' = detect from the value: credentials, card numbers, SSNs, PINs high; email, phone, IBAN medium. |
 | `dry_run` | `bool` | `False` | Run the conflict check and return its verdict, peers and `next` WITHOUT writing — no loom.memory row, no embedding row, no audit hash, no usage event, no supersession. |

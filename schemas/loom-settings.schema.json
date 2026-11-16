@@ -3130,6 +3130,64 @@
           "type": "integer",
           "description": "Seconds a no-row source's chunks must have aged before a delete retires them (a first write's are younger); never less than an ingest pass plus 5 minutes of clock skew."
         },
+        "knowledge_query_history_enabled": {
+          "default": false,
+          "type": "boolean",
+          "description": "Permit opt-in ClickHouse query-history sources to queue definition drafts."
+        },
+        "knowledge_query_history_interval_seconds": {
+          "default": 3600,
+          "minimum": 300,
+          "type": "integer"
+        },
+        "knowledge_query_history_max_drafts": {
+          "default": 20,
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Drafts one source may queue in a worker turn, at most."
+        },
+        "knowledge_query_history_max_groups": {
+          "default": 200,
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Most-used query groups inspected per source turn before skipping existing drafts."
+        },
+        "knowledge_query_history_max_pass_seconds": {
+          "default": 120.0,
+          "maximum": 600.0,
+          "minimum": 30.0,
+          "type": "number",
+          "description": "Seconds between query-history passes. Deadline of one query-history pass; it starts no new group after half this budget."
+        },
+        "knowledge_query_history_max_sources": {
+          "default": 100,
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Sources one pass reads, at most; each turn is separately time bounded."
+        },
+        "knowledge_query_history_min_users": {
+          "default": 3,
+          "minimum": 3,
+          "type": "integer",
+          "description": "Distinct initial ClickHouse accounts required before drafting a query group."
+        },
+        "knowledge_query_history_read_timeout_s": {
+          "default": 30,
+          "exclusiveMinimum": 0,
+          "maximum": 120,
+          "type": "number",
+          "description": "Seconds allowed for one query-history source read."
+        },
+        "knowledge_query_history_window_days": {
+          "default": 7,
+          "maximum": 30,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Days of finished SELECT query history a turn groups."
+        },
         "knowledge_repo_docs_list_ttl_s": {
           "default": 60.0,
           "exclusiveMinimum": 0,

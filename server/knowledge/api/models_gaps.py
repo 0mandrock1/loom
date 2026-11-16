@@ -46,3 +46,14 @@ class KnowledgeGapsListOutput(BaseModel):
     capturing: bool | None = None
     # Whether this deployment records misses (LOOM_KNOWLEDGE_GAPS_ENABLED).
     enabled: bool = False
+
+
+class KnowledgeGapsDraftInput(BaseModel):
+    org: str
+    namespace: str
+    gap_id: str = Field(min_length=1, max_length=128)
+
+
+class KnowledgeGapsDraftOutput(BaseModel):
+    # Stable review-queue id; a repeat makes no new model call.
+    candidate_id: str

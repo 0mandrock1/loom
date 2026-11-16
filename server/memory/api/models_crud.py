@@ -387,6 +387,9 @@ class MemorySetInput(_Identity):
     # Optimistic-concurrency precondition: 409 PRECONDITION_FAILED if the live
     # row's SHA-256 doesn't match. Empty = skip the check.
     if_match_sha256: str = ""
+    # Refuse with PRECONDITION_FAILED when an untombstoned row holds the key; off by
+    # default. Cannot be combined with if_match_sha256.
+    if_absent: bool = Field(default=False, json_schema_extra=MCP_HIDDEN)
     # Server-enforced char cap on the stringified value (422 on exceed). Persists
     # on the row so a later set without char_limit reuses the stored cap. NULL = no cap.
     char_limit: int | None = Field(default=None, json_schema_extra=MCP_HIDDEN)

@@ -38,6 +38,8 @@ class _LearningEntry(BaseModel):
     supporters: list[str]
     rationale: str
     source_kind: str = "memory_supporters"
+    # The gap id or query-history group that produced a definition draft; empty otherwise.
+    source_resource_id: str = ""
     # The agent an `assistant_turn` candidate is a rule for; '' for other producers.
     agent: str = ""
     status: LearningStatus

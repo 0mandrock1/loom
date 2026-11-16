@@ -126,3 +126,19 @@ async def test_read_then_conditional_update_loop(control_plane_url) -> None:
         final = await a.memory.get("counter")
         assert final is not None
         assert final["value"] == {"n": 2}
+
+
+@pytest.mark.asyncio
+async def test_absence_precondition_creates_once_without_replacing_a_row(control_plane_url) -> None:
+    from loom import Agent, PreconditionFailed
+
+    ns = f"absent-{uuid.uuid4().hex[:6]}"
+    async with Agent(org=ORG, namespace=ns, agent="t", base_url=control_plane_url) as a:
+        created = await a.memory.set("k", {"v": 1}, if_absent=True)
+        with pytest.raises(PreconditionFailed) as refused:
+            await a.memory.set("k", {"v": 2}, if_absent=True)
+        assert refused.value.current_sha256 == created["content_sha256"]
+        row = await a.memory.get("k")
+        assert row is not None and row["value"] == {"v": 1}
+        assert row["version"] == created["version"]
+        assert row["content_sha256"] == created["content_sha256"]

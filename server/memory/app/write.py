@@ -15,6 +15,7 @@ from server.code.app.member_writes import assert_own_row
 from server.core import pg
 from server.core.ch import get_client
 from server.core.datetimes import naive_utc_now
+from server.core.errors import ValidationError
 from server.core.hashing import served_content_sha256
 from server.core.hashing import sha256_value as _content_sha256
 from server.core.vectors import codes_state
@@ -461,15 +462,17 @@ async def _set_prepare_value(w: _SetWrite) -> None:
 
 
 async def _set_check_if_match(w: _SetWrite) -> None:
-    """Phase 5 of memory.set: the if_match_sha256 precondition (409 PRECONDITION_FAILED).
+    """Phase 5 of memory.set: conditional hash or absence (409 PRECONDITION_FAILED).
 
     When the caller sent a hash, `w.existing` is re-read strongly and rebound.
     """
     input, existing = w.input, w.existing
+    if input.if_absent and input.if_match_sha256:
+        raise ValidationError("if_absent cannot be combined with if_match_sha256")
 
     # Optimistic concurrency: verify the live row's hash matches before
     # accepting. Mismatch → 409 so the caller can re-read and retry.
-    if input.if_match_sha256:
+    if input.if_match_sha256 or input.if_absent:
         import server.memory.store as memory_repo
 
         existing = await memory_repo.get_by_key(
@@ -489,13 +492,15 @@ async def _set_check_if_match(w: _SetWrite) -> None:
             scope=request_scope(),
         )
         current_sha = served_sha256(existing)
-        if current_sha != input.if_match_sha256:
+        if (input.if_absent and existing is not None) or (
+            input.if_match_sha256 and current_sha != input.if_match_sha256
+        ):
             raise HTTPException(
                 status_code=409,
                 detail={
                     "code": "PRECONDITION_FAILED",
                     "message": (
-                        "if_match_sha256 does not match current row "
+                        "the write precondition does not match the current row "
                         f"(current_sha256={current_sha!r})"
                     ),
                     "current_sha256": current_sha,
@@ -626,11 +631,11 @@ async def _handle_memory_set(
 ) -> MemorySetOutput:
     """memory.set; a conditional write and a pin hold the key's write lock from their read
     to their insert, as a resolver write does, so a retirement never lands between them."""
-    if not (input.if_match_sha256 or input.pinned):
+    if not (input.if_match_sha256 or input.if_absent or input.pinned):
         return await _memory_set_phases(input)
     # A pin rewrites the row from its read: a retirement landing between the two would be
     # written over by the pinned copy, active again, so the pin holds the lock across both.
-    if not input.if_match_sha256:  # a pin: busy, the answer says what to retry
+    if not (input.if_match_sha256 or input.if_absent):  # a pin: busy, the answer says what to retry
         async with key_write_lock.key_lock_for(
             input.org,
             input.namespace,
@@ -717,7 +722,7 @@ async def _memory_set_once(input: MemorySetInput, *, embedder: Any = None) -> Me
     if input.proposed:
         await _refuse_proposal_over_fact(input)
     await _set_check_if_match(w)
-    if input.if_match_sha256:
+    if input.if_match_sha256 or input.if_absent:
         # The precondition was read under the key lock just now: the version is drawn
         # after it, so only a delete that lands after the check is above it (write_fence).
         w.version = next_version()

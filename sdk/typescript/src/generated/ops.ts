@@ -3567,6 +3567,16 @@ export interface KnowledgeFormatsOutput {
   default_format?: string;
 }
 
+export interface KnowledgeGapsDraftInput {
+  org: string;
+  namespace: string;
+  gap_id: string;
+}
+
+export interface KnowledgeGapsDraftOutput {
+  candidate_id: string;
+}
+
 export interface KnowledgeGapsListInput {
   /** The org. */
   org: string;
@@ -4087,6 +4097,53 @@ export interface KnowledgeQueryOutput {
   receipt: QueryReceipt;
 }
 
+export interface KnowledgeQueryHistoryAddInput {
+  org: string;
+  namespace: string;
+  name: string;
+  host: string;
+  port?: number;
+  secure?: boolean;
+  user: string;
+  password: string;
+  databases: string[];
+  cluster?: string;
+}
+
+export interface KnowledgeQueryHistoryAddOutput {
+  name: string;
+  source_id: string;
+  kind?: "clickhouse_queries";
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  databases: string[];
+  cluster?: string;
+  created_at: string; // date-time
+}
+
+export interface KnowledgeQueryHistoryListInput {
+  org: string;
+  namespace: string;
+  limit?: number;
+}
+
+export interface KnowledgeQueryHistoryListOutput {
+  enabled?: boolean;
+  sources?: KnowledgeQueryHistoryAddOutput[];
+}
+
+export interface KnowledgeQueryHistoryRemoveInput {
+  org: string;
+  namespace: string;
+  name: string;
+}
+
+export interface KnowledgeQueryHistoryRemoveOutput {
+  removed: boolean;
+}
+
 export interface KnowledgeReadsInput {
   org: string;
   namespace: string;
@@ -4521,6 +4578,7 @@ export interface LearningEntry {
   supporters: string[];
   rationale: string;
   source_kind?: string;
+  source_resource_id?: string;
   agent?: string;
   status: "pending" | "promoted" | "rejected";
   proposed_at: string; // date-time
@@ -6382,6 +6440,7 @@ export interface MemorySetInput {
   pinned?: boolean;
   classify?: boolean;
   if_match_sha256?: string;
+  if_absent?: boolean;
   char_limit?: number | null;
   sensitivity?: "" | "low" | "medium" | "high";
   dry_run?: boolean;
@@ -10414,6 +10473,7 @@ export type OpName =
   | "knowledge.dedup_resolve"
   | "knowledge.delete"
   | "knowledge.formats"
+  | "knowledge.gaps.draft"
   | "knowledge.gaps.list"
   | "knowledge.get"
   | "knowledge.ingest"
@@ -10424,6 +10484,9 @@ export type OpName =
   | "knowledge.move"
   | "knowledge.outline"
   | "knowledge.query"
+  | "knowledge.query_history.add"
+  | "knowledge.query_history.list"
+  | "knowledge.query_history.remove"
   | "knowledge.reads"
   | "knowledge.restore"
   | "knowledge.search"
@@ -10783,6 +10846,7 @@ export interface OpMap {
   "knowledge.dedup_resolve": { input: KnowledgeDedupResolveInput; output: KnowledgeDedupResolveOutput };
   "knowledge.delete": { input: KnowledgeDeleteInput; output: KnowledgeDeleteOutput };
   "knowledge.formats": { input: KnowledgeFormatsInput; output: KnowledgeFormatsOutput };
+  "knowledge.gaps.draft": { input: KnowledgeGapsDraftInput; output: KnowledgeGapsDraftOutput };
   "knowledge.gaps.list": { input: KnowledgeGapsListInput; output: KnowledgeGapsListOutput };
   "knowledge.get": { input: KnowledgeGetInput; output: KnowledgeGetOutput };
   "knowledge.ingest": { input: KnowledgeIngestInput; output: KnowledgeIngestOutput };
@@ -10793,6 +10857,9 @@ export interface OpMap {
   "knowledge.move": { input: KnowledgeMoveInput; output: KnowledgeMoveOutput };
   "knowledge.outline": { input: KnowledgeOutlineInput; output: KnowledgeOutlineOutput };
   "knowledge.query": { input: KnowledgeQueryInput; output: KnowledgeQueryOutput };
+  "knowledge.query_history.add": { input: KnowledgeQueryHistoryAddInput; output: KnowledgeQueryHistoryAddOutput };
+  "knowledge.query_history.list": { input: KnowledgeQueryHistoryListInput; output: KnowledgeQueryHistoryListOutput };
+  "knowledge.query_history.remove": { input: KnowledgeQueryHistoryRemoveInput; output: KnowledgeQueryHistoryRemoveOutput };
   "knowledge.reads": { input: KnowledgeReadsInput; output: KnowledgeReadsOutput };
   "knowledge.restore": { input: KnowledgeRestoreInput; output: KnowledgeRestoreOutput };
   "knowledge.search": { input: KnowledgeSearchInput; output: KnowledgeSearchOutput };
@@ -11152,6 +11219,7 @@ export const OPS: readonly OpSpec[] = [
   { name: "knowledge.dedup_resolve", group: "knowledge", method: "dedupResolve", idempotent: true, role: "admin", maturity: "experimental", budgetP99Ms: 400, audit: true, readOnly: false },
   { name: "knowledge.delete", group: "knowledge", method: "delete", idempotent: true, role: "writer", maturity: "experimental", budgetP99Ms: 100, audit: true, readOnly: false },
   { name: "knowledge.formats", group: "knowledge", method: "formats", idempotent: true, role: "viewer", maturity: "experimental", budgetP99Ms: 5500, audit: false, readOnly: true },
+  { name: "knowledge.gaps.draft", group: "knowledge", method: "gapsDraft", idempotent: true, role: "admin", maturity: "experimental", budgetP99Ms: 30000, audit: true, readOnly: false },
   { name: "knowledge.gaps.list", group: "knowledge", method: "gapsList", idempotent: true, role: "admin", maturity: "experimental", budgetP99Ms: 300, audit: false, readOnly: false },
   { name: "knowledge.get", group: "knowledge", method: "get", idempotent: true, role: "viewer", maturity: "stable", budgetP99Ms: 30, audit: false, readOnly: true },
   { name: "knowledge.ingest", group: "knowledge", method: "ingest", idempotent: false, role: "writer", maturity: "experimental", budgetP99Ms: 60, audit: false, readOnly: false },
@@ -11162,6 +11230,9 @@ export const OPS: readonly OpSpec[] = [
   { name: "knowledge.move", group: "knowledge", method: "move", idempotent: true, role: "writer", maturity: "experimental", budgetP99Ms: 8000, audit: true, readOnly: false },
   { name: "knowledge.outline", group: "knowledge", method: "outline", idempotent: true, role: "viewer", maturity: "experimental", budgetP99Ms: 80, audit: false, readOnly: true },
   { name: "knowledge.query", group: "knowledge", method: "query", idempotent: true, role: "viewer", maturity: "experimental", budgetP99Ms: 1500, audit: false, readOnly: true },
+  { name: "knowledge.query_history.add", group: "knowledge", method: "queryHistoryAdd", idempotent: false, role: "admin", maturity: "experimental", budgetP99Ms: 30000, audit: true, readOnly: false },
+  { name: "knowledge.query_history.list", group: "knowledge", method: "queryHistoryList", idempotent: true, role: "admin", maturity: "experimental", budgetP99Ms: 250, audit: false, readOnly: false },
+  { name: "knowledge.query_history.remove", group: "knowledge", method: "queryHistoryRemove", idempotent: true, role: "admin", maturity: "experimental", budgetP99Ms: 1000, audit: true, readOnly: false },
   { name: "knowledge.reads", group: "knowledge", method: "reads", idempotent: true, role: "viewer", maturity: "experimental", budgetP99Ms: 500, audit: false, readOnly: true },
   { name: "knowledge.restore", group: "knowledge", method: "restore", idempotent: true, role: "writer", maturity: "experimental", budgetP99Ms: 200, audit: true, readOnly: false },
   { name: "knowledge.search", group: "knowledge", method: "search", idempotent: true, role: "viewer", maturity: "stable", budgetP99Ms: 250, audit: false, readOnly: true },
@@ -11390,4 +11461,4 @@ export const OP_BY_NAME: Readonly<Record<OpName, OpSpec>> = Object.fromEntries(
   OPS.map((o) => [o.name, o]),
 ) as Readonly<Record<OpName, OpSpec>>;
 
-export const GENERATED_OP_COUNT = 366;
+export const GENERATED_OP_COUNT = 370;

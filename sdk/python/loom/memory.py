@@ -806,6 +806,7 @@ class MemoryClient:
         source_resource_id: str = "",
         source_class: SourceClass | None = None,
         if_match_sha256: str | None = None,
+        if_absent: bool = False,
         valid_at: datetime | None = None,
         valid_to: datetime | None = None,
         char_limit: int | None = None,
@@ -859,7 +860,8 @@ class MemoryClient:
         identity inside 200 ms the SDK coalesces sets into one
         `memory.bulk_set`, and such a result carries `coalesced: true` and no
         `memory_id` / `content_sha256`: read the hash with `get()` (a set
-        with `if_match_sha256` is never coalesced). A blacklisted value raises
+        with `if_match_sha256` or `if_absent` is never coalesced). `if_absent=True`
+        refuses a key that already holds a row. A blacklisted value raises
         the `ValidationError` (`BLACKLISTED`, 422); a new value for a pinned
         key, or a close write against a pinned row, the `PreconditionFailed`
         (`PINNED_CONFLICT`, 409); a write to a `read_only` key a `LoomError`
@@ -894,6 +896,7 @@ class MemoryClient:
             source_resource_id=source_resource_id,
             source_class=source_class,
             if_match_sha256=if_match_sha256,
+            if_absent=if_absent,
             valid_at=valid_at,
             valid_to=valid_to,
             char_limit=char_limit,
@@ -1009,6 +1012,7 @@ class MemoryClient:
         source_resource_id: str = "",
         source_class: SourceClass | None = None,
         if_match_sha256: str | None = None,
+        if_absent: bool = False,
         valid_at: datetime | None = None,
         valid_to: datetime | None = None,
         char_limit: int | None = None,
@@ -1040,6 +1044,7 @@ class MemoryClient:
             source_resource_id=source_resource_id,
             source_class=source_class,
             if_match_sha256=if_match_sha256,
+            if_absent=if_absent,
             valid_at=valid_at,
             valid_to=valid_to,
             char_limit=char_limit,

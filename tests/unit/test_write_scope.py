@@ -175,6 +175,48 @@ def test_if_match_probe_does_not_disclose_another_users_hash(store) -> None:
     assert exc.value.detail["current_sha256"] == ""
 
 
+def test_if_absent_refuses_a_live_row_and_does_not_probe_another_user(store) -> None:
+    from server.memory.api.models_crud import MemorySetInput
+    from server.memory.app.write import _set_check_if_match
+
+    present = MemorySetInput(
+        org="o",
+        namespace="n",
+        agent="bot",
+        user_id="V",
+        memory_key="k",
+        value="new",
+        if_absent=True,
+    )
+    with pytest.raises(HTTPException) as exc:
+        _run_as(None, lambda: _set_check_if_match(SimpleNamespace(input=present, existing=None)))
+    assert exc.value.status_code == 409 and exc.value.detail["code"] == "PRECONDITION_FAILED"
+
+    own = present.model_copy(update={"user_id": "U"})
+    _run_as(_pinned("U"), lambda: _set_check_if_match(SimpleNamespace(input=own, existing=None)))
+    assert store["writes"] == []
+
+
+def test_absence_and_hash_preconditions_are_mutually_exclusive(store) -> None:
+    from server.core.errors import ValidationError
+    from server.memory.api.models_crud import MemorySetInput
+    from server.memory.app.write import _set_check_if_match
+
+    value = MemorySetInput(
+        org="o",
+        namespace="n",
+        agent="bot",
+        user_id="U",
+        memory_key="k",
+        value="v",
+        if_absent=True,
+        if_match_sha256="a" * 64,
+    )
+    with pytest.raises(ValidationError, match="cannot be combined"):
+        _run_as(None, lambda: _set_check_if_match(SimpleNamespace(input=value, existing=None)))
+    assert store["writes"] == []
+
+
 @pytest.mark.parametrize("by", ["id", "key"])
 def test_outcome_on_another_users_row_is_not_recorded(store, monkeypatch, by) -> None:
     import server.core.ch as ch_mod

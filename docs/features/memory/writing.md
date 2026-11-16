@@ -146,6 +146,13 @@ A `memory.set` or `memory.update` that carries the precondition holds a lock on 
 from the check to the insert, so of two writers holding the same hash only one succeeds.
 The lock is a KeeperMap key when the server has a Keeper, and per process otherwise.
 
+`memory.set` also accepts `if_absent = true`, which refuses with
+`409 PRECONDITION_FAILED` when an untombstoned row holds the same identity and key.
+An expired row still holds its key; revise it with its hash instead. Absence and hash
+preconditions cannot be combined. A set with either precondition is never coalesced by
+the Python SDK. On ClickHouse, ordinary concurrent writes still resolve by version;
+the key lock serializes conditional callers with each other.
+
 ## Example
 
 Against the stock stack from the [quickstart](../../getting-started/quickstart.md) (drop

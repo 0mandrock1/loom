@@ -315,7 +315,8 @@ async def commit_set_rows(
     admission = Admission(
         generations=dict(w.generations),
         recheck=heads_unchanged(
-            {identity_key(w.memory_row): w.existing}, exact=bool(w.input.if_match_sha256)
+            {identity_key(w.memory_row): w.existing},
+            exact=bool(w.input.if_match_sha256 or w.input.if_absent),
         ),
     )
     if semantic and w.peer_rows is not None:
@@ -361,7 +362,7 @@ async def _lift_above_deletes(w: _SetWrite, ch: Any) -> None:
         w.input.namespace,
         [w.memory_row],
         [],
-        conditional=bool(w.input.if_match_sha256),
+        conditional=bool(w.input.if_match_sha256 or w.input.if_absent),
         ch=ch,
     )
     w.version = int(w.memory_row["version"])
@@ -373,7 +374,7 @@ async def _lift_after_insert(
     """The row's version once it is in: written again above a memory.delete_version
     tombstone that landed after the fence read (`write_fence`). A conditional write holds
     the key lock, which the delete takes too, so it never needs this."""
-    if not w.input.if_match_sha256:
+    if not (w.input.if_match_sha256 or w.input.if_absent):
         await lift_after_insert(
             w.input.org, w.input.namespace, [w.memory_row], embedding_rows or [], ch=ch
         )

@@ -302,6 +302,15 @@ async def delete_source_listings_by_namespace(
     )
 
 
+async def delete_query_history_by_namespace(
+    org: str, namespace: str | Sequence[str], *, ch: _CHClient | None = None
+) -> int:
+    """Remove credentials that would keep drafting into an erased namespace."""
+    return await delete_scoped(
+        "loom.query_history_sources", org=org, scope_where=NS_EQ, params={"ns": namespace}, ch=ch
+    )
+
+
 async def delete_memory_drops_by_namespace(
     org: str, namespace: str | Sequence[str], *, ch: _CHClient | None = None
 ) -> int:

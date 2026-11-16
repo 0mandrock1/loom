@@ -80,6 +80,7 @@ import { EditDocumentMetadataDialog } from "../flows/EditDocumentMetadataDialog"
 import { PageContainer } from "../layout/PageContainer";
 import { EmptyState } from "../components/EmptyState";
 import { KnowledgeGaps } from "./KnowledgeGaps";
+import { QueryHistorySources } from "./QueryHistorySources";
 import { useAcrossRead } from "./useAcrossRead";
 import { ScopeBadge } from "../components/ScopeBadge";
 import { oneOf } from "../lib/oneOf";
@@ -1529,6 +1530,13 @@ export function Documents() {
       </PageHeader>
       {picker}
       {seesGaps && !resolving && !all && <KnowledgeGaps org={identity.org} namespace={identity.namespace} />}
+      {seesGaps && !resolving && !all && (
+        <QueryHistorySources
+          key={`${identity.org}/${identity.namespace}`}
+          org={identity.org}
+          namespace={identity.namespace}
+        />
+      )}
       {/* One line: who can see the collection shown, the library's figures once they are read,
           what the library is behind the tip. A phone, with the place picker above the list, has
           room for who can see it only: the bar's count says how many are shown. */}

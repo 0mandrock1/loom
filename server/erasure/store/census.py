@@ -538,6 +538,9 @@ STEP_ONLY_TABLES: dict[str, tuple[str, ...]] = {
     # Deactivates the namespace's sources and clears their credentials: configuration
     # an admin wrote (ids, names, a filter's name fragment), no memory or document content.
     "knowledge_sources.retire": ("loom.knowledge_sources",),
+    # Connection metadata and sealed credentials, no query text; removed so the source
+    # cannot draft again into the erased namespace.
+    "query_history_sources.delete": ("loom.query_history_sources",),
     # Which `acl-` namespaces hold a namespace's mirrored documents: names only, no
     # content. Every step also purges the mirrors; this one writes them `deleted`.
     "knowledge_mirrors.forget": ("loom.knowledge_mirrors",),

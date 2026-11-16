@@ -22,10 +22,13 @@ from server.memory.api.models_learnings import (
 )
 from server.memory.api.models_lifecycle import MemoryPromoteInput
 from server.memory.app import blacklist_guard
+from server.memory.app.learning_access import private_candidates_visible
+from server.memory.app.provenance import writer_actor
 from server.memory.domain import assistant_rules
+from server.memory.domain.definitions import DEFINITION_DRAFT_KINDS
 from server.memory.domain.memory_types import is_definition
 from server.memory.store import learnings as learnings_repo
-from server.memory.store.rows import next_version
+from server.memory.store.rows import version_over
 
 
 async def handle_learnings_list(
@@ -34,12 +37,18 @@ async def handle_learnings_list(
     """Page through the review queue. Defaults to status='pending'."""
 
     status_filter = input.status or "pending"
+    exclude = (
+        ()
+        if await private_candidates_visible(input.org, input.namespace)
+        else DEFINITION_DRAFT_KINDS
+    )
     rows = await learnings_repo.list_by_status(
         input.org,
         input.namespace,
         status_filter,
         limit=input.limit,
         source_kind=input.source_kind,
+        exclude_source_kinds=exclude,
     )
     support = await _assistant_turn_support(input.org, input.namespace, rows)
     entries = []
@@ -62,6 +71,7 @@ async def handle_learnings_list(
                 supporters=list(r["supporters"]),
                 rationale=r["rationale"],
                 source_kind=r.get("source_kind", "memory_supporters"),
+                source_resource_id=str(r.get("source_resource_id") or ""),
                 agent=str(r.get("agent") or ""),
                 status=r["status"],
                 proposed_at=r["proposed_at"],
@@ -116,7 +126,6 @@ async def handle_learnings_quality(
     counts and queue depths across the org's namespaces.
     """
     from server.auth.context import resolve_org_scope
-    from server.core.ch import get_client
 
     params: dict[str, Any] = {"org": input.org}
     where = "org = {org:String}"
@@ -129,26 +138,13 @@ async def handle_learnings_quality(
             return LearningsQualityOutput(rows=[])
         where += scope.where
         params.update(scope.params)
-    if input.source_kind:
+    if input.source_kind is not None:
         where += " AND source_kind = {sk:String}"
         params["sk"] = input.source_kind
-    rows = await get_client().query_all(
-        f"""
-        SELECT
-            namespace,
-            countIf(status='pending')  AS pending,
-            countIf(status='promoted') AS promoted,
-            countIf(status='rejected') AS rejected,
-            if(countIf(status IN ('promoted','rejected')) > 0,
-               countIf(status='promoted') / countIf(status IN ('promoted','rejected')),
-               0.0) AS approve_ratio
-        FROM loom.learnings_queue FINAL
-        WHERE {where}
-        GROUP BY namespace
-        ORDER BY pending DESC, namespace
-        """,
-        params=params,
-    )
+    private_namespaces = None
+    if input.source_kind is None or input.source_kind in DEFINITION_DRAFT_KINDS:
+        private_namespaces = await _private_quality_namespaces(input, where, params)
+    rows = await learnings_repo.quality_by_namespace(where, params, private_namespaces)
     return LearningsQualityOutput(
         rows=[
             LearningsQualityRow(
@@ -161,6 +157,21 @@ async def handle_learnings_quality(
             for r in rows
         ]
     )
+
+
+async def _private_quality_namespaces(
+    input: LearningsQualityInput, where: str, params: dict[str, Any]
+) -> list[str] | None:
+    """Private counts enter the rollup only in namespaces this caller administers."""
+    from server.auth.context import current_auth
+    from server.settings import settings
+
+    if current_auth() is None:
+        return [] if settings.auth_actually_required() else None
+    if input.namespace:
+        return None if await private_candidates_visible(input.org, input.namespace) else []
+    names = await learnings_repo.private_candidate_namespaces(where, params)
+    return [name for name in names if await private_candidates_visible(input.org, name)]
 
 
 async def handle_learnings_review(
@@ -184,6 +195,32 @@ async def handle_learnings_review(
         input.namespace,
         input.candidate_id,
     )
+    if row is not None and row.get("source_kind") in DEFINITION_DRAFT_KINDS:
+        if not await private_candidates_visible(input.org, input.namespace):
+            raise HTTPException(status_code=404, detail={"code": "RESOURCE_NOT_FOUND"})
+        from server.core import leases
+        from server.core.errors import OverloadedError
+
+        claim = f"definition.review/{input.org}/{input.namespace}/{input.candidate_id}"
+        async with leases.holding(claim, ttl_s=30) as held:
+            if not held:
+                raise OverloadedError("another reviewer is deciding this draft", retry_after_s=1)
+            from server.memory.app.definition_review import require_draft_fleet
+
+            await require_draft_fleet()
+            row = await learnings_repo.find_candidate(
+                input.org, input.namespace, input.candidate_id
+            )
+            return await _review(input, row)
+    return await _review(input, row)
+
+
+async def _review(input: LearningsReviewInput, row: dict[str, Any] | None) -> LearningsReviewOutput:
+    from fastapi import HTTPException
+
+    if row is not None and row.get("source_kind") in DEFINITION_DRAFT_KINDS:
+        if not row.get("proposed_value"):
+            row = None
     # A bot rule with no supporter left (blanked once decided, deleted once pending
     # by the erasure that took its last supporter): there is no rule left to review,
     # so it answers as a missing candidate does.
@@ -236,14 +273,22 @@ async def handle_learnings_review(
             )
         wants_memory = destination in ("memory", "both")
         wants_knowledge = destination in ("knowledge", "both")
-        if wants_memory and is_definition(row):
+        private_definition = row.get("source_kind") in DEFINITION_DRAFT_KINDS
+        if private_definition:
+            if destination != "memory":
+                raise ValidationError("a definition draft is promoted only to memory")
+            from server.memory.app.definition_review import promote_candidate
+
+            await promote_candidate(input.org, input.namespace, row, input.reason)
+            promoted_to_shared = True
+        if wants_memory and is_definition(row) and not private_definition:
             # A definition reaches memory only through memory.promote of its namespace-wide
             # row, which checks the approved hash.
             raise ValidationError(
                 "a definition candidate is not promoted to memory by review: write the "
                 "definition as the namespace-wide row and promote it with memory.promote"
             )
-        if wants_memory:
+        if wants_memory and not private_definition:
             await _do_promote(
                 input.org,
                 input.namespace,
@@ -279,15 +324,20 @@ async def handle_learnings_review(
             "supporters": list(row["supporters"]),
             "rationale": row["rationale"],
             "source_kind": row.get("source_kind", "memory_supporters"),
+            "source_resource_id": str(row.get("source_resource_id") or ""),
             "agent": str(row.get("agent") or ""),
             "seeded_from_thread_id": row.get("seeded_from_thread_id"),
             "seeded_from_msg_id": row.get("seeded_from_msg_id"),
             "status": target_status,
             "proposed_at": row.get("proposed_at") or now,
             "decided_at": now,
-            "decided_by": input.approver,
+            "decided_by": (
+                writer_actor("learnings-reviewer")
+                if row.get("source_kind") in DEFINITION_DRAFT_KINDS
+                else input.approver
+            ),
             "decision_reason": input.reason,
-            "version": next_version(),
+            "version": version_over(int(row.get("version") or 0)),
         }
     )
 
@@ -497,3 +547,9 @@ async def _do_promote_to_knowledge(
     with contextlib.suppress(PublicationPending):
         await handle_knowledge_upsert(request)
     return source_uri
+
+
+def learnings_review_audit_subject(input: LearningsReviewInput, response: Any) -> dict[str, Any]:
+    from server.observability import audit
+
+    return {**audit.input_subject(input), "approver": writer_actor("learnings-reviewer")}

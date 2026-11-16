@@ -173,6 +173,7 @@ OpName = Literal[
     "knowledge.dedup_resolve",
     "knowledge.delete",
     "knowledge.formats",
+    "knowledge.gaps.draft",
     "knowledge.gaps.list",
     "knowledge.get",
     "knowledge.ingest",
@@ -183,6 +184,9 @@ OpName = Literal[
     "knowledge.move",
     "knowledge.outline",
     "knowledge.query",
+    "knowledge.query_history.add",
+    "knowledge.query_history.list",
+    "knowledge.query_history.remove",
     "knowledge.reads",
     "knowledge.restore",
     "knowledge.search",
@@ -542,6 +546,7 @@ OP_NAMES: tuple[str, ...] = (
     "knowledge.dedup_resolve",
     "knowledge.delete",
     "knowledge.formats",
+    "knowledge.gaps.draft",
     "knowledge.gaps.list",
     "knowledge.get",
     "knowledge.ingest",
@@ -552,6 +557,9 @@ OP_NAMES: tuple[str, ...] = (
     "knowledge.move",
     "knowledge.outline",
     "knowledge.query",
+    "knowledge.query_history.add",
+    "knowledge.query_history.list",
+    "knowledge.query_history.remove",
     "knowledge.reads",
     "knowledge.restore",
     "knowledge.search",
@@ -2385,6 +2393,18 @@ OPS: dict[str, OpSpec] = {
         False,
         True,
     ),
+    "knowledge.gaps.draft": OpSpec(
+        "knowledge.gaps.draft",
+        "KnowledgeGapsDraftInput",
+        "KnowledgeGapsDraftBody",
+        "KnowledgeGapsDraftOutput",
+        True,
+        "admin",
+        "experimental",
+        30000,
+        True,
+        False,
+    ),
     "knowledge.gaps.list": OpSpec(
         "knowledge.gaps.list",
         "KnowledgeGapsListInput",
@@ -2504,6 +2524,42 @@ OPS: dict[str, OpSpec] = {
         1500,
         False,
         True,
+    ),
+    "knowledge.query_history.add": OpSpec(
+        "knowledge.query_history.add",
+        "KnowledgeQueryHistoryAddInput",
+        "KnowledgeQueryHistoryAddBody",
+        "KnowledgeQueryHistoryAddOutput",
+        False,
+        "admin",
+        "experimental",
+        30000,
+        True,
+        False,
+    ),
+    "knowledge.query_history.list": OpSpec(
+        "knowledge.query_history.list",
+        "KnowledgeQueryHistoryListInput",
+        "KnowledgeQueryHistoryListBody",
+        "KnowledgeQueryHistoryListOutput",
+        True,
+        "admin",
+        "experimental",
+        250,
+        False,
+        False,
+    ),
+    "knowledge.query_history.remove": OpSpec(
+        "knowledge.query_history.remove",
+        "KnowledgeQueryHistoryRemoveInput",
+        "KnowledgeQueryHistoryRemoveBody",
+        "KnowledgeQueryHistoryRemoveOutput",
+        True,
+        "admin",
+        "experimental",
+        1000,
+        True,
+        False,
     ),
     "knowledge.reads": OpSpec(
         "knowledge.reads",
@@ -10581,6 +10637,22 @@ class KnowledgeFormat(TypedDict, total=False):
     available: NotRequired[Optional[bool]]
 
 
+class KnowledgeGapsDraftInput(TypedDict, total=False):
+    org: Required[str]
+    namespace: Required[str]
+    gap_id: Required[str]
+
+
+class KnowledgeGapsDraftBody(TypedDict, total=False):
+    org: NotRequired[str]
+    namespace: NotRequired[str]
+    gap_id: Required[str]
+
+
+class KnowledgeGapsDraftOutput(TypedDict, total=False):
+    candidate_id: Required[str]
+
+
 class KnowledgeGapsListInput(TypedDict, total=False):
     "The questions people keep asking in a namespace that nothing answers."
 
@@ -11284,6 +11356,78 @@ class QuerySnapshot(TypedDict, total=False):
     schema_state: Required[str]
 
 
+class KnowledgeQueryHistoryAddInput(TypedDict, total=False):
+    org: Required[str]
+    namespace: Required[str]
+    name: Required[str]
+    host: Required[str]
+    port: NotRequired[int]
+    secure: NotRequired[bool]
+    user: Required[str]
+    password: Required[str]
+    databases: Required[list[str]]
+    cluster: NotRequired[str]
+
+
+class KnowledgeQueryHistoryAddBody(TypedDict, total=False):
+    org: NotRequired[str]
+    namespace: NotRequired[str]
+    name: Required[str]
+    host: Required[str]
+    port: NotRequired[int]
+    secure: NotRequired[bool]
+    user: Required[str]
+    password: Required[str]
+    databases: Required[list[str]]
+    cluster: NotRequired[str]
+
+
+class KnowledgeQueryHistoryAddOutput(TypedDict, total=False):
+    name: Required[str]
+    source_id: Required[str]
+    kind: NotRequired[Literal["clickhouse_queries"]]
+    host: Required[str]
+    port: Required[int]
+    secure: Required[bool]
+    user: Required[str]
+    databases: Required[list[str]]
+    cluster: NotRequired[str]
+    created_at: Required[str]  # date-time as ISO-8601 text
+
+
+class KnowledgeQueryHistoryListInput(TypedDict, total=False):
+    org: Required[str]
+    namespace: Required[str]
+    limit: NotRequired[int]
+
+
+class KnowledgeQueryHistoryListBody(TypedDict, total=False):
+    org: NotRequired[str]
+    namespace: NotRequired[str]
+    limit: NotRequired[int]
+
+
+class KnowledgeQueryHistoryListOutput(TypedDict, total=False):
+    enabled: NotRequired[bool]
+    sources: NotRequired[list["KnowledgeQueryHistoryAddOutput"]]
+
+
+class KnowledgeQueryHistoryRemoveInput(TypedDict, total=False):
+    org: Required[str]
+    namespace: Required[str]
+    name: Required[str]
+
+
+class KnowledgeQueryHistoryRemoveBody(TypedDict, total=False):
+    org: NotRequired[str]
+    namespace: NotRequired[str]
+    name: Required[str]
+
+
+class KnowledgeQueryHistoryRemoveOutput(TypedDict, total=False):
+    removed: Required[bool]
+
+
 class KnowledgeReadsInput(TypedDict, total=False):
     "How often agents opened each document over the last `days` (`knowledge.get`"
 
@@ -11894,6 +12038,7 @@ class LearningEntry(TypedDict, total=False):
     supporters: Required[list[str]]
     rationale: Required[str]
     source_kind: NotRequired[str]
+    source_resource_id: NotRequired[str]
     agent: NotRequired[str]
     status: Required[Literal["pending", "promoted", "rejected"]]
     proposed_at: Required[str]  # date-time as ISO-8601 text
@@ -14558,6 +14703,7 @@ class MemorySetInput(TypedDict, total=False):
     pinned: NotRequired[bool]
     classify: NotRequired[bool]
     if_match_sha256: NotRequired[str]
+    if_absent: NotRequired[bool]
     char_limit: NotRequired[Optional[int]]
     sensitivity: NotRequired[Literal["", "low", "medium", "high"]]
     dry_run: NotRequired[bool]
@@ -14591,6 +14737,7 @@ class MemorySetBody(TypedDict, total=False):
     pinned: NotRequired[bool]
     classify: NotRequired[bool]
     if_match_sha256: NotRequired[str]
+    if_absent: NotRequired[bool]
     char_limit: NotRequired[Optional[int]]
     sensitivity: NotRequired[Literal["", "low", "medium", "high"]]
     dry_run: NotRequired[bool]
