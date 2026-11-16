@@ -145,10 +145,10 @@ without the provenance and SBOM attestations that only a registry keeps, and `do
 them from there. The `preflight` job reports each missing [prerequisite](#before-the-first-release)
 as a warning instead of failing. What only a published release exercises, a dry run does not:
 `docker-tag` (joining each image's two digests, the Latest decision, `:latest`), `sign`, the GitHub
-Release, the registry publishes, `release-check`, the published-images check
-(`scripts/release/published_images.sh`) with the skipped-build path it selects, the candidate-order
-check (`prepare.py check-tag`, which a dry run of a branch skips with a notice), and the chart check
-when the version is already tagged on another commit.
+Release and its files' signatures, the registry publishes, `release-check`, the published-images
+check (`scripts/release/published_images.sh`) with the skipped-build path it selects, the
+candidate-order check (`prepare.py check-tag`, which a dry run of a branch skips with a notice),
+and the chart check when the version is already tagged on another commit.
 
 ## Before the first release
 
@@ -257,12 +257,26 @@ there costs a candidate number, not a final version.
    `gh workflow run release.yml --ref vX.Y.Z -f allow_clickhouse_downgrade=true`.
    When neither is taken, move `:latest` (if it moved) and, for a final, `:X.Y` back to the
    previous release on both images, as in [a failed tag or signature](#a-failed-tag-or-signature);
-9. `release-check` (on a tag push) runs `.github/workflows/release-check.yml` against what
-   was just published, signed in to nothing: the one-liner from github.com in the same clean
-   containers, pulling both images anonymously, and verifies both images' signatures, which
-   must come from `release.yml` on that tag, as a user does
-   ([container images](../operations/deployment.md#container-images)). A release published
-   before the release workflow signed carries none, so a check of it fails its `signatures` job.
+9. `sign-files` downloads every file the release now serves, as users do
+   (`scripts/release/download_release_files.sh`), and signs each one that is byte-identical to
+   this run's build with a keyless signature like the images', into a Sigstore bundle
+   `<file>.sigstore.json` (`scripts/release/sign_release_files.sh`). The stack bundle and
+   checksum the release kept from an earlier run keep their Sigstore bundles when those verify;
+   any other file that is not this run's build fails the job, signing nothing
+   ([a failed tag or signature](#a-failed-tag-or-signature)). It then verifies each file as
+   users do (`scripts/release/verify_release_files.sh`). It holds the run's OIDC token in a job of
+   its own, with read-only contents; `attach-signatures` then uploads the Sigstore bundles it made
+   (a kept one stays as it is, since replacing an asset deletes it first). A dispatch builds the
+   files again, and `github-release` replaces them, so until its own `sign-files` and
+   `attach-signatures` finish, the tag run's Sigstore bundles do not verify the replaced files;
+10. `release-check` (on a tag push) runs `.github/workflows/release-check.yml` against what
+    was just published, signed in to nothing: the one-liner from github.com in the same clean
+    containers, pulling both images anonymously, and verifies the signatures of both images and
+    of every release file, which must come from `release.yml` on that tag, as a user does
+    ([container images](../operations/deployment.md#container-images),
+    [release files](../operations/deployment.md#release-files)); a file without its
+    `.sigstore.json` fails. A release published before the release workflow signed its images,
+    or its files, lacks those signatures, so a check of it fails its `signatures` job.
 
 The server and extractor images are published before the GitHub Release, so an installer
 shown on the release page never points at a missing image.
@@ -286,7 +300,9 @@ move the version's tags onto other bytes.
 Never move a published `X.Y.Z` tag: `published_images.sh` fails when a published image was built
 from another commit than the run's, and a fix needs a new version.
 
-A re-run after a partial publish is safe: each publish job skips what already exists.
+A re-run after a partial publish is safe: each publish job skips what already exists. The one
+exception is a tag run whose file signing failed, which [a failed tag or
+signature](#a-failed-tag-or-signature) recovers.
 
 **Why publish the verified files.** A job that rebuilt its own artifact could ship unchecked bytes. Publishing what `verify` passed means the GitHub Release and the registries carry the same bytes.
 
@@ -335,6 +351,27 @@ the `digest=` line, then the `docker buildx imagetools create` command without t
 [ -n "$digest" ] && [ "$(docker buildx imagetools inspect ghcr.io/clickhouse/<image>:<tag> --format '{{json .Manifest}}' | jq -re .digest)" = "$digest" ] \
   || { echo "<tag> does not name $digest" >&2; false; }
 ```
+
+A failed `sign-files` or `attach-signatures` (Sigstore or the GitHub API down, say) leaves files on
+the release without a Sigstore bundle that verifies them. Any later run signs them again while the
+stack bundle and checksum on the release carry Sigstore bundles that verify: "Re-run failed jobs" on
+the run that failed. When they carry none, because the tag run's own signing failed, only "Re-run
+failed jobs" on the tag run signs them, while its artifacts are kept (30 days, unless the
+repository's artifact retention limit is shorter) and before any dispatch: a dispatch, "Re-run all
+jobs" or a second push of the tag rebuilds the stack bundle and checksum but keeps the ones the
+release carries, which then no run can sign. Past that, release a new version.
+
+A `release-check` that fails on a listing or a download: "Re-run failed jobs". One that finds a
+Sigstore bundle that does not verify after the latest release run's `sign-files` and
+`attach-signatures` passed means the release changed after it was signed: a security incident
+([SECURITY.md](../../SECURITY.md)). A run whose signing failed is recovered as above instead.
+
+`sign-files` refuses any file that is not this run's build, except a kept stack bundle or checksum
+whose Sigstore bundle verifies. A file attached to the release by hand: delete it from the release
+when the workflow does not make it, then "Re-run failed jobs". A kept stack bundle or checksum with
+no Sigstore bundle was never signed (above). Any other refusal, and a kept file whose Sigstore
+bundle does not verify outside a Sigstore outage, means the file was changed outside the workflow:
+a security incident, not a signing failure.
 
 ### When the clickhouse job stops
 
