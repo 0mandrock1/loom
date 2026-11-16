@@ -4668,6 +4668,11 @@ settings:
   # span loss at SIGTERM. [restart]
   # otel_metrics_export_interval_s: 60
 
+  # Most series per metric; past it, new attribute sets join one `otel.metric.overflow`
+  # series. Request metrics need about operations x namespaces x transports x outcomes.
+  # [restart]
+  # otel_metrics_cardinality_limit: 20000
+
   # Delta temporality for counters and histograms (an idle synchronous series writes no
   # row). Off: the dashboards (deploy/hyperdx_dashboards.md) read cumulative rows — flip
   # together with them. [restart]
