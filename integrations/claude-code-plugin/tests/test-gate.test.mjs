@@ -311,9 +311,12 @@ test("checkoutPython prefers the checkout's virtualenvs, then an active one, the
     fs.writeFileSync(py, "");
     return py;
   };
-  const env = { PATH: "", VIRTUAL_ENV: active };
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "loom-path-"));
+  const pathPy = process.platform === "win32" ? ["python", ".exe"] : ["python3", ""];
+  fs.writeFileSync(path.join(bin, pathPy.join("")), "#!/bin/sh\n", { mode: 0o755 });
+  const env = { PATH: bin, VIRTUAL_ENV: active };
   try {
-    assert.equal(checkoutPython(root, { env }), "");
+    assert.equal(checkoutPython(root, { env }), pathPy[0]);
     const activePy = make(active);
     assert.equal(checkoutPython(root, { env }), activePy);
     make(path.join(root, "venv"));
@@ -334,6 +337,7 @@ test("checkoutPython prefers the checkout's virtualenvs, then an active one, the
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(bin, { recursive: true, force: true });
     fs.rmSync(active, { recursive: true, force: true });
   }
 });
