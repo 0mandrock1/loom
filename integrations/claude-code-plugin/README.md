@@ -37,17 +37,17 @@ with (the two skills below are the exceptions). They send:
 - prompts, tool calls' input and output, and the paths of files read or edited;
 - a symbol name taken from a redirected grep pattern, and the query of a `gh`
   issue search with the repository it names;
-- chat turns and session briefs (the compaction summary and a log of asks,
-  commands, files and web addresses), stored only when the namespace has
-  conversation logging on;
+- chat turns and session briefs (the compaction summary and a log of asks and
+  replies, commands, files and web addresses), stored only when the namespace
+  has conversation logging on;
 - up to the session's last 200 turns, which the server keeps as source evidence
   for the facts it extracts whatever the logging setting is, with up to 80,000
   characters of the session's Loom tool arguments and results
   (`LOOM_SESSION_MEMORY=off` stops it);
 - the file paths and diff outlines of uncommitted changes (a diff's outline is
   its file paths, hunk line ranges and usually the enclosing function's name; no
-  changed line is sent), run records and working-memory notes, token usage and
-  the model name;
+  other part of a changed line is sent), run records and working-memory notes,
+  token usage and the model name;
 - the repository's identity (each remote's owner and name, the branch and `HEAD`
   commit) and the working directory's absolute path;
 - what the agent passes to Loom's tools (memories, search and code queries);
@@ -70,9 +70,10 @@ deleting data is covered in
 
 The plugin's hooks run `node`, `git` and `grep` on your machine: `git` reads the
 checkout's remotes, branch, `HEAD` commit, status and diffs, and `grep` searches
-uncommitted files for a redirected grep pattern. When the test gate names a
-pytest test, it names the checkout's virtualenv, the active one (`VIRTUAL_ENV`)
-or the first `python3` or `python` on `PATH`, checking only that the file exists.
+uncommitted files for a redirected grep pattern. The test gate runs no Python:
+for a pytest test it picks the interpreter of the checkout's virtualenv, the
+active one (`VIRTUAL_ENV`) or a `python3` or `python` on `PATH`, checking only
+that the file exists.
 
 The plugin keeps the token it saves (a copy of the install token or a
 self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
