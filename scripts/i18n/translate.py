@@ -7,21 +7,20 @@
 
 Claude is called through the Messages API of Amazon Bedrock (`bedrock-mantle`), each request
 signed with the short-lived AWS credentials in AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and
-AWS_SESSION_TOKEN for AWS_REGION. Credentials without a session token are refused, so a
-long-lived access key cannot be used. A short page is sent in one call, a longer one a `## `
-section at a time (`WHOLE_PAGE_CHARS`). A translation is kept only when its fenced code
-blocks (in order), inline code spans, link targets, URLs, heading anchors and numbers match
-the English; otherwise the call is retried once with the differences named, then the page
-is not written (below). The assembled page is held to the same label rule before it is
-written. Relative links in the prose are rewritten before translation: a page of the set
-links to its translation, anything else to the English file on GitHub. Every heading gets
-an explicit `<a id>` with its English anchor, so `#anchor` links keep working on the
-translated page. The first line of each translation stamps the git blob of the English page
-it was made from; `check` compares that stamp with the file. A change to the model or a
-banner makes every page stale; a change to the prompt does not: regenerate with `--all`.
-The READMEs carry a generated language line that `update` rewrites without translating;
-adding a language changes the English README's line, so its blob, and every README is
-translated again.
+AWS_SESSION_TOKEN for AWS_REGION: only temporary credentials are taken, since the session
+token is required. A short page is sent in one call, a longer one a `## ` section at a time
+(`WHOLE_PAGE_CHARS`). A translation is kept only when its fenced code blocks (in order),
+inline code spans, link targets, URLs, heading anchors and numbers match the English;
+otherwise the call is retried once with the differences named, then the page is not written
+(below). The assembled page is held to the same label rule before it is written. Relative
+links in the prose are rewritten before translation: a page of the set links to its
+translation, anything else to the English file on GitHub. Every heading gets an explicit
+`<a id>` with its English anchor, so `#anchor` links keep working on the translated page.
+The first line of each translation stamps the git blob of the English page it was made from;
+`check` compares that stamp with the file. A change to the model or a banner makes every
+page stale; a change to the prompt does not: regenerate with `--all`. The READMEs carry a
+generated language line that `update` rewrites without translating; adding a language
+changes the English README's line, so its blob, and every README is translated again.
 
 The run estimates its cost before the first call and stops when the estimate, or the
 spend reported by the API, passes LOOM_I18N_MAX_USD (default 5). Every call checks the cap

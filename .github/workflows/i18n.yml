@@ -11,8 +11,9 @@ name: translations
 # Claude is called on Amazon Bedrock with no stored secret: the job, in the environment
 # i18n, exchanges its GitHub OIDC token for one-hour AWS credentials of the role in the
 # repository variable LOOM_I18N_AWS_ROLE_ARN, in the region in LOOM_I18N_AWS_REGION. The
-# credentials reach only the Translate step. While LOOM_I18N_AWS_ROLE_ARN is empty the job
-# is skipped. The role's trust and permission policies are in
+# role trusts the environment, so any step of this job could assume it; the credentials
+# themselves go only into the Translate step's environment. While LOOM_I18N_AWS_ROLE_ARN is
+# empty the job is skipped. The role's trust and permission policies are in
 # CONTRIBUTING.md#translations.
 on:
   push:
@@ -79,7 +80,7 @@ jobs:
         with:
           role-to-assume: ${{ vars.LOOM_I18N_AWS_ROLE_ARN }}
           aws-region: ${{ vars.LOOM_I18N_AWS_REGION }}
-          # Handed to the Translate step only, not exported to every later step.
+          # Into the Translate step's environment only, not exported to every later step.
           output-credentials: true
           output-env-credentials: false
       - name: Translate

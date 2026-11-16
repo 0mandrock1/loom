@@ -146,7 +146,7 @@ An operation or field may be renamed or removed. Say so in the PR description an
 
 `i18n/<lang>/` holds machine translations of the README, the quickstart and the use-case pages. `scripts/i18n/translate.py` writes them and `.github/workflows/i18n.yml` runs it on main after an English page changes; never edit a translation by hand.
 
-The script calls Claude on Amazon Bedrock and signs each request with short-lived AWS credentials: credentials without a session token are refused, so a long-lived access key cannot be used. To run it yourself, sign in to an AWS account where Bedrock serves Claude Sonnet 5.5 and export temporary credentials:
+The script calls Claude on Amazon Bedrock and signs each request with AWS credentials. It takes temporary credentials only: it requires `AWS_SESSION_TOKEN`. To run it yourself, sign in to an AWS account where Bedrock serves Claude Sonnet 5.5 and export temporary credentials (with an IAM user's access key, `aws sts get-session-token` returns them):
 
 ```bash
 aws sso login
@@ -155,7 +155,7 @@ export AWS_REGION=<region>
 python -m scripts.i18n.translate update
 ```
 
-The workflow gets its credentials from GitHub's OIDC token. Its job runs in the environment `i18n`, assumes an IAM role for one hour, and hands the credentials to the translating step only. The role trusts the OIDC subject of that environment, so a job outside it cannot assume the role. While no role is configured, the job is skipped.
+The workflow gets its credentials from GitHub's OIDC token. Its job runs in the environment `i18n`, assumes an IAM role for one hour, and puts the credentials into the translating step's environment only. The role trusts the OIDC subject of that environment, so a job outside it cannot assume the role; any step inside the job could, which is why the environment is limited to `main`. While no role is configured, the job is skipped.
 
 To turn translations on:
 
