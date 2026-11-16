@@ -3,9 +3,9 @@
 Loom links coding agents' memories to the functions, classes and files they name, follows
 them through refactors, and flags a memory when its code changes. By default, search
 leaves out a memory whose code is all gone unless a person pinned, locked or verified it,
-and every read that serves a lesson says when its code changed or is gone. It runs over MCP, HTTP and the SDKs on the repositories a
-self-hosted Loom indexes
-(the [code index](code-intelligence.md), `LOOM_CODE_INGEST_ENABLED=true`), and the
+and every read that serves a lesson says when its code changed or is gone. It runs over
+MCP, HTTP and the SDKs on the repositories a self-hosted Loom indexes (the
+[code index](code-intelligence.md), `LOOM_CODE_INGEST_ENABLED=true`), and the
 `memory_code_links` worker that keeps the links is on by default.
 
 ## What you get
