@@ -14,9 +14,10 @@ MCP, HTTP and the SDKs on the repositories a self-hosted Loom indexes (the
   (the Claude Code and Codex plugins tag what their hooks capture) or written in the
   repository's code namespace is linked to each definition
   (function, class or other symbol) it names in backticks, or anywhere in its text as
-  `A::b` or a call (`a.b()`, `name()`), that resolves to exactly one place; to definitions
-  in the files it lists that it names by a bare camelCase or snake_case word; and to each
-  file it lists that holds none of them. A qualified name not on trunk yet links if it
+  `A::b` or a call (`a.b()`, `name()`), that resolves to exactly one place (an unqualified
+  name needs four or more characters); to definitions in the files it lists that it names
+  by a bare camelCase or snake_case word; and to each file it lists that holds none of
+  them. A qualified name not on trunk yet links if it
   merges within `LOOM_MEMORY_CODE_LINKS_PENDING_DAYS` (14 days).
   [Memories linked to code](../concepts/memory.md#memories-linked-to-code)
 - **Links that follow refactors.** On every indexed commit, each link reads `fresh`,
@@ -27,8 +28,9 @@ MCP, HTTP and the SDKs on the repositories a self-hosted Loom indexes (the
   [`code_change_policy`](../reference/operations/namespace.md#namespaceregister) decides:
   `retire_removed` (the default) leaves a memory whose code is all gone out of search and
   flags changed code; `flag` only flags; `revise` also leaves gone-code memories out, and
-  has the model check a changed one's claim against the old and new code and suggest a
-  corrected claim. A memory a person pinned, locked or verified is never left out. Under
+  has the model check a changed one's claim against the old and new code: one that still
+  holds is re-anchored, and a contradicted one gets a suggested correction. A memory a
+  person pinned, locked or verified is never left out. Under
   every policy, search usually ranks a memory whose code changed below the next three
   results instead of hiding it; a held memory and a row found by name keep their place.
   Loom never rewrites the memory itself.
@@ -67,8 +69,8 @@ MCP, HTTP and the SDKs on the repositories a self-hosted Loom indexes (the
 [adding repositories](../features/code-index/repositories.md) turns the code index on for
 a repository. Connect your coding agent with its plugin or over MCP
 ([connect a coding agent](../getting-started/connect-a-coding-agent.md)). Save a lesson
-that names a definition of four or more characters in backticks, or a qualified one such
-as `` `Reader.run` ``. The Claude Code and Codex plugins tag what their hooks capture with
+that names a definition of four or more characters in backticks or as a call
+(`` `name()` ``), or a qualified one such as `` `Reader.run` ``. The Claude Code and Codex plugins tag what their hooks capture with
 `repo:<id>`, and the session primer names the id
 ([how it is derived](../features/integrations/claude-code.md#configuration)). A lesson the
 agent saves itself with `loom_memory_set` links when it carries that tag
