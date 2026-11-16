@@ -589,14 +589,19 @@ class AwsCredentials:
 
     @classmethod
     def from_env(cls) -> AwsCredentials:
-        names = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION")
-        missing = [n for n in names if not os.environ.get(n)]
+        names = {
+            "access_key_id": "AWS_ACCESS_KEY_ID",
+            "secret_access_key": "AWS_SECRET_ACCESS_KEY",
+            "session_token": "AWS_SESSION_TOKEN",
+            "region": "AWS_REGION",
+        }
+        missing = [n for n in names.values() if not os.environ.get(n)]
         if missing:
             raise SystemExit(
                 f"{', '.join(missing)} not set: translations need short-lived AWS credentials "
                 "and a region"
             )
-        return cls(*(os.environ[n] for n in names))
+        return cls(**{field: os.environ[n] for field, n in names.items()})
 
 
 def _hmac(key: bytes, text: str) -> bytes:

@@ -155,7 +155,7 @@ export AWS_REGION=<region>
 python -m scripts.i18n.translate update
 ```
 
-The workflow gets its credentials from GitHub's OIDC token. Its job runs in the environment `i18n` and assumes the IAM role in the repository variable `LOOM_I18N_AWS_ROLE_ARN`, in the region in `LOOM_I18N_AWS_REGION`, for one hour, and hands the credentials to the translating step only. While `LOOM_I18N_AWS_ROLE_ARN` is empty, the job is skipped. A job's OIDC subject names its environment, and the role trusts the subject of `i18n`: a job outside that environment cannot assume it. Create the environment `i18n` with deployment branches set to `main` only (Settings → Environments) before creating the role, so a workflow on another branch cannot run in it. The role's trust policy:
+The workflow gets its credentials from GitHub's OIDC token. Its job runs in the environment `i18n` and assumes the IAM role in the repository variable `LOOM_I18N_AWS_ROLE_ARN`, in the region in `LOOM_I18N_AWS_REGION`, for one hour, and hands the credentials to the translating step only. Set both as repository variables, not on the environment: the job's `if:` reads them before the job enters the environment. While `LOOM_I18N_AWS_ROLE_ARN` is empty, the job is skipped. A job's OIDC subject names its environment, and the role trusts the subject of `i18n`: a job outside that environment cannot assume it. Create the environment `i18n` with deployment branches set to `main` only (Settings → Environments) before creating the role, so a workflow on another branch cannot run in it. The role's trust policy:
 
 ```json
 {

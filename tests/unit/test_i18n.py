@@ -23,7 +23,10 @@ from tests.unit import markdown_links
 
 # The access key and secret of the AWS Signature Version 4 documentation's examples.
 CREDS = t.AwsCredentials(
-    "AKIDEXAMPLE", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "session-token", "us-east-1"
+    access_key_id="AKIDEXAMPLE",
+    secret_access_key="wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+    session_token="session-token",
+    region="us-east-1",
 )
 
 
@@ -536,3 +539,13 @@ def test_each_retry_is_signed_again(monkeypatch: pytest.MonkeyPatch) -> None:
     first, second = (r.get_header("X-amz-date") for r in sent)
     assert (first, second) == ("20261116T120000Z", "20261116T120600Z")
     assert sent[0].get_header("Authorization") != sent[1].get_header("Authorization")
+
+
+def test_credentials_are_read_into_their_own_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "id")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "token")
+    monkeypatch.setenv("AWS_REGION", "eu-west-1")
+    assert t.AwsCredentials.from_env() == t.AwsCredentials(
+        access_key_id="id", secret_access_key="secret", session_token="token", region="eu-west-1"
+    )
