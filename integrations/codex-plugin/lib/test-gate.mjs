@@ -18,7 +18,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { commandText, extractFiles, normalizeToolName, pathUnder } from "./loom-client.mjs";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "str_replace_editor", "apply_patch"]);
 
@@ -184,10 +187,11 @@ export function checkoutPython(root, { exec = execFileSync } = {}) {
   }
   for (const py of ["python3", "python"]) {
     try {
-      // -c puts the working directory first on sys.path, so a pytest.py at the
-      // checkout root would run here: drop that entry, and only that one, before the import.
-      exec(py, ["-c", 'import sys; sys.path[:1] == [""] and sys.path.pop(0); import pytest'], {
-        cwd: root,
+      // From the plugin's own directory, not the checkout: -c puts the working
+      // directory on sys.path, and so does an empty or relative PYTHONPATH entry,
+      // so run from the checkout a pytest.py there would be imported.
+      exec(py, ["-c", "import pytest"], {
+        cwd: HERE,
         timeout: 1500,
         stdio: "ignore",
         windowsHide: true,
