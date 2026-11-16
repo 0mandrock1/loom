@@ -671,7 +671,8 @@ def _extract(path: str, source: bytes) -> tuple[object, bool]:
 
 
 _REGISTRY_N = 5_000
-# The over-linear thresholds of test_code_regex_cost.py (`_lane_over`, the other tests).
+# Shared with test_code_regex_cost.py: RATIO and BOUND_S judge every timing test there,
+# LANE_FLOOR_S the class guard (`_lane_over`).
 RATIO = 8.0
 LANE_FLOOR_S = 0.05
 BOUND_S = 2.0
@@ -688,8 +689,8 @@ RETRY_FLOOR_S = 0.02
 def judged_step(
     cost: Callable[[int], tuple[float, int, bool, bool]], n: int, listed: bool
 ) -> tuple[str, float, float, int, int] | None:
-    """(the step judged, `N`, `4N`, or `N, 16N unread` when the 16N text stopped early or
-    read as another lane, the time at its two sizes, the bytes tree-sitter parsed at each)
+    """(the step judged: `N`, `4N` or `N, 16N unread` when the 16N text stopped early or
+    read as another lane; the time at its two sizes; the bytes tree-sitter parsed at each)
     of one shape, or None when its text at `n` does not read as the lane.
     `cost(n)` is (the time, the bytes parsed, whether the text read as the lane, whether
     every parse and walk finished). A listed shape that looks linear and an unlisted one
