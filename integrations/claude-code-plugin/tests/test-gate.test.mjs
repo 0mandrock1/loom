@@ -273,24 +273,33 @@ test("nothing to run asks for a test, not for running tests", () => {
 
 test("checkoutPython's pytest probe never imports a pytest.py from the checkout", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
+  const venv = process.env.VIRTUAL_ENV;
+  delete process.env.VIRTUAL_ENV; // an active virtualenv is used before the probe runs
   const marker = path.join(root, "ran");
   fs.writeFileSync(path.join(root, "pytest.py"), `open(${JSON.stringify(marker)}, "w").write("x")\n`);
   try {
     checkoutPython(root);
     assert.equal(fs.existsSync(marker), false);
   } finally {
+    if (venv !== undefined) process.env.VIRTUAL_ENV = venv;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
 test("checkoutPython drops the working directory from sys.path before importing pytest", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "loom-gate-"));
+  const venv = process.env.VIRTUAL_ENV;
+  delete process.env.VIRTUAL_ENV;
   const calls = [];
   try {
     const py = checkoutPython(root, { exec: (cmd, args) => calls.push([cmd, args]) });
     assert.equal(py, "python3");
-    assert.deepEqual(calls[0], ["python3", ["-c", "import sys; sys.path.pop(0); import pytest"]]);
+    assert.deepEqual(calls[0], [
+      "python3",
+      ["-c", 'import sys; sys.path[:1] == [""] and sys.path.pop(0); import pytest'],
+    ]);
   } finally {
+    if (venv !== undefined) process.env.VIRTUAL_ENV = venv;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

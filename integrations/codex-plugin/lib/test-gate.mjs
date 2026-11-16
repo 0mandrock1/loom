@@ -185,8 +185,8 @@ export function checkoutPython(root, { exec = execFileSync } = {}) {
   for (const py of ["python3", "python"]) {
     try {
       // -c puts the working directory first on sys.path, so a pytest.py at the
-      // checkout root would run here: drop that entry before the import.
-      exec(py, ["-c", "import sys; sys.path.pop(0); import pytest"], {
+      // checkout root would run here: drop that entry, and only that one, before the import.
+      exec(py, ["-c", 'import sys; sys.path[:1] == [""] and sys.path.pop(0); import pytest'], {
         cwd: root,
         timeout: 1500,
         stdio: "ignore",
