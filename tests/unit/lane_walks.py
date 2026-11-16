@@ -642,7 +642,7 @@ def _extract(path: str, source: bytes) -> tuple[object, bool]:
     if err.startswith("parse: MemoryError"):
         raise MemoryError(err)  # the parse reports it as a failed file
     if pf is None:
-        return None, not err
+        return None, False
     repo = _Names()
     steps = [
         lambda: _chunks_for(pf, path, source, 6000),
