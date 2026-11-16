@@ -36,10 +36,9 @@ def test_both_plugins_link_the_data_handling_section() -> None:
 
 def test_published_links_resolve() -> None:
     """The registry listing, the plugin manifests, both pyproject files, the SDK packages
-    and their READMEs, the Claude Code plugin's README, the citation, the chart and the issue
-    templates publish absolute
-    repository and site links, which the doc-link check does not follow; a renamed file
-    breaks them."""
+    and their READMEs, the Claude Code plugin's README, the citation, the chart and the
+    issue templates publish absolute repository and site links, which the doc-link check
+    does not follow; a renamed file breaks them."""
     text = "\n".join(
         (ROOT / f).read_text()
         for f in (
