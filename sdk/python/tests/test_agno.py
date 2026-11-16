@@ -138,7 +138,7 @@ def test_non_memory_operations_refuse_without_another_store():
         db.get_session("s")
     assert db.table_exists(db.memory_table_name)
     assert not db.table_exists(db.session_table_name)
-    for user in ["", " ", "-", "*"]:
+    for user in ["", " ", "-", "*", " alice", "alice "]:
         with pytest.raises(ValueError):
             LoomMemoryDb(FakeAgent(), user_id=user)
 

@@ -14,7 +14,9 @@ try:
     from agno.db.schemas.memory import UserMemory
     from agno.db.utils import validate_pagination
 except ImportError:
-    raise ImportError("Install clickhouse-loom[agno] to use LoomMemoryDb") from None
+    raise ImportError(
+        "loom.integrations.agno needs its optional extra: pip install 'clickhouse-loom[agno]'"
+    ) from None
 
 from loom import Agent, SyncAgent
 from loom.errors import LoomError
@@ -41,7 +43,7 @@ class LoomMemoryDb(BaseDb):
     def __init__(self, agent: SyncAgent, *, user_id: str, store: str = "default") -> None:
         if isinstance(agent, Agent):
             raise TypeError("Agno's synchronous database needs a loom.SyncAgent")
-        if not user_id.strip() or user_id.strip() in ("-", "*"):
+        if user_id in ("", "-", "*") or user_id != user_id.strip():
             raise ValueError("user_id must name an end user")
         if not store.strip():
             raise ValueError("store must not be empty")

@@ -51,7 +51,8 @@ def test_agno_manager_persists_resumes_and_clears_its_user(control_plane_url):
         claims = os.environ["LOOM_API_KEY"].split(".")[1]
         subject = json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))["sub"]
         assert row["actor"].endswith(f":{subject}")
-        assert row["tags"] == []
+        # Native epoch timestamps match Loom's contact-number detector.
+        assert row["tags"] == ["sensitivity:medium"]
         manager.clear_user_memories(user_id="alice")
         assert alice.get_user_memories() == []
         assert bob.get_user_memory("same").memory == "Window seats"

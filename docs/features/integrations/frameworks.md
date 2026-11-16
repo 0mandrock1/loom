@@ -713,7 +713,9 @@ with SyncAgent(org="acme", namespace="support", agent="assistant") as loom_agent
 
 The database stores each native memory, including its id, topics, agent/team attribution,
 input, feedback and timestamps, as an episodic Loom row. This keeps native identifiers
-and updates intact without fact extraction or semantic duplicate merging. Rows stay in
+and updates intact without fact extraction or semantic duplicate merging. The native
+JSON payload follows Loom's sensitivity classification; epoch timestamps can receive
+a contact-detail label. Rows stay in
 the user's Loom deployment; the adapter adds no database, cache or vector store.
 
 Use one `LoomMemoryDb` per end user. An omitted user in a database method means its
