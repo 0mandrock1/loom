@@ -679,8 +679,9 @@ BOUND_S = 2.0
 STEP_MAX_S = 0.25
 # A shape over this at N is not timed at 4N: it is over any linear budget already.
 N_MAX_S = 1.0
-# An unlisted shape over this at 4N is timed again before it is judged; it sits under
-# LANE_FLOOR_S so a shape near the floor is not failed on one slow run.
+# An unlisted shape over this at 4N and over RATIO times its N time is timed again
+# before it is judged; it sits under LANE_FLOOR_S so a shape near the floor is not
+# failed on one slow run.
 RETRY_FLOOR_S = 0.02
 
 
@@ -721,9 +722,9 @@ def judged_step(
     return "4N", big, huge, bb, bh
 
 
-def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
+def registry_cost(lang: str) -> list[tuple[str, str, float, float, int, int]]:
     """`judged_step` per shape the lane reads as its own (a manifest shape can read as a
-    template), with the shape's name first; a shape judged from 4N says so after its name.
+    template), with the shape's name first.
     The parses' time is not counted, since each has its own CPU deadline (`bounded_parse`);
     the bytes they read are returned, so a walk that parses the file again per block is
     still seen."""
@@ -767,8 +768,7 @@ def registry_cost(lang: str) -> list[tuple[str, float, float, int, int]]:
         listed = name in KNOWN_SLOW.get(lang, ())
         got = judged_step(functools.partial(cost, text), n, listed)
         if got is not None:
-            step, small, big, bs, bb = got
-            out.append((name if step == "N" else f"{name} from 4N", small, big, bs, bb))
+            out.append((name, *got))
     return out
 
 
