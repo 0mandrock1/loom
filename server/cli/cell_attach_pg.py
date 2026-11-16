@@ -31,6 +31,7 @@ TRY_FLOOR_MS = 100  # not a setting: one try's floor
 _MIGRATION_LOCK_MS = 10_000  # not a setting: one try's bound
 # A trigger try yields quickly to active writers.
 _TRIGGER_LOCK_MS = 100  # not a setting: one try's bound
+_TRIGGER_TRY_MARGIN_S = 8.0  # not a setting: catalog, DDL and standby allowance
 # The mode commit's lock wait a try, in ms, and its statement bound's margin above it.
 _MODE_LOCK_MS = 2_000  # not a setting: one try's bound
 _MODE_STATEMENT_MARGIN_MS = 3_000  # not a setting: a margin over the lock wait
@@ -524,29 +525,37 @@ async def _migration_holder(conn: Any, key: int) -> str:
 async def _ensure_one(conn: Any, table: str, most_ms: int, wait: Wait) -> cell_triggers.Outcome:
     """One try under the migration lock: the migration lock's wait, and then the DDL's lock
     wait (at most `most_ms`), each bounded by what `wait` has left when it starts, with the
-    try floor. A busy migration lock answers `busy` naming that lock's holder."""
+    try floor. One client deadline covers the lock, DDL and cleanup, including COMMIT or
+    rollback. A busy migration lock answers `busy` naming that lock's holder."""
     from server.core.schema.pg_migrate import _LOCK_KEY
 
-    await conn.execute(f"SET lock_timeout = '{wait.bound_ms(_MIGRATION_LOCK_MS)}ms'")
+    bound_s = (
+        wait.bound_ms(_MIGRATION_LOCK_MS) + wait.bound_ms(most_ms)
+    ) / 1000 + _TRIGGER_TRY_MARGIN_S
     try:
-        await conn.execute(_MIGRATION_LOCK, _LOCK_KEY)
-    except Exception as e:
-        if getattr(e, "sqlstate", None) == "55P03":
-            # A boot migrating: the next try.
-            return cell_triggers.Outcome("busy", await _migration_holder(conn, _LOCK_KEY))
+        async with asyncio.timeout(bound_s):
+            await conn.execute(f"SET lock_timeout = '{wait.bound_ms(_MIGRATION_LOCK_MS)}ms'")
+            try:
+                await conn.execute(_MIGRATION_LOCK, _LOCK_KEY)
+            except Exception as e:
+                if getattr(e, "sqlstate", None) != "55P03":
+                    raise
+                await conn.execute("RESET lock_timeout")
+                return cell_triggers.Outcome("busy", await _migration_holder(conn, _LOCK_KEY))
+            await conn.execute("RESET lock_timeout")
+            outcome = await cell_triggers.ensure_table(
+                conn,
+                table,
+                recording_first=True,
+                lock_timeout=f"{wait.bound_ms(most_ms)}ms",
+                attempts=1,
+            )
+            await conn.execute(_MIGRATION_UNLOCK, _LOCK_KEY)
+            return outcome
+    except BaseException:
+        # Closing the session releases its locks without asynchronous error cleanup.
+        conn.terminate()
         raise
-    finally:
-        await conn.execute("RESET lock_timeout")
-    try:
-        return await cell_triggers.ensure_table(
-            conn,
-            table,
-            recording_first=True,
-            lock_timeout=f"{wait.bound_ms(most_ms)}ms",
-            attempts=1,
-        )
-    finally:
-        await conn.execute(_MIGRATION_UNLOCK, _LOCK_KEY)
 
 
 def _busy_refusal(table: str, holders: list[Any]) -> Refusal:

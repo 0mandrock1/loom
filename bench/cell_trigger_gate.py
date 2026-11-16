@@ -80,8 +80,9 @@ async def _batch(args: argparse.Namespace, marked: bool) -> float:
             t = time.perf_counter()
             await conn.execute(
                 "INSERT INTO loom.scope_generations (org, scope) "
-                "SELECT $1, 'gate-' || g || '-' || $2 FROM generate_series(1, 1000) g",
+                "SELECT $1, $2 || g || '-' || $3 FROM generate_series(1, 1000) g",
                 args.org,
+                args.scope_prefix,
                 uuid.uuid4().hex[:8],
             )
             times.append((time.perf_counter() - t) * 1000)
@@ -98,6 +99,7 @@ async def main() -> None:
     p.add_argument("--org", required=True)
     p.add_argument("--namespace", required=True)
     args = p.parse_args()
+    args.scope_prefix = f"gate-{uuid.uuid4().hex}-"
     try:
         for _ in range(ROUNDS):
             for on in (True, False):
@@ -120,7 +122,9 @@ async def _clean(args: argparse.Namespace) -> None:
     conn = await asyncpg.connect(args.pg_dsn, server_settings={"loom.tenancy_checked": "on"})
     try:
         await conn.execute(
-            "DELETE FROM loom.scope_generations WHERE org = $1 AND scope LIKE 'gate-%'", args.org
+            "DELETE FROM loom.scope_generations WHERE org = $1 AND starts_with(scope, $2)",
+            args.org,
+            args.scope_prefix,
         )
     finally:
         await conn.close()

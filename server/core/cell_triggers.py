@@ -328,18 +328,32 @@ async def _run_ddl(
     import asyncpg
 
     for attempt in range(attempts):
+        rolled_back = False
         try:
-            async with conn.transaction():
+            tx = conn.transaction()
+            await tx.start()
+            try:
                 await conn.execute(f"SET LOCAL lock_timeout = '{lock_timeout}'")
                 for sql in sqls:
                     await conn.execute(sql)
+            except Exception:
+                await tx.rollback()
+                rolled_back = True
+                raise
+            await tx.commit()
             return Outcome("applied")
         except asyncpg.exceptions.InsufficientPrivilegeError as e:
+            if not rolled_back:
+                conn.terminate()
+                raise
             log.warning(
                 "cell triggers: not applied on loom.%s (%s): this role cannot alter it", table, e
             )
             return Outcome("denied")
         except asyncpg.exceptions.LockNotAvailableError as e:
+            if not rolled_back:
+                conn.terminate()
+                raise
             # Short tries outlast a short transaction; an autovacuum is left to finish.
             if attempt < attempts - 1:
                 await asyncio.sleep(LOCK_RETRY_S)
@@ -354,6 +368,11 @@ async def _run_ddl(
                     held,
                 )
             return Outcome("busy", held)
+        except BaseException:
+            if not rolled_back:
+                # Cancellation must not wait for another statement on this session.
+                conn.terminate()
+            raise
     return Outcome("busy")
 
 

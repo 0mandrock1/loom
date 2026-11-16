@@ -617,11 +617,17 @@ class _Cell:
         self.error = error
 
     def transaction(self) -> Any:
-        @contextlib.asynccontextmanager
-        async def _tx() -> AsyncIterator[None]:
-            yield
+        class _Tx:
+            async def start(self) -> None:
+                pass
 
-        return _tx()
+            async def commit(self) -> None:
+                pass
+
+            async def rollback(self) -> None:
+                pass
+
+        return _Tx()
 
     async def fetchrow(self, _sql: str, *_a: Any) -> dict[str, Any]:
         return {
