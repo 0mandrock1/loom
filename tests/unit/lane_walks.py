@@ -691,13 +691,11 @@ def judged_step(
 ) -> tuple[str, float, float, int, int] | None:
     """(the step judged: `N`, `4N` or `N, 16N unread` when the 16N text stopped early or
     read as another lane; the time at its two sizes; the bytes tree-sitter parsed at each)
-    of one shape, or None when its text at `n` does not read as the lane.
-    `cost(n)` is (the time, the bytes parsed, whether the text read as the lane, whether
-    every parse and walk finished). A listed shape that looks linear and an unlisted one
-    that looks over linear are timed best of three. An unlisted one still over linear, its
-    4N time under 16 times its N time (pure quadratic growth, which no cache step reaches)
-    and from LANE_FLOOR_S to STEP_MAX_S, is judged from 4N to 16N instead when the 16N text
-    reads as the lane and every parse and walk finishes."""
+    of one shape, or None when its text at `n` does not read as the lane. `cost(n)` is
+    (the time, the bytes parsed, whether the text read as the lane, whether every parse and
+    walk finished). An unlisted shape still over linear after the best of three, from
+    LANE_FLOOR_S to STEP_MAX_S at 4N and under 16 times its N time (pure quadratic growth,
+    which no cache step reaches), is judged from 4N to 16N instead."""
     small, bs, lane, _ = cost(n)
     if not lane:
         return None
@@ -714,7 +712,9 @@ def judged_step(
     if listed or not (in_window and in_band):
         return "N", small, big, bs, bb
     # The N walk can fit in the CPU cache and the 4N one not, so that step can grow over 8
-    # times on a busy host; from 4N to 16N only a walk over linear does.
+    # times on a busy host; from 4N to 16N only a walk over linear does. A walk capped at
+    # a count between its 4N and 16N items looks linear there: the per-file caps in
+    # server/code/domain/extract are at most 10,000, reached by 4N at one item a repeat.
     huge, bh, lane, finished = cost(16 * n)
     if not (lane and finished):  # a parse or walk that stopped early looks cheap
         return "N, 16N unread", small, big, bs, bb

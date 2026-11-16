@@ -27,6 +27,7 @@ import re
 import subprocess
 import sys
 import time
+import types
 from collections.abc import Callable
 
 import pytest
@@ -352,7 +353,9 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
         return {1: [0.01], 4: [0.12], 16: list(at_16n) or [1.9]}  # 12 times, then 16
 
     assert judged({1: [0.01], 4: [0.04]}) == ("N", False)  # not timed at 16N
-    assert judged({1: [(0.01, "stopped")], 4: [0.04]}) == ("N", False)  # timed all the same
+    # a run that stopped early at N or 4N is timed as it ran
+    assert judged({1: [(0.01, "stopped")], 4: [0.04]}) == ("N", False)
+    assert judged({1: [0.01], 4: [(0.1, "stopped")], 16: [0.4]}) == ("4N", False)
     assert judged({1: [0.01], 4: [0.1], 16: [0.4]}) == ("4N", False)  # 10 times once, then 4
     assert judged({1: [0.01], 4: [0.1], 16: [0.9, 0.4]}) == ("4N", False)  # 16N best of 3
     assert judged(quadratic()) == ("4N", True)
@@ -392,6 +395,33 @@ def test_a_lane_parse_that_fails_is_not_finished(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setitem(ingest_parse._PARSERS, "hcl", fails)
     pf, finished = _extract("a.tf", b"a = 1\n")
     assert getattr(pf, "lang", "") == "hcl" and not finished  # reads as the lane, cheaply
+
+
+def test_a_parse_a_walk_catches_is_not_finished(monkeypatch: pytest.MonkeyPatch) -> None:
+    from server.code.domain.extract import bounded_parse
+    from tests.unit import lane_walks
+
+    def raises(parser: object, source: bytes) -> object:
+        raise bounded_parse.ParseTimeout("deadline")
+
+    def extract(path: str, source: bytes) -> tuple[object, bool]:
+        try:
+            bounded_parse.parse(None, source)  # a walk that parses again and swallows it
+        except bounded_parse.ParseTimeout:
+            pass
+        return types.SimpleNamespace(lang="hcl"), True
+
+    runs: list[tuple[float, int, bool, bool]] = []
+
+    def judged(cost: Callable[[int], tuple[float, int, bool, bool]], n: int, listed: bool) -> None:
+        runs.append(cost(n))
+
+    monkeypatch.setattr(bounded_parse, "parse", raises)
+    monkeypatch.setattr(lane_walks, "_extract", extract)
+    monkeypatch.setattr(lane_walks, "judged_step", judged)
+    monkeypatch.setattr(lane_walks, "SHAPES", [("one", lambda n: "a\n" * n)])
+    lane_walks.registry_cost("hcl")
+    assert [(lane, finished) for _t, _b, lane, finished in runs] == [(True, False)]
 
 
 def _registered_lanes() -> list[str]:
