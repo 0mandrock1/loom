@@ -28,7 +28,7 @@ from typing import Any
 
 from server.core import cell as cell_state
 from server.core.paths import ROUTER_MIGRATIONS_DIR
-from server.router.limits import MAX_BODY_BYTES
+from server.router import fingerprints
 from server.settings import settings
 
 # The directory's own migration lock: never the memory authority's.
@@ -805,27 +805,6 @@ def _fingerprint_refusal(found: Attaching, name: str, value: dict[str, Any]) -> 
     return ""
 
 
-# An org as a placement body carries it at most: ORG_MAX_BYTES bytes, each escaped in JSON
-# to at most six (`\u00XX`).
-_PLACEMENT_ORG_MAX = 6 * cell_state.ORG_MAX_BYTES  # not a setting: derived
-
-
-def _placement_refusal(cell: str, name: str, value: dict[str, Any]) -> str:
-    """Why a fingerprint is too large for the cell's live placements ('' when it is not): a
-    placement body (`{org, cell, fingerprint}`, the org at its longest) past the router's
-    MAX_BODY_BYTES would refuse every new org; the largest fields are named."""
-    # The default encoding is the longest: spaces after separators, non-ASCII escaped.
-    size = len(json.dumps({"org": "", "cell": cell, "fingerprint": value})) + _PLACEMENT_ORG_MAX
-    if size <= MAX_BODY_BYTES:
-        return ""
-    sizes = sorted(((len(json.dumps(v)), k) for k, v in value["fields"].items()), reverse=True)
-    largest = ", ".join(k for _, k in sizes[:3])
-    return (
-        f"{name} makes a placement body of up to {size} bytes, past the router's "
-        f"{MAX_BODY_BYTES}: its largest fields are {largest}"
-    )
-
-
 def _as_json(*values: Any) -> str:
     """Values in one canonical JSON text, which tells `false`, `0` and `0.0` apart."""
     return json.dumps(values, sort_keys=True)
@@ -840,7 +819,7 @@ def begin_refusal(found: Attaching, begin: Begin) -> str:
     for name, value in (("current_fp", begin.current_fp), ("next_fp", begin.next_fp)):
         if value is None:
             continue
-        if reason := _fingerprint_refusal(found, name, value) or _placement_refusal(
+        if reason := _fingerprint_refusal(found, name, value) or fingerprints.placement_refusal(
             row.cell, name, value
         ):
             return reason
