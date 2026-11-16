@@ -35,8 +35,9 @@ The hooks and scripts send data only to the Loom server the plugin is configured
 with (the two skills below are the exceptions). They send:
 
 - prompts, tool calls' input and output, and the paths of files read or edited;
-- a symbol name taken from a redirected grep pattern, and the query of a `gh`
-  issue search with the repository it names;
+- the symbol name in a grep the plugin answers from the code index instead, and
+  the search text of a `gh issue list --search` or `gh search issues` command
+  it answers from Loom, with the repository that command names;
 - chat turns and session briefs (the compaction summary and a log of asks and
   replies, commands, files and web addresses), stored only when the namespace
   has conversation logging on;
@@ -70,10 +71,10 @@ deleting data is covered in
 
 The plugin's hooks run `node`, `git` and `grep` on your machine: `git` reads the
 checkout's remotes, branch, `HEAD` commit, status and diffs, and `grep` searches
-uncommitted files for a redirected grep pattern. The test gate runs no Python:
-for a pytest test it picks the interpreter of the checkout's virtualenv, the
-active one (`VIRTUAL_ENV`) or a `python3` or `python` on `PATH`, looking at the
-file without running it.
+uncommitted files for the pattern of a grep the plugin answers from the code
+index. The test gate runs no Python: for a pytest test it picks the interpreter
+of the checkout's virtualenv, the active one (`VIRTUAL_ENV`) or a `python3` or
+`python` on `PATH`, looking at the file without running it.
 
 The plugin keeps the token it saves (a copy of the install token or a
 self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
