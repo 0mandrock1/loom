@@ -86,8 +86,10 @@ replica that may write the configured databases with `--ch-allow-user`,
 Postgres role besides attach's own that may make an org held with `--pg-allow-role`; each
 list is audited by the router. `--wait` (default 600 s) is the wall time the waits share;
 every lock try runs at least once, with a lock wait of at least 100 ms, so `--wait 0` runs
-one try of each wait with no retry; `--scan-budget` (default 7200 s) bounds each full scan,
-and step 2 must take at most half of it, since step 4 reads the same tables again.
+one try of each wait with no retry. The final heartbeat checks get at least two heartbeats
+plus the router timeout, with one extension for a process first seen booting; this floor
+is not charged to `--wait`. `--scan-budget` (default 7200 s) bounds each full scan, and
+step 2 must take at most half of it, since step 4 reads the same tables again.
 
 A refusal names what to fix. Rerun attach after fixing it: every step is idempotent, and a
 rerun resumes by the directory row and the cell's mode. On a `serving` row it prints that it

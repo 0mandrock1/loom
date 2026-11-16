@@ -469,8 +469,8 @@ async def test_the_mode_commit_waits_out_a_for_share_holder(cell_stores) -> None
     await _prepare(cell_stores, _Network())
     logged: list[str] = []
 
-    async def ok() -> bool:
-        return True
+    async def ok() -> list[str]:
+        return []
 
     async with pg.dedicated() as holder, pg.dedicated() as conn:
         tx = holder.transaction()

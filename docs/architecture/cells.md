@@ -1065,8 +1065,10 @@ Then, in order (the step numbers are the ones the rest of this page uses):
   backed out.
 - **Step 3, the mode commit**: `attach/enforced`, then on a session of its own an EXCLUSIVE
   lock on `loom.tenancy_mode`, 2 s a try within `--wait`, the attach lock confirmed and the
-  cheap heartbeat refusals run before each try (a booting process skips the try). After a
-  failed try, the mode transaction an earlier run left in flight is found by its lock (only
+  cheap heartbeat refusals run before each try (a booting process skips the try). Each try,
+  including COMMIT, has a client deadline: the lock wait plus a 3 s statement margin and
+  a 5 s standby allowance. A commit past it has an unknown outcome until the durable read.
+  After a failed try, the mode transaction an earlier run left in flight is found by its lock (only
   attach takes `ExclusiveLock` there; a relation's OID is matched in this database alone)
   and ended. From the commit on the mode only rises: every later refusal leaves the cell
   `enforced` and `attaching`, and a rerun resumes from the durable read.

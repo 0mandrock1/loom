@@ -442,13 +442,13 @@ class Run:
 
     # -- step 3 ------------------------------------------------------------------------
 
-    async def ready_for_commit(self) -> bool:
+    async def ready_for_commit(self) -> list[str]:
         """The cheap heartbeat refusals right before a mode-commit try: a refusal raises,
         a booting process skips the try."""
         verdict = self.judge_beats("refuse")(await beats.read_beats(self.ch))
         if verdict.refusals:
             raise Refused(verdict.refusals)
-        return not verdict.booting
+        return verdict.booting
 
     async def commit_mode(self) -> None:
         from server.core import pg
