@@ -339,8 +339,10 @@ test("checkoutPython prefers the checkout's virtualenvs, then an active one, the
 });
 
 test("the test gate starts no process", () => {
-  const src = fs.readFileSync(new URL("../lib/test-gate.mjs", import.meta.url), "utf8");
-  assert.doesNotMatch(src, /child_process/);
+  for (const file of ["../lib/test-gate.mjs", "../hooks/loom-test-gate.mjs"]) {
+    const src = fs.readFileSync(new URL(file, import.meta.url), "utf8");
+    assert.doesNotMatch(src, /child_process/, file);
+  }
 });
 
 test("checkoutPython runs no pytest.py planted in the checkout", () => {
