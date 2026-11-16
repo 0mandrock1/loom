@@ -6,6 +6,7 @@ ClickHouse and router behaviour is tests/integration/test_cell_attach.py. CH-fre
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -244,8 +245,8 @@ async def test_wait_is_wall_time_lock_tries_included_and_no_scan(clock: _Clock) 
     async def nothing() -> None:
         pass
 
-    async def ready() -> bool:
-        return True
+    async def ready() -> list[str]:
+        return []
 
     wait = apg.Wait(4, clock)
     clock.now += 100  # a scan before the wait
@@ -652,8 +653,8 @@ async def test_the_mode_commit_retries_a_busy_lock_and_ends_an_earlier_run(clock
     async def confirm() -> None:
         confirmed.append(True)
 
-    async def ready() -> bool:
-        return True
+    async def ready() -> list[str]:
+        return []
 
     logged: list[str] = []
     await apg.commit_enforced(
@@ -684,22 +685,106 @@ async def test_a_superusers_mode_transaction_is_named_not_ended() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wait_s", [0, 2])
 async def test_the_mode_commit_refuses_past_wait_and_skips_a_try_while_booting(
     clock: _Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    wait_s: int,
 ) -> None:
     conn = FakeConn([("l.mode = 'ExclusiveLock'", [])])
+    run = cell_attach.Run(None, _args(), None, lambda _t: None)  # type: ignore[arg-type]
+    run.own_fp = (CURRENT, NEXT)
+
+    async def read(_ch: Any) -> list[beats.Beat]:
+        return [_beat("a", cell_name=None), _beat("b", cell_name=None)]
+
+    monkeypatch.setattr(beats, "read_beats", read)
 
     async def confirm() -> None:
         pass
 
-    async def booting() -> bool:
-        return False
-
-    with pytest.raises(Refused, match="not taken within --wait"):
+    with pytest.raises(Refused) as error:
         await apg.commit_enforced(
-            conn, confirm, booting, apg.Wait(2, clock), lambda _t: None, lambda _m: None
+            conn,
+            confirm,
+            run.ready_for_commit,
+            apg.Wait(wait_s, clock),
+            lambda _t: None,
+            lambda _m: None,
         )
+    assert [str(r) for r in error.value.refusals] == [
+        "process a: still booting at the end of --wait",
+        "process b: still booting at the end of --wait",
+    ]
     assert not any("LOCK TABLE" in s for s in conn.executed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wait_s,bound_s", [(0, 8.1), (10, 10.0)])
+async def test_the_mode_try_bounds_a_commit_that_never_answers(
+    monkeypatch: pytest.MonkeyPatch, clock: _Clock, wait_s: int, bound_s: float
+) -> None:
+    class _StalledCommit(FakeConn):
+        def transaction(self) -> Any:
+            conn = self
+
+            class _Tx:
+                async def __aenter__(self) -> None:
+                    conn.executed.append("BEGIN")
+
+                async def __aexit__(self, *exc: Any) -> None:
+                    assert not exc[0]
+                    conn.executed.append("COMMIT")
+                    await asyncio.Future()
+
+            return _Tx()
+
+    conn = _StalledCommit([("UPDATE loom.tenancy_mode", "UPDATE 1")])
+    bounds: list[float] = []
+    timeout = asyncio.timeout
+
+    def bounded(seconds: float) -> Any:
+        bounds.append(seconds)
+        return timeout(0)
+
+    monkeypatch.setattr(apg.asyncio, "timeout", bounded)
+    marks: list[str] = []
+
+    async def confirm() -> None:
+        pass
+
+    async def ready() -> list[str]:
+        return []
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            apg.commit_enforced(
+                conn, confirm, ready, apg.Wait(wait_s, clock), lambda _t: None, marks.append
+            ),
+            timeout=0.2,
+        )
+    assert conn.executed[-1] == "COMMIT"
+    assert bounds == [bound_s]
+    assert marks == ["unknown"]
+
+
+@pytest.mark.asyncio
+async def test_an_interrupt_waiting_for_the_mode_lock_leaves_recording(clock: _Clock) -> None:
+    conn = FakeConn([("LOCK TABLE", KeyboardInterrupt())])
+    marks: list[str] = []
+
+    async def confirm() -> None:
+        pass
+
+    async def ready() -> list[str]:
+        return []
+
+    with pytest.raises(KeyboardInterrupt):
+        await apg.commit_enforced(
+            conn, confirm, ready, apg.Wait(2, clock), lambda _t: None, marks.append
+        )
+    assert conn.executed[-1] == "ROLLBACK"
+    assert marks == []
 
 
 @pytest.mark.asyncio
@@ -921,8 +1006,8 @@ async def test_wait_0_runs_one_try_of_each_wait(
     )
     marks: list[str] = []
 
-    async def ok() -> bool:
-        return True
+    async def ok() -> list[str]:
+        return []
 
     async def nothing() -> None:
         pass
@@ -975,10 +1060,10 @@ async def test_a_mode_commit_refused_without_a_landed_try_says_recording(
     async def call(_self: Any, _path: str, _body: Any = None) -> dict[str, Any]:
         return {"cell": "first"}
 
-    async def ready(_self: Any) -> bool:
+    async def ready(_self: Any) -> list[str]:
         if refused_before_any_try:
             raise Refused([Refusal("process p1", "runs with LOOM_CELL unset")])
-        return True
+        return []
 
     async def confirm(_self: Any) -> None:
         pass

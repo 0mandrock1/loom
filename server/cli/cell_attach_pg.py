@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -29,9 +29,13 @@ TRY_FLOOR_MS = 100  # not a setting: one try's floor
 # The migration lock's wait a trigger try (a boot holds it for its migrations), in ms; a
 # try never waits longer than --wait has left.
 _MIGRATION_LOCK_MS = 10_000  # not a setting: one try's bound
+# A trigger try yields quickly to active writers.
+_TRIGGER_LOCK_MS = 100  # not a setting: one try's bound
 # The mode commit's lock wait a try, in ms, and its statement bound's margin above it.
 _MODE_LOCK_MS = 2_000  # not a setting: one try's bound
 _MODE_STATEMENT_MARGIN_MS = 3_000  # not a setting: a margin over the lock wait
+# COMMIT's standby wait is outside Postgres's statement timeout.
+_MODE_STANDBY_S = 5.0  # not a setting: one try's standby allowance
 # The server ends the lock session soon after its client is gone, releasing the lock.
 _KEEPALIVE = {"tcp_keepalives_idle": "30", "tcp_keepalives_interval": "10"}
 
@@ -465,7 +469,7 @@ async def _ensure_table(
     yielded = False
     said = ""
     while True:
-        most_ms = 100
+        most_ms = _TRIGGER_LOCK_MS
         holders = await cell_triggers.holders(conn, table)
         if not yielded and any(h["backend_type"] == "autovacuum worker" for h in holders):
             most_ms, yielded = deadlock_ms + 500, True
@@ -572,7 +576,7 @@ _END_PAUSE_S = 0.1  # not a setting: the pause between them
 async def commit_enforced(
     conn: Any,
     confirm_lock: Callable[[], Any],
-    ready: Callable[[], Any],
+    ready: Callable[[], Awaitable[list[str]]],
     wait: Wait,
     log: Callable[[str], None],
     mark: Callable[[str], None],
@@ -581,17 +585,17 @@ async def commit_enforced(
     session): an EXCLUSIVE lock on loom.tenancy_mode a try, `_MODE_LOCK_MS` each (less
     when `wait` has less left), within `wait`; `confirm_lock` before each try and each
     termination (it refuses when another run holds the attach lock), and `ready` before
-    each try (False skips the try while a process boots). After a failed try the in-flight
+    each try (the booting process ids skip the try). After a failed try the in-flight
     mode transaction, found by its lock, is ended. `mark` hears `unknown` just before a try
     sends its UPDATE and `recording` when that try rolled back. Raises Refused when `wait`
     runs out; whether the commit landed is the durable read's to say."""
     with wait.counting():
         while True:
             await confirm_lock()
-            if await ready():
-                mark("unknown")
+            booting = await ready()
+            if not booting:
                 try:
-                    done = await _mode_try(conn, wait.bound_ms(_MODE_LOCK_MS))
+                    done = await _mode_try(conn, wait.bound_ms(_MODE_LOCK_MS), mark)
                 except Refused:
                     mark("recording")  # the UPDATE's transaction rolled back
                     raise
@@ -601,6 +605,13 @@ async def commit_enforced(
                 log("the mode's lock is busy; retrying")
                 await end_mode_transactions(conn, confirm_lock)
             if not await wait.pause():
+                if booting:
+                    raise Refused(
+                        [
+                            Refusal(f"process {p}", "still booting at the end of --wait")
+                            for p in booting
+                        ]
+                    )
                 raise Refused(
                     [
                         Refusal(
@@ -612,15 +623,18 @@ async def commit_enforced(
                 )
 
 
-async def _mode_try(conn: Any, lock_ms: int) -> bool:
-    """One try of the mode commit, its lock wait `lock_ms`; False when it timed out."""
+async def _mode_try(conn: Any, lock_ms: int, mark: Callable[[str], None]) -> bool:
+    """One try including COMMIT, bounded by its lock and statement waits plus the standby
+    allowance; False on a statement timeout, TimeoutError if COMMIT never answers."""
+    bound_s = (lock_ms + _MODE_STATEMENT_MARGIN_MS) / 1000 + _MODE_STANDBY_S
     try:
-        async with conn.transaction():
+        async with asyncio.timeout(bound_s), conn.transaction():
             await conn.execute(f"SET LOCAL lock_timeout = '{lock_ms}ms'")
             await conn.execute(
                 f"SET LOCAL statement_timeout = '{lock_ms + _MODE_STATEMENT_MARGIN_MS}ms'"
             )
             await conn.execute("LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE")
+            mark("unknown")
             status = await conn.execute(
                 "UPDATE loom.tenancy_mode SET mode = 'enforced', since = now()"
             )
