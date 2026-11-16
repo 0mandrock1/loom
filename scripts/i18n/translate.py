@@ -601,7 +601,7 @@ class AwsCredentials:
                 f"{', '.join(missing)} not set: translations need short-lived AWS credentials "
                 "and a region"
             )
-        return cls(**{field: os.environ[n] for field, n in names.items()})
+        return cls(**{attr: os.environ[env] for attr, env in names.items()})
 
 
 def _hmac(key: bytes, text: str) -> bytes:

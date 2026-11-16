@@ -155,7 +155,15 @@ export AWS_REGION=<region>
 python -m scripts.i18n.translate update
 ```
 
-The workflow gets its credentials from GitHub's OIDC token. Its job runs in the environment `i18n` and assumes the IAM role in the repository variable `LOOM_I18N_AWS_ROLE_ARN`, in the region in `LOOM_I18N_AWS_REGION`, for one hour, and hands the credentials to the translating step only. Set both as repository variables, not on the environment: the job's `if:` reads them before the job enters the environment. While `LOOM_I18N_AWS_ROLE_ARN` is empty, the job is skipped. A job's OIDC subject names its environment, and the role trusts the subject of `i18n`: a job outside that environment cannot assume it. Create the environment `i18n` with deployment branches set to `main` only (Settings → Environments) before creating the role, so a workflow on another branch cannot run in it. The role's trust policy:
+The workflow gets its credentials from GitHub's OIDC token. Its job runs in the environment `i18n`, assumes an IAM role for one hour, and hands the credentials to the translating step only. The role trusts the OIDC subject of that environment, so a job outside it cannot assume the role. While no role is configured, the job is skipped.
+
+To turn translations on:
+
+1. Create the environment `i18n` with deployment branches set to `main` only (Settings → Environments), so a workflow on another branch cannot run in it. Do this before creating the role.
+2. Create the IAM role in an AWS account where Bedrock serves Claude Sonnet 5.5, with the trust and permission policies below.
+3. Set the repository variables `LOOM_I18N_AWS_ROLE_ARN` (the role) and `LOOM_I18N_AWS_REGION`. Set them on the repository, not on the environment: the job's `if:` reads them before the job enters the environment.
+
+The trust policy names the subject GitHub puts in the job's token. This repository uses GitHub's immutable subject format, which carries the owner and repository ids; `gh api repos/ClickHouse/loom/actions/oidc/customization/sub` prints its prefix as `sub_claim_prefix`, and the environment's subject is that prefix followed by `:environment:i18n`:
 
 ```json
 {
@@ -170,7 +178,7 @@ The workflow gets its credentials from GitHub's OIDC token. Its job runs in the 
       "Condition": {
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:ClickHouse/loom:environment:i18n"
+          "token.actions.githubusercontent.com:sub": "repo:ClickHouse@54801242/loom@1410331061:environment:i18n"
         }
       }
     }
@@ -178,7 +186,7 @@ The workflow gets its credentials from GitHub's OIDC token. Its job runs in the 
 }
 ```
 
-The role's permission policy allows inference on Claude Sonnet 5.5 (`anthropic.claude-sonnet-5-5`) only. Bedrock's `bedrock-mantle` endpoint authorizes inference on the account's project, so the policy names the model in a condition:
+The permission policy allows inference on Claude Sonnet 5.5 (`anthropic.claude-sonnet-5-5`) only. Bedrock's `bedrock-mantle` endpoint authorizes inference on the account's project, so the policy names the model in a condition:
 
 ```json
 {
