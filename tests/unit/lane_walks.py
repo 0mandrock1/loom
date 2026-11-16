@@ -622,8 +622,9 @@ class _Names:
 def _extract(path: str, source: bytes) -> tuple[object, bool]:
     """What the ingest derives from one file without the store: the parse, its chunks
     and facets, its call edges, and a tree-less lane's own edges against a name table,
-    under the recursion limit the edge stage retries with. A walk that raises costs what
-    it ran and is reported as not finished; running out of memory fails."""
+    under the recursion limit the edge stage retries with. A parse that fails or a walk
+    that raises costs what it ran and is reported as not finished; running out of memory
+    fails."""
     import asyncio
     import sys
 
@@ -641,7 +642,7 @@ def _extract(path: str, source: bytes) -> tuple[object, bool]:
     if err.startswith("parse: MemoryError"):
         raise MemoryError(err)  # the parse reports it as a failed file
     if pf is None:
-        return err, True
+        return None, not err
     repo = _Names()
     steps = [
         lambda: _chunks_for(pf, path, source, 6000),
@@ -666,7 +667,7 @@ def _extract(path: str, source: bytes) -> tuple[object, bool]:
                 finished = False
     finally:
         sys.setrecursionlimit(before)
-    return pf, finished
+    return pf, finished and not err
 
 
 _REGISTRY_N = 5_000
@@ -676,6 +677,11 @@ LANE_FLOOR_S = 0.05
 BOUND_S = 2.0
 # A shape over this at 4N is not timed at 16N: a quadratic walk there takes seconds.
 STEP_MAX_S = 0.25
+# A shape over this at N is not timed at 4N: it is over any linear budget already.
+N_MAX_S = 1.0
+# An unlisted shape over this at 4N is timed again before it is judged; it sits under
+# LANE_FLOOR_S so a shape near the floor is not failed on one slow run.
+RETRY_FLOOR_S = 0.02
 
 
 def judged_step(
@@ -692,14 +698,16 @@ def judged_step(
     small, bs, lane, _ = cost(n)
     if not lane:
         return None
-    if small > 1.0:  # already over any linear budget: 4N would only spend the deadline
+    if small > N_MAX_S:
         return "N", small, float("inf"), bs, bs
     big, bb, _, _ = cost(4 * n)
-    if (listed and big < LANE_FLOOR_S) or (not listed and big > 0.02 and big > RATIO * small):
+    if (listed and big < LANE_FLOOR_S) or (
+        not listed and big > RETRY_FLOOR_S and big > RATIO * small
+    ):
         small = min(small, cost(n)[0], cost(n)[0])
         big = min(big, cost(4 * n)[0], cost(4 * n)[0])
     in_window = LANE_FLOOR_S < big < STEP_MAX_S
-    in_band = RATIO * small < big < 2 * RATIO * small
+    in_band = RATIO * small < big < 16 * small  # 16 times: pure quadratic growth
     if listed or not (in_window and in_band):
         return "N", small, big, bs, bb
     # The N walk can fit in the CPU cache and the 4N one not, so that step can grow over 8

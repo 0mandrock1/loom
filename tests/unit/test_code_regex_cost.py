@@ -382,6 +382,18 @@ def test_judged_step_tells_a_cache_step_from_growth_over_linear() -> None:
     assert sizes.count(16) == 1  # a 16N run that looks linear is timed once
 
 
+def test_a_lane_parse_that_fails_is_not_finished(monkeypatch: pytest.MonkeyPatch) -> None:
+    from server.code.app.index import ingest_parse
+    from tests.unit.lane_walks import _extract
+
+    def fails(path: str, source: bytes) -> object:
+        raise ValueError("no parse")
+
+    monkeypatch.setitem(ingest_parse._PARSERS, "hcl", fails)
+    pf, finished = _extract("a.tf", b"a = 1\n")
+    assert getattr(pf, "lang", "") == "hcl" and not finished  # reads as the lane, cheaply
+
+
 def _registered_lanes() -> list[str]:
     from server.code.app.index.ingest_parse import _PARSERS
 
