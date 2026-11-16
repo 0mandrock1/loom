@@ -12,7 +12,7 @@ name: translations
 # i18n, exchanges its GitHub OIDC token for one-hour AWS credentials of the role in the
 # repository variable LOOM_I18N_AWS_ROLE_ARN, in the region in LOOM_I18N_AWS_REGION. The
 # credentials reach only the Translate step. While LOOM_I18N_AWS_ROLE_ARN is empty the job
-# translates nothing and succeeds. The role's trust and permission policies are in
+# is skipped. The role's trust and permission policies are in
 # CONTRIBUTING.md#translations.
 on:
   push:
@@ -41,35 +41,29 @@ concurrency:
 jobs:
   update:
     name: update
-    if: github.ref == 'refs/heads/main'
+    # Without an AWS role the job is skipped before it enters the environment, so the
+    # environment is never created without its deployment-branch rule.
+    if: github.ref == 'refs/heads/main' && vars.LOOM_I18N_AWS_ROLE_ARN != ''
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # The AWS role trusts this environment only, so no other job can assume it.
+    # The AWS role trusts this environment's OIDC subject; a job outside it cannot assume
+    # the role.
     environment: i18n
     permissions:
       contents: write
       pull-requests: write
       id-token: write
-    env:
-      ROLE_ARN: ${{ vars.LOOM_I18N_AWS_ROLE_ARN }}
     defaults:
       run:
         # Explicit bash runs with -o pipefail, so a failed translation fails its step.
         shell: bash
     steps:
-      - name: Skip without an AWS role
-        if: env.ROLE_ARN == ''
-        run: |
-          echo "translations are off: no AWS role configured" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.ROLE_ARN != ''
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        if: env.ROLE_ARN != ''
         with:
           python-version: "3.12"
       - name: Find stale translations
         id: check
-        if: env.ROLE_ARN != ''
         env:
           ALL: ${{ inputs.all }}
         run: |
@@ -83,7 +77,7 @@ jobs:
         if: steps.check.outputs.stale == 'true'
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ env.ROLE_ARN }}
+          role-to-assume: ${{ vars.LOOM_I18N_AWS_ROLE_ARN }}
           aws-region: ${{ vars.LOOM_I18N_AWS_REGION }}
           # Handed to the Translate step only, not exported to every later step.
           output-credentials: true

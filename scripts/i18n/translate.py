@@ -134,6 +134,8 @@ LANGUAGES = (
 # USD per million tokens (input, output) at Anthropic's list prices. Bedrock bills at its own
 # prices, so the cap is approximate. A model missing here is refused: the cap needs a price.
 PRICES = {"claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}
+# The workflow's AWS role may call this model only (CONTRIBUTING.md#translations): another
+# model needs that policy changed first.
 DEFAULT_MODEL = "claude-sonnet-5-5"
 # Bedrock names a model with an `anthropic.` prefix; the stamp keeps the plain name.
 BEDROCK_MODEL_PREFIX = "anthropic."
