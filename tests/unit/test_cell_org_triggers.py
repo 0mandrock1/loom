@@ -86,6 +86,14 @@ class _Session:
     async def fetch(self, _sql: str, *_a: Any) -> list[Any]:
         return []
 
+    def terminate(self) -> None:
+        self.statements.append("terminated")
+
+    async def fetchval(self, sql: str, *_a: Any) -> bool:
+        assert sql in ("SELECT pg_try_advisory_lock($1)", "SELECT pg_advisory_unlock($1)")
+        self.statements.append(sql)
+        return True
+
 
 @pytest.mark.parametrize("name", ["eu-1", ""])
 @pytest.mark.parametrize("schema", ["loom", "loom_router"])
