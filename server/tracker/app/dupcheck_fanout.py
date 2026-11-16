@@ -73,7 +73,7 @@ async def readable_tracker_namespaces(
         if ns and ns not in out:
             out.append(ns)
     cap = max(cap, len(out))
-    if cap <= 1 and not requested:
+    if cap <= 1 and out and not requested:
         return out
     if requested:
         operator = operator_repositories()  # once for every requested name

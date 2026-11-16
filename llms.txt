@@ -50,7 +50,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Namespaces and sharing](docs/features/namespaces-and-sharing.md): A namespace is the unit of isolation and sharing inside an org.
 - [Runs](docs/features/runs.md): A run is one execution of a task, such as "triage issue 1234".
 - [Tasks, decisions and policies](docs/features/tasks-and-decisions.md): Three planes sit beside memory for coordination between agents.
-- [Unified search and context packs](docs/features/unified-search.md): `loom_search` searches memory, profile, knowledge and past conversations across the caller's namespaces in one round trip.
+- [Unified search and context packs](docs/features/unified-search.md): `loom_search` searches memory, profile, knowledge, past conversations and readable issues and PRs across the caller's namespaces in one round trip.
 - [Code index for coding agents over MCP](docs/features/code-index/overview.md): With code workers enabled for a repository, Loom indexes it into ClickHouse and answers structure questions through the `code.*` operations: where a symbol is defined, who calls it, what a change reaches, which merged PR touched a line.
 - [Code index freshness](docs/features/code-index/freshness.md): The index trails the repository: it indexes merged commits on a configured branch, pass by pass, and each tier advances its own watermark.
 - [History, PRs and releases](docs/features/code-index/history-and-prs.md): These ops need merged-PR history; the `code_pr_history` worker is off by default (`LOOM_CODE_PR_HISTORY_ENABLED`).
