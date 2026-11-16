@@ -306,14 +306,15 @@ same network. On the same machine, `loom install --client claude-desktop` writes
   OAuth or not at all and sends no custom header, so it needs the
   [browser sign-in](#clients-that-sign-in-by-browser), at a public HTTPS address or
   through a Secure MCP Tunnel.
-- **Grok**: grok.com/connectors → New Connector → Custom, with the URL; xAI's docs do not
-  say which authentication it takes. Where it asks for a token, enter `Bearer <JWT>`
-  ([telling which](#bearer-or-bare-token)); otherwise use the
+- **Grok**: grok.com/connectors → New Connector → Custom, with the URL. xAI's docs name
+  OAuth and API keys but not the header an API key is sent in: where it asks for a key,
+  enter `Bearer <JWT>` ([telling which](#bearer-or-bare-token)); for OAuth, use the
   [browser sign-in](#clients-that-sign-in-by-browser).
-- **Perplexity**: it documents OAuth and an API key for a custom remote connector. Loom's
+- **Perplexity**: the connector docs Perplexity publishes offer an API key or no
+  authentication and do not say which header the key is sent in
+  ([telling which](#bearer-or-bare-token)). Where it offers OAuth, Loom's
   [browser sign-in](#clients-that-sign-in-by-browser) registers it as a public client with
-  no client secret. Perplexity's docs do not say which header its API-key option sends, so
-  if it refuses that registration no other route is known.
+  no client secret; that route has not been tested with Loom.
 - **Le Chat** (Mistral's connector docs call the app Work): an admin adds it under
   Connectors → Add Connector → Custom MCP Connector; Mistral documents that it detects the
   authentication method from the URL. Choose **HTTP Bearer Token / Basic Auth** and enter
