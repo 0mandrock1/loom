@@ -473,13 +473,28 @@ class FakeConn:
         conn = self
 
         class _Tx:
+            async def start(self) -> None:
+                await conn.execute("BEGIN")
+
+            async def commit(self) -> None:
+                await conn.execute("COMMIT")
+
+            async def rollback(self) -> None:
+                await conn.execute("ROLLBACK")
+
             async def __aenter__(self) -> None:
-                conn.executed.append("BEGIN")
+                await self.start()
 
             async def __aexit__(self, *exc: Any) -> None:
-                conn.executed.append("ROLLBACK" if exc[0] else "COMMIT")
+                if exc[0]:
+                    await self.rollback()
+                else:
+                    await self.commit()
 
         return _Tx()
+
+    def terminate(self) -> None:
+        self.executed.append("TERMINATE")
 
 
 def _seq(*values: Any) -> Callable[..., Any]:
@@ -663,6 +678,8 @@ async def test_the_mode_commit_retries_a_busy_lock_and_ends_an_earlier_run(clock
     assert logged == ["the mode's lock is busy; retrying"]
     # Before each try and the one termination.
     assert len(confirmed) == 3
+    assert conn.executed.count("ROLLBACK") == 1
+    assert "TERMINATE" not in conn.executed
 
 
 @pytest.mark.asyncio
@@ -725,19 +742,11 @@ async def test_the_mode_try_bounds_a_commit_that_never_answers(
     monkeypatch: pytest.MonkeyPatch, clock: _Clock, wait_s: int, bound_s: float
 ) -> None:
     class _StalledCommit(FakeConn):
-        def transaction(self) -> Any:
-            conn = self
-
-            class _Tx:
-                async def __aenter__(self) -> None:
-                    conn.executed.append("BEGIN")
-
-                async def __aexit__(self, *exc: Any) -> None:
-                    assert not exc[0]
-                    conn.executed.append("COMMIT")
-                    await asyncio.Future()
-
-            return _Tx()
+        async def execute(self, sql: str, *args: Any) -> str:
+            result = await super().execute(sql, *args)
+            if sql == "COMMIT":
+                await asyncio.Future()
+            return result
 
     conn = _StalledCommit([("UPDATE loom.tenancy_mode", "UPDATE 1")])
     bounds: list[float] = []
@@ -763,9 +772,82 @@ async def test_the_mode_try_bounds_a_commit_that_never_answers(
             ),
             timeout=0.2,
         )
-    assert conn.executed[-1] == "COMMIT"
+    assert "COMMIT" in conn.executed
+    assert conn.executed[-1] == "TERMINATE"
     assert bounds == [bound_s]
     assert marks == ["unknown"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stall", ["LOCK TABLE", "UPDATE", "ROLLBACK"])
+async def test_a_mode_deadline_never_waits_for_rollback(
+    monkeypatch: pytest.MonkeyPatch, stall: str
+) -> None:
+    class _StalledRollback(FakeConn):
+        async def execute(self, sql: str, *args: Any) -> str:
+            result = await super().execute(sql, *args)
+            if stall == "ROLLBACK" and sql.startswith("LOCK TABLE"):
+                raise _Timeout()
+            if sql.startswith(stall) or sql == "ROLLBACK":
+                await asyncio.Future()
+            return result
+
+    conn = _StalledRollback()
+    timeout = asyncio.timeout
+    monkeypatch.setattr(apg.asyncio, "timeout", lambda _s: timeout(0))
+    marks: list[str] = []
+    task = asyncio.create_task(apg._mode_try(conn, 100, marks.append))
+    done, _ = await asyncio.wait([task], timeout=0.2)
+    if not done:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert task in done, "mode deadline is stuck awaiting rollback"
+    assert isinstance(task.exception(), TimeoutError)
+    assert conn.executed[-1] == "TERMINATE"
+    assert marks == (["unknown"] if stall == "UPDATE" else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_read", [1, 2])
+@pytest.mark.parametrize("failure", ["cancel", "error"])
+async def test_a_failed_direct_session_read_never_waits_for_rollback(
+    failed_read: int, failure: str
+) -> None:
+    class _StalledRollback(FakeConn):
+        reads = 0
+
+        async def fetchrow(self, sql: str, *args: Any) -> Any:
+            self.reads += 1
+            if self.reads == failed_read:
+                if failure == "error":
+                    raise ValueError("identity read failed")
+                await asyncio.Future()
+            return (1, "t0")
+
+        async def execute(self, sql: str, *args: Any) -> str:
+            result = await super().execute(sql, *args)
+            if sql == "ROLLBACK":
+                await asyncio.Future()
+            return result
+
+    conn = _StalledRollback()
+    task = asyncio.create_task(apg.direct_refusals(conn, "attach"))
+    await asyncio.sleep(0)
+    if failure == "cancel":
+        task.cancel()
+    done, _ = await asyncio.wait([task], timeout=0.2)
+    if not done:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert task in done, "direct-session failure is stuck awaiting rollback"
+    if failure == "cancel":
+        assert task.cancelled()
+    else:
+        assert isinstance(task.exception(), ValueError)
+    assert conn.executed[-1] == "TERMINATE"
+    assert "ROLLBACK" not in conn.executed
 
 
 @pytest.mark.asyncio
@@ -783,7 +865,7 @@ async def test_an_interrupt_waiting_for_the_mode_lock_leaves_recording(clock: _C
         await apg.commit_enforced(
             conn, confirm, ready, apg.Wait(2, clock), lambda _t: None, marks.append
         )
-    assert conn.executed[-1] == "ROLLBACK"
+    assert conn.executed[-1] == "TERMINATE"
     assert marks == []
 
 

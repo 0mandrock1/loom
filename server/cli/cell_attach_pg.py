@@ -122,10 +122,18 @@ async def direct_refusals(conn: Any, what: str) -> list[Refusal]:
     startup parameters drops it). Behind a transaction pooler a session-level lock would
     outlive the CLI on the pooler's server connection, and attach's tenancy rows would be
     refused as an unchecked writer's."""
-    async with conn.transaction():
-        first = await conn.fetchrow(_IDENTITY)
-    async with conn.transaction():
-        second = await conn.fetchrow(_IDENTITY)
+    identities = []
+    try:
+        for _ in range(2):
+            tx = conn.transaction()
+            await tx.start()
+            identities.append(await conn.fetchrow(_IDENTITY))
+            await tx.commit()
+    except BaseException:
+        # A cancelled read must not wait for a transaction context's rollback.
+        conn.terminate()
+        raise
+    first, second = identities
     out = []
     if first is None or second is None or tuple(first) != tuple(second):
         out.append(
@@ -627,31 +635,39 @@ async def commit_enforced(
 
 
 async def _mode_try(conn: Any, lock_ms: int, mark: Callable[[str], None]) -> bool:
-    """One try including COMMIT, bounded by its lock and statement waits plus the standby
-    allowance; False on a statement timeout, TimeoutError if COMMIT never answers."""
+    """One try including rollback or COMMIT, bounded by its lock and statement waits plus
+    the standby allowance; False after a statement timeout rolls back, TimeoutError at
+    the try's deadline."""
     bound_s = (lock_ms + _MODE_STATEMENT_MARGIN_MS) / 1000 + _MODE_STANDBY_S
     try:
-        async with asyncio.timeout(bound_s), conn.transaction():
-            await conn.execute(f"SET LOCAL lock_timeout = '{lock_ms}ms'")
-            await conn.execute(
-                f"SET LOCAL statement_timeout = '{lock_ms + _MODE_STATEMENT_MARGIN_MS}ms'"
-            )
-            await conn.execute("LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE")
-            mark("unknown")
-            status = await conn.execute(
-                "UPDATE loom.tenancy_mode SET mode = 'enforced', since = now()"
-            )
-            if status != "UPDATE 1":
-                raise Refused(
-                    [Refusal("postgres loom.tenancy_mode", f"the mode update read {status}")]
+        async with asyncio.timeout(bound_s):
+            tx = conn.transaction()
+            await tx.start()
+            try:
+                await conn.execute(f"SET LOCAL lock_timeout = '{lock_ms}ms'")
+                await conn.execute(
+                    f"SET LOCAL statement_timeout = '{lock_ms + _MODE_STATEMENT_MARGIN_MS}ms'"
                 )
+                await conn.execute("LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE")
+                mark("unknown")
+                status = await conn.execute(
+                    "UPDATE loom.tenancy_mode SET mode = 'enforced', since = now()"
+                )
+                if status != "UPDATE 1":
+                    raise Refused(
+                        [Refusal("postgres loom.tenancy_mode", f"the mode update read {status}")]
+                    )
+            except Exception as e:
+                await tx.rollback()
+                if getattr(e, "sqlstate", None) in _TIMED_OUT:
+                    return False
+                raise
+            await tx.commit()
         return True
-    except Refused:
+    except BaseException:
+        # Termination is synchronous: cancellation never starts an unbounded rollback.
+        conn.terminate()
         raise
-    except Exception as e:
-        if getattr(e, "sqlstate", None) not in _TIMED_OUT:
-            raise
-        return False
 
 
 async def end_mode_transactions(conn: Any, confirm_lock: Callable[[], Any]) -> None:
