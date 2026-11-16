@@ -208,7 +208,9 @@ def test_a_label_borrowed_from_another_section_keeps_the_page_unwritten(
     monkeypatch.setattr(t, "ROOT", tmp_path)
     monkeypatch.setattr(t, "prepare", lambda source, lang: (english, ""))
     monkeypatch.setattr(
-        t, "translate_text", lambda text, lang, key, spend: replies["A" if "## A" in text else "B"]
+        t,
+        "translate_text",
+        lambda text, lang, creds, spend: replies["A" if "## A" in text else "B"],
     )
     with pytest.raises(t.TranslationDiffers, match="Get a token"):
         t.translate_page("docs/x.md", t.LANGUAGES[1], CREDS, t.Spend("claude-sonnet-5-5", 1.0))
@@ -463,7 +465,13 @@ def test_a_request_names_the_bedrock_model_and_carries_no_key() -> None:
 
 
 def test_the_signature_is_aws_signature_version_4() -> None:
-    # The expected value is botocore's SigV4Auth for the same request.
+    # The expected value is botocore's signature of the same request at the same time:
+    #   url = "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
+    #   headers = {"anthropic-version": t.API_VERSION, "content-type": "application/json"}
+    #   request = AWSRequest("POST", url, data=body, headers=headers)
+    #   credentials = Credentials(*astuple(CREDS)[:3])
+    #   SigV4Auth(credentials, "bedrock-mantle", "us-east-1").add_auth(request)
+    # with botocore.auth.datetime.datetime.utcnow patched to 2026-11-16 12:00:00.
     body = t.request_body("claude-sonnet-5-5", "sys", [{"role": "user", "content": "Hi"}])
     headers = t.signed_headers(CREDS, body, datetime(2026, 11, 16, 12, tzinfo=UTC))
     assert headers["x-amz-date"] == "20261116T120000Z"
@@ -477,7 +485,7 @@ def test_the_signature_is_aws_signature_version_4() -> None:
 @pytest.mark.parametrize(
     "unset", ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION"]
 )
-def test_update_refuses_credentials_that_are_not_short_lived(
+def test_update_needs_short_lived_aws_credentials_and_a_region(
     monkeypatch: pytest.MonkeyPatch, unset: str
 ) -> None:
     _aws_env(monkeypatch)

@@ -8,9 +8,9 @@ name: translations
 # starts no other workflow: close and reopen it to run CI. Needs "Allow GitHub Actions to
 # create and approve pull requests" (Settings → Actions → General).
 #
-# Claude is called on Amazon Bedrock with no stored secret: the job exchanges its GitHub
-# OIDC token for one-hour AWS credentials of the role in the repository variable
-# LOOM_I18N_AWS_ROLE_ARN, in the region in LOOM_I18N_AWS_REGION. The credentials reach only
+# Claude is called on Amazon Bedrock with no stored secret: the job, in the environment
+# i18n, exchanges its GitHub OIDC token for one-hour AWS credentials of the role in the
+# variable LOOM_I18N_AWS_ROLE_ARN, in the region in LOOM_I18N_AWS_REGION. The credentials reach only
 # the Translate step. While LOOM_I18N_AWS_ROLE_ARN is empty the job translates nothing and
 # succeeds. The role's trust and permission policies are in CONTRIBUTING.md#translations.
 on:
@@ -43,6 +43,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # The AWS role trusts this environment only, so no other job can assume it.
+    environment: i18n
     permissions:
       contents: write
       pull-requests: write

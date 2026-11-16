@@ -9,10 +9,10 @@ Claude is called through the Messages API of Amazon Bedrock (`bedrock-mantle`), 
 signed with the short-lived AWS credentials in AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and
 AWS_SESSION_TOKEN for AWS_REGION. Credentials without a session token are refused, so a
 long-lived access key cannot be used. A short page is sent in one call, a longer one a `## `
-section at a time (`WHOLE_PAGE_CHARS`). A translation is kept only when its fenced code blocks (in
-order), inline code spans, link targets, URLs, heading anchors and numbers match the
-English; otherwise the call is retried once with the differences named, then the page is
-not written (below). The assembled page is held to the same label rule before it is
+section at a time (`WHOLE_PAGE_CHARS`). A translation is kept only when its fenced code
+blocks (in order), inline code spans, link targets, URLs, heading anchors and numbers match
+the English; otherwise the call is retried once with the differences named, then the page
+is not written (below). The assembled page is held to the same label rule before it is
 written. Relative links in the prose are rewritten before translation: a page of the set
 links to its translation, anything else to the English file on GitHub. Every heading gets
 an explicit `<a id>` with its English anchor, so `#anchor` links keep working on the
@@ -139,6 +139,7 @@ DEFAULT_MODEL = "claude-sonnet-5-5"
 BEDROCK_MODEL_PREFIX = "anthropic."
 API_HOST = "bedrock-mantle.{region}.api.aws"
 API_PATH = "/anthropic/v1/messages"
+# The version Bedrock's Messages API takes for Claude 4.7 and later models.
 API_VERSION = "2026-10-21"
 SIGNING_SERVICE = "bedrock-mantle"
 MAX_TOKENS = 32000
@@ -628,7 +629,7 @@ def signed_headers(creds: AwsCredentials, body: bytes, now: datetime) -> dict[st
     key = _hmac(f"AWS4{creds.secret_access_key}".encode(), day)
     for part in (creds.region, SIGNING_SERVICE, "aws4_request"):
         key = _hmac(key, part)
-    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    signature = _hmac(key, to_sign).hex()
     headers["authorization"] = (
         f"AWS4-HMAC-SHA256 Credential={creds.access_key_id}/{scope}, "
         f"SignedHeaders={names}, Signature={signature}"

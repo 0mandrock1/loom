@@ -155,7 +155,7 @@ export AWS_REGION=<region>
 python -m scripts.i18n.translate update
 ```
 
-The workflow gets its credentials from GitHub's OIDC token. It assumes the IAM role in the repository variable `LOOM_I18N_AWS_ROLE_ARN`, in the region in `LOOM_I18N_AWS_REGION`, for one hour, and hands them to the translating step only. While `LOOM_I18N_AWS_ROLE_ARN` is empty, the workflow translates nothing and succeeds. The role trusts only this repository's main branch, which covers both a push and a manual run there:
+The workflow gets its credentials from GitHub's OIDC token. Its job runs in the environment `i18n` and assumes the IAM role in the variable `LOOM_I18N_AWS_ROLE_ARN`, in the region in `LOOM_I18N_AWS_REGION`, for one hour, and hands the credentials to the translating step only. While `LOOM_I18N_AWS_ROLE_ARN` is empty, the workflow translates nothing and succeeds. A job's OIDC subject names its environment, so the role trusts that environment and no other job, and the environment's deployment branches are set to `main` only (Settings → Environments → i18n), so a workflow on another branch cannot use it either:
 
 ```json
 {
@@ -170,7 +170,7 @@ The workflow gets its credentials from GitHub's OIDC token. It assumes the IAM r
       "Condition": {
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:ClickHouse/loom:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub": "repo:ClickHouse/loom:environment:i18n"
         }
       }
     }
