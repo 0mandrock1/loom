@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.codegen.page_summary import page_summary  # noqa: E402
 from scripts.docs_site.hooks import _TOKEN, BLOB, _with_source  # noqa: E402
-from scripts.docs_site.indexnow import page_path  # noqa: E402
+from scripts.docs_site.paths import page_path  # noqa: E402
 
 LANGUAGES = {
     "zh-CN": "简体中文",

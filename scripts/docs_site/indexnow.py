@@ -6,7 +6,7 @@ docs/ whose name is its own content; it is public by design.
 
 Usage: indexnow.py <changed path>...   (paths relative to the repository root)
 A changed or deleted page under docs/ maps to its URL. A change to what renders the pages
-(mkdocs.yml, the hooks, the theme overrides, the pinned builder, or
+(mkdocs.yml, the hooks, the shared routes, the theme overrides, the pinned builder, or
 scripts/codegen/page_summary.py, which supplies the descriptions and the sidebar order)
 changes every page, so every page under docs/ is submitted; a change to this script alone
 submits none.
@@ -26,12 +26,15 @@ ENDPOINT = "https://api.indexnow.org/indexnow"
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from scripts.docs_site.paths import page_path  # noqa: E402
+
 DOCS = ROOT / "docs"
 BUILD_INPUTS = (
     "mkdocs.yml",
     "scripts/codegen/page_summary.py",
     "scripts/docs_site/hooks.py",
     "scripts/docs_site/locales.py",
+    "scripts/docs_site/paths.py",
     "scripts/docs_site/requirements.txt",
     "scripts/docs_site/overrides/",
 )
@@ -42,16 +45,6 @@ def key() -> str:
         if re.fullmatch(r"[0-9a-f]{32}", p.stem) and p.read_text().strip() == p.stem:
             return p.stem
     raise SystemExit("no IndexNow key file in docs/")
-
-
-def page_path(path: str) -> str:
-    """The path under the site a docs/ Markdown file is served at ("" for the home page)."""
-    rel = path[len("docs/") : -len(".md")]
-    if rel == "index":
-        return ""
-    if rel.endswith("/index"):
-        rel = rel[: -len("/index")]
-    return f"{rel}/"
 
 
 def page_url(path: str) -> str | None:

@@ -43,6 +43,8 @@ def test_a_change_to_the_build_submits_every_page() -> None:
     for path in (
         "mkdocs.yml",
         "scripts/docs_site/overrides/main.html",
+        "scripts/docs_site/locales.py",
+        "scripts/docs_site/paths.py",
         "scripts/docs_site/hooks.py",
         "scripts/docs_site/requirements.txt",
         "scripts/codegen/page_summary.py",
@@ -86,3 +88,10 @@ def test_main_posts_only_the_changed_pages_and_posts_nothing_when_none_changed(m
     assert sent == []
     assert indexnow.main(["docs/a.md"]) == 0
     assert [s["urlList"] for s in sent] == [[SITE + "a/"]]
+
+
+def test_shared_language_route_mapping_is_a_render_input() -> None:
+    from scripts.docs_site import locales
+
+    helper = Path(locales.page_path.__code__.co_filename).resolve().relative_to(ROOT)
+    assert indexnow.urls_for([helper.as_posix()]) == indexnow.every_page()
