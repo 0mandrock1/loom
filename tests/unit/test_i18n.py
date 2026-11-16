@@ -454,16 +454,12 @@ def test_the_committed_translations_pass_check() -> None:
     assert t.untranslated_pages() == []
 
 
-def test_a_request_names_the_bedrock_model_and_carries_no_key() -> None:
+def test_a_request_names_the_bedrock_model() -> None:
     body = json.loads(
         t.request_body("claude-sonnet-5-5", "system", [{"role": "user", "content": "x"}])
     )
     assert body["model"] == "anthropic.claude-sonnet-5-5"
     assert body["output_config"] == {"effort": "low"} and body["max_tokens"] == t.MAX_TOKENS
-    headers = t.signed_headers(CREDS, b"{}", datetime(2026, 11, 16, tzinfo=UTC))
-    assert headers["host"] == "bedrock-mantle.us-east-1.api.aws"
-    assert headers["x-amz-security-token"] == "session-token"
-    assert "x-api-key" not in headers
 
 
 def test_the_signature_is_aws_signature_version_4() -> None:

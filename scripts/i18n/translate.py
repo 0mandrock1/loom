@@ -593,7 +593,8 @@ class AwsCredentials:
         missing = [n for n in names if not os.environ.get(n)]
         if missing:
             raise SystemExit(
-                f"{', '.join(missing)} not set: translations need short-lived AWS credentials"
+                f"{', '.join(missing)} not set: translations need short-lived AWS credentials "
+                "and a region"
             )
         return cls(*(os.environ[n] for n in names))
 
