@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import weakref
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
@@ -377,6 +378,37 @@ def _terminate(conn: Any) -> None:
 
     with suppress(asyncpg.InterfaceError):
         conn.terminate()
+
+
+def _retrieve_task(task: asyncio.Task[Any]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def close_owned(conn: Any, *, end: float) -> None:
+    """Close an owned session by an absolute time.monotonic deadline.
+
+    Public close sends cancellation before transport cleanup can discard it. Abort
+    is a bounded fallback, not evidence that the backend has released its locks.
+    The owner preserves an earlier operation failure when this cleanup fails.
+    """
+    task: asyncio.Task[Any] | None = None
+    try:
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Postgres owned-session cleanup deadline expired")
+        task = asyncio.create_task(conn.close(timeout=remaining))
+        done, _ = await asyncio.wait({task}, timeout=max(0, end - time.monotonic()))
+        if not done:
+            raise TimeoutError("Postgres owned-session cleanup deadline expired")
+        task.result()
+    except BaseException:
+        _terminate(conn)
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            task.add_done_callback(_retrieve_task)
+        raise
 
 
 async def _release(pool: Any, conn: Any) -> None:
