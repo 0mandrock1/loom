@@ -10,8 +10,9 @@ payloads and thoughts, then call `memory.set_from_messages` in bounded batches.
 Both SDKs refuse empty, sentinel and whitespace-padded user ids before any call.
 Each call carries the end user and a session derived from the user and native
 session id. Python also implements the installed framework's incremental-event,
-direct-memory and deletion methods. Python deletion ids carry the key, session, writer and exact version. They call
-`memory.delete_version` directly. A missing or rewritten version is a no-op, and
+direct-memory and deletion methods. Python deletion ids carry the key, session,
+writer and exact version. They call `memory.delete_version` directly. A missing or
+rewritten version is a no-op, and
 another writer's row is never selected. The additive `agent` response field on
 memory search hits comes from the stored row identity, including parked pages.
 A hit without a known writer or version has no deletion id. Older clients ignore

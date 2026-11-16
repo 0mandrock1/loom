@@ -564,12 +564,12 @@ async with Agent(org="acme", namespace="support") as loom_agent:
         ...
 ```
 
-ADK scopes memory by app and user. Loom's boundary is the namespace: a Loom write that
-matches a memory of the namespace merges into it, whichever agent wrote that memory, so two
-apps sharing a namespace would share and lose memories. A service therefore serves one ADK
+ADK scopes memory by app and user. Loom's authorization boundary is the namespace:
+a write can merge with another agent's row for the same user, so apps sharing a
+namespace also share that user's memory context. A service therefore serves one ADK
 app, named by `app_name`, in the namespace of its Loom agent, and refuses a call for
 another app; give each app its own namespace and service. The ADK user is the Loom
-`user_id`; an empty or `-` user, which names no user in Loom, raises `ValueError`.
+`user_id`; empty, `-`, `*` and whitespace-padded ids raise `ValueError`.
 Extraction runs under a Loom session derived from the user and the ADK session (`adk-`
 and a digest of the pair): Loom files a turn's verbatim chunks by session alone, and ADK
 makes a session id unique per user only. A search reads all of the user's memories in the
