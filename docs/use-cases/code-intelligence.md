@@ -44,6 +44,29 @@ indexed file and 79% for BM25 over `.py` files only; the `.py`-only gap is withi
 [With and without Loom](../benchmarks/results.md#with-and-without-loom) ·
 [SWE-bench Verified file localization](../benchmarks/results.md#swe-bench-verified-file-localization)
 
+## A coding agent that reads the definition it needs
+
+Start with a repository you trust. On the released stack, follow the
+[operator-configured index steps](../getting-started/quickstart.md#optional-index-a-repository-on-the-released-stack);
+the dashboard's add-repository flow needs a sandbox that stack does not enable. Connect
+Claude Code or Codex with its plugin and start a session inside that repository's checkout
+([repository matching](../getting-started/connect-a-coding-agent.md#when-the-code-index-is-used)).
+
+1. Ask the agent to call `loom_op` with `op: "code.index_status"` and
+   `arguments: {"namespace": "<indexed namespace>", "brief": true}`. Record `git_head`,
+   the indexed commit; an empty value means the first index has not finished.
+2. Pick a function whose definition you know. Ask the agent to call `loom_code_symbol`
+   in that namespace with the function's name and `include_body: true`. Check the
+   returned `path`, `start_line`, `end_line`, `body` and `tier`.
+3. Compare the definition with the source at `git_head` before relying on it. A missing
+   or ambiguous definition needs a narrower name or a local read.
+4. Start a fresh session in the same checkout and repeat both calls. The index supplies
+   the definition again; the agent need not load the previous chat or the whole file.
+
+This checks one indexed definition. Uncommitted edits still need local reads, and a
+successful lookup is not a measurement of task accuracy or cost savings. See
+[code operations](../features/code-index/operations.md) for search, callers and impact.
+
 ## Start
 
 [Adding repositories](../features/code-index/repositories.md) turns the index on for a
