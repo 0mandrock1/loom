@@ -144,6 +144,7 @@ async def test_stale_http_after_backend_death_and_pair_aba(control_stores, monke
 @pytest.mark.asyncio
 async def test_replayed_claim_lost_ack_and_noop_wrong_generation(control_stores) -> None:
     client, conn, _ = control_stores
+    await conn.execute("UPDATE loom_router.cells SET state = 'serving'")
     snapshot = await read(client)
     lost = await claim(client, snapshot)  # its caller lost this acknowledgement
     current = await claim(client, snapshot)  # duplicate HTTP execution must rotate again
@@ -611,3 +612,190 @@ async def test_attach_lock_dies_between_confirmation_and_mode_write(local_contro
     finally:
         await a.close()
         await b.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fresh_open", [False, True])
+async def test_backout_close_cannot_be_reopened_before_same_session_cleanup(
+    control_stores, local_control, fresh_open
+):
+    from server.cli import cell_attach_pg as apg
+    from server.cli import cell_control
+
+    client, directory_admin, _ = control_stores
+    local, _ = local_control
+    await directory_admin.execute(
+        "UPDATE loom_router.cells SET mode = 'enforced', placements_max = 7"
+    )
+    await local.execute("INSERT INTO loom.cell_first(is_first, cell) VALUES (true, 'first')")
+    await local.execute("INSERT INTO loom.tenancy_mode(mode) VALUES ('recording')")
+    await local.execute("INSERT INTO loom.cell_self(current_fp) VALUES ('{\"v\":1}')")
+    await apg.take_lock(local, "backout reopen test")
+    pid = local.get_server_pid()
+    before_close = opened = placement_error = None
+
+    async def call(path, body):
+        nonlocal before_close, opened, placement_error
+        response = await client.post("/cells/v1/operator/cells/first" + path, json=body)
+        assert response.status_code == 200, response.text
+        answer = response.json()
+        if path == "/claim":
+            # The queued opener has the NEW generation, read before cleanup closes D.
+            before_close = await read(client)
+        if path == "/limit":
+            assert answer["closed"] and answer["placed_orgs"] == 0
+            assert await local.fetchval("SELECT EXISTS(SELECT 1 FROM loom.cell_self)")
+            assert await apg.lock_held(local)
+            snapshot = await read(client) if fresh_open else before_close
+            opened = await client.post(
+                "/cells/v1/operator/cells/first/limit",
+                json={**expected(snapshot), "closed": False, "placements_max": 99},
+            )
+            # Actually attempt placement before the acknowledged close returns to cleanup.
+            try:
+                await directory.place("between-close-and-cleanup", "first", app.placement_refusal)
+            except directory.PlacementRefused as exc:
+                placement_error = str(exc)
+        return answer
+
+    await cell_control.backout(local, call, await read(client))
+    assert opened.status_code == 409, opened.text
+    assert "serving" in opened.json()["error"]
+    assert placement_error and "closed" in placement_error
+    after = await read(client)
+    assert after["placed_orgs"] == 0
+    assert tuple(
+        await directory_admin.fetchrow("SELECT closed, placements_max FROM loom_router.cells")
+    ) == (True, 7)
+    assert after["mutation_generation"] == before_close["mutation_generation"]
+    assert not await directory_admin.fetchval("SELECT EXISTS(SELECT 1 FROM loom_router.placements)")
+    assert (
+        await directory_admin.fetchval(
+            "SELECT count(*) FROM loom_router.audit WHERE action = 'limit'"
+        )
+        == 1
+    )
+    assert local.get_server_pid() == pid and await apg.lock_held(local)
+    for table in ("cell_first", "tenancy_mode", "cell_self", "tenancy"):
+        assert not await local.fetchval(f"SELECT EXISTS(SELECT 1 FROM loom.{table})")
+
+
+@pytest.mark.asyncio
+async def test_attaching_open_refusal_preserves_guard_order_and_closed_attach_progress(
+    control_stores,
+):
+    client, conn, _ = control_stores
+    original = await read(client)
+    current = await claim(client, original)
+
+    async def limit(snapshot, **fields):
+        return await client.post(
+            "/cells/v1/operator/cells/first/limit", json={**expected(snapshot), **fields}
+        )
+
+    stale = await limit(original, closed=False, placements_max=99)
+    assert stale.status_code == 409 and "generation" in stale.json()["error"]
+    for field, value in (("host", "other.example.test"), ("current_fp", {"v": 2})):
+        changed = await limit({**current, field: value}, closed=False, placements_max=99)
+        assert (
+            changed.status_code == 409 and "registration or fingerprints" in changed.json()["error"]
+        )
+    noop = await limit(current, closed=False, placements_max=99)
+    assert noop.status_code == 409 and "serving" in noop.json()["error"]
+    assert await conn.fetchval("SELECT placements_max FROM loom_router.cells") is None
+    assert not await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM loom_router.audit WHERE action='limit')"
+    )
+    assert (await limit(current, closed=True)).status_code == 200
+    assert (await limit(current, placements_max=0)).status_code == 200
+    closed = await read(client)
+    assert tuple(await conn.fetchrow("SELECT closed, placements_max FROM loom_router.cells")) == (
+        True,
+        0,
+    )
+    assert closed["mutation_generation"] == current["mutation_generation"]
+
+    # An earlier mode request cannot escape the cleanup owner's claim.
+    stale_mode = await client.post(
+        "/cells/v1/operator/cells/first/attach/enforced",
+        json={**expected(original), "deployment_id": "dep-first"},
+    )
+    assert stale_mode.status_code == 409 and "generation" in stale_mode.json()["error"]
+    # Existing held-org attach batches intentionally bypass closed/quota.
+    await conn.execute(
+        "UPDATE loom_router.cells SET mode='enforced', attach_started_at=now(), current_fp='{\"v\":1}'"
+    )
+    row = await read(client)
+    values = expected(row, generation=False)["expected"]
+    control = directory.Control(values, uuid.UUID(row["mutation_generation"]))
+    assert await directory.attach_place("first", "dep-first", ["held-org"], expected=control) == (
+        1,
+        1,
+    )
+    served = await directory.attach_serving("first", "dep-first", expected=control)
+    assert served.row.closed and served.row.state == "serving"
+    response = await limit(await read(client), closed=False)
+    assert response.status_code == 200, response.text
+    assert not response.json()["closed"]
+
+
+@pytest.mark.asyncio
+async def test_pending_attach_batch_cannot_escape_backout_claim(
+    control_stores, local_control, monkeypatch
+):
+    import asyncpg
+
+    from server.cli import cell_attach_pg as apg
+    from server.cli import cell_control
+
+    client, directory_admin, _ = control_stores
+    local, dsn = local_control
+    await directory_admin.execute(
+        "UPDATE loom_router.cells SET mode='enforced', attach_started_at=now(), current_fp='{\"v\":1}'"
+    )
+    await local.execute("INSERT INTO loom.cell_first(is_first,cell) VALUES(true,'first')")
+    await local.execute("INSERT INTO loom.tenancy_mode(mode) VALUES('recording')")
+    await local.execute("INSERT INTO loom.cell_self(current_fp) VALUES('{\"v\":1}')")
+    old_backend = await asyncpg.connect(dsn)
+    await apg.take_lock(old_backend, "old attach batch")
+    old = await claim(client, await read(client))
+    entered, resume = asyncio.Event(), asyncio.Event()
+    real = directory.attach_place
+
+    async def delayed(*args, **kwargs):
+        entered.set()
+        await resume.wait()
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(directory, "attach_place", delayed)
+    pending = asyncio.create_task(
+        client.post(
+            "/cells/v1/operator/cells/first/attach/place",
+            json={**expected(old), "deployment_id": "dep-first", "orgs": ["old-batch"]},
+        )
+    )
+
+    async def call(path, body):
+        response = await client.post("/cells/v1/operator/cells/first" + path, json=body)
+        assert response.status_code == 200, response.text
+        if path == "/limit":
+            resume.set()
+            stale = await pending
+            assert stale.status_code == 409 and "generation" in stale.json()["error"]
+        return response.json()
+
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+        await local.execute("SELECT pg_terminate_backend($1)", old_backend.get_server_pid())
+        await apg.take_lock(local, "backout successor")
+        await cell_control.backout(local, call, await read(client))
+        assert await apg.lock_held(local)
+        assert not await local.fetchval("SELECT EXISTS(SELECT 1 FROM loom.cell_self)")
+        assert not await directory_admin.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM loom_router.placements)"
+        )
+        assert await directory_admin.fetchval("SELECT closed FROM loom_router.cells")
+    finally:
+        resume.set()
+        await pending
+        await old_backend.close()

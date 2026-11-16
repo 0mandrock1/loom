@@ -439,7 +439,7 @@ def _add_cell_parser(sub: Any) -> None:
     limit.add_argument("--cell", required=True, help="The cell to limit")
     state = limit.add_mutually_exclusive_group()
     state.add_argument("--closed", action="store_true", help="Refuse its new orgs")
-    state.add_argument("--open", action="store_true", help="Take new orgs again")
+    state.add_argument("--open", action="store_true", help="Take new orgs again once serving")
     limit.add_argument(
         "--placements-max", metavar="N|none", help="Its quota of orgs (none: no quota)"
     )

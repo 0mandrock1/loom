@@ -314,6 +314,10 @@ async def set_limit(
         raise ValueError("set_limit sets closed, placements_max or both")
 
     async def change(conn: Any, row: Cell) -> dict[str, Any]:
+        if closed is False and row.state == "attaching":
+            raise OperatorRefused(
+                f"cell {cell_name!r} is attaching: it can reopen after attach reaches serving"
+            )
         detail: dict[str, Any] = {}
         if closed is not UNSET:
             detail["closed"] = closed

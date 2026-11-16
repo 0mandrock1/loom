@@ -1203,7 +1203,10 @@ one command,
 `loom cell limit --cell <cell> [--closed | --open] [--placements-max (<n> | none)]`,
 which writes the directory alone, with the router's operator credential and none of the
 cell's stores, so it works while the cell is down; the router judges a placement from
-the directory row.
+the directory row. An explicit `--open` refuses while the cell is `attaching`, including
+an already-open row and a combined quota edit. This behavior break preserves the closed,
+zero-placement boundary used by state cleanup. Close and quota-only edits still work;
+an attaching cell can complete attach while closed, then reopen once `serving`.
 
 ## Control mutation fencing
 
@@ -1245,7 +1248,9 @@ cleanup have explicit bounds; an interrupted or uncertain local transaction neve
 continues on another connection. No operation record, persistent census, phase or lease
 is added. The UUID is coordination metadata and holds no memory content.
 
-The source census for acceptance and operator directory writes is:
+The source census for acceptance and operator directory writes is checked by
+`tests/unit/test_cell_control_census.py`, including dynamic cleanup tables, guarded
+entry points and the named exceptions:
 
 | Writer                                                                                  | Fence                                                                                              |
 | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -1274,7 +1279,7 @@ participate in this protocol.
   there); for an org with no placement it names the first cell, which the lookup does
   not tell apart.
 - `loom cell limit --cell <cell> --closed` closes a cell to new orgs, `--open` reopens
-  it, and `--placements-max <n>` sets its placement quota (`--placements-max none`
+  a serving cell, and `--placements-max <n>` sets its placement quota (`--placements-max none`
   clears it).
 - `loom cell remove --cell <cell>` removes the directory row of a cell that is `attaching`
   with no placement (`--cell` is the cell's `LOOM_CELL`, unset by then). For the first cell

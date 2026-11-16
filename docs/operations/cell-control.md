@@ -102,15 +102,21 @@ asyncio.run(main())
 The helper claims first, closes the cell using the existing limit operation, and requires
 that operation's durable placement count to remain zero before any local state cleanup.
 A queued placement either wins first and refuses cleanup, or observes the closed row and
-cannot create a placement. The helper then compares and deletes only the existing
+cannot create a placement. An explicit `loom cell limit --open` now refuses for every
+attaching cell, even one already open; a combined open/quota request changes neither
+field. This behavior break keeps concurrent limit clients from reopening the cleanup
+boundary. Close and quota-only edits remain available. The helper then compares and
+deletes only the existing
 `cell_first`, `tenancy_mode`, `cell_self` and `tenancy` rows, restores the first-row
 triggers and drops only the existing org guard triggers, on the same locked backend.
 It takes the migration lock for each bounded local transaction. Even an already-open
 retry proves durability before reporting success.
 
-An abort leaves the cell closed. It never reopens automatically or deletes a placement.
-If a placement won, resume attach; inspect the reason before explicitly reopening with
-`loom cell limit --open`. Otherwise rerun the cleanup with a fresh claim, then run
+After the close is acknowledged, an abort leaves the cell closed. It never reopens
+automatically or deletes a placement.
+If a placement won, resume attach while closed: its existing-org placement batches bypass
+the ordinary close/quota gate. Complete attach to `serving` before explicitly reopening
+with `loom cell limit --open`. Otherwise rerun the cleanup with a fresh claim, then run
 `loom cell remove --cell <cell>` with the same cell settings. Removal now holds that
 cell's direct Postgres lock and takes a fresh claim for both first and later cells. It
 also requires a first cell's durable local state to read `open` before deleting the row.
