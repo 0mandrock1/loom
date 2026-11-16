@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   checkoutPython,
   decideBlock,
+  outsidePythonPath,
   gatePayload,
   gateSignature,
   renderGate,
@@ -276,8 +277,8 @@ test("checkoutPython's pytest probe never imports a pytest.py from the checkout"
   const venv = process.env.VIRTUAL_ENV;
   delete process.env.VIRTUAL_ENV; // an active virtualenv is used before the probe runs
   const pythonPath = process.env.PYTHONPATH;
-  // An empty or relative PYTHONPATH entry resolves against the working directory.
-  process.env.PYTHONPATH = `:.${path.delimiter}src`;
+  // Empty, relative and absolute entries that name the checkout.
+  process.env.PYTHONPATH = ["", ".", "src", root, path.join(root, "src")].join(path.delimiter);
   const marker = path.join(root, "ran");
   fs.writeFileSync(path.join(root, "pytest.py"), `open(${JSON.stringify(marker)}, "w").write("x")\n`);
   fs.mkdirSync(path.join(root, "src"));
@@ -314,3 +315,11 @@ function pathUnderRoot(root, p) {
   const rel = path.relative(root, p);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
+
+test("outsidePythonPath keeps only absolute PYTHONPATH entries outside the checkout", () => {
+  const root = path.join(os.tmpdir(), "checkout");
+  const other = path.join(os.tmpdir(), "lib");
+  const value = ["", ".", "src", root, path.join(root, "src"), other].join(path.delimiter);
+  assert.equal(outsidePythonPath(root, value), other);
+  assert.equal(outsidePythonPath(root, ""), "");
+});

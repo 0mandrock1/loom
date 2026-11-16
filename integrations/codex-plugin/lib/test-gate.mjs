@@ -168,6 +168,15 @@ export function venvPython(dir, platform = process.platform) {
   return platform === "win32" ? path.win32.join(dir, "Scripts", "python.exe") : path.posix.join(dir, "bin", "python");
 }
 
+/** PYTHONPATH without the entries that could import from `root`: relative and
+ *  empty ones (they resolve against the working directory) and any under it. */
+export function outsidePythonPath(root, value = process.env.PYTHONPATH ?? "") {
+  return value
+    .split(path.delimiter)
+    .filter((e) => path.isAbsolute(e) && pathUnder(root, e) === null)
+    .join(path.delimiter);
+}
+
 /** The interpreter that runs this checkout's pytest: its own virtualenv
  *  first, then an active one, then a PATH python that imports pytest; ""
  *  when none does, so the gate can say there is none instead of sending the
@@ -188,10 +197,11 @@ export function checkoutPython(root, { exec = execFileSync } = {}) {
   for (const py of ["python3", "python"]) {
     try {
       // From the plugin's own directory, not the checkout: -c puts the working
-      // directory on sys.path, and so does an empty or relative PYTHONPATH entry,
-      // so run from the checkout a pytest.py there would be imported.
+      // directory on sys.path, and so does an empty or relative PYTHONPATH entry.
+      // PYTHONPATH keeps only absolute entries outside the checkout.
       exec(py, ["-c", "import pytest"], {
         cwd: HERE,
+        env: { ...process.env, PYTHONPATH: outsidePythonPath(root) },
         timeout: 1500,
         stdio: "ignore",
         windowsHide: true,
