@@ -86,14 +86,14 @@ self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
 `~/.loom/`, mode 0600, until you remove it.
 
 Its files in the system temp directory, which can hold prompt and reply text,
-are also mode 0600. A capture whose delivery process stopped before sending it
-stays until you replay or delete it (`loom-status` counts them and names the
+are also mode 0600. A queued write whose delivery process stopped before sending
+it stays until you replay or delete it (`loom-status` counts them and names the
 directory); one the server refuses or cannot be reached for is discarded, as is
 a batch of the redirect records above that fails to send; chat turns are sent
 again at the next Stop and a brief's events at the next save. Other state files
 are swept after a day untouched, and the log of which tool calls the plugin
-redirected (no prompt or file content) stays until removed (`LOOM_SHUNT_LOG=off`
-stops it).
+redirected or let through (no prompt or file content) stays until removed
+(`LOOM_SHUNT_LOG=off` stops it).
 
 Two skills reach other services when you run them. `loom-status` can install
 Node.js after you agree: on Linux, as root or with passwordless sudo, it

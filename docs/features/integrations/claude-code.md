@@ -35,6 +35,8 @@ end of this section are the exceptions. The plugin sends:
   redirected grep pattern (`code.symbol`); and the search query of a `gh` issue search the
   tracker shunt answers (`tracker.duplicate_check`), with the owner and name of a repository
   the command names (`code.repos`);
+- for each file read or grep the code shunt redirects or lets through, the tool name, file
+  path and line range, and an estimate of the tokens saved (`code.outcome`);
 - chat turns (`conversation.append`), which the server stores only when the namespace has
   conversation logging on;
 - the session's last turns (up to 200), to `memory.set_from_messages`, which keeps them as
@@ -79,9 +81,10 @@ Two skills reach other services, each only when you ask for it. The `loom-status
 can install Node.js from NodeSource through apt, dnf or yum, or from apk or Homebrew, and
 runs that installer only after you agree. The `improve-loom-for-my-repo` skill searches
 the ClickHouse/loom GitHub issues for each finding it reports and, after you approve,
-files its report there, or adds it as a comment on the issue that already reports it.
-The issue is public, and holds the report as shown to you: the server version, namespace,
-indexed commit and corpus size, and each finding's queries, symbols and file units.
+files its report there, or adds it as a comment on the issue that already reports it. The
+issue is public, and holds the report as shown to you: the server version, namespace,
+indexed commit and how much of the repository is indexed, and for each finding a
+reproduction with its queries, symbols and file names.
 
 ## Requirements
 
