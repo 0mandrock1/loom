@@ -142,6 +142,60 @@ The HTTP and MCP transports discover registered operations; you don't touch tran
 
 An operation or field may be renamed or removed. Say so in the PR description and tell the consumers that call it. A client that still sends a removed field is served, with the field named in `ignored_args` ([HTTP API](./docs/reference/http-api.md#unknown-and-removed-fields)). Retiring a flag deletes the setting, its branch and any per-request field that carried it, in one change.
 
+## Translations
+
+`i18n/<lang>/` holds machine translations of the README, the quickstart and the use-case pages. `scripts/i18n/translate.py` writes them and `.github/workflows/i18n.yml` runs it on main after an English page changes; never edit a translation by hand.
+
+The script calls Claude on Amazon Bedrock and signs each request with short-lived AWS credentials: it refuses credentials without a session token, so no long-lived key is stored anywhere. To run it yourself, sign in to an AWS account where Bedrock serves Claude Sonnet 5.5 and export temporary credentials:
+
+```bash
+aws sso login
+eval "$(aws configure export-credentials --format env)"
+export AWS_REGION=<region>
+python -m scripts.i18n.translate update
+```
+
+The workflow gets its credentials from GitHub's OIDC token. It assumes the IAM role in the repository variable `LOOM_I18N_AWS_ROLE_ARN`, in the region in `LOOM_I18N_AWS_REGION`, for one hour, and hands them to the translating step only. While `LOOM_I18N_AWS_ROLE_ARN` is empty, the workflow translates nothing and succeeds. The role trusts only this repository's main branch, which covers both a push and a manual run there:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": "repo:ClickHouse/loom:ref:refs/heads/main"
+        }
+      }
+    }
+  ]
+}
+```
+
+It may run inference on that one model and nothing else. Bedrock's `bedrock-mantle` endpoint authorizes inference on the account's project, so the policy names the model in a condition:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "bedrock-mantle:CreateInference",
+      "Resource": "arn:aws:bedrock-mantle:<region>:<account-id>:project/*",
+      "Condition": {
+        "StringEquals": { "bedrock-mantle:Model": "anthropic.claude-sonnet-5-5" }
+      }
+    }
+  ]
+}
+```
+
 ## The open-source copy rule
 
 Repository text (code, comments, tests, docs, fixtures) stays product-neutral and timeless. `tests/unit/test_public_copy.py` enforces the lists:

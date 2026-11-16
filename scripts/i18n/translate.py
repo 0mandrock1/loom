@@ -2,11 +2,14 @@
 
     python -m scripts.i18n.translate check    # exit 1: a page is stale, orphaned, or has a broken
                                               # link, an English label or an old language line
-    python -m scripts.i18n.translate update   # translate the stale pages (needs ANTHROPIC_API_KEY)
+    python -m scripts.i18n.translate update   # translate the stale pages (needs AWS credentials)
     python -m scripts.i18n.translate update --all [--lang ja ...]   # after a prompt change
 
-A short page is sent to the Messages API in one call, a longer one a `## ` section at a
-time (`WHOLE_PAGE_CHARS`). A translation is kept only when its fenced code blocks (in
+Claude is called through the Messages API of Amazon Bedrock (`bedrock-mantle`), each request
+signed with the short-lived AWS credentials in AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and
+AWS_SESSION_TOKEN for AWS_REGION. Credentials without a session token are refused, so a
+long-lived access key cannot be used. A short page is sent in one call, a longer one a `## `
+section at a time (`WHOLE_PAGE_CHARS`). A translation is kept only when its fenced code blocks (in
 order), inline code spans, link targets, URLs, heading anchors and numbers match the
 English; otherwise the call is retried once with the differences named, then the page is
 not written (below). The assembled page is held to the same label rule before it is
@@ -30,12 +33,13 @@ after its retry is not written; the other pages go on, and the run then fails na
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import posixpath
 import re
 import subprocess
-import sys
 import threading
 import time
 import urllib.error
@@ -44,6 +48,7 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -126,12 +131,16 @@ LANGUAGES = (
     ),
 )
 
-# USD per million tokens (input, output). A model missing here is refused: the cost cap
-# needs its price.
+# USD per million tokens (input, output) at Anthropic's list prices. Bedrock bills at its own
+# prices, so the cap is approximate. A model missing here is refused: the cap needs a price.
 PRICES = {"claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}
 DEFAULT_MODEL = "claude-sonnet-5-5"
-API_URL = "https://api.anthropic.com/v1/messages"
-API_VERSION = "2023-06-01"
+# Bedrock names a model with an `anthropic.` prefix; the stamp keeps the plain name.
+BEDROCK_MODEL_PREFIX = "anthropic."
+API_HOST = "bedrock-mantle.{region}.api.aws"
+API_PATH = "/anthropic/v1/messages"
+API_VERSION = "2026-10-21"
+SIGNING_SERVICE = "bedrock-mantle"
 MAX_TOKENS = 32000
 
 LANGUAGE_LINE = re.compile(r"<!-- languages -->.*?<!-- /languages -->", re.DOTALL)
@@ -568,23 +577,84 @@ def estimate_usd(model: str, chars: int) -> float:
     return (tokens * price_in + 1.2 * tokens * price_out) / 1e6
 
 
-def call(key: str, model: str, system: str, messages: list[dict[str, str]]) -> dict:
-    body = json.dumps(
+@dataclass(frozen=True)
+class AwsCredentials:
+    access_key_id: str
+    secret_access_key: str
+    session_token: str
+    region: str
+
+    @classmethod
+    def from_env(cls) -> AwsCredentials:
+        names = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION")
+        missing = [n for n in names if not os.environ.get(n)]
+        if missing:
+            raise SystemExit(
+                f"{', '.join(missing)} not set: translations need short-lived AWS credentials"
+            )
+        return cls(*(os.environ[n] for n in names))
+
+
+def _hmac(key: bytes, text: str) -> bytes:
+    return hmac.new(key, text.encode(), hashlib.sha256).digest()
+
+
+def signed_headers(creds: AwsCredentials, body: bytes, now: datetime) -> dict[str, str]:
+    """The request's headers with an AWS Signature Version 4 `authorization` header."""
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    day = amz_date[:8]
+    headers = {
+        "anthropic-version": API_VERSION,
+        "content-type": "application/json",
+        "host": API_HOST.format(region=creds.region),
+        "x-amz-date": amz_date,
+        "x-amz-security-token": creds.session_token,
+    }
+    names = ";".join(sorted(headers))
+    canonical = "\n".join(
+        [
+            "POST",
+            API_PATH,
+            "",
+            "".join(f"{k}:{headers[k]}\n" for k in sorted(headers)),
+            names,
+            hashlib.sha256(body).hexdigest(),
+        ]
+    )
+    scope = f"{day}/{creds.region}/{SIGNING_SERVICE}/aws4_request"
+    to_sign = "\n".join(
+        ["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode()).hexdigest()]
+    )
+    key = _hmac(f"AWS4{creds.secret_access_key}".encode(), day)
+    for part in (creds.region, SIGNING_SERVICE, "aws4_request"):
+        key = _hmac(key, part)
+    signature = hmac.new(key, to_sign.encode(), hashlib.sha256).hexdigest()
+    headers["authorization"] = (
+        f"AWS4-HMAC-SHA256 Credential={creds.access_key_id}/{scope}, "
+        f"SignedHeaders={names}, Signature={signature}"
+    )
+    return headers
+
+
+def request_body(model: str, system: str, messages: list[dict[str, str]]) -> bytes:
+    return json.dumps(
         {
-            "model": model,
+            "model": BEDROCK_MODEL_PREFIX + model,
             "max_tokens": MAX_TOKENS,
             "system": system,
             "messages": messages,
             "output_config": {"effort": "low"},
         }
     ).encode()
-    headers = {
-        "x-api-key": key,
-        "anthropic-version": API_VERSION,
-        "content-type": "application/json",
-    }
+
+
+def call(creds: AwsCredentials, model: str, system: str, messages: list[dict[str, str]]) -> dict:
+    body = request_body(model, system, messages)
+    url = f"https://{API_HOST.format(region=creds.region)}{API_PATH}"
     for attempt in range(4):
-        request = urllib.request.Request(API_URL, data=body, headers=headers, method="POST")
+        # Signed for each attempt: a signature is valid for five minutes.
+        headers = signed_headers(creds, body, datetime.now(UTC))
+        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=600) as response:
                 return json.load(response)
@@ -609,14 +679,14 @@ def reply_text(data: dict) -> str:
     return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
 
 
-def translate_text(text: str, lang: Language, key: str, spend: Spend) -> str:
+def translate_text(text: str, lang: Language, creds: AwsCredentials, spend: Spend) -> str:
     if not text.strip():
         return text
     system = SYSTEM.format(language=lang.english, style=lang.style)
     messages = [{"role": "user", "content": text}]
     for _ in range(2):
         spend.before_call()
-        data = call(key, spend.model, system, messages)
+        data = call(creds, spend.model, system, messages)
         spend.add(data.get("usage", {}))
         reply = reply_text(data)
         problems = differences(text, reply)
@@ -677,10 +747,10 @@ def english_requests(text: str) -> list[str]:
     return [whole] if len(whole) <= WHOLE_PAGE_CHARS else parts
 
 
-def translate_page(source: str, lang: Language, key: str, spend: Spend) -> None:
+def translate_page(source: str, lang: Language, creds: AwsCredentials, spend: Spend) -> None:
     text, line = prepare(source, lang)
     requests = english_requests(text)
-    body = "\n".join(translate_text(s, lang, key, spend) for s in requests)
+    body = "\n".join(translate_text(s, lang, creds, spend) for s in requests)
     # A section can borrow an English label from another part of the page; `check` reads the
     # whole page, so the page is held to the same rule before it is written.
     kept = labels("\n".join(requests)) & labels(body)
@@ -752,11 +822,11 @@ def update(every: bool = False, codes: list[str] | None = None) -> int:
             f"estimate over LOOM_I18N_MAX_USD=${spend.cap_usd:.2f}; nothing translated"
         )
     if work:
-        key = os.environ.get("ANTHROPIC_API_KEY") or sys.exit("ANTHROPIC_API_KEY is not set")
+        creds = AwsCredentials.from_env()
         try:
             with ThreadPoolExecutor(WORKERS) as pool:
                 futures = {
-                    pool.submit(translate_page, s, lg, key, spend): target_path(lg.code, s)
+                    pool.submit(translate_page, s, lg, creds, spend): target_path(lg.code, s)
                     for s, lg in work
                 }
                 differ: list[str] = []

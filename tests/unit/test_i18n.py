@@ -5,15 +5,32 @@ the translations after it lands."""
 
 from __future__ import annotations
 
+import io
+import json
 import pathlib
 import re
 import time
+import urllib.request
 from collections import Counter
+from datetime import UTC, datetime
 
 import pytest
 
 from scripts.i18n import translate as t
 from tests.unit import markdown_links
+
+# The example credentials of the AWS Signature Version 4 documentation.
+CREDS = t.AwsCredentials(
+    "AKIDEXAMPLE", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", "session-token", "us-east-1"
+)
+
+
+def _aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", CREDS.access_key_id)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", CREDS.secret_access_key)
+    monkeypatch.setenv("AWS_SESSION_TOKEN", CREDS.session_token)
+    monkeypatch.setenv("AWS_REGION", CREDS.region)
+
 
 ROOT = t.ROOT
 
@@ -194,7 +211,7 @@ def test_a_label_borrowed_from_another_section_keeps_the_page_unwritten(
         t, "translate_text", lambda text, lang, key, spend: replies["A" if "## A" in text else "B"]
     )
     with pytest.raises(t.TranslationDiffers, match="Get a token"):
-        t.translate_page("docs/x.md", t.LANGUAGES[1], "key", t.Spend("claude-sonnet-5-5", 1.0))
+        t.translate_page("docs/x.md", t.LANGUAGES[1], CREDS, t.Spend("claude-sonnet-5-5", 1.0))
     assert not (tmp_path / "i18n").exists()
 
 
@@ -203,12 +220,12 @@ def test_a_page_that_still_differs_lets_the_others_finish(
 ) -> None:
     written: list[str] = []
 
-    def fake_page(source: str, lang: t.Language, key: str, spend: t.Spend) -> None:
+    def fake_page(source: str, lang: t.Language, creds: t.AwsCredentials, spend: t.Spend) -> None:
         if source == t.SOURCES[0]:
             raise t.TranslationDiffers("still differs after a retry")
         written.append(source)
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    _aws_env(monkeypatch)
     monkeypatch.setattr(t, "translate_page", fake_page)
     monkeypatch.setattr(t, "write_language_lines", lambda: None)
     monkeypatch.setattr(t, "request_chars", lambda source, lang: 1)
@@ -222,13 +239,13 @@ def test_a_page_that_still_differs_lets_the_others_finish(
 def test_a_fatal_error_after_a_differing_page_still_names_that_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_page(source: str, lang: t.Language, key: str, spend: t.Spend) -> None:
+    def fake_page(source: str, lang: t.Language, creds: t.AwsCredentials, spend: t.Spend) -> None:
         if source == t.SOURCES[0]:
             raise t.TranslationDiffers("still differs after a retry")
         time.sleep(0.05)
         raise SystemExit("Messages API 500")
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    _aws_env(monkeypatch)
     monkeypatch.setattr(t, "translate_page", fake_page)
     monkeypatch.setattr(t, "write_language_lines", lambda: None)
     monkeypatch.setattr(t, "request_chars", lambda source, lang: 1)
@@ -253,7 +270,7 @@ def test_a_fatal_error_stops_the_other_pages(
 ) -> None:
     calls: list[str] = []
 
-    def fake_page(source: str, lang: t.Language, key: str, spend: t.Spend) -> None:
+    def fake_page(source: str, lang: t.Language, creds: t.AwsCredentials, spend: t.Spend) -> None:
         if source == t.SOURCES[0]:
             raise SystemExit("boom")
         for _ in range(200):
@@ -261,7 +278,7 @@ def test_a_fatal_error_stops_the_other_pages(
             calls.append(source)
             time.sleep(0.005)
 
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    _aws_env(monkeypatch)
     monkeypatch.setattr(t, "translate_page", fake_page)
     monkeypatch.setattr(t, "write_language_lines", lambda: None)
     monkeypatch.setattr(t, "request_chars", lambda source, lang: 1)
@@ -314,13 +331,15 @@ def test_a_section_that_differs_is_retried_once_with_the_differences(
     replies = iter(["## Lancez\n\nLancez loom up.\n", "## Lancez\n\nLancez `loom up` deux fois.\n"])
     sent: list[list[dict[str, str]]] = []
 
-    def fake_call(key: str, model: str, system: str, messages: list[dict[str, str]]) -> dict:
+    def fake_call(
+        creds: t.AwsCredentials, model: str, system: str, messages: list[dict[str, str]]
+    ) -> dict:
         sent.append(list(messages))
         text = next(replies)
         return {"stop_reason": "end_turn", "content": [{"type": "text", "text": text}], "usage": {}}
 
     monkeypatch.setattr(t, "call", fake_call)
-    out = t.translate_text(section, t.LANGUAGES[4], "key", t.Spend("claude-sonnet-5-5", 1.0))
+    out = t.translate_text(section, t.LANGUAGES[4], CREDS, t.Spend("claude-sonnet-5-5", 1.0))
     assert out == "## Lancez\n\nLancez `loom up` deux fois.\n"
     assert len(sent) == 2 and "inline code" in sent[1][-1]["content"]
 
@@ -429,3 +448,59 @@ def test_the_committed_translations_pass_check() -> None:
     """Fresh or not, every committed page keeps its links, anchors and translated labels."""
     assert t.link_problems() == []
     assert t.untranslated_pages() == []
+
+
+def test_a_request_names_the_bedrock_model_and_carries_no_key() -> None:
+    body = json.loads(
+        t.request_body("claude-sonnet-5-5", "system", [{"role": "user", "content": "x"}])
+    )
+    assert body["model"] == "anthropic.claude-sonnet-5-5"
+    assert body["output_config"] == {"effort": "low"} and body["max_tokens"] == t.MAX_TOKENS
+    headers = t.signed_headers(CREDS, b"{}", datetime(2026, 11, 16, tzinfo=UTC))
+    assert headers["host"] == "bedrock-mantle.us-east-1.api.aws"
+    assert headers["x-amz-security-token"] == "session-token"
+    assert "x-api-key" not in headers
+
+
+def test_the_signature_is_aws_signature_version_4() -> None:
+    # The expected value is botocore's SigV4Auth for the same request.
+    body = t.request_body("claude-sonnet-5-5", "sys", [{"role": "user", "content": "Hi"}])
+    headers = t.signed_headers(CREDS, body, datetime(2026, 11, 16, 12, tzinfo=UTC))
+    assert headers["x-amz-date"] == "20261116T120000Z"
+    assert headers["authorization"] == (
+        "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20261116/us-east-1/bedrock-mantle/aws4_request, "
+        "SignedHeaders=anthropic-version;content-type;host;x-amz-date;x-amz-security-token, "
+        "Signature=99471560efb74827912b4972210a5b838a3a963be1171c8170faaf3f1ac1513c"
+    )
+
+
+@pytest.mark.parametrize(
+    "unset", ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION"]
+)
+def test_update_refuses_credentials_that_are_not_short_lived(
+    monkeypatch: pytest.MonkeyPatch, unset: str
+) -> None:
+    _aws_env(monkeypatch)
+    monkeypatch.delenv(unset)
+    monkeypatch.setattr(t, "write_language_lines", lambda: None)
+    monkeypatch.setattr(t, "request_chars", lambda source, lang: 1)
+    monkeypatch.setattr(t, "translate_page", lambda *a: pytest.fail("translated"))
+    with pytest.raises(SystemExit, match=f"{unset} not set"):
+        t.update(every=True, codes=["ja"])
+
+
+def test_a_call_posts_the_signed_request_to_bedrock(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[urllib.request.Request] = []
+
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> io.BytesIO:
+        sent.append(request)
+        return io.BytesIO(b'{"stop_reason": "end_turn", "content": []}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    reply = t.call(CREDS, "claude-sonnet-5-5", "system", [{"role": "user", "content": "x"}])
+    assert reply["stop_reason"] == "end_turn"
+    (request,) = sent
+    assert request.full_url == "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
+    assert request.get_header("Authorization").startswith(
+        "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/"
+    )
