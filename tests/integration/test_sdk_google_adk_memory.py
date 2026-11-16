@@ -108,7 +108,7 @@ async def test_add_memory_then_delete_by_id(agent) -> None:
     await eventually(lambda: ids("alice"), description="the memory found")
     (memory_id,) = await ids("alice")
     assert memory_id is not None
-    key, _session = json.loads(memory_id)
+    key, _session, _writer, _version = json.loads(memory_id)
     row = await agent.memory.get(key, user_id="alice")
     assert row is not None
     fields = ("value", "agent", "user_id", "session_id", "memory_type", "source_class", "tags")
@@ -251,3 +251,31 @@ async def test_knowledge_is_shared_by_app_without_a_fact_deletion_id(agent) -> N
         found = await documents(user)
         assert found and found[0].id is None
         assert found[0].custom_metadata["source_uri"] == "guide"
+
+
+async def test_deleting_one_writers_search_hit_preserves_another_writer(agent) -> None:
+    for writer, text in (("writer-a", "Prefers aisle seats"), ("writer-b", "Prefers window seats")):
+        await agent.memory.set("seat", text, agent_id=writer, user_id="alice", session_id="shared")
+    service = LoomMemoryService(agent, app_name="travel", honour_abstain=False)
+
+    async def both():
+        found = await service.search_memory(app_name="travel", user_id="alice", query="seat")
+        facts = [m for m in found.memories if m.custom_metadata["source"] == "fact"]
+        return facts if len(facts) == 2 else None
+
+    facts = await eventually(both, description="two writers' same-key facts")
+    assert facts[0].id != facts[1].id
+    selected = next(m for m in facts if "window" in (m.content.parts[0].text or ""))
+    await service.delete_memory(app_name="travel", user_id="alice", memory_id=selected.id)
+    removed = await agent.call(
+        "memory.list", agent_id="writer-b", user_id="alice", session_id="shared", prefix="seat"
+    )
+    assert removed["entries"] == []
+    kept = await agent.memory.get("seat", agent_id="writer-a", user_id="alice", session_id="shared")
+    assert kept is not None and kept["value"] == "Prefers aisle seats"
+    # A stale delete cannot fall back to the surviving author's row.
+    await service.delete_memory(app_name="travel", user_id="alice", memory_id=selected.id)
+    kept_again = await agent.memory.get(
+        "seat", agent_id="writer-a", user_id="alice", session_id="shared"
+    )
+    assert kept_again is not None and kept_again["value"] == "Prefers aisle seats"

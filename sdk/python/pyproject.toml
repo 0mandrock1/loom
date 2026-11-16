@@ -76,7 +76,7 @@ agent-framework = ["agent-framework-core>=1.26,<1.27"]
 claude-memory = ["anthropic>=2.8,<2.9"]
 # ADK 2.14 has get_active_events and the memory service's add_memory and delete_memory;
 # 3.0 may change the memory service.
-google-adk = ["google-adk>=2.14,<3"]
+google-adk = ["google-adk>=2.14,<2.15"]
 
 [project.urls]
 Homepage = "https://clickhouse.github.io/loom/"

@@ -70,6 +70,10 @@ class _Agent:
         self.memory = memory
         self.knowledge = knowledge or _Knowledge()
 
+    async def call(self, op: str, **kw: Any) -> dict[str, Any]:
+        self.memory.calls.append((op, (), kw))
+        return {"tombstoned": True}
+
 
 class _ScriptedLlm(BaseLlm):
     """Answers each model call with the next scripted content; keeps the requests."""
@@ -86,6 +90,8 @@ class _ScriptedLlm(BaseLlm):
 
 
 def _hit(key: str, text: str, **kw: Any) -> MemorySearchHit:
+    kw.setdefault("version", 1)
+    kw.setdefault("agent", "bot")
     return MemorySearchHit(
         memory_key=key, memory_type="semantic", content_excerpt=text, similarity=0.9, **kw
     )
@@ -179,7 +185,7 @@ def test_the_model_reads_load_memory_results() -> None:
         if p.function_response
     ]
     (memory,) = response.response["result"].memories
-    assert memory.id == _entry_id("adk/1", "-")
+    assert memory.id == _entry_id("adk/1", "-", "bot", 1)
     assert memory.content.parts[0].text == "Alice prefers aisle seats"
 
 
@@ -188,10 +194,12 @@ def test_search_leaves_out_rows_below_the_floor_and_an_abstention() -> None:
     found = asyncio.run(
         _service(_FakeMemory(hits)).search_memory(app_name="travel", user_id="u", query="q")
     )
-    assert [m.id for m in found.memories] == [_entry_id("adk/1", "-")]
+    assert [m.id for m in found.memories] == [_entry_id("adk/1", "-", "bot", 1)]
     everything = _service(_FakeMemory(hits), honour_abstain=False)
     found = asyncio.run(everything.search_memory(app_name="travel", user_id="u", query="q"))
-    assert [m.id for m in found.memories] == [_entry_id(k, "-") for k in ("adk/1", "adk/2")]
+    assert [m.id for m in found.memories] == [
+        _entry_id(k, "-", "bot", 1) for k in ("adk/1", "adk/2")
+    ]
     abstained = _service(_FakeMemory(hits, abstain=True))
     assert not asyncio.run(
         abstained.search_memory(app_name="travel", user_id="u", query="q")
@@ -203,7 +211,9 @@ def test_search_cuts_to_top_k_and_skips_an_empty_query() -> None:
     found = asyncio.run(
         _service(fake, top_k=2).search_memory(app_name="travel", user_id="u", query="q")
     )
-    assert [m.id for m in found.memories] == [_entry_id(k, "-") for k in ("adk/0", "adk/1")]
+    assert [m.id for m in found.memories] == [
+        _entry_id(k, "-", "bot", 1) for k in ("adk/0", "adk/1")
+    ]
     assert not asyncio.run(
         _service(fake).search_memory(app_name="travel", user_id="u", query="  ")
     ).memories
@@ -401,19 +411,38 @@ def test_a_timestamp_that_is_not_iso_is_no_valid_at() -> None:
     assert kw["valid_at"] is None
 
 
-def test_delete_memory_deletes_the_key_and_skips_an_entry_without_one() -> None:
+def test_delete_memory_deletes_exact_version_and_skips_an_entry_without_one() -> None:
     fake = _FakeMemory()
     service = _service(fake)
-    memory_id = _entry_id("user_seat", "adk-1")
+    memory_id = _entry_id("user_seat", "adk-1", "writer", 1)
     asyncio.run(service.delete_memory(app_name="travel", user_id="alice", memory_id=memory_id))
     asyncio.run(service.delete_memory(app_name="travel", user_id="alice"))
-    # The session is sent: by key alone the delete finds the key's newest row, any user's.
-    assert fake.calls == [("delete", ("user_seat",), {"user_id": "alice", "session_id": "adk-1"})]
-    for not_an_id in ("adk/1", '"ab"', '{"k": "s", "x": "y"}', '["k"]', '["k", 1]'):
+    assert fake.calls == [
+        (
+            "memory.delete_version",
+            (),
+            {
+                "memory_key": "user_seat",
+                "version": "1",
+                "agent_id": "writer",
+                "user_id": "alice",
+                "session_id": "adk-1",
+            },
+        )
+    ]
+    for bad in (
+        "adk/1",
+        '"ab"',
+        '{"k":"s"}',
+        '["k"]',
+        '["k", "s"]',
+        '["k","s","*","1"]',
+        '["k","s","a",0]',
+        '["k","s","a","0"]',
+        '["k","s","a","18446744073709551616"]',
+    ):
         with pytest.raises(ValueError, match="not an id"):
-            asyncio.run(
-                service.delete_memory(app_name="travel", user_id="alice", memory_id=not_an_id)
-            )
+            asyncio.run(service.delete_memory(app_name="travel", user_id="alice", memory_id=bad))
 
 
 def test_the_loom_session_is_per_user_and_unambiguous() -> None:
@@ -439,24 +468,45 @@ def test_a_call_for_another_app_is_refused() -> None:
     assert fake.calls == []
 
 
-def test_only_a_fact_gets_an_entry_id_and_it_carries_the_rows_session() -> None:
-    hits = [
-        _hit("user_seat", "a fact", session_id="adk-1"),
-        _hit("adk/1", "an entry"),
-        _hit("chunk:adk/1:0", "a passage", source="chunk", parent_memory_key="adk/1"),
-        _hit("chunk:s1:0", "a turn", source="chunk", parent_memory_key="adk/1"),
-        _hit("summary:s1", "a session", source="summary"),
-    ]
-    fake = _FakeMemory(hits)
+def test_only_a_versioned_fact_gets_an_exact_deletion_id() -> None:
+    fake = _FakeMemory(
+        [
+            _hit("user_seat", "a fact", session_id="adk-1"),
+            _hit("adk/1", "an entry"),
+            _hit("chunk:adk/1:0", "a passage", source="chunk", parent_memory_key="adk/1"),
+            _hit("chunk:s1:0", "a turn", source="chunk", parent_memory_key="adk/1"),
+            _hit("summary:s1", "a session", source="summary"),
+        ]
+    )
     service = _service(fake)
     found = asyncio.run(service.search_memory(app_name="travel", user_id="u", query="q"))
     ids = [m.id for m in found.memories]
-    assert ids == [_entry_id("user_seat", "adk-1"), _entry_id("adk/1", "-"), None, None, None]
-    sources = ["fact", "fact", "chunk", "chunk", "summary"]
-    assert [m.custom_metadata["source"] for m in found.memories] == sources
-    # The id a search returned deletes that row: its key under its session.
+    assert ids == [
+        _entry_id("user_seat", "adk-1", "bot", 1),
+        _entry_id("adk/1", "-", "bot", 1),
+        None,
+        None,
+        None,
+    ]
+    assert [m.custom_metadata["source"] for m in found.memories] == [
+        "fact",
+        "fact",
+        "chunk",
+        "chunk",
+        "summary",
+    ]
     asyncio.run(service.delete_memory(app_name="travel", user_id="u", memory_id=ids[0]))
-    assert fake.calls[-1] == ("delete", ("user_seat",), {"user_id": "u", "session_id": "adk-1"})
+    assert fake.calls[-1] == (
+        "memory.delete_version",
+        (),
+        {
+            "memory_key": "user_seat",
+            "version": "1",
+            "agent_id": "bot",
+            "user_id": "u",
+            "session_id": "adk-1",
+        },
+    )
 
 
 def test_without_google_adk_the_import_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -486,7 +536,7 @@ def test_a_real_agent_posts_the_service_calls() -> None:
         )
         await service.add_memory(app_name="travel", user_id="alice", memories=[entry])
         await service.delete_memory(
-            app_name="travel", user_id="alice", memory_id=_entry_id("user_seat", "adk-1")
+            app_name="travel", user_id="alice", memory_id=_entry_id("user_seat", "adk-1", "bot", 1)
         )
 
     asyncio.run(calls())
@@ -496,7 +546,7 @@ def test_a_real_agent_posts_the_service_calls() -> None:
         "/v1/knowledge.search",
         "/v1/memory.set_from_messages",
         "/v1/memory.set",
-        "/v1/memory.delete",
+        "/v1/memory.delete_version",
     ]
     search, knowledge, extract, write, delete = (body for _, body in posts)
     assert (search["query"], search["top_k"], search["user_id"]) == ("seat", 3, "alice")
@@ -508,6 +558,7 @@ def test_a_real_agent_posts_the_service_calls() -> None:
     assert (extract["user_id"], extract["session_id"]) == ("alice", _loom_session("alice", "s1"))
     assert [m["content"] for m in extract["messages"]] == ["I prefer aisle seats"]
     assert write["memory_key"].startswith("adk/") and write["user_id"] == "alice"
+    assert delete["agent"] == "bot" and delete["version"] == "1"
     assert (delete["memory_key"], delete["user_id"], delete["session_id"]) == (
         "user_seat",
         "alice",
@@ -515,7 +566,7 @@ def test_a_real_agent_posts_the_service_calls() -> None:
     )
 
 
-@pytest.mark.parametrize("user", ["", "-"])
+@pytest.mark.parametrize("user", ["", "-", " ", "\t", " - ", " alice", "alice ", "\u00a0alice"])
 def test_a_user_id_that_names_no_loom_user_is_refused(user: str) -> None:
     fake = _FakeMemory()
     service = _service(fake)
@@ -532,7 +583,7 @@ def test_a_user_id_that_names_no_loom_user_is_refused(user: str) -> None:
         service.delete_memory(app_name="travel", user_id=user, memory_id="adk/1"),
     ]
     for call in calls:
-        with pytest.raises(ValueError, match="names none"):
+        with pytest.raises(ValueError, match="user_id"):
             asyncio.run(call)
     assert fake.calls == []
 
@@ -555,3 +606,34 @@ def test_knowledge_search_obeys_its_wire_cap():
     service = LoomMemoryService(agent, app_name="travel", top_k=500)
     asyncio.run(service.search_memory(app_name="travel", user_id="alice", query="guide"))
     assert agent.knowledge.calls[0][1]["top_k"] == 100
+
+
+def test_same_version_different_writers_have_distinct_exact_deletion_ids() -> None:
+    fake = _FakeMemory(
+        [
+            _hit("seat", "Prefers aisle", agent="writer-a", session_id="shared", version=101),
+            _hit("seat", "Prefers window", agent="writer-b", session_id="shared", version=101),
+        ]
+    )
+    service = _service(fake)
+    found = asyncio.run(service.search_memory(app_name="travel", user_id="alice", query="seat"))
+    first, second = found.memories
+    assert first.id != second.id
+    asyncio.run(service.delete_memory(app_name="travel", user_id="alice", memory_id=second.id))
+    assert fake.calls[-1] == (
+        "memory.delete_version",
+        (),
+        {
+            "memory_key": "seat",
+            "version": "101",
+            "agent_id": "writer-b",
+            "user_id": "alice",
+            "session_id": "shared",
+        },
+    )
+
+
+def test_a_fact_without_writer_or_version_has_no_deletion_id() -> None:
+    fake = _FakeMemory([_hit("seat", "aisle", agent=""), _hit("name", "Alice", version=0)])
+    found = asyncio.run(_service(fake).search_memory(app_name="travel", user_id="alice", query="q"))
+    assert [m.id for m in found.memories] == [None, None]

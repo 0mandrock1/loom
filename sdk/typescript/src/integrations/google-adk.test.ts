@@ -50,7 +50,7 @@ describe("Google ADK LoomMemoryService", () => {
 
   it("refuses app/user scope mistakes before calling Loom and skips blank queries", async () => {
     const { service, calls } = harness();
-    for (const userId of ["", " ", "-"])
+    for (const userId of ["", " ", "-", " - ", " alice", "alice ", "\u00a0alice"])
       await expect(service.searchMemory({ appName: "app", userId, query: "q" })).rejects.toThrow("userId");
     await expect(service.searchMemory({ appName: "other", userId: "alice", query: "q" })).rejects.toThrow("namespace");
     expect(await service.searchMemory({ appName: "app", userId: "alice", query: " " })).toEqual({ memories: [] });

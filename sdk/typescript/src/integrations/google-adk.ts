@@ -36,7 +36,9 @@ export class LoomMemoryService implements BaseMemoryService {
     if (appName !== this.opts.appName) {
       throw new Error("Give each ADK app its own Loom namespace and memory service");
     }
-    if (!userId.trim() || userId.trim() === "-") throw new Error("userId must name a Loom user");
+    if (!userId || userId === "-" || userId !== userId.trim()) {
+      throw new Error("userId must name a Loom user without surrounding whitespace");
+    }
   }
 
   async addSessionToMemory(session: Session): Promise<void> {

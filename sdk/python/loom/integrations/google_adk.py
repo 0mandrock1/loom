@@ -179,7 +179,9 @@ class LoomMemoryService(BaseMemoryService):
             MemoryEntry(
                 # Only a fact is deleted by its key; a chunk outlives the fact it names
                 # and a summary has no key, so erasure removes both.
-                id=_entry_id(hit.memory_key, hit.session_id) if hit.source == "fact" else None,
+                id=_entry_id(hit.memory_key, hit.session_id, hit.agent, hit.version)
+                if hit.source == "fact" and hit.agent and hit.agent != "*" and hit.version > 0
+                else None,
                 content=types.Content(role="user", parts=[types.Part(text=hit.content_excerpt)]),
                 custom_metadata={"similarity": hit.similarity, "source": hit.source},
                 timestamp=hit.valid_at or None,
@@ -210,8 +212,16 @@ class LoomMemoryService(BaseMemoryService):
         self._check_scope(app_name, user_id)
         if not memory_id:  # no id, nothing to delete: ADK's InMemoryMemoryService also returns
             return
-        key, session = _parse_entry_id(memory_id)
-        await self._agent.memory.delete(key, user_id=user_id, session_id=session)
+        key, session, writer, version = _parse_entry_id(memory_id)
+        # Exact identity and version: a removed or rewritten target cannot select another row.
+        await self._agent.call(
+            "memory.delete_version",
+            memory_key=key,
+            version=version,
+            agent_id=writer,
+            user_id=user_id,
+            session_id=session,
+        )
 
     def _check_scope(self, app_name: str, user_id: str) -> None:
         # Loom merges a write into a matching memory of the namespace whichever agent
@@ -221,9 +231,9 @@ class LoomMemoryService(BaseMemoryService):
                 f"this LoomMemoryService serves the ADK app {self._app_name!r}, not "
                 f"{app_name!r}: give each app its own Loom namespace and service"
             )
-        # In Loom an empty or "-" user is no user: writes would land outside the user's reads.
-        if user_id in ("", "-"):
-            raise ValueError(f"an ADK user_id names a Loom user; {user_id!r} names none")
+        # Reads trim user ids; refusing noncanonical ids keeps writes and reads on one user.
+        if user_id in ("", "-") or user_id != user_id.strip():
+            raise ValueError("user_id must name a Loom user without surrounding whitespace")
 
     async def _extract(self, user_id: str, session_id: str, events: Sequence[Event]) -> None:
         messages: list[dict[str, object]] = []
@@ -247,22 +257,28 @@ class LoomMemoryService(BaseMemoryService):
             )
 
 
-def _entry_id(memory_key: str, session_id: str) -> str:
-    """A memory's entry id: its key and its session. Users share extracted keys, and a
-    delete by key alone finds the newest row of the key, which can be another user's."""
-    return json.dumps([memory_key, session_id or "-"])
+def _entry_id(memory_key: str, session_id: str, agent: str, version: int) -> str:
+    """The complete row identity and version keep another writer's fact out of a delete."""
+    return json.dumps([memory_key, session_id or "-", agent, str(version)])
 
 
-def _parse_entry_id(memory_id: str) -> tuple[str, str]:
+def _parse_entry_id(memory_id: str) -> tuple[str, str, str, str]:
     try:
         parsed = json.loads(memory_id)
     except ValueError:
         parsed = None
     if not (
-        isinstance(parsed, list) and len(parsed) == 2 and all(isinstance(p, str) for p in parsed)
+        isinstance(parsed, list)
+        and len(parsed) == 4
+        and all(isinstance(p, str) and p for p in parsed)
+        and parsed[2] != "*"
+        and len(parsed[3]) <= 20
+        and parsed[3].isascii()
+        and parsed[3].isdigit()
+        and 0 < int(parsed[3]) < 2**64
     ):
         raise ValueError(f"{memory_id!r} is not an id this service's search returned")
-    return parsed[0], parsed[1]
+    return parsed[0], parsed[1], parsed[2], parsed[3]
 
 
 def _loom_session(user_id: str, session_id: str) -> str:
