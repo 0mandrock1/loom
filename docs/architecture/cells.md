@@ -1215,6 +1215,59 @@ which writes the directory alone, with the router's operator credential and none
 cell's stores, so it works while the cell is down; the router judges a placement from
 the directory row.
 
+## Restoring a cell
+
+Stop every server, worker and CLI writer before restoring a cell's stores. Keep old
+endpoints and restored copies stopped too. Run `loom router migrate` with the router's
+configuration, and apply pending ClickHouse schema with `loom migrate` while the cell
+is stopped. Then, with the restored cell's own configuration and the router operator
+credential, run:
+
+```bash
+loom cell restore --cell <cell> --wait 300
+```
+
+The command verifies the recorded Postgres and ClickHouse deployment identities and
+epochs against each other and the directory, checks the bucket name and prefix, and
+probes the configured stores directly. A different address is allowed when the store
+identity matches. It applies pending cell Postgres migrations on its marked operator
+session, then copies every permanent directory placement back into `loom.tenancy`,
+repairs first/mode/own rows and verifies the complete trigger set. A closed cell or a
+placement quota does not exclude its existing orgs. The directory's placement count
+and limits stay unchanged. The command holds the same operator lock as prepare, attach
+and place; another operation on that cell must finish first.
+
+Pages have fixed row and byte bounds and use the directory's `(cell, org)` index. A
+placement added during the scan restarts it; a configuration change refuses the run.
+There is no maximum number of orgs. Select a longer `--wait` for a larger cell. Every
+completed batch, including a no-op retry, acknowledges new WAL before success. A
+failure or interrupted commit can leave completed batches in place: repeat the same
+command while the cell stays stopped.
+
+Mode rises from `recording` to `enforced` when either store record requires it. The
+immutable first row must match the directory. After attach records fingerprints, the
+directory's current and next values replace the restored own row exactly. Before that,
+the own row stays as restored, including its absence. The command creates all org and
+tenancy guards even with that approval absent; the cell remains gated. Its result names
+whether prepare is still required. Complete reconciliation first, then start gated
+processes and rerun prepare before serving if the own row is absent. A retained own
+fingerprint that differs from the running configuration needs the normal configuration
+update procedure.
+
+The first cell can still hold orgs that attach has not placed yet, even after it records
+`enforced`: attach records directory enforcement before completing the placement
+batches. While it is `attaching` and the sole directory cell, restore preserves and
+reports those tenancy rows and directs the operator to resume attach. A serving cell,
+a later cell, or a cell with another registered cell refuses an unexpected local tenancy
+row. It neither creates a placement from restored content nor deletes an extra row.
+
+Run the ordinary [restore reconciliation](../operations/backup-and-recovery.md#restoring-one-store)
+after this command, before serving resumes. Cell metadata repair also works after both
+stores are restored; reconciliation still refuses when both lost the evidence it needs.
+Restored signing keys, revocations, sessions, bots and SCIM rows retain the existing
+backup limitations. Activity checks can detect a running process or a recent worker
+pass; heartbeat expiry cannot prove that every process is stopped.
+
 ## Operations
 
 - `loom cell restore`, after any store restore and before `loom reconcile`, writes the

@@ -1,0 +1,179 @@
+"""Cell restore repairs real metadata and guards without creating directory routes."""
+
+from __future__ import annotations
+
+import pytest
+
+from server.cli import cell_attach_pg as apg
+from server.cli import cell_restore_pg as local
+from server.core import cell, cell_triggers, pg
+from server.settings import settings
+from tests.integration._pg_database import own_database
+
+
+@pytest.fixture
+async def cell_db(monkeypatch):
+    async with own_database() as dsn:
+        monkeypatch.setattr(settings, "pg_dsn", dsn)
+        monkeypatch.setattr(settings, "cell", "first")
+        pg.expect_deployment(None)
+        async with pg.dedicated(statement_timeout_ms=5000) as conn:
+            await conn.execute(
+                "INSERT INTO loom.authority(authority,epoch,deployment_id) VALUES('postgres',1,'dep-restore')"
+            )
+            await apg.take_lock(conn, "restore-test")
+            yield conn
+        pg.expect_deployment(None)
+
+
+def desc(*, first=True, fingerprint=True, mode="enforced", state="serving"):
+    return {
+        "cell": "first",
+        "deployment_id": "dep-restore",
+        "is_first": first,
+        "state": state,
+        "mode": mode,
+        "bucket": "",
+        "bucket_prefix": "",
+        "current_fp": cell.as_value({"deployment_id": "dep-restore"}) if fingerprint else None,
+        "next_fp": None,
+        "placed": 0,
+        "sole_cell": True,
+    }
+
+
+RECORDED = {"authority": "postgres", "epoch": 1, "deployment_id": "dep-restore"}
+
+
+@pytest.mark.parametrize("has_first", [False, True])
+@pytest.mark.parametrize("has_mode", [False, True])
+@pytest.mark.parametrize("has_own", [False, True])
+@pytest.mark.parametrize("directory_fp", [False, True])
+async def test_state_matrix_fills_missing_rows_and_preserves_unapproved_own(
+    cell_db,
+    has_first,
+    has_mode,
+    has_own,
+    directory_fp,
+):
+    conn = cell_db
+    if has_first:
+        await conn.execute("INSERT INTO loom.cell_first(is_first,cell) VALUES(true,'first')")
+    if has_mode:
+        await conn.execute("INSERT INTO loom.tenancy_mode(mode) VALUES('recording')")
+    old = {
+        "current_fp": cell.as_value({"deployment_id": "dep-restore", "public_host": "old.test"}),
+        "next_fp": None,
+    }
+    if has_own:
+        await conn.execute("INSERT INTO loom.cell_self(current_fp) VALUES($1)", old["current_fp"])
+    descriptor = desc(fingerprint=directory_fp, mode="recording", state="attaching")
+    result = await local.state(conn, descriptor, RECORDED)
+    assert result["first"] == {"is_first": True, "cell": "first"}
+    assert result["mode"] == "recording"
+    assert result["own"] == (
+        {"current_fp": descriptor["current_fp"], "next_fp": None}
+        if directory_fp
+        else (old if has_own else None)
+    )
+    assert await local.state(conn, descriptor, RECORDED) == result
+
+
+async def test_enforced_mode_never_lowers_and_obsolete_next_clears(cell_db):
+    conn = cell_db
+    descriptor = desc(mode="recording", state="attaching")
+    await conn.execute("INSERT INTO loom.tenancy_mode(mode) VALUES('enforced')")
+    await conn.execute(
+        "INSERT INTO loom.cell_self(current_fp,next_fp) VALUES($1,$1)", descriptor["current_fp"]
+    )
+    result = await local.state(conn, descriptor, RECORDED)
+    assert result["mode"] == "enforced" and result["own"]["next_fp"] is None
+
+
+@pytest.mark.parametrize(
+    "mode,first", [("recording", True), ("enforced", True), ("enforced", False)]
+)
+async def test_missing_own_partial_gets_every_guard_without_approval(cell_db, mode, first):
+    from server.cli.cell_restore_triggers import repair
+
+    conn = cell_db
+    descriptor = desc(first=first, fingerprint=False, mode=mode, state="attaching")
+    await local.state(conn, descriptor, RECORDED)
+    assert await cell.read_state(conn) == "partial"
+    with pytest.raises(RuntimeError, match="partial"):
+        await cell_triggers.ensure_table(conn, "tenancy")
+    await repair(conn, descriptor)
+    assert await conn.fetchval("SELECT count(*) FROM loom.cell_self") == 0
+    assert await cell.read_state(conn) == "partial"
+    assert await cell_triggers.missing(conn) == []
+    assert await cell_triggers.first_missing(conn) == []
+
+
+async def test_wrong_first_guard_definition_and_function_refuse(cell_db):
+    from server.cli.cell_restore_triggers import repair
+
+    conn = cell_db
+    descriptor = desc()
+    await local.state(conn, descriptor, RECORDED)
+    await repair(conn, descriptor)
+    await conn.execute("DROP TRIGGER cell_first_immutable ON loom.cell_first")
+    await conn.execute(
+        "CREATE TRIGGER cell_first_immutable BEFORE UPDATE ON loom.cell_first FOR EACH ROW EXECUTE FUNCTION loom.cell_first_immutable()"
+    )
+    await conn.execute("ALTER TABLE loom.cell_first ENABLE ALWAYS TRIGGER cell_first_immutable")
+    assert any(d.kind == "cell_first" for d in await cell_triggers.first_missing(conn))
+    with pytest.raises(ValueError, match="first"):
+        await repair(conn, descriptor)
+
+
+@pytest.mark.parametrize("mode", ["recording", "enforced"])
+async def test_first_attaching_sole_cell_keeps_not_yet_placed_orgs(cell_db, mode):
+    conn = cell_db
+    await conn.execute("INSERT INTO loom.tenancy(org) VALUES('a'),('b'),('z')")
+    descriptor = desc(mode=mode, state="attaching")
+    held = local.LocalTenancy(conn)
+    await held.compare(["b"], descriptor, last=True)
+    assert held.extra == 2
+    assert await conn.fetchval("SELECT count(*) FROM loom.tenancy") == 3
+
+
+@pytest.mark.parametrize(
+    "change", [{"state": "serving"}, {"is_first": False}, {"sole_cell": False}]
+)
+async def test_serving_later_or_nonsole_cell_refuses_unknown_local_tenancy(cell_db, change):
+    conn = cell_db
+    await conn.execute("INSERT INTO loom.tenancy(org) VALUES('unknown')")
+    descriptor = {**desc(state="attaching"), **change}
+    with pytest.raises(ValueError, match="permanent placements"):
+        await local.LocalTenancy(conn).compare([], descriptor, last=True)
+
+
+async def test_noop_tenancy_batch_is_marked_and_durable(cell_db):
+    conn = cell_db
+    descriptor = desc()
+    assert await local.tenancy(conn, descriptor, RECORDED, ["acme"]) == 1
+    assert await local.tenancy(conn, descriptor, RECORDED, ["acme"]) == 0
+    assert await conn.fetchval("SELECT org FROM loom.tenancy WHERE org='acme'") == "acme"
+
+
+async def test_real_clickhouse_and_postgres_direct_nonce_round_trip(cell_db, monkeypatch):
+    import os
+
+    from server.cli.cell_restore_stores import identity, nonces
+    from server.core import cell_probe, leases, pg_profile
+    from server.core.ch import get_client
+    if not os.environ.get('LOOM_CH_HOST'):
+        pytest.skip('LOOM_CH_HOST not set')
+    monkeypatch.setattr(settings, 'document_s3_bucket', '')
+    ch = get_client()
+    await ch.connect()
+    try:
+        recorded = await pg_profile.recorded_authority(ch)
+        assert recorded is not None
+        await cell_db.execute('UPDATE loom.authority SET deployment_id=$1, epoch=$2', recorded['deployment_id'], recorded['epoch'])
+        assert (await identity(ch, cell_db))['deployment_id'] == recorded['deployment_id']
+        await nonces(ch, cell_db)
+        assert await cell_db.fetchval('SELECT count(*) FROM loom.cell_probe WHERE name=$1', cell_probe.NONCE_NAME) == 0
+        assert await ch.query_one(f'SELECT holder FROM {leases.LOCK_TABLE} WHERE name={{name:String}}', {'name': cell_probe.NONCE_NAME}) is None
+    finally:
+        await ch.disconnect()

@@ -223,10 +223,14 @@ carries `010_revision_delivered_at.sql`, and start the deployment on that build 
 1. Stop every server and worker of the deployment.
 2. Restore the store from its backup, and note the backup's time from the backup's own
    metadata (for ClickHouse, the start of `BACKUP`; for Postgres, the recovery target).
-3. Run `loom reconcile --restored clickhouse --point <time>` (or `--restored postgres`),
+3. For a cell, run `loom cell restore --cell <cell>` with its configuration and the
+   router operator credential, keeping every process stopped. It repairs cell metadata
+   and pending cell Postgres schema before reconciliation
+   ([cell restore](../architecture/cells.md#restoring-a-cell)).
+4. Run `loom reconcile --restored clickhouse --point <time>` (or `--restored postgres`),
    which prints what it would run again; then the same with `--apply`.
-4. Start the deployment.
-5. After a ClickHouse restore, run each `loom rechunk` the reconcile printed, and
+5. Start the deployment.
+6. After a ClickHouse restore, run each `loom rechunk` the reconcile printed, and
    upload and ingest again each source it names under "to ingest again": a knowledge
    document's chunks and a dataset's rows live in ClickHouse alone.
 
@@ -234,11 +238,12 @@ A [cell](../architecture/cells.md)'s Postgres carries org triggers that refuse a
 org the cell holds no tenancy row for, and a `loom.tenancy` guard that refuses a tenancy
 row, from a session that does not mark itself. A logical restore into a cell is such a
 session: with every process of the cell stopped, run it as one command with the marker,
-`PGOPTIONS='-c loom.tenancy_checked=on' pg_restore ...`, then start one pod with
-`LOOM_BOOT_MIGRATE` on before the others. A data-only `pg_restore --disable-triggers` into
+`PGOPTIONS='-c loom.tenancy_checked=on' pg_restore ...`, then run `loom cell restore`
+while it stays stopped. That command applies pending Postgres schema and verifies the
+triggers before reconciliation and startup. A data-only `pg_restore --disable-triggers` into
 an existing schema ends by enabling every trigger as an origin trigger, which leaves
 `loom.cell_first`'s two triggers off under `session_replication_role = replica`; that pod's
-boot sets them back to `ALWAYS`, and `loom doctor` names them until it does.
+restore sets them back to `ALWAYS`, and `loom doctor` names them until it does.
 
 On the Helm chart ([Kubernetes](kubernetes.md)), with release `loom`:
 

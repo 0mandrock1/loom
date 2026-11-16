@@ -462,7 +462,9 @@ def _add_cell_parser(sub: Any) -> None:
     from server.cli.cell_attach import add_attach_parser
     from server.cli.cell_place import add_place_parser
     from server.cli.cell_prepare import add_prepare_parser
+    from server.cli.cell_restore import add_restore_parser
 
     add_place_parser(csub)
     add_prepare_parser(csub)
     add_attach_parser(csub)
+    add_restore_parser(csub)
