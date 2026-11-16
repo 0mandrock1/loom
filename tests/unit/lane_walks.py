@@ -710,7 +710,7 @@ def judged_step(
         small = min(small, cost(n)[0], cost(n)[0])
         big = min(big, cost(4 * n)[0], cost(4 * n)[0])
     in_window = LANE_FLOOR_S < big < STEP_MAX_S
-    in_band = RATIO * small < big < 16 * small  # 16 times: pure quadratic growth
+    in_band = RATIO * small < big < 16 * small
     if listed or not (in_window and in_band):
         return "N", small, big, bs, bb
     # The N walk can fit in the CPU cache and the 4N one not, so that step can grow over 8
