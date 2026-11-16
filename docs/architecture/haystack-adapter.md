@@ -5,6 +5,8 @@ retrieval component through the synchronous Loom SDK. The core SDK and server do
 depend on the framework. Each HTTP call has an SDK-managed client lifetime; the
 adapter leaves no server, local database, cache or persistent background process.
 
+## Invariants
+
 A store maps each native document id to a hashed source URI under a store-specific
 prefix. A matching tag scopes listing and retrieval. The full native document
 serialization, including metadata, embeddings and binary fields, lives in the
@@ -24,3 +26,9 @@ Serialized connections carry Haystack environment-variable Secret references; ra
 Secret tokens refuse serialization. Explicit endpoint URLs reject embedded secrets.
 The adapter preserves Haystack's pipeline deserialization trust policy and never
 registers trusted modules or selects unsafe deserialization.
+
+## Source entry points
+
+- `sdk/python/loom/integrations/haystack.py`: `LoomDocumentStore` and `LoomRetriever`.
+- `sdk/python/tests/test_haystack.py`: native document-store and pipeline behavior.
+- `tests/integration/test_sdk_haystack.py`: live document persistence and retrieval.

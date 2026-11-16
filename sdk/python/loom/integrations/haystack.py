@@ -17,7 +17,9 @@ try:
     from haystack.utils import Secret
     from haystack.utils.filters import document_matches_filter
 except ImportError:
-    raise ImportError("Install clickhouse-loom[haystack] to use the Haystack adapters") from None
+    raise ImportError(
+        "loom.integrations.haystack needs haystack-ai: pip install 'clickhouse-loom[haystack]'"
+    ) from None
 
 from loom import SyncAgent
 from loom.errors import LoomError
