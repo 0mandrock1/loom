@@ -122,7 +122,7 @@ async def test_online_target_must_match_its_ledger_before_connecting(tmp_path) -
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["statement", "rollback", "commit"])
-async def test_cancellation_terminates_before_installed_asyncpg_transaction_unwind(
+async def test_cancellation_closes_before_installed_asyncpg_transaction_unwind(
     tmp_path, phase
 ) -> None:
     import asyncio
@@ -136,6 +136,7 @@ async def test_cancellation_terminates_before_installed_asyncpg_transaction_unwi
     (tmp_path / "001_one.sql").write_text("SELECT stalled_statement;")
     reached = asyncio.Event()
     terminated = asyncio.Event()
+    closed = asyncio.Event()
 
     class Connection:
         _pool_release_ctr = 0
@@ -143,10 +144,15 @@ async def test_cancellation_terminates_before_installed_asyncpg_transaction_unwi
         _protocol = SimpleNamespace(is_in_transaction=lambda: False)
 
         def is_closed(self):
-            return terminated.is_set()
+            return closed.is_set() or terminated.is_set()
 
         def transaction(self):
             return Transaction(self, None, False, False)
+
+        async def close(self, **kwargs):
+            assert kwargs["timeout"] > 0
+            assert not terminated.is_set()
+            closed.set()
 
         def terminate(self):
             terminated.set()
@@ -166,11 +172,10 @@ async def test_cancellation_terminates_before_installed_asyncpg_transaction_unwi
                 or (sql.startswith("COMMIT") and phase == "commit")
             ):
                 reached.set()
-                # Transport termination, rather than a second task cancellation,
-                # releases a transaction that has already begun async cleanup.
-                while not terminated.is_set():
+                # Public close must run independently of transaction unwinding.
+                while not closed.is_set():
                     try:
-                        await terminated.wait()
+                        await closed.wait()
                     except asyncio.CancelledError:
                         continue
 
@@ -188,9 +193,9 @@ async def test_cancellation_terminates_before_installed_asyncpg_transaction_unwi
         migrating.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(migrating, 1)
-        assert terminated.is_set()
+        assert closed.is_set() and not terminated.is_set()
     finally:
-        terminated.set()
+        closed.set()
         if not migrating.done():
             migrating.cancel()
         await asyncio.gather(migrating, return_exceptions=True)

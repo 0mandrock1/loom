@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 from asyncio import sleep
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
@@ -108,23 +109,52 @@ async def migrate(
     bounded (`lock_timeout`), so an `ALTER` queued behind a long transaction never
     holds every read and write of the table behind it; the file is retried. For schema
     `loom` it marks the session and runs `cell_triggers.ensure` before the lock goes."""
-    files = migration_files(mig_dir)
-    # Validate every online declaration before even creating the ledger.
-    indexes = {f.name: pg_online_index.parse(f.read_text()) for f in files}
-    if any(index is not None and index.schema != schema for index in indexes.values()):
-        raise ValueError("online-index target differs from its ledger schema")
+    files, indexes = _validated(mig_dir, schema)
     async with (connect or pg.dedicated)() as conn:
         task = asyncio.create_task(_migrate(conn, files, indexes, schema, lock_key))
         try:
             return await asyncio.shield(task)
         except BaseException:
-            # Terminate before cancellation can enter asyncpg's unbounded rollback.
-            conn.terminate()
-            task.cancel()
-            await asyncio.wait({task}, timeout=1)
-            if task.done() and not task.cancelled():
-                task.exception()
+            end = time.monotonic() + pg._RELEASE_TIMEOUT_S
+            try:
+                await pg.close_owned(conn, end=end)
+            except BaseException:  # noqa: BLE001 — preserve the migration failure/cancellation.
+                pass
+            if not task.done():
+                task.cancel()
+            task.add_done_callback(pg._retrieve_task)
+            try:
+                await asyncio.wait({task}, timeout=max(0, end - time.monotonic()))
+            except BaseException:  # noqa: BLE001 — preserve the original failure on repeated cancel.
+                pg._terminate(conn)
             raise
+
+
+def _validated(
+    mig_dir: Path, schema: str
+) -> tuple[list[Path], dict[str, pg_online_index.OnlineIndex | None]]:
+    files = migration_files(mig_dir)
+    # Validate every online declaration before even creating the ledger.
+    indexes = {f.name: pg_online_index.parse(f.read_text()) for f in files}
+    if any(index is not None and index.schema != schema for index in indexes.values()):
+        raise ValueError("online-index target differs from its ledger schema")
+    return files, indexes
+
+
+async def migrate_borrowed(
+    conn: Any,
+    mig_dir: Path = PG_MIGRATIONS_DIR,
+    *,
+    schema: str = "loom",
+    lock_key: int = _LOCK_KEY,
+) -> list[str]:
+    """Apply on the owner's session; its supervisor owns all failure cleanup.
+
+    The caller retains its operation deadline and must close the session before
+    cancelling this work. Normal completion releases only the migration key.
+    """
+    files, indexes = _validated(mig_dir, schema)
+    return await _migrate(conn, files, indexes, schema, lock_key)
 
 
 async def _lock(conn: Any, key: int) -> None:
