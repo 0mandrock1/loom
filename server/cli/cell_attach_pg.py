@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import Awaitable, Callable, Iterable, Iterator
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -90,6 +90,50 @@ class Wait:
         return True
 
 
+@dataclass
+class _Interrupted:
+    error: BaseException
+
+
+async def _work_result[T](work: Coroutine[Any, Any, T]) -> T | _Interrupted:
+    try:
+        return await work
+    except (KeyboardInterrupt, SystemExit) as error:
+        # These exceptions otherwise stop asyncio's loop before the owner can close.
+        return _Interrupted(error)
+
+
+async def supervise[T](conn: Any, work: Coroutine[Any, Any, T], *, end: float) -> T:
+    """Bound owned work, reserving cleanup inside its original phase deadline.
+
+    A failed borrowed transaction must remain alive until public close sends its
+    cancellation. Closing the transport first can leave its backend locks held.
+    """
+    task = asyncio.create_task(_work_result(work))
+    reserve = min(1.0, max(0.0, end - time.monotonic()) / 4)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=max(0.0, end - reserve - time.monotonic()))
+        if not done:
+            raise TimeoutError("attach Postgres phase deadline expired")
+        result = task.result()
+        if isinstance(result, _Interrupted):
+            raise result.error
+        return result
+    except BaseException:
+        try:
+            await pg.close_owned(conn, end=end)
+        except BaseException:  # noqa: BLE001 — preserve the work failure or cancellation.
+            pass
+        if not task.done():
+            task.cancel()
+        task.add_done_callback(pg._retrieve_task)
+        try:
+            await asyncio.wait({task}, timeout=max(0.0, end - time.monotonic()))
+        except BaseException:  # noqa: BLE001 — repeated cancellation preserves the first failure.
+            pg._terminate(conn)
+        raise
+
+
 def _split(key: int) -> str:
     """The `pg_locks` columns that hold a bigint advisory key, in this database."""
     return (
@@ -125,16 +169,11 @@ async def direct_refusals(conn: Any, what: str) -> list[Refusal]:
     outlive the CLI on the pooler's server connection, and attach's tenancy rows would be
     refused as an unchecked writer's."""
     identities = []
-    try:
-        for _ in range(2):
-            tx = conn.transaction()
-            await tx.start()
-            identities.append(await conn.fetchrow(_IDENTITY))
-            await tx.commit()
-    except BaseException:
-        # A cancelled read must not wait for a transaction context's rollback.
-        conn.terminate()
-        raise
+    for _ in range(2):
+        tx = conn.transaction()
+        await tx.start()
+        identities.append(await conn.fetchrow(_IDENTITY))
+        await tx.commit()
     first, second = identities
     out = []
     if first is None or second is None or tuple(first) != tuple(second):
@@ -538,30 +577,32 @@ async def _ensure_one(conn: Any, table: str, most_ms: int, wait: Wait) -> cell_t
     bound_s = (
         wait.bound_ms(_MIGRATION_LOCK_MS) + wait.bound_ms(most_ms)
     ) / 1000 + _TRIGGER_TRY_MARGIN_S
+    return await supervise(
+        conn, _trigger_try(conn, table, most_ms, wait, _LOCK_KEY), end=time.monotonic() + bound_s
+    )
+
+
+async def _trigger_try(
+    conn: Any, table: str, most_ms: int, wait: Wait, key: int
+) -> cell_triggers.Outcome:
+    await conn.execute(f"SET lock_timeout = '{wait.bound_ms(_MIGRATION_LOCK_MS)}ms'")
     try:
-        async with asyncio.timeout(bound_s):
-            await conn.execute(f"SET lock_timeout = '{wait.bound_ms(_MIGRATION_LOCK_MS)}ms'")
-            try:
-                await conn.execute(_MIGRATION_LOCK, _LOCK_KEY)
-            except Exception as e:
-                if getattr(e, "sqlstate", None) != "55P03":
-                    raise
-                await conn.execute("RESET lock_timeout")
-                return cell_triggers.Outcome("busy", await _migration_holder(conn, _LOCK_KEY))
-            await conn.execute("RESET lock_timeout")
-            outcome = await cell_triggers.ensure_table(
-                conn,
-                table,
-                recording_first=True,
-                lock_timeout=f"{wait.bound_ms(most_ms)}ms",
-                attempts=1,
-            )
-            await conn.execute(_MIGRATION_UNLOCK, _LOCK_KEY)
-            return outcome
-    except BaseException:
-        # Closing the session releases its locks without asynchronous error cleanup.
-        conn.terminate()
-        raise
+        await conn.execute(_MIGRATION_LOCK, key)
+    except Exception as e:
+        if getattr(e, "sqlstate", None) != "55P03":
+            raise
+        await conn.execute("RESET lock_timeout")
+        return cell_triggers.Outcome("busy", await _migration_holder(conn, key))
+    await conn.execute("RESET lock_timeout")
+    outcome = await cell_triggers.ensure_table(
+        conn,
+        table,
+        recording_first=True,
+        lock_timeout=f"{wait.bound_ms(most_ms)}ms",
+        attempts=1,
+    )
+    await conn.execute(_MIGRATION_UNLOCK, key)
+    return outcome
 
 
 def _busy_refusal(table: str, holders: list[Any]) -> Refusal:

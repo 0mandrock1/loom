@@ -170,9 +170,29 @@ class Run:
         self.lock_conn = await self._lock_cm.__aenter__()
 
     async def close_lock(self) -> None:
+        from server.core import pg
+
         if self._lock_cm is not None:
-            await self._lock_cm.__aexit__(None, None, None)
+            cm, conn = self._lock_cm, self.lock_conn
             self._lock_cm = self.lock_conn = None
+            closed = pg._lost(conn)
+            end = time.monotonic() + (0.0 if closed else pg._RELEASE_TIMEOUT_S)
+            try:
+                if not closed:
+                    await pg.close_owned(conn, end=end)
+            finally:
+                task = asyncio.create_task(cm.__aexit__(None, None, None))
+                task.add_done_callback(pg._retrieve_task)
+                try:
+                    done, _ = await asyncio.wait({task}, timeout=max(0.0, end - time.monotonic()))
+                    if not done:
+                        task.cancel()
+                        raise TimeoutError("attach lock cleanup deadline expired")
+                    task.result()
+                except BaseException:
+                    pg._terminate(conn)
+                    task.cancel()
+                    raise
 
     async def confirm_lock(self) -> None:
         """A lost backend ends the owner; a new run must claim and start again."""
@@ -588,6 +608,7 @@ class Run:
             await self.done()
             self.report.update(state="serving", done=True)
             return 0
+        failure: BaseException | None = None
         try:
             await self.open_lock()
             await self.read_own_row()
@@ -616,8 +637,15 @@ class Run:
             answer = await self.serving()
             self.report.update(state=answer.get("state"), placed_orgs=answer.get("placed_orgs"))
             return 0
+        except BaseException as error:
+            failure = error
+            raise
         finally:
-            await self.close_lock()
+            try:
+                await self.close_lock()
+            except BaseException:
+                if failure is None:
+                    raise
 
     async def precommit(self, found: cell_scan.ScanResult) -> None:
         from server.core import pg_profile

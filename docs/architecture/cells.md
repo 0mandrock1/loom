@@ -1067,7 +1067,14 @@ Then, in order (the step numbers are the ones the rest of this page uses):
   lock on `loom.tenancy_mode`, 2 s a try within `--wait`, the attach lock confirmed and the
   cheap heartbeat refusals run before each try (a booting process skips the try). Each try,
   including COMMIT, has a client deadline: the lock wait plus a 3 s statement margin and
-  a 5 s standby allowance. A commit past it has an unknown outcome until the durable read.
+  a 5 s standby allowance. Each mode or trigger try reserves the smaller of one second
+  and one quarter of its original client bound for cleanup. Its independent owner
+  closes the session through the public driver API while query/transaction work is
+  still alive, then cancels and reaps that work within the same absolute deadline.
+  Borrowed checks and trigger DDL leave failed-session cleanup to that owner. Close
+  failure or exhausted cleanup time aborts the transport and preserves the original
+  failure; abort alone does not prove that server locks disappeared. A commit past
+  its deadline has an unknown outcome until the durable read.
   After a failed try, the mode transaction an earlier run left in flight is found by its lock (only
   attach takes `ExclusiveLock` there; a relation's OID is matched in this database alone)
   and ended. From the commit on the mode only rises: every later refusal leaves the cell
