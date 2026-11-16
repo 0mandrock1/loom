@@ -598,6 +598,47 @@ def test_loom_search_and_ask_keep_a_computed_row_above_governed_hits() -> None:
     assert governed_after_computed(ordinary) == ordinary
 
 
+@pytest.mark.parametrize("computed_key", ["derived_aggregate", "temporal_diff"])
+@pytest.mark.parametrize("with_definition", [False, True])
+async def test_ask_knee_preserves_computed_precedence_before_token_trimming(
+    monkeypatch: pytest.MonkeyPatch, computed_key: str, with_definition: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from server.memory.app import code_grounding
+    from server.memory.app.ask import pool
+
+    async def unchanged(query: str, search_input: Any, hits: list[Any], config: Any) -> list[Any]:
+        return hits
+
+    monkeypatch.setattr(code_grounding, "apply_code_grounding", unchanged)
+    monkeypatch.setattr(pool, "_drop_superseded", lambda _: False)
+    computed = _hit(computed_key, 1.0, source="computed")
+    rows = [computed]
+    if with_definition:
+        rows.append(_governed("definition/arr"))
+    rows.extend([_hit("on-topic", 0.9), _hit("weak", 0.1), _hit("weak2", 0.1)])
+    for hit in rows:
+        hit.similarity = hit.rank_score
+    run = pool._AskRun(
+        search_input=_input(),
+        question="ARR",
+        query_text="ARR",
+        settings=SimpleNamespace(memory_ask_relevance_gate_min_keep=2),
+        target_k=5,
+        window=5,
+        recency_weight=0.0,
+        ranked=list(rows),
+        synth_pool=list(rows),
+    )
+    await pool._ground_and_cut(run, window_rel_floor=0.8)
+    assert run.gate_dropped == 2
+    assert run.synth_pool == rows[:-2]
+    await pool._settle_window(run, token_budget=1)
+    assert run.memories == [computed]
+    assert run.context_trimmed == len(rows) - 3
+
+
 async def test_launch_serves_whole_bodies_when_the_search_asks_for_them(
     store: dict[str, Any],
 ) -> None:

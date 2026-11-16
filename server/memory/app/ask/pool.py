@@ -673,7 +673,6 @@ async def _ground_and_cut(run: _AskRun, window_rel_floor: float | None) -> None:
 
         # A governed definition is not cut: its similarity says nothing about whether the
         # admin's definition answers the question.
-        held = [m for m in run.synth_pool if getattr(m, "governed", None)]
         knee = similarity_floor_cut(
             [m for m in run.synth_pool if not getattr(m, "governed", None)],
             rel_floor=rel_floor,
@@ -686,7 +685,7 @@ async def _ground_and_cut(run: _AskRun, window_rel_floor: float | None) -> None:
         if knee.dropped:
             _knee_ids = {id(m) for m in knee.dropped}
             run.ranked = [m for m in run.ranked if id(m) not in _knee_ids]
-            run.synth_pool = held + knee.kept
+            run.synth_pool = [m for m in run.synth_pool if id(m) not in _knee_ids]
 
 
 async def _settle_window(run: _AskRun, *, token_budget: int | None) -> bool:
