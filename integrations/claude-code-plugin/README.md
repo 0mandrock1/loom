@@ -77,8 +77,8 @@ only if its operator configured one
 ([models and keys](https://clickhouse.github.io/loom/getting-started/models-and-keys/));
 deleting data is covered in
 [retention and erasure](https://clickhouse.github.io/loom/features/memory/retention-and-erasure/).
-Anyone the server grants access to that namespace, such as teammates, and the
-server's operator can read what is stored there
+Users whose grants allow them to read a stored row, such as teammates, and the
+server's operator can read it
 ([namespaces and sharing](https://clickhouse.github.io/loom/features/namespaces-and-sharing/)).
 
 The plugin's hooks and its MCP header helper (the script that adds the token to
@@ -103,8 +103,9 @@ it stays until you replay or delete it; `loom-status` counts these and names the
 directory. A write the server refuses, or that cannot reach the server, is
 discarded. A batch of the per-file read and grep records above that fails to
 send is discarded too. Chat turns that fail are sent again at the end of the
-next reply, and a brief's events at the next brief save. Other state files are
-deleted after a day untouched. The log of which tool calls the plugin redirected
+next reply, and a brief's events at the next brief save. At session start the
+plugin tries to remove other state files untouched for a day. They can remain
+longer, especially when no new session starts. The log of which tool calls the plugin redirected
 or let through (no prompt or file content) stays until you remove it
 (`LOOM_SHUNT_LOG=off` stops it).
 

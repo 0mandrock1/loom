@@ -78,6 +78,25 @@ The server keeps this in its own databases (ClickHouse, and Postgres when the op
 stores memories there). It passes text to an LLM or embedding provider only if its
 operator configured one ([models and keys](../../getting-started/models-and-keys.md)).
 Deleting data is covered in [retention and erasure](../memory/retention-and-erasure.md).
+Users whose grants allow them to read a stored row, and the server's operator, can read
+it. [Namespaces and sharing](../namespaces-and-sharing.md) describes access control.
+
+The plugin keeps the token it saves (a copy of the install token or a self-signup token
+in `~/.loom/config.json`; in agent mode the exchanged one in
+`~/.loom/agent-token-<hash of LOOM_CLIENT_ID>.json`) and its other state in `~/.loom/`,
+mode 0600, until you remove it.
+
+Its files in the system temp directory, which can hold prompt and reply text, are also
+mode 0600. A queued write whose delivery process stopped before sending it stays until
+you replay or delete it; `loom-status` counts these and names the directory. A write the
+server refuses, or that cannot reach the server, is discarded. A batch of the per-file
+read and grep records above that fails to send is discarded too. Chat turns that fail
+are sent again at the end of the next reply, and a brief's events at the next brief
+save. At session start the plugin tries to remove other state files untouched for a
+day. They can remain longer, especially when no new session starts. The log of which
+tool calls the plugin redirected or let through (no prompt or file content) stays until
+you remove it (`LOOM_SHUNT_LOG=off` stops it).
+
 Two skills reach other services, each only when you ask for it. The `loom-status` skill
 can install Node.js from NodeSource through apt, dnf or yum, or from apk or Homebrew, and
 runs that installer only after you agree. The `improve-loom-for-my-repo` skill searches
@@ -298,8 +317,9 @@ keeping tool authority independent of retrieved text is the client's job.
 The hooks' temp files (turn journal, cursors, stashes, flush jobs, and the code shunt's
 decision log, pending batches and denial counts) are created `0600`, never written through
 a symlink or into another user's file, and never read from a planted symlink, a hard link
-or another user's file; the turn journal and stashes are removed at SessionEnd. What the
-hooks redact before sending is in [data handling](#data-handling).
+or another user's file. At SessionEnd the session-memory hook removes its recalled-content
+stash; the turn journal is kept for cleanup at a later session start. Retention and what
+the hooks redact before sending are in [data handling](#data-handling).
 
 ### Tuning knobs
 

@@ -27,16 +27,17 @@ What you get once it is installed:
 The hooks send prompts, tool inputs and outputs, file paths, repository identity,
 session summaries and outlines of uncommitted diffs to the configured Loom server.
 The server can keep conversation turns, extract memories from the session's last
-200 turns, and pass text to the providers its operator configures. People with
-access to the same namespace and the server's operator can read stored data.
+200 turns, and pass text to the providers its operator configures. Users whose
+grants allow them to read a stored row, and the server's operator, can read it.
 Client-side redaction of common credentials is best effort; MCP tool arguments
 and manually saved session briefs bypass it.
 
 The plugin runs Node.js, Git and grep locally, keeps credentials and state under
 `~/.loom/`, and writes temporary state that can contain prompt and reply text.
-The test gate chooses a Python interpreter without starting it. Most temporary
-state expires after a day untouched; queued writes and the shunt log have
-different retention rules. The `loom-status` skill can install Node.js after
+The test gate chooses a Python interpreter without starting it. At session start
+the plugin tries to remove most temporary state untouched for a day; it can
+remain longer, especially when no new session starts. Queued writes and the
+shunt log have different retention rules. The `loom-status` skill can install Node.js after
 you agree, and `improve-loom-for-my-repo` searches public issues and asks before
 filing a report. The full
 [data-handling disclosure](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling)
