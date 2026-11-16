@@ -311,8 +311,9 @@ same network. On the same machine, `loom install --client claude-desktop` writes
   enter `Bearer <JWT>` ([telling which](#bearer-or-bare-token)); for OAuth, use the
   [browser sign-in](#clients-that-sign-in-by-browser).
 - **Perplexity**: the connector docs Perplexity publishes offer an API key or no
-  authentication and do not say which header the key is sent in
-  ([telling which](#bearer-or-bare-token)). Where it offers OAuth, Loom's
+  authentication and do not say which header the key is sent in: enter `Bearer <JWT>` as its
+  API key ([telling which](#bearer-or-bare-token)); `missing bearer token` means it sends
+  another header. Where it offers OAuth, Loom's
   [browser sign-in](#clients-that-sign-in-by-browser) registers it as a public client with
   no client secret; that route has not been tested with Loom.
 - **Le Chat** (Mistral's connector docs call the app Work): an admin adds it under
@@ -334,6 +335,7 @@ contains applies.
 | The error contains                                                         | It means                                                                                            | Then                                                                                           |
 | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `Invalid header`                                                           | the provider added its own prefix (`Bearer Bearer <JWT>`)                                           | enter the bare token                                                                           |
+| `invalid token header:`                                                    | the value is not a JWT: an unexpanded `${VAR}` or a truncated paste                                 | check the variable or secret expanded, and paste the whole token                               |
 | ``authorization header must be `Bearer <token>` ``                         | the provider sent no `Bearer` scheme (a bare token, or Basic), or the scheme with no token after it | enter `Bearer <JWT>` (check the token field is filled), or choose the provider's bearer option |
 | `missing bearer token`                                                     | no `Authorization` header arrived                                                                   | check the header name, or the field the token went in                                          |
 | `token expired`, says it is revoked, or says its sign-in session has ended | the token itself is refused                                                                         | mint a new one ([tokens and grants](../../guides/tokens-and-grants.md))                        |
