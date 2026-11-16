@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -87,9 +88,10 @@ def test_cli_admin_mint_reads_the_fleet_before_minting(
 
     monkeypatch.setattr(instances, "live_rows", lambda: [{"schema_version": 76}])
     monkeypatch.setattr(instances, "read_live", read_live)
-    monkeypatch.setattr(keyring, "load_for_offline_mint", lambda **kw: None)
+    monkeypatch.setattr(keyring, "load_for_connected_mint", AsyncMock())
+    monkeypatch.setattr("server.cli._ch.check_acceptance", AsyncMock())
     monkeypatch.setattr(access, "run_connected", lambda run, **_declared: asyncio.run(run(None)))
-    monkeypatch.setattr(access, "_audit_platform_admin_mint", lambda *a: True)
+    monkeypatch.setattr(access, "_audit_platform_admin_mint", AsyncMock(return_value=True))
     monkeypatch.setattr(jwt, "mint_token", mint)
     code = cli.main(
         [
@@ -139,7 +141,7 @@ def test_cli_admin_mint_refuses_an_unread_fleet(monkeypatch, capsys) -> None:
         ]
     )
     out, err = capsys.readouterr()
-    assert code == 1 and out == "" and "rollout" in err
+    assert code == 1 and out == "" and "enrolled scope" in err
 
 
 def test_admin_token_floor_matches_the_physical_migration() -> None:

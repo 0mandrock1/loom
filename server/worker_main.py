@@ -63,8 +63,6 @@ async def _start_services(ch: Any) -> list[asyncio.Task[None]]:
             track(boot.start_runtime_overrides()),
         ]
         await boot.await_warm_up(settings.boot_warmup_timeout_s, ("runtime_overrides",))
-    for task in tasks:
-        retirement.get_gate().track(task)
     return tasks
 
 

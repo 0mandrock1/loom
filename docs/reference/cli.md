@@ -38,7 +38,10 @@ Commands fall into two kinds:
   whatever `--token` says, `loom init` refuses before it signs anything up, and `loom call`
   exchanges the workload token itself.
 
-`loom mint-token` needs only `LOOM_JWT_SECRET`: it signs a token locally.
+`loom mint-token` signs locally with `LOOM_JWT_SECRET` after verifying its paired
+stores and enrolling as a participant. It refuses when those stores cannot be verified
+or enrollment fails, including offline and before the deployment is migrated. Run it
+against the deployment's migrated stores.
 
 **Session commands** (`login`, `logout`, `whoami`, `call`, `token`) are the Python SDK's
 own (`loom.cli`; `python -m loom …` with only the SDK installed), so `loom`
@@ -304,7 +307,7 @@ python scripts/codegen/docs_reference.py
 | `loom import-recall` | Import an external vector-recall agent-memory SQLite export into Loom. | `--sqlite`, `--org`, `--namespace`, `--agent`, `--base-url`, `--token`, `--dry-run` |
 | `loom import-brain` | Import a markdown agent 'brain' directory into Loom: MEMORY.md (always-injected HOT layer) → profile.set sections; memory/contexts/*.md (read-on-demand WARM layer) → knowledge.add docs. | `--dir`, `--org`, `--namespace`, `--agent`, `--base-url`, `--token`, `--dry-run` |
 | `loom claim-release` | Release a self-signup claim: revoke its grants, clear the owner, deactivate it. | `--org`, `--namespace`, `-y` |
-| `loom mint-token` | Mint a JWT locally (requires LOOM_JWT_SECRET). | `--subject`, `--org`, `--namespaces`, `--roles`, `--platform-admin`, `--namespace-role`, `--ttl-days`, `--save`, `--read-scope`, `--read-user-id`, `--traffic-class`, `--consumer`, `--service-account`, `--user-token`, `--json` |
+| `loom mint-token` | Mint a JWT locally (requires LOOM_JWT_SECRET and verified stores). | `--subject`, `--org`, `--namespaces`, `--roles`, `--platform-admin`, `--namespace-role`, `--ttl-days`, `--save`, `--read-scope`, `--read-user-id`, `--traffic-class`, `--consumer`, `--service-account`, `--user-token`, `--json` |
 | `loom revoke-token` | Revoke one token by jti or subject (writes loom.revoked_tokens through the revocation module; needs the configured ClickHouse). | `--jti`, `--subject`, `--list`, `--issued-before`, `--scim`, `--reason`, `--expires-at`, `--json` |
 | `loom sso` | Carry password accounts over to single sign-on. |  |
 | `loom sso adopt` | Let SSO sign-ins reach the password accounts whose email is at --domain: each person then signs in with the identity provider to their own account, its namespaces and data. | `--domain`, `--org`, `--skip`, `--keep-tokens`, `--apply`, `--dry-run` |

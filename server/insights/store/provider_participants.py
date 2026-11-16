@@ -111,10 +111,8 @@ async def record_participant(
                 "transition_id": transition,
                 "state": state,
                 "version": version if version is not None else max(time_ns(), after + 1),
-                # A retired row is stopped at once, so every build's `provider-lock clear`
-                # frees its holder without waiting out the heartbeat window.
-                "stale_after_s": 0 if state == "retired" else STALE_AFTER_S,
-                "host_proof": participant_proof() if own else "",
+                "stale_after_s": STALE_AFTER_S,
+                "host_proof": participant_proof(),
             }
         ],
     )

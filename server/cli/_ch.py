@@ -193,7 +193,9 @@ async def check_setup_stores() -> None:
     gated connect (`loom ch-setup`), the gate a gated connect would run, before it writes:
     its ClickHouse, where it already records a deployment, must record its Postgres's, and
     the Postgres `first` row must not name another cell. A ClickHouse with no Loom
-    database or record yet (a service set up before the first boot) passes."""
+    database or record yet (a service set up before the first boot) passes. This
+    diagnostic discards the mode result and never installs an accepting view;
+    subsequent Loom row work must verify, enroll and check acceptance afresh."""
     from server.core import pg, pg_profile
     from server.core.ch import get_client
     from server.core.ch_errors import error_code, error_line
