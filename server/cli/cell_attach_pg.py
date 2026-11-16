@@ -231,6 +231,7 @@ _SYSTEM_SCHEMA = (
 
 # Every right a login role may hold that lets it make an org held, lower the mode, or run
 # its own SQL as the servers on their marked sessions: each row a role and why.
+# Membership can supply a right through SET ROLE or an ADMIN regrant without INHERIT.
 _RIGHTS = f"""
 WITH owned AS (
     SELECT c.relowner AS owner, 'owns loom.' || c.relname AS why
@@ -248,7 +249,8 @@ WITH owned AS (
     SELECT n.nspowner, 'owns schema ' || n.nspname FROM pg_namespace n WHERE {_SYSTEM_SCHEMA}
 ),
 login AS (SELECT oid, rolname FROM pg_roles WHERE rolcanlogin)
-SELECT r.rolname AS role, w.why FROM login r, LATERAL (
+SELECT DISTINCT l.rolname AS role, w.why FROM login l
+JOIN pg_roles r ON pg_has_role(l.oid, r.oid, 'MEMBER'), LATERAL (
     SELECT 'may insert into loom.tenancy'
     WHERE has_any_column_privilege(r.oid, 'loom.tenancy', 'INSERT')
     UNION ALL SELECT 'may update loom.tenancy (org)'
@@ -273,10 +275,10 @@ SELECT r.rolname AS role, w.why FROM login r, LATERAL (
     UNION ALL SELECT 'is a member of ' || g.rolname FROM pg_roles g
     WHERE g.rolname IN ('pg_write_server_files', 'pg_execute_server_program')
       AND pg_has_role(r.oid, g.oid, 'MEMBER')
-    UNION ALL SELECT o.why || CASE WHEN o.owner = r.oid THEN ''
+    UNION ALL SELECT o.why || CASE WHEN o.owner = l.oid THEN ''
                                    ELSE ' (as a member of ' || pg_get_userbyid(o.owner) || ')'
                               END
-    FROM owned o WHERE pg_has_role(r.oid, o.owner, 'MEMBER')
+    FROM owned o WHERE pg_has_role(l.oid, o.owner, 'MEMBER')
 ) w(why)
 ORDER BY 1, 2
 """

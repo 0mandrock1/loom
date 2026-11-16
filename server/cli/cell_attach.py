@@ -516,7 +516,7 @@ class Run:
 
     # -- step 4 ------------------------------------------------------------------------
 
-    async def cheap_checks(self, stopped_unset: str) -> None:
+    async def nonheartbeat_checks(self) -> None:
         from server.core import pg_profile
 
         out, _, _ = await self.writer_refusals()
@@ -527,9 +527,12 @@ class Run:
         out += await self.catalog_refusals()
         if out:
             raise Refused(out)
-        await self.check_beats(stopped_unset)
         if (now := await pg_profile.standby_now()) != "synchronous":
             raise _refused("postgres standbys", f"commits are acknowledged as {now}")
+
+    async def cheap_checks(self, stopped_unset: str) -> None:
+        await self.nonheartbeat_checks()
+        await self.check_beats(stopped_unset)
 
     async def final_checks(self, watch: beats.Watch) -> None:
         from server.core import instances
@@ -575,9 +578,7 @@ class Run:
                 )
                 placed += int(answer.get("placed") or 0)
             self.report.update(orgs_found=len(orgs), placed_now=placed, skipped=self._named(found))
-            writers, _, _ = await self.writer_refusals()
-            if writers:
-                raise Refused(writers)
+            await self.nonheartbeat_checks()
         finally:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

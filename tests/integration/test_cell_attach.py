@@ -325,6 +325,41 @@ async def test_a_refusal_after_step_3_leaves_enforced_and_a_rerun_resumes(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("defect", ["trigger", "catalog"])
+async def test_a_defect_during_the_rescan_keeps_the_cell_attaching(
+    cell_stores, monkeypatch, capsys, defect: str
+) -> None:
+    stores, network = cell_stores, _Network()
+    await _prepare(stores, network)
+    role = f"it_rescan_{uuid.uuid4().hex[:6]}"
+    await _admin(f"CREATE ROLE {role} LOGIN")
+    real_scan = cell_attach.Run.scan
+
+    async def scan_then_defect(self: Any, *args: Any) -> Any:
+        found = await real_scan(self, *args)
+        if self.mode == "enforced":
+            if defect == "trigger":
+                await pg.execute(
+                    f"ALTER TABLE loom.scope_generations DISABLE TRIGGER {cell_triggers.INSERT_TRIGGER}"
+                )
+            else:
+                await pg.execute(f"GRANT INSERT (org) ON loom.tenancy TO {role}")
+        return found
+
+    monkeypatch.setattr(cell_attach.Run, "scan", scan_then_defect)
+    try:
+        assert await _attach(stores, network) == 1
+        refused = capsys.readouterr().err
+        assert ("postgres triggers" if defect == "trigger" else f"postgres role {role}") in refused
+        assert await _mode() == "enforced"
+        assert (await _row()).state == "attaching"
+    finally:
+        async with pg.dedicated() as conn:
+            await conn.execute(f"DROP OWNED BY {role}")
+        await _admin(f"DROP ROLE {role}")
+
+
+@pytest.mark.asyncio
 async def test_a_second_run_is_refused_at_the_lock(cell_stores, capsys) -> None:
     stores, network = cell_stores, _Network()
     await _prepare(stores, network)
@@ -503,6 +538,58 @@ async def test_the_mode_commit_waits_out_a_for_share_holder(cell_stores) -> None
         await task
     assert await _mode() == "enforced"
     assert logged == ["the mode's lock is busy; retrying"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("membership", ["set", "admin"])
+async def test_a_login_can_lower_mode_through_a_noninherited_group(
+    cell_stores, membership: str
+) -> None:
+    await _prepare(cell_stores, _Network())
+    group = f"it_group_{uuid.uuid4().hex[:6]}"
+    login = f"it_login_{uuid.uuid4().hex[:6]}"
+    await _admin(f"CREATE ROLE {group} NOLOGIN")
+    try:
+        await _admin(f"CREATE ROLE {login} LOGIN")
+        async with pg.dedicated() as conn:
+            await conn.execute(f"GRANT USAGE ON SCHEMA loom TO {group}")
+            await conn.execute(f"GRANT UPDATE (mode) ON loom.tenancy_mode TO {group}")
+            flags = (
+                "ADMIN FALSE, INHERIT FALSE, SET TRUE"
+                if membership == "set"
+                else "ADMIN TRUE, INHERIT FALSE, SET FALSE"
+            )
+            await conn.execute(f"GRANT {group} TO {login} WITH {flags}")
+            assert not await conn.fetchval(
+                "SELECT has_column_privilege($1, 'loom.tenancy_mode', 'mode', 'UPDATE')", login
+            )
+            holders = await cell_attach_pg.privilege_holders(conn, exempt_self=True)
+            await conn.execute(f"SET SESSION AUTHORIZATION {login}")
+            if membership == "admin":
+                await conn.execute(f"GRANT {group} TO {login} WITH SET TRUE")
+            await conn.execute(f"SET ROLE {group}")
+            assert (
+                await conn.execute("UPDATE loom.tenancy_mode SET mode = 'enforced'") == "UPDATE 1"
+            )
+            assert (
+                await conn.execute("UPDATE loom.tenancy_mode SET mode = 'recording'") == "UPDATE 1"
+            )
+            await conn.execute("RESET SESSION AUTHORIZATION")
+        assert "may update loom.tenancy_mode (mode)" in holders.others.get(login, [])
+        assert login not in holders.own
+        assert any(
+            r.subject == f"postgres role {login}"
+            for r in cell_attach_pg.privilege_refusals(holders, [])
+        )
+        assert not any(
+            r.subject == f"postgres role {login}"
+            for r in cell_attach_pg.privilege_refusals(holders, [login])
+        )
+    finally:
+        async with pg.dedicated() as conn:
+            await conn.execute(f"DROP OWNED BY {login}, {group}")
+        await _admin(f"DROP ROLE IF EXISTS {login}")
+        await _admin(f"DROP ROLE {group}")
 
 
 @pytest.mark.asyncio

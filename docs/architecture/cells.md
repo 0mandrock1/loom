@@ -1093,7 +1093,8 @@ Then, in order (the step numbers are the ones the rest of this page uses):
   source in full, Postgres before ClickHouse (the outbox and delivery tables move rows to
   ClickHouse), and the queue and drain tables and the tables a view reads before the others
   (`cell_scan.MOVE_SOURCES`); the tenancy rows; the placements, in `attach/place` batches;
-  the writer check again; and the final checks, under a floor of their own (the larger of
+  the writer, trigger, Postgres and standby checks again; and the final checks, under a
+  floor of their own (the larger of
   what `--wait` left and `instances.boot_allowance_s()`): the heartbeats, read through the
   rescan every half of the time the leader keeps a stopped row (`instances.PRUNE_AFTER_S`),
   refusing any process that ran with `LOOM_CELL` unset during it, `loom.cell_self` equal to
