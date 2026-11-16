@@ -475,6 +475,27 @@ def test_the_setup_check_mutes_the_drivers_own_failed_connect_line(
     assert not [r for r in caplog.records if r.name == "clickhouse_connect"]
 
 
+@pytest.mark.parametrize("diagnostic_mode", ["open", "recording", "enforced", "partial"])
+def test_setup_identity_probe_neither_installs_nor_uses_acceptance(
+    monkeypatch: pytest.MonkeyPatch, diagnostic_mode: str
+) -> None:
+    """Bootstrap checks store ownership, never a reusable data-plane admission."""
+    from server.core import retirement
+
+    _cell_set(monkeypatch, (diagnostic_mode, "eu-1"))
+    client = AsyncMock()
+    monkeypatch.setattr("server.core.ch.get_client", lambda: client)
+    monkeypatch.setattr(pg_profile, "recorded_authority", AsyncMock(return_value=None))
+    acceptance = AsyncMock(side_effect=AssertionError("bootstrap is not admission"))
+    monkeypatch.setattr(_ch, "check_acceptance", acceptance)
+    monkeypatch.setattr(cell, "refresh", acceptance)
+    before = cell._view
+    asyncio.run(_ch.check_setup_stores())
+    assert cell._view is before
+    assert not retirement.get_gate().enrolled
+    acceptance.assert_not_awaited()
+
+
 def test_the_loom_code_drain_after_a_subcommand_is_a_read() -> None:
     """The reconnect that drains buffered writes runs after every `loom code`
     subcommand, reads included; the subcommand's own connect gated its writes, so the

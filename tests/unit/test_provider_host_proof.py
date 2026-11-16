@@ -66,7 +66,7 @@ def test_a_pid_this_process_may_not_signal_still_runs(monkeypatch: pytest.Monkey
     assert not pp.proves_stopped(_with(pid=_dead_pid()))
 
 
-def test_a_container_restarted_into_a_new_pid_namespace_is_proven_stopped(
+def test_a_changed_container_pid_namespace_does_not_prove_the_old_process_stopped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(pp, "_container", lambda: "c" * 64)

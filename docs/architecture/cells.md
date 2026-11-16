@@ -25,6 +25,17 @@ enrolls before its first fresh primary acceptance read and uses permanent guarde
 retirement. A serving cell heartbeat includes its `participant_id` beside the
 fingerprint, allowing a replacement to be joined to the participant registry.
 Workers children enroll independently and do not publish serving instance rows.
+Native commands hold one admission scope through their complete org or principal
+work and drain: claim lookup and release share that scope; token readiness, keyring
+read, signing and audit share another. Connections and helper calls do not retire
+a command that still has principal work to perform. Store pairing is verified
+before enrollment and fresh acceptance. Org-free diagnostics do not install an
+accepting view. The pre-schema `ch-setup` ownership probe discards its diagnostic
+mode result and checks only store/cell identity before raw database user/profile
+setup; its optional analyst-row work opens a separate verified, enrolled scope
+and obtains fresh acceptance. That bootstrap exception admits no tenant or token
+work.
+
 The capability identifies installed code; it does not prove that every older
 process or unsafe retirement client has disappeared.
 

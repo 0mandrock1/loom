@@ -15607,7 +15607,7 @@
     },
     {
      "dest": "mint-token",
-     "help": "Mint a JWT locally (requires LOOM_JWT_SECRET).",
+     "help": "Mint a JWT locally (requires LOOM_JWT_SECRET and verified stores).",
      "metavar": "mint-token"
     },
     {
