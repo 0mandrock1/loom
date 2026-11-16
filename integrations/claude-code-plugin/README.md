@@ -94,10 +94,10 @@ redirected (no prompt or file content) stays until removed (`LOOM_SHUNT_LOG=off`
 stops it).
 
 Two skills reach other services when you run them. `loom-status` can install
-Node.js after you agree: on Linux, as root or with passwordless sudo, it installs
-curl if missing, downloads and runs NodeSource's setup script and installs nodejs
-(apt, dnf or yum), or runs `apk add nodejs`; on macOS it runs
-`brew upgrade node || brew install node` as you.
+Node.js after you agree: on Linux, as root or with passwordless sudo, it
+installs curl if missing, downloads and runs NodeSource's setup script and
+installs nodejs (apt, dnf or yum), or runs `apk add --no-cache nodejs`; on macOS
+it runs `brew upgrade node || brew install node` as you.
 
 `improve-loom-for-my-repo`, after building its report, searches the
 ClickHouse/loom GitHub issues for each finding's symbol or query without asking,

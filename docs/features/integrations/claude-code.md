@@ -72,8 +72,8 @@ run records, notes and briefs the hooks send. It is best effort, not a guarantee
 arguments and a brief the `loom-session` skill saves are sent without it.
 
 The server keeps this in its own databases (ClickHouse, and Postgres when the operator
-makes it the memory authority). It passes text to an LLM or embedding provider only if
-its operator configured one ([models and keys](../../getting-started/models-and-keys.md)).
+makes it the memory authority). It passes text to an LLM or embedding provider only if its
+operator configured one ([models and keys](../../getting-started/models-and-keys.md)).
 Deleting data is covered in [retention and erasure](../memory/retention-and-erasure.md).
 Two skills reach other services, each only when you ask for it. The `loom-status` skill
 can install Node.js from NodeSource through apt, dnf or yum, or from apk or Homebrew, and
