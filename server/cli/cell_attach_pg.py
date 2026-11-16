@@ -422,8 +422,8 @@ WHERE NOT held
 
 async def own_role_refusals(conn: Any, tables: list[Any]) -> list[Refusal]:
     """What attach's own role lacks, `tables` being the rows `cell_triggers.ORG_TABLES`
-    read: its grants, `SELECT` on every org table, and membership in the owner role of every
-    table it gives triggers (or the trigger pass could not alter it); and a server that
+    read: its grants, `SELECT` on every org table, and effective owner-role privileges for
+    every table it gives triggers (or the trigger pass could not alter it); and a server that
     allows prepared transactions."""
     role = await conn.fetchval("SELECT current_user")
     lacks = [str(r["need"]) for r in await conn.fetch(_OWN_GRANTS)]
@@ -435,7 +435,7 @@ async def own_role_refusals(conn: Any, tables: list[Any]) -> list[Refusal]:
     planned = set(cell_triggers.planned_names(tables))
     for r in tables:
         if r["relname"] in planned and not r["owned"]:
-            lacks.append(f"membership in the owner role of loom.{r['relname']}")
+            lacks.append(f"effective privileges of the owner role of loom.{r['relname']}")
     out = [Refusal(f"postgres role {role}", f"attach's role lacks {n}") for n in lacks]
     out += await prepared_refusals(conn)
     return out
@@ -495,7 +495,8 @@ async def _ensure_table(
         if outcome.answer == "denied":
             return Refusal(
                 f"postgres loom.{table}",
-                "attach's role cannot alter it: make the role a member of its owner role",
+                "attach's role cannot alter it: grant inherited privileges of its owner role "
+                "without SET ROLE",
             )
         if not await wait.pause():
             if outcome.holders.startswith(_MIGRATION_HELD):

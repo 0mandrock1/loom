@@ -579,7 +579,7 @@ async def test_own_role_lacks_and_prepared_transactions_refuse() -> None:
     )
     tables = [
         {"relname": "memory_current", "relkind": "r", "owned": True},
-        # Its grants are held, but not its owner role's membership: the trigger pass could
+        # Its grants are held, but not its effective owner-role privileges: the pass could
         # not alter it, so it refuses before any write.
         {"relname": "scope_generations", "relkind": "r", "owned": False},
         {"relname": "tenancy", "relkind": "r", "owned": True},
@@ -588,7 +588,7 @@ async def test_own_role_lacks_and_prepared_transactions_refuse() -> None:
     assert [str(r) for r in refusals] == [
         "postgres role attacher: attach's role lacks effective privileges of pg_read_all_stats",
         "postgres role attacher: attach's role lacks SELECT on loom.memory_current",
-        "postgres role attacher: attach's role lacks membership in the owner role of "
+        "postgres role attacher: attach's role lacks effective privileges of the owner role of "
         "loom.scope_generations",
         "postgres max_prepared_transactions: is 5: a prepared transaction outlives every "
         "session, so step 4 could not wait for it; set it to 0",

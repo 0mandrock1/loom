@@ -902,7 +902,10 @@ async def test_a_role_with_the_grants_but_not_the_owner_role_is_refused_before_a
             rows = list(await conn.fetch(cell_triggers.ORG_TABLES))
             refusals = await cell_attach_pg.own_role_refusals(conn, rows)
             lacking = [r.reason for r in refusals if "owner role" in r.reason]
-            assert "attach's role lacks membership in the owner role of loom.tenancy" in lacking
+            assert (
+                "attach's role lacks effective privileges of the owner role of loom.tenancy"
+                in lacking
+            )
             assert any("loom.scope_generations" in r for r in lacking)
             # The trigger pass tells the cause apart: denied, not a busy lock.
             outcome = await cell_triggers.ensure_table(

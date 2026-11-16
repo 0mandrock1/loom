@@ -60,8 +60,9 @@ without `SET ROLE` (grant their memberships with `INHERIT TRUE`), `USAGE` on sch
 `loom`, `SELECT` on `loom.cell_first`, `loom.tenancy_mode`, `loom.cell_self`,
 `loom.authority` and every org table, `UPDATE` on `loom.tenancy_mode`, `INSERT` on
 `loom.tenancy`, `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `loom.cell_probe`, `TEMPORARY`
-on the database, `EXECUTE` on `pg_logical_emit_message`, and membership in the owner role of
-`loom.tenancy` and of every guarded table. Its ClickHouse user needs the grants the writer
+on the database, `EXECUTE` on `pg_logical_emit_message`, and effective privileges of the owner
+role of `loom.tenancy` and every guarded table without `SET ROLE` (grant their memberships
+with `INHERIT TRUE`). Its ClickHouse user needs the grants the writer
 check names (`SELECT` on `system.*` and on the configured databases, `SHOW USERS`,
 `SHOW ROLES`, `SHOW ROW POLICIES`, `SHOW TABLES`, `SHOW COLUMNS`,
 `SYSTEM FLUSH ASYNC INSERT QUEUE`, and on a cluster `SYSTEM SYNC REPLICA`, `CLUSTER` and
