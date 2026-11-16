@@ -1,6 +1,6 @@
 # Code index for coding agents over MCP
 
-Loom indexes git repositories into ClickHouse and answers structure questions through
+With code workers enabled for a repository, Loom indexes it into ClickHouse and answers structure questions through
 the `code.*` operations: where a symbol is defined, who calls it, what a change
 reaches, which merged PR touched a line. Agents call them over MCP, HTTP
 (`POST /v1/code.<op>`) or the Python SDK (`agent.code`). Every agent reads the same

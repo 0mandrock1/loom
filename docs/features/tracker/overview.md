@@ -1,8 +1,8 @@
 # Issue duplicate checks and regression candidates for agents
 
-Loom lets agents check whether a bug is already reported and rank changes that may
+With `LOOM_TRACKER_ORG` set and a registered source, Loom lets agents check whether a bug is already reported and rank changes that may
 have introduced a regression, using tracker records and indexed PR history.
-Tracker operations need `LOOM_TRACKER_ORG` set and a registered source. For a repository
+For a repository
 with indexed PR history and no tracker, use
 [code history and bisect candidates](../code-index/history-and-prs.md).
 

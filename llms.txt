@@ -51,7 +51,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Runs](docs/features/runs.md): A run is one execution of a task, such as "triage issue 1234".
 - [Tasks, decisions and policies](docs/features/tasks-and-decisions.md): Three planes sit beside memory for coordination between agents.
 - [Unified search and context packs](docs/features/unified-search.md): `loom_search` searches memory, profile, knowledge and past conversations across the caller's namespaces in one round trip.
-- [Code index for coding agents over MCP](docs/features/code-index/overview.md): Loom indexes git repositories into ClickHouse and answers structure questions through the `code.*` operations: where a symbol is defined, who calls it, what a change reaches, which merged PR touched a line.
+- [Code index for coding agents over MCP](docs/features/code-index/overview.md): With code workers enabled for a repository, Loom indexes it into ClickHouse and answers structure questions through the `code.*` operations: where a symbol is defined, who calls it, what a change reaches, which merged PR touched a line.
 - [Code index freshness](docs/features/code-index/freshness.md): The index trails the repository: it indexes merged commits on a configured branch, pass by pass, and each tier advances its own watermark.
 - [History, PRs and releases](docs/features/code-index/history-and-prs.md): These ops need merged-PR history; the `code_pr_history` worker is off by default (`LOOM_CODE_PR_HISTORY_ENABLED`).
 - [Code operations](docs/features/code-index/operations.md): This page maps questions to `code.*` ops.
@@ -81,7 +81,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Audit log](docs/features/observability/audit.md): Audit rows, the `audit_verifier` worker and the checkpoint chain are on by default.
 - [Cost and usage](docs/features/observability/cost-and-usage.md): Loom records every upstream dollar it spends on embedding and LLM calls against the operation that spent it, in the per-operation ledger `loom.agent_events`.
 - [Telemetry](docs/features/observability/telemetry.md): Loom reports on itself in three layers:
-- [Issue duplicate checks and regression candidates for agents](docs/features/tracker/overview.md): Loom lets agents check whether a bug is already reported and rank changes that may have introduced a regression, using tracker records and indexed PR history.
+- [Issue duplicate checks and regression candidates for agents](docs/features/tracker/overview.md): With `LOOM_TRACKER_ORG` set and a registered source, Loom lets agents check whether a bug is already reported and rank changes that may have introduced a regression, using tracker records and indexed PR history.
 - [Tracker record contract](docs/features/tracker/record-contract.md): The `tracker.*` ops, and the tracker legs of `code.*` and `loom_search`, read a team's issues, pull requests and incidents live from the team's own ClickHouse with a read-only credential.
 
 ## Guides
