@@ -98,7 +98,7 @@ export function renderGate(gate, { maxRuns = 4, maxNames = 4, python, testExists
       : "Add a test that reaches it, or say why the change needs none, before finishing.";
   const env =
     python === "" && raw.some(isPytest)
-      ? " No Python was found for this checkout (no .venv, no python3 or python on PATH): name the test you would run instead of searching for one."
+      ? " No Python was found for this checkout (no .venv, venv or VIRTUAL_ENV, no python3 or python on PATH): name the test you would run instead of searching for one."
       : "";
   return `Loom test gate${floor}: ${parts.join(" · ")}. ${tail}${env}`;
 }
@@ -182,18 +182,29 @@ export function checkoutPython(root, { env = process.env, platform = process.pla
     .split(win ? ";" : ":")
     .map((d) => (win ? d.replace(/^"(.*)"$/, "$1") : d))
     .filter(Boolean);
-  // Windows: python.exe first. python.org installs ship no python3.exe, and
-  // the Store's python3.exe alias only offers to install Python.
+  // Windows: python.exe first, since python.org installs ship no python3.exe.
   for (const py of win ? ["python", "python3"] : ["python3", "python"]) {
-    if (dirs.some((d) => isFile(path.join(d, win ? `${py}.exe` : py), !win))) return py;
+    if (dirs.some((d) => isProgram(path.join(d, win ? `${py}.exe` : py), win))) return py;
   }
   return "";
 }
 
-function isFile(p, executable = false) {
+function isFile(p) {
   try {
-    if (!fs.statSync(p).isFile()) return false;
-    if (executable) fs.accessSync(p, fs.constants.X_OK);
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** A PATH entry a shell would start: executable on POSIX, and not empty, so
+ *  the zero-byte Store aliases Windows puts on PATH when no Python is
+ *  installed do not count. */
+function isProgram(p, win) {
+  try {
+    const st = fs.statSync(p);
+    if (!st.isFile() || st.size === 0) return false;
+    if (!win) fs.accessSync(p, fs.constants.X_OK);
     return true;
   } catch {
     return false;

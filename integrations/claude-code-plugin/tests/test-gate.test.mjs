@@ -293,6 +293,9 @@ test("checkoutPython names a PATH python without running it", () => {
       fs.chmodSync(path.join(dir, "python3"), 0o644); // a shell would not run it
       assert.equal(checkoutPython(root, { env }), "python");
     }
+    // An empty file, like the Store aliases Windows puts on PATH, does not count.
+    for (const f of fs.readdirSync(dir)) fs.writeFileSync(path.join(dir, f), "");
+    assert.equal(checkoutPython(root, { env }), "");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(root, { recursive: true, force: true });
@@ -333,6 +336,11 @@ test("checkoutPython prefers the checkout's virtualenvs, then an active one, the
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(active, { recursive: true, force: true });
   }
+});
+
+test("the test gate starts no process", () => {
+  const src = fs.readFileSync(new URL("../lib/test-gate.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /child_process/);
 });
 
 test("checkoutPython runs no pytest.py planted in the checkout", () => {
