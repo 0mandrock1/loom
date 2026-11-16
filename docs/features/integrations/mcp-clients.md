@@ -184,7 +184,7 @@ client afterwards.
 | Visual Studio (Copilot agent mode)                                  | `%USERPROFILE%\.mcp.json`, or `.mcp.json` in the solution                                                                                                                                                                                                                          | `{"servers": {"loom": {"type": "http", "url": "URL", "headers": {…}}}}` (Visual Studio also reads `.vscode/mcp.json`)                                                                                                                                                                                                          |                                                                    |
 | Kiro                                                                | `~/.kiro/settings/mcp.json`, or `.kiro/settings/mcp.json`; Kiro CLI reads the same `~/.kiro/settings/mcp.json` as the Kiro IDE (and copies `~/.aws/amazonq/mcp.json` there once, when Kiro CLI is installed, skipping servers that conflict with ones already there)               | `{"mcpServers": {"loom": {"url": "URL", "headers": {…}}}}` (Kiro documents that it expands a `${LOOM_API_KEY}` placeholder only for a variable listed in the **Mcp Approved Env Vars** setting); for a single-user server, an install link `https://kiro.dev/launch/mcp/add?name=loom&config=<URL-encoded {"url": "URL"}>`     |                                                                    |
 | Gemini CLI                                                          | `~/.gemini/settings.json`, or `.gemini/settings.json`                                                                                                                                                                                                                              | `{"mcpServers": {"loom": {"httpUrl": "URL", "headers": {…}}}}`, or `gemini mcp add --transport http --header "Authorization: Bearer <JWT>" loom URL` (drop `--header` for a single-user server); or the extension, below; Gemini lists a server as disabled in a folder it does not trust                                      | connected (`gemini mcp add`, and the extension)                    |
-| GitHub Copilot CLI                                                  | `~/.copilot/mcp-config.json`                                                                                                                                                                                                                                                       | `{"mcpServers": {"loom": {"type": "http", "url": "URL", "headers": {…}, "tools": ["*"]}}}`                                                                                                                                                                                                                                     | accepted                                                           |
+| GitHub Copilot CLI                                                  | `~/.copilot/mcp-config.json`                                                                                                                                                                                                                                                       | `{"mcpServers": {"loom": {"type": "http", "url": "URL", "headers": {…}, "tools": ["*"]}}}`; or the plugin, below                                                                                                                                                                                                               | accepted                                                           |
 | Neovim with mcphub.nvim (also serves avante.nvim and CodeCompanion) | `~/.config/mcphub/servers.json`                                                                                                                                                                                                                                                    | `{"mcpServers": {"loom": {"url": "URL", "headers": {…}}}}`                                                                                                                                                                                                                                                                     |                                                                    |
 | Emacs with mcp.el and gptel                                         | `mcp-hub-servers` in your init file, then `gptel-mcp-connect`                                                                                                                                                                                                                      | `(setq mcp-hub-servers '(("loom" . (:url "URL"))))` (single-user server only: no header field is documented)                                                                                                                                                                                                                   |                                                                    |
 | OpenCode                                                            | `opencode.json` or `.opencode/opencode.json` in the project or a folder above it, or `~/.config/opencode/opencode.json`                                                                                                                                                            | `opencode mcp add loom --url URL --header "Authorization=Bearer <JWT>"`, which in OpenCode 2.x writes `{"mcp": {"servers": {"loom": {"type": "remote", "url": "URL", "headers": {…}}}}}`; the 1.x `opencode-ai` npm package takes `{"mcp": {"loom": {"type": "remote", "url": "URL", "headers": {…}}}}`, which 2.x still reads | connected                                                          |
@@ -256,6 +256,34 @@ the extension's `.env` file (`~/.gemini/extensions/clickhouse-loom/.env`).
 On a single-user server, an empty token still sends `Authorization: Bearer`, which the
 server accepts with a warning in its log for each request; `gemini mcp add` without
 `--header` (above) avoids it.
+
+GitHub Copilot CLI (experimental) installs Loom as a plugin from the repository's root
+`plugin.json`, an [Agent Plugins](https://agent-plugins.org) package:
+
+```bash
+copilot plugin install ClickHouse/loom
+```
+
+Copilot CLI installs it from the default branch. The plugin adds the `loom` MCP server at
+`http://localhost:7777/mcp?toolset=coding`, a single-user server on the same machine, and
+the `loom` and `loom-code` skills; `copilot mcp get loom` shows the entry.
+
+- **Team server**: the URL is fixed and a user entry named `loom` does not replace it, so
+  skip the plugin and add the entry from the table. To remove an installed one, run
+  `copilot plugin uninstall clickhouse-loom`, or `copilot plugin uninstall loom-code-skill`
+  for an install named `loom-code-skill` (below).
+- **Skills only**: a `loom-code-skill` install that `copilot mcp get loom` does not list
+  has only the skills. `copilot plugin update loom-code-skill` turns it into this plugin,
+  local entry included, so on a team server uninstall it instead; installing again without
+  updating keeps both and loads the skills twice.
+- **Claude Code marketplace**: `copilot plugin marketplace add ClickHouse/loom`, then
+  `copilot plugin install loom-code-skill@loom`, installs the same package, MCP server
+  included, under the name `loom-code-skill`.
+
+Checked with Copilot CLI 1.0.112: the install, the update, the marketplace install,
+`copilot mcp get loom`, and MCP `initialize` and `tools/list` through the entry pointed at
+a local Loom on another port. A Copilot session needs a sign-in and was not run, so whether
+a session offers the tools to the model is untested.
 
 ### Hosted builders and chat apps
 
