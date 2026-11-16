@@ -233,11 +233,12 @@ The wiring is `hooks/hooks.json`; `hooks/HOOKS.md` has per-hook notes.
 | SessionEnd                                        | `loom-run.mjs`              | closes the run (`run.complete`, `outcome: none`, the last reply as the final response)                                                                                                                                                                                                                                          | `LOOM_RUN_LEDGER=off`                                                                                       |
 | SessionEnd                                        | `loom-session-memory.mjs`   | hands the session's turns to `memory.set_from_messages(defer=true)`, which extracts facts and writes the session summary                                                                                                                                                                                                        | `LOOM_SESSION_MEMORY=off`                                                                                   |
 
-On your machine the hooks run `node`, `git` and `grep`: `git` reads the checkout's remotes,
-branch, `HEAD` commit, status and diffs, and `grep` searches uncommitted files for a
-redirected grep pattern. The test gate runs no Python: for a pytest test it picks the
-interpreter of the checkout's virtualenv, the active one (`VIRTUAL_ENV`) or a `python3` or
-`python` on `PATH`, looking at the file without running it.
+The plugin's hooks run `node`, `git` and `grep` on your machine: `git` reads the
+checkout's remotes, branch, `HEAD` commit, status and diffs, and `grep` searches
+uncommitted files for the pattern of a grep the plugin answers from the code index. The
+test gate runs no Python: for a pytest test it picks the interpreter of the checkout's
+virtualenv, the active one (`VIRTUAL_ENV`) or a `python3` or `python` on `PATH`, checking
+that the interpreter's file exists without running it.
 
 The plugin names the oldest Loom server its hooks support (`MIN_SERVER_VERSION` in `lib/server-version.mjs`). SessionStart reads the server's `version` from the `GET /v1/health` answer it already requests and, when that version is older, prints one `loom:` line naming both versions and asking for a server upgrade. The session goes on either way; an unreachable server, an answer other than 2xx, a server that reports no `version`, or a version that is not SemVer prints nothing. The `loom-status` skill (`bin/loom-client-status.mjs`) reports the same as a warning. The minimum rises with the release that first serves what a hook needs, so between that hook's merge and that release a server of the previous release gets no warning.
 

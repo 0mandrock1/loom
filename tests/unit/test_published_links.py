@@ -95,3 +95,16 @@ def test_published_links_resolve() -> None:
         assert page.is_file(), url
         anchor = url.partition("#")[2]
         assert not anchor or anchor in _site_anchors(page), url
+
+
+def test_plugin_readme_and_docs_page_name_the_same_local_commands() -> None:
+    """The plugin README, which a plugin directory serves alone, and the hooks page carry
+    the same paragraph on what the hooks run locally; a change to one must reach both."""
+
+    def paragraph(text: str) -> str:
+        start = text.index("The plugin's hooks run ")
+        return " ".join(text[start : text.index("\n\n", start)].split())
+
+    readme = (CLAUDE / "README.md").read_text()
+    page = (ROOT / "docs/features/integrations/claude-code.md").read_text()
+    assert paragraph(readme) == paragraph(page)

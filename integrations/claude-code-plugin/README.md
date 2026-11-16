@@ -74,7 +74,8 @@ checkout's remotes, branch, `HEAD` commit, status and diffs, and `grep` searches
 uncommitted files for the pattern of a grep the plugin answers from the code
 index. The test gate runs no Python: for a pytest test it picks the interpreter
 of the checkout's virtualenv, the active one (`VIRTUAL_ENV`) or a `python3` or
-`python` on `PATH`, looking at the file without running it.
+`python` on `PATH`, checking that the interpreter's file exists without running
+it.
 
 The plugin keeps the token it saves (a copy of the install token or a
 self-signup token in `~/.loom/config.json`; in agent mode the exchanged one in
@@ -155,7 +156,9 @@ Codex wiring, `hooks.generic.json` and the skills' commands start Node through
 PATH, a version manager's default (or its newest install when the default
 cannot be read or is older than 18), and the usual install directories. With
 none, it exits 1 with one line naming the Node it found too old, or none, and
-`LOOM_NODE` ([requirements](https://clickhouse.github.io/loom/features/integrations/claude-code/#requirements) has the platforms).
+`LOOM_NODE`
+([requirements](https://clickhouse.github.io/loom/features/integrations/claude-code/#requirements)
+has the platforms).
 
 ## Safety model: fire-and-forget, hard-bounded
 
@@ -471,8 +474,8 @@ Codex's hook wiring — at
 the plugin bundles its MCP entry with the URL and
 `toolset=core,coding,tracker,tasks` fixed (Codex plugins have no install-time
 options). See [Codex](https://clickhouse.github.io/loom/features/integrations/codex/).
-The scripts learn which client runs them from their third argument (`… PostToolUse codex`); unnamed, they are Claude
-Code's.
+The scripts learn which client runs them from their third argument
+(`… PostToolUse codex`); unnamed, they are Claude Code's.
 
 `hooks/hooks.generic.json` maps the same lifecycle events to the same
 scripts for any client that can exec a command and pass the hook payload as JSON
@@ -484,4 +487,5 @@ absent.
 
 Captures POST to the `observe.record` wire op and crystallization to
 `observe.crystallize`. A failed POST is swallowed — the primer (`context.pack`)
-and the safety model work regardless. See [Claude Code](https://clickhouse.github.io/loom/features/integrations/claude-code/).
+and the safety model work regardless. See
+[Claude Code](https://clickhouse.github.io/loom/features/integrations/claude-code/).
