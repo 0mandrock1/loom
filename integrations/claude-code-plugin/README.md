@@ -26,7 +26,6 @@ The `toolset` query selects the listing, including a union such as
 other operations are callable through `loom_op {op, arguments}`. See
 [MCP clients](https://clickhouse.github.io/loom/features/integrations/mcp-clients/).
 
-
 > **Bare mode skips hooks.** `claude --bare` (chosen by some agent harnesses for prompt-cache and cost reasons) does not run PreToolUse hooks, so the token shunt and the outcome capture in this plugin do not fire there. A harness that wants the shunt under bare mode needs the SDK backend's hook path instead.
 
 ## Data handling
@@ -108,6 +107,36 @@ plugin tries to remove other state files untouched for a day. They can remain
 longer, especially when no new session starts. The log of which tool calls the plugin redirected
 or let through (no prompt or file content) stays until you remove it
 (`LOOM_SHUNT_LOG=off` stops it).
+
+Claude Code's SessionStart also writes `loom-mcp-project-<hash>.json` in the system
+temp directory (normally `/tmp/loom-mcp-project-<hash>.json` on Linux), mode 0600.
+It holds the checkout's absolute working directory, session ID, native client PID,
+parent PID, process name and OS process creation marker. It contains no credential
+or transcript. The MCP header helper uses it to find this client's checkout and
+code namespace. It survives SessionEnd; a later SessionStart tries to prune it after
+one day without a write. This is best-effort cleanup, with no deletion deadline.
+Codex does not write or read this artifact.
+
+To match that native client identity, Claude Code reads `/proc/<pid>/stat` and
+`/proc/sys/kernel/random/boot_id` on Linux. On macOS it runs:
+
+```sh
+ps -p <pid> -o ppid= -o lstart= -o ucomm=
+```
+
+On Windows it runs `powershell.exe -NoProfile -NonInteractive -Command` with this
+script, substituting a validated integer for `<pid>`:
+
+```powershell
+$p=Get-CimInstance Win32_Process -Filter 'ProcessId=<pid>'; if($p){[PSCustomObject]@{name=$p.Name;parent=$p.ParentProcessId;born=$p.CreationDate.ToUniversalTime().Ticks.ToString()}|ConvertTo-Json -Compress}
+```
+
+Each subprocess has a one-second timeout and a 16 KiB output limit. These queries
+read the process name, parent PID and creation marker, without collecting process
+command lines or environments. The header helper checks at most three ancestors,
+through known shells to the nearest client, and waits nominally 1.5 seconds for its
+checkout context; one process query can finish after that interval. Codex's fixed
+MCP entry skips these process queries.
 
 Two skills reach other services when you run them. `loom-status` can install
 Node.js after you agree: on Linux, as root or with passwordless sudo, it
