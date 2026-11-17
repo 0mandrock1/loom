@@ -1,11 +1,39 @@
 # Document source push notifications
 
-Push notifications request a sync of an existing document source. They never
-write document content or change the source's access policy. The normal
-15-minute poll remains enabled and is the recovery path for missed deliveries.
-Push setup, callbacks and renewal are off by default; an operator enables
-`LOOM_KNOWLEDGE_SOURCE_PUSH_ENABLED` for the deployment. Disabling it pauses
-deliveries and renewal without preventing secret resealing or setup retirement.
+Needs `LOOM_KNOWLEDGE_SOURCE_PUSH_ENABLED=true` to request document source syncs
+from provider notifications. Notifications never write document content or change
+the source's access policy. The normal 15-minute poll remains enabled and is the
+recovery path for missed deliveries. Disabling push pauses setup, deliveries and
+renewal without preventing secret resealing or setup retirement.
+
+## Source entry points
+
+- `server/knowledge/api/ops_source_push.py` (`OPERATIONS`) declares admin setup,
+  confirmation and status operations.
+- `server/knowledge/app/source_push_routes.py` (`notification`) bounds callback
+  bodies and dispatches provider deliveries.
+- `server/knowledge/app/source_push.py` (`receive`, `_fresh`, `_put`, `renew_drive`,
+  `reseal_registry`) authenticates hints and coordinates registry lifecycle writes.
+- `server/knowledge/domain/source_push.py` (`fingerprint`, `verify_drive`,
+  `verify_notion`, `verify_linear`) binds setup and verifies provider proof;
+  `server/knowledge/store/source_push.py` (`get`, `put`) persists registry versions.
+- `server/knowledge/app/sources.py` (`sources_lease`, `deactivate_namespace_sources`)
+  coordinates source lifecycle changes;
+  `server/erasure/store/steps_ledgers.py` (`delete_source_push_by_namespace`) settles
+  registry erasure.
+
+## Invariants
+
+- Authenticated deliveries request sync through the existing source path. Provider
+  payloads cannot write content or widen source access.
+- A delivery must match the current source ID, setup generation and credential,
+  item and configuration fingerprint. The source lease and sequential reads fence
+  source replacement, retirement and late provider responses.
+- Push secrets use purpose-bound sealing. Only an admin can reveal a pending
+  challenge; ordinary reads, audit subjects and idempotency replay omit it.
+- Registry writes and namespace erasure share a fenced writer lease. Erasure
+  removes every stored version, and setup publication requires verified fleet
+  support for that erasure step.
 
 ## Registration and authentication
 
