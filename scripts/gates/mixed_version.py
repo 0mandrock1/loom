@@ -364,6 +364,7 @@ class Scenario:
     def run_all(self) -> list[str]:
         self.all_ready()
         ids = self.memories_read_across()
+        self.absence_precondition_across()
         for a, b in (("N", "N-1"), ("N-1", "N")):
             self.run_completes_across(a, b)
             self.verdict_survives(a, b)
@@ -393,6 +394,64 @@ class Scenario:
             got = self.get(label, f"facts/{other}")
             self.check(got.get("value") == f"by {other}", f"{label} reads what {other} wrote")
         return ids
+
+    def absence_precondition_across(self) -> None:
+        for label in ("N", "N-1"):
+            body = {
+                **self.ident,
+                "memory_key": f"conditional/{label}",
+                "memory_type": "episodic",
+                "value": {"first": True},
+                "if_match_sha256": "absent",
+                "clear_expiry": True,
+            }
+            srv = self.builds[label]
+            reply = httpx.post(
+                f"{srv.url}/v1/memory.set",
+                json=body,
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=60,
+            )
+            self.check(
+                reply.status_code == 200 if label == "N" else reply.status_code in (200, 409),
+                f"{label} accepts absence or refuses it without an unconditional write",
+            )
+            if reply.status_code == 409:
+                self.check(
+                    reply.json().get("detail", {}).get("code") == "PRECONDITION_FAILED",
+                    f"{label} refuses unsupported absence as a precondition failure",
+                )
+                self.check(
+                    not self.get("N", body["memory_key"])["found"],
+                    f"{label} leaves the absent key untouched on refusal",
+                )
+                self.call("N", "memory.set", body)
+            changed = httpx.post(
+                f"{srv.url}/v1/memory.set",
+                json={**body, "value": {"clobbered": True}},
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=60,
+            )
+            self.check(changed.status_code == 409, f"{label} refuses absence when a row exists")
+            other = "N-1" if label == "N" else "N"
+            row = self.get(other, body["memory_key"])
+            self.check(
+                row.get("value") == {"first": True},
+                f"{other} reads the conditional creation unchanged",
+            )
+            self.call(
+                other,
+                "memory.set",
+                {
+                    **body,
+                    "value": {"revised": True},
+                    "if_match_sha256": row["content_sha256"],
+                },
+            )
+            self.check(
+                self.get(label, body["memory_key"]).get("value") == {"revised": True},
+                f"{label} reads the other build's hash-conditional revision",
+            )
 
     def analysis_across(self) -> None:
         if not (self.builds["N-1"].tree / "server/insights/domain/analysis.py").exists():
