@@ -337,9 +337,9 @@ from server.observability import otel as _otel  # noqa: E402
 
 _otel.init_otel(app)
 
-# Request-body cap — the one bounded input at the front door (413 before any
-# parser runs; LOOM_MAX_REQUEST_BYTES, 0 disables). Added first, so it is the
-# innermost middleware: the 413 still passes out through the header middleware.
+# Request-body caps reject oversized input before parsing. LOOM_MAX_REQUEST_BYTES
+# is the global cap; 0 disables only that cap. Fixed cell administration caps remain.
+# This middleware is innermost so 413 responses pass through header middleware.
 from server.transport.body_limit import BodyLimitMiddleware as _BodyLimit  # noqa: E402
 
 # An upload's route bounds its own body (LOOM_KNOWLEDGE_UPLOAD_MAX_BYTES).
