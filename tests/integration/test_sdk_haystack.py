@@ -1,7 +1,5 @@
 """Native Haystack documents and retrieval against an explicit private Loom."""
 
-import os
-
 import pytest
 
 pytest.importorskip("haystack")
@@ -14,13 +12,14 @@ from loom.integrations.haystack import LoomDocumentStore, LoomRetriever
 from tests.integration._resources import unique_org
 
 
-def test_haystack_writes_filters_retrieves_and_deletes(control_plane_url):
+def test_haystack_writes_filters_retrieves_and_deletes(control_plane_url, mint_test_token):
     org = unique_org("haystack")
+    token = mint_test_token(org=org, namespaces=["documents"], roles=["writer"])
     store = LoomDocumentStore(
         org,
         "documents",
         base_url=control_plane_url,
-        api_key=Secret.from_token(os.environ["LOOM_API_KEY"]),
+        api_key=Secret.from_token(token),
     )
     docs = [
         Document(
@@ -54,7 +53,7 @@ def test_haystack_writes_filters_retrieves_and_deletes(control_plane_url):
         "documents",
         store="other",
         base_url=control_plane_url,
-        api_key=Secret.from_token(os.environ["LOOM_API_KEY"]),
+        api_key=Secret.from_token(token),
     )
     other.write_documents([Document(id="travel", content="Other application document.")])
     store.delete_documents(["travel", "food"])
