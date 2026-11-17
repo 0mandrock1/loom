@@ -53,7 +53,102 @@ async def test_close_timeout_aborts_within_the_original_deadline() -> None:
     assert conn.aborted and time.monotonic() - started < 0.3
 
 
-async def test_second_cancellation_aborts_without_waiting_for_close_unwind() -> None:
+async def test_outer_signals_do_not_abort_pending_public_close() -> None:
+    conn = Connection()
+    task = asyncio.create_task(pg.close_owned(conn, end=time.monotonic() + 0.5))
+    try:
+        await conn.started.wait()
+        task.cancel("first close interruption")
+        await asyncio.sleep(0)
+        task.cancel("second close interruption")
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not conn.aborted
+        conn.finished.set()
+        with pytest.raises(asyncio.CancelledError, match="first close interruption"):
+            await task
+        assert not conn.aborted
+        assert len(conn.timeouts) == 1
+    finally:
+        conn.finished.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_self_cancelled_close_child_does_not_spin_to_deadline() -> None:
+    class SelfCancelled(Connection):
+        async def close(self, **_: Any) -> None:
+            raise asyncio.CancelledError("close child cancelled")
+
+    started = time.monotonic()
+    with pytest.raises(asyncio.CancelledError, match="close child cancelled"):
+        await pg.close_owned(SelfCancelled(), end=started + 10)
+    assert time.monotonic() - started < 0.3
+
+
+@pytest.mark.parametrize(
+    "later",
+    [
+        ValueError("late close"),
+        asyncio.CancelledError("close child"),
+        SystemExit(17),
+        KeyboardInterrupt(),
+    ],
+)
+async def test_first_outer_cancel_survives_a_later_close_failure(later: BaseException) -> None:
+    class Failing(Connection):
+        async def close(self, **_: Any) -> None:
+            self.started.set()
+            await self.finished.wait()
+            raise later
+
+        def is_closed(self) -> bool:
+            return True  # An aborted transport cannot prove cancellation acknowledgement.
+
+    conn = Failing()
+
+    async def captured() -> BaseException | None:
+        try:
+            await pg.close_owned(conn, end=time.monotonic() + 10)
+        except BaseException as error:  # noqa: BLE001 — keep native failures inside the test task.
+            return error
+        return None
+
+    task = asyncio.create_task(captured())
+    try:
+        await conn.started.wait()
+        task.cancel("first close interruption")
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not conn.aborted
+        started = time.monotonic()
+        conn.finished.set()
+        result = await task
+        assert isinstance(result, asyncio.CancelledError)
+        assert str(result) == "first close interruption"
+        assert time.monotonic() - started < 0.3
+        assert conn.aborted
+    finally:
+        conn.finished.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("abort_error", [ValueError("abort"), SystemExit(17), KeyboardInterrupt()])
+async def test_abort_failure_cannot_replace_the_close_failure(abort_error: BaseException) -> None:
+    original = ValueError("original close failure")
+
+    class Broken(Connection):
+        async def close(self, **_: Any) -> None:
+            raise original
+
+        def terminate(self) -> None:
+            raise abort_error
+
+    with pytest.raises(ValueError) as result:
+        await pg.close_owned(Broken(), end=time.monotonic() + 1)
+    assert result.value is original
+
+
+async def test_second_cancellation_waits_for_the_original_cleanup_end() -> None:
     conn = Connection()
     supervisor_started = asyncio.Event()
     original = asyncio.CancelledError("operation cancelled")
@@ -64,7 +159,7 @@ async def test_second_cancellation_aborts_without_waiting_for_close_unwind() -> 
             await asyncio.Future()
         except asyncio.CancelledError:
             try:
-                await pg.close_owned(conn, end=time.monotonic() + 1)
+                await pg.close_owned(conn, end=time.monotonic() + 0.03)
             except BaseException:  # noqa: BLE001 — preserve the original cancellation.
                 pass
             raise original from None
@@ -74,6 +169,8 @@ async def test_second_cancellation_aborts_without_waiting_for_close_unwind() -> 
     task.cancel()
     await asyncio.wait_for(conn.started.wait(), 1)
     task.cancel()
+    await asyncio.sleep(0)
+    assert not conn.aborted
     with pytest.raises(asyncio.CancelledError, match="operation cancelled"):
         await asyncio.wait_for(task, 0.3)
     assert conn.aborted
