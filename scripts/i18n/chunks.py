@@ -101,7 +101,8 @@ def _lists(text: str, protected: list[tuple[int, int]]) -> list[tuple[int, int]]
     for line in text.splitlines(keepends=True):
         inside = any(a <= offset < b for a, b in protected)
         item = None if inside else _LIST.match(line)
-        indent = len(line) - len(line.lstrip(" "))
+        expanded = line.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip(" "))
         if item and (active is None or len(item[1]) <= active[1]):
             if active is not None:
                 spans.append((active[0], offset))
@@ -132,9 +133,46 @@ def _protected(text: str) -> list[tuple[int, int]]:
     return spans + _lists(text, spans)
 
 
+def heading_sections(text: str) -> list[str]:
+    """Cut before anchored second-level headings outside complete Markdown units."""
+    protected = _protected(text)
+    cuts = [0]
+    for match in re.finditer(r'^<a id="[^"]+"></a>\n\n(?=## )', text, re.MULTILINE):
+        offset = match.start()
+        if offset and not any(a < offset < b for a, b in protected):
+            cuts.append(offset)
+    cuts.append(len(text))
+    parts = [text[a:b] for a, b in pairwise(cuts)]
+    return [part.removesuffix("\n") for part in parts[:-1]] + parts[-1:]
+
+
+def _row_width(line: str) -> int:
+    prose = CODE_SPAN.sub("", line.strip())
+    prose = re.sub(r"\\.", "", prose).removeprefix("|").removesuffix("|")
+    return prose.count("|") + 1
+
+
+def _table_rows(text: str) -> dict[int, int]:
+    """Row offsets and cell counts; outer pipes are optional Markdown table syntax."""
+    lines = outside_fences(text)
+    rows: dict[int, int] = {}
+    active, offset = False, 0
+    for index, (line, fenced) in enumerate(lines):
+        if fenced or not line.strip():
+            active = False
+        elif index + 1 < len(lines) and not lines[index + 1][1]:
+            if _SEPARATOR.fullmatch(lines[index + 1][0]):
+                active = True
+        if not fenced and line.strip() and (active or line.lstrip().startswith("|")):
+            rows[offset] = _row_width(line)
+        offset += len(line) + 1
+    return rows
+
+
 def _boundaries(text: str) -> list[int]:
     lines, offset, last = text.splitlines(keepends=True), 0, ""
     protected = _protected(text)
+    rows = _table_rows(text)
     boundaries = [0]
     for previous, current in pairwise(lines):
         offset += len(previous)
@@ -142,9 +180,7 @@ def _boundaries(text: str) -> list[int]:
             last = previous.strip()
         blank = not previous.strip() and not ANCHOR.fullmatch(last)
         row = (
-            current.lstrip().startswith("|")
-            and previous.lstrip().startswith("|")
-            and not _SEPARATOR.fullmatch(current)
+            offset in rows and offset - len(previous) in rows and not _SEPARATOR.fullmatch(current)
         )
         if (blank or row or _LIST.match(current)) and not any(a < offset < b for a, b in protected):
             boundaries.append(offset)
@@ -173,8 +209,4 @@ def split(text: str) -> list[str]:
 
 
 def table_shape(text: str) -> list[int]:
-    return [
-        line.count("|")
-        for line, fenced in outside_fences(text)
-        if not fenced and line.lstrip().startswith("|")
-    ]
+    return list(_table_rows(text).values())

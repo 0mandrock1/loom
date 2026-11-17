@@ -1,4 +1,4 @@
-"""Translation requests fit one reply without breaking Markdown units."""
+"""Translation requests bound source bytes without breaking Markdown units."""
 
 from collections import Counter
 
@@ -53,14 +53,30 @@ def test_multiline_list_continuation_never_becomes_a_separate_request() -> None:
     assert any(item.rstrip("\n") in part for part in requests)
 
 
+def test_html_crossing_a_heading_stays_in_one_request() -> None:
+    html = "<details>\n\n## Loom\n\nLoom\n</details>\n"
+    text = "# Loom\n\n" + "Loom\n\n" * 3000 + html
+    requests = assert_bounded(text)
+    assert any(t.anchor_headings(html, Counter({"loom": 1})) in part for part in requests)
+
+
+def test_table_without_outer_pipes_splits_between_complete_rows() -> None:
+    header = "Loom | Loom\n--- | ---\n"
+    text = header + "Loom | Loom\n" * 2000
+    requests = assert_bounded(text)
+    assert len(requests) > 1
+    assert requests[0].startswith(header)
+
+
 @pytest.mark.parametrize(
     "unit",
     [
         "```\n" + "x" * MAXIMUM + "\n```\n",
         "<details>\n" + "x" * MAXIMUM + "\n</details>\n",
         "- Loom " + "x" * 9000 + "\n\n  continued " + "y" * 9000 + "\n",
+        "- " + "x" * 9000 + "\n\n\t" + "y" * 9000 + "\n",
     ],
-    ids=["fence", "html", "list"],
+    ids=["fence", "html", "list", "tab-list"],
 )
 def test_indivisible_oversize_input_stops_before_any_provider_call(monkeypatch, unit) -> None:
     calls = []
@@ -112,6 +128,17 @@ def test_assembled_table_layout_is_verified_before_writing(monkeypatch, tmp_path
     monkeypatch.setattr(
         t, "translate_text", lambda part, *args: part + "\n| Loom | Loom | Loom |\n"
     )
+    with pytest.raises(t.TranslationDiffers, match="table"):
+        t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
+    assert not (tmp_path / "i18n").exists()
+
+
+def test_assembled_table_without_outer_pipes_rejects_row_loss(monkeypatch, tmp_path) -> None:
+    source = "Loom | Loom\n--- | ---\nLoom | Loom\n"
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
+    monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
+    monkeypatch.setattr(t, "translate_text", lambda *args: "Loom | Loom\n--- | ---\n")
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()

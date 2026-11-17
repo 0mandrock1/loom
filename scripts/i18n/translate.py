@@ -9,13 +9,14 @@ Claude is called on Amazon Bedrock through the `anthropic` package's AnthropicBe
 (scripts/i18n/requirements.txt), which signs each request with the default AWS credential
 chain: on the workflow's self-hosted runner, the instance role; locally, a profile or the
 AWS_* variables. The region comes from AWS_REGION, AWS_DEFAULT_REGION or the profile. A
-short page is sent in one call, a longer one a `## ` section at a time (`WHOLE_PAGE_CHARS`).
+short page is sent together when it fits the source-byte bound. Longer pages prefer safe
+second-level heading cuts, then split oversized sections at complete Markdown units.
 A translation is kept only when its fenced code blocks (in order), inline code spans, link
 targets, URLs, heading anchors and numbers match the English; otherwise the call is retried
 once with the differences named, then the page is not written (below). The assembled page is
-held to the same label rule before it is written. Relative links in the prose are rewritten
-before translation: a page of the set links to its translation, anything else to the English
-file on GitHub. Every heading gets an explicit `<a id>` with its English anchor, so
+held to the same invariants and table row/cell layout before it is written. Relative links
+are rewritten before translation: a page of the set links to its translation, anything else
+to the English file on GitHub. Every heading gets an explicit `<a id>` with its English anchor, so
 `#anchor` links keep working on the translated page. The first line of each translation
 stamps the git blob of the English page it was made from; `check` compares that stamp with
 the file. A change to the model or a banner makes every page stale; a change to the prompt
@@ -663,11 +664,9 @@ WHOLE_PAGE_CHARS = 8000
 
 def english_requests(text: str) -> list[str]:
     """The bounded requests used by both translation and its cost/reservation planners."""
-    seen: Counter[str] = Counter()
-    parts = [anchor_headings(s, seen) for s in sections(text)]
-    whole = "\n".join(parts)
-    groups = [whole] if len(whole) <= WHOLE_PAGE_CHARS else parts
+    whole = anchor_headings(text, Counter())
     try:
+        groups = [whole] if len(whole) <= WHOLE_PAGE_CHARS else chunks.heading_sections(whole)
         return [piece for section in groups for piece in chunks.split(section)]
     except ValueError as error:
         raise TranslationDiffers(str(error)) from error
