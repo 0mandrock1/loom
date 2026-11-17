@@ -61,6 +61,7 @@ import { readJsonFile, sweepStaleStateFiles, tmpStatePath, writeJsonFile } from 
 async function main() {
   const payload = await readStdinJson();
   if (hookClient() === "claude-code" && !entryIsFixed()) publishProject(payload);
+  saveInstallServerUrl();
   resolveServerUrl();
   // A token given at `claude plugin install --config token=…`
   // reaches the hooks as an environment variable but never the MCP header
@@ -72,7 +73,6 @@ async function main() {
   // plugin). An agent signs in as itself, so the config token is not what
   // its tools send.
   const optionNotice = hookClient() === "claude-code" && !agentMode() ? installTokenNotice(optionPlan) : "";
-  saveInstallServerUrl();
   sweepStaleStateFiles();
   // Default ON; opt out with LOOM_INJECT_CONTEXT=false (see header).
   if (!envSwitch("LOOM_INJECT_CONTEXT", true)) {

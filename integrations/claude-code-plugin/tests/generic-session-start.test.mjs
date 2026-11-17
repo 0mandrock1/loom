@@ -12,9 +12,9 @@ import { hostEnv } from "./host-env.mjs";
 const replies = String.raw`
 import fs from "node:fs";
 globalThis.fetch = async (input) => {
+  fs.appendFileSync(process.env.FIXTURE_REQUESTS, String(input) + "\n");
   const url = new URL(String(input));
   if (url.origin !== "https://loom.example") throw new Error("Unexpected destination");
-  fs.appendFileSync(process.env.FIXTURE_REQUESTS, url.pathname + "\n");
   const op = url.pathname.split("/").at(-1);
   const body = op === "health" ? {version: "1.2.0"}
     : op === "context.pack" ? {rendered: "fixture-primer"}
@@ -121,7 +121,7 @@ for (const [name, plugin, client, overrides, accepts] of [
       );
       if (overrides.CLAUDE_PLUGIN_OPTION_SERVER_URL?.endsWith("/proxy")) {
         assert.ok(
-          calls.every((url) => url.startsWith("/proxy/")),
+          calls.every((url) => new URL(url).pathname.startsWith("/proxy/")),
           calls.join("\n"),
         );
       }

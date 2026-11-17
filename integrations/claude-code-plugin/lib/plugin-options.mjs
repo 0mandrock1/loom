@@ -11,7 +11,7 @@
 // waits briefly for that file. Writes are idempotent and private; an invalid
 // endpoint refuses network work with an actionable configuration notice.
 
-import { claudeEndpoint } from "./mcp-endpoint.mjs";
+import { claudeEndpoint, EndpointError } from "./mcp-endpoint.mjs";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -72,14 +72,24 @@ const installStatePath = (tmp) => tmpStatePath("install", PLUGIN_ROOT, { tmp });
  *  install without the option removes a stale one. */
 export function saveInstallServerUrl(env = process.env, { tmp } = {}) {
   if (entryIsFixed() || hookClient(process.argv, env) !== "claude-code") return;
-  const url = env.CLAUDE_PLUGIN_OPTION_SERVER_URL ? claudeEndpoint(env).base : "";
+  let endpoint;
+  try {
+    endpoint = claudeEndpoint(env);
+  } catch (error) {
+    if (!(error instanceof EndpointError)) throw error;
+    writeJsonFile(installStatePath(tmp), { invalid: true });
+    throw error;
+  }
+  const url = env.CLAUDE_PLUGIN_OPTION_SERVER_URL ? endpoint.base : "";
   if (url) writeJsonFile(installStatePath(tmp), { url });
   else removeFile(installStatePath(tmp));
 }
 
 /** The saved install URL, "" when no session saved one. */
 export function installServerUrl({ tmp } = {}) {
-  return String(readJsonFile(installStatePath(tmp), {}).url || "");
+  const saved = readJsonFile(installStatePath(tmp), {});
+  if (saved.invalid) throw new EndpointError();
+  return String(saved.url || "");
 }
 
 /** The server the status script checks under Claude Code: the one the MCP

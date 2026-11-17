@@ -16,6 +16,7 @@ import {
   tokenLookup,
 } from "../lib/loom-client.mjs";
 import { entryIsFixed, sameServer, statusServerUrl } from "../lib/plugin-options.mjs";
+import { EndpointError } from "../lib/mcp-endpoint.mjs";
 import { serverVersionMessage } from "../lib/server-version.mjs";
 
 const FLUSH_RE = /^loom-flush-\d{13}-\d+\.json$/;
@@ -146,18 +147,24 @@ export async function clientStatus({
 }
 
 if (process.env.LOOM_HOOK_NO_MAIN !== "1") {
-  const { token, kind } = tokenLookup();
-  // Under Codex the MCP entry's URL is unknown here: the check runs against
-  // the hooks' server and compares the config with nothing.
-  const fixed = entryIsFixed();
-  const result = await clientStatus({
-    serverUrl: fixed ? resolveServerUrl() : statusServerUrl(),
-    token,
-    scope: resolveScope(process.cwd()),
-    tokenKind: kind,
-    configUrl: fixed ? "" : loomConfig().url,
-    exchangeUrl: resolveServerUrl(),
-  });
+  let result;
+  try {
+    // Validate configuration before resolving a token or making a request.
+    const fixed = entryIsFixed();
+    const serverUrl = fixed ? resolveServerUrl() : statusServerUrl();
+    const { token, kind } = tokenLookup();
+    result = await clientStatus({
+      serverUrl,
+      token,
+      scope: resolveScope(process.cwd()),
+      tokenKind: kind,
+      configUrl: fixed ? "" : loomConfig().url,
+      exchangeUrl: resolveServerUrl(),
+    });
+  } catch (error) {
+    if (!(error instanceof EndpointError)) throw error;
+    result = { ok: false, checks: [{ name: "server", grade: "FAIL", detail: error.message }] };
+  }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (!result.ok) process.exitCode = 1;
 }
