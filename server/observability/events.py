@@ -213,6 +213,11 @@ class EventEmitter:
 
     def emit(self, event: AgentEvent) -> None:
         """Fire-and-forget. Never raises; never blocks the request."""
+        from server.core.diagnostics import codes_only
+        from server.core.naming import is_mirror_name
+
+        if codes_only() or is_mirror_name(event.namespace):
+            return
         event = for_this_cell(event)
         try:
             self.queue.put_nowait(event)
@@ -319,3 +324,15 @@ _emitter = EventEmitter()
 
 def get_emitter() -> EventEmitter:
     return _emitter
+
+
+async def write_private_event(event: AgentEvent) -> None:
+    """Write a mirror's event inside its private scope, without shared queue statistics."""
+    from server.core.diagnostics import codes_only
+    from server.core.naming import is_mirror_name
+
+    if not codes_only() or not is_mirror_name(event.namespace):
+        raise ValueError("private events require a mirror and a private scope")
+    await get_client().insert(
+        "loom.agent_events", [for_this_cell(event).to_row()], settings=batched_insert_settings()
+    )

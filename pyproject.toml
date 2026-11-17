@@ -263,6 +263,8 @@ module = [
   "pydantic_ai.*",
   "ag2",
   "ag2.*",
+  "agno",
+  "agno.*",
   "haystack",
   "haystack.*",
   "agent_framework",
@@ -277,6 +279,8 @@ module = [
   "langgraph.*",
   "strands",
   "strands.*",
+  "pipecat",
+  "pipecat.*",
 ]
 ignore_missing_imports = true
 

@@ -53,4 +53,8 @@ run does not test those access controls.
 agent sends and what to write; [tokens and grants](../guides/tokens-and-grants.md) gives
 each agent its own token.
 
+Run the [planner and worker example](https://github.com/ClickHouse/loom/tree/main/sdk/python/examples#multi_agent_handoffpy)
+to follow a task from posting through fenced completion and read its result with
+provenance. It uses separate tokens and deletes the result memory after the handoff.
+
 Some ops on this page are marked experimental on the [status page](../reference/status.md).

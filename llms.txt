@@ -141,6 +141,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 ## Architecture
 
 - [Microsoft Agent Framework context provider](docs/architecture/agent-framework-adapter.md): `LoomContextProvider` implements the framework's context-provider interface over the asynchronous Python SDK.
+- [Agno user-memory database](docs/architecture/agno-adapter.md): The Agno adapter implements the user-memory methods of its 3.2 `BaseDb` interface through the synchronous Loom SDK.
 - [Assistant design](docs/architecture/assistant.md): This page is the design of Loom's assistant, which answers questions about what a namespace holds and how it is used, with a citation for every claim.
 - [Cells](docs/architecture/cells.md): A deployment's memory can outgrow one Postgres primary and one ClickHouse service, and an org may want its memory in services of its own.
 - [Claude API memory file tree](docs/architecture/claude-memory-adapter.md): The Claude API memory adapter implements the framework's Python memory-tool bases and TypeScript memory handlers through Loom knowledge documents.

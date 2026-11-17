@@ -858,7 +858,18 @@ schema. These rules keep that safe. The operator procedure is in
     Mirrored registration remains unavailable. `tests/unit/test_knowledge_source_retirements.py`
     checks name replacement, bounded progress and cursor persistence.
 
-58. **User cost caps and private budget warnings** (migration
+58. **Mirrored work keeps diagnostics inside its namespace**: N suppresses shared
+    logs, spans, metrics and work figures while syncing or retiring mirrored content.
+    Its worker summaries carry fixed codes and no elapsed time or document figures;
+    billing rows stay in the mirror namespace. N-1 has no equivalent boundary, so
+    mirrored source creation remains refused until every process implements the read,
+    session and enablement protections. Before N-1 can serve after enablement, stop
+    writers, settle outstanding inserts and sagas, scrub marked receipts and audit
+    figures, and erase every mirror store, including `agent_events` and
+    `agent_cost_rollup_daily`, before clearing the enablement latch. Stopping a client
+    after its timeout does not prove a sent insert has completed.
+
+59. **User cost caps and private budget warnings** (migration
     `103_user_cost_budgets.sql`): activate the global and namespace user caps and alert
     inboxes only after every serving build supports the migration; keep them disabled
     and do not rely on user caps while any build is older or unknown. N-1 cannot enforce
@@ -898,3 +909,16 @@ It does not check new enum values (rule 3), wire formats (rule 4), signing keys 
 than `default` (rule 5), new revocation keys (rule 18), an `/assistant` history entry
 (rule 46), or a process killed mid-migration. It skips with exit 0 where docker is
 unreachable; CI passes `--require`, which fails there instead.
+
+### Analyst probes across catalog versions
+
+The analyst probe checks its signed key canary before reading the stored entity version.
+When a newer build owns the entities, the older probe leaves that build's catalog and
+grant checks to it. It does not query retired tables or overwrite the newer entities.
+A failed key canary still refuses analysis, regardless of the version stamp.
+
+Deploy this probe ordering across the fleet before a later catalog change revokes a raw
+relation. Builds with the earlier probe order can refuse `insights.query` after that
+cutover because they probe the retired relation before checking the entity version.
+Statements naming a removed relation still fail its grant check; trusting the newer
+catalog does not restore a retired grant.

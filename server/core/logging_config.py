@@ -103,7 +103,10 @@ def configure_logging() -> None:
     fmt = settings.log_format
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
+    from server.core.diagnostics import public_log
+
     handler = logging.StreamHandler(stream=sys.stdout)
+    handler.addFilter(public_log)
     if fmt == "json":
         handler.setFormatter(_JsonFormatter())
     else:
