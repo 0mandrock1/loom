@@ -1143,7 +1143,7 @@ async def test_review_failed_request_keeps_raw_status_elapsed_and_classification
 ):
     async def send(self, request, **kwargs):
         return httpx.Response(
-            status, json={"error": {"code": code, "message": "secret-token"}}, request=request
+            status, json={"detail": {"code": code, "message": "secret-token"}}, request=request
         )
 
     monkeypatch.setattr(httpx.AsyncClient, "send", send)
