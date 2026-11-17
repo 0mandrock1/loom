@@ -26,11 +26,11 @@ async def test_replaced_source_cleanup_keeps_the_new_copy(monkeypatch: pytest.Mo
     from server.settings import settings
 
     ch = get_client()
-    await ch.connect()
     org, mirror = unique_org("source-retire"), new_mirror_name()
     old = queue.Retirement(org, "team", "decks", str(uuid.uuid4()), "gdrive", mirror)
     new = dataclasses.replace(old, source_id=str(uuid.uuid4()))
     try:
+        await ch.connect()
         await queue.write(old, pending=True)
         await sources.insert_source(old.source())
         await sources.insert_source(
@@ -78,13 +78,13 @@ async def test_queue_roundtrip_cursor_tenant_isolation_and_erasure() -> None:
     from server.knowledge.store import sources
 
     ch = get_client()
-    await ch.connect()
     source_id = str(uuid.uuid4())
     first = queue.Retirement(
         unique_org("retire-a"), "team", "decks", source_id, "gdrive", new_mirror_name()
     )
     other = dataclasses.replace(first, org=unique_org("retire-b"), mirror=new_mirror_name())
     try:
+        await ch.connect()
         for item in (first, other):
             await queue.write(item, pending=True)
         await sources.write_state(
