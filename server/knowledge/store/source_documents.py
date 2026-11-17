@@ -12,6 +12,7 @@ from server.core.ch import get_client, set_query_tag
 from server.knowledge.domain.live_chunks import live_chunk_sql
 from server.knowledge.domain.serving import Serving
 from server.knowledge.store.documents import DOCUMENT_COLUMNS, DocumentRow, _hydrate
+from server.knowledge.store.inspect import SCHEME_SQL, format_sql
 from server.knowledge.store.pg_documents import decode_row
 from server.knowledge.store.source_candidates import candidates
 
@@ -30,6 +31,80 @@ SELECT namespace, source_uri, public_namespace, public_uri FROM metadata
 WHERE (public_namespace, public_uri, namespace, source_uri) > ($5, $6, $7, $8)
 ORDER BY public_namespace, public_uri, namespace, source_uri LIMIT 64
 """
+
+_TITLE_COLUMNS = (
+    "org",
+    "namespace",
+    "source_uri",
+    "version",
+    "revision",
+    "title",
+    "ingested_at",
+    "superseded_at",
+)
+
+_PG_TITLE_FORMAT = """
+coalesce(nullif(row ->> 'format', ''),
+    nullif(CASE WHEN jsonb_typeof(meta -> 'ingested_format') = 'string'
+        THEN meta ->> 'ingested_format' ELSE '' END, ''),
+    nullif(row ->> 'blob_content_type', ''),
+    CASE WHEN ext != '' THEN '.' || ext ELSE '(none)' END)
+"""
+
+_TITLE_FORMAT_SQL = format_sql(
+    "if(JSONType(metadata, 'ingested_format') = 'String', "
+    "JSONExtractString(metadata, 'ingested_format'), '')"
+)
+
+
+async def title_projection(
+    org: str, namespace: str, source_uri: str, version: int, revision: int
+) -> dict[str, Any] | None:
+    """Read inspection scalars at one admitted live identity, without bodies or diagnostics."""
+    if not pg.enabled():
+        return await get_client().query_one(
+            f"SELECT {', '.join(_TITLE_COLUMNS)}, {_TITLE_FORMAT_SQL} AS doc_format, "
+            f"{SCHEME_SQL} AS source_scheme, "
+            "if(JSONType(metadata, 'source_revision') = 'String', "
+            "JSONExtractString(metadata, 'source_revision'), '') AS source_revision "
+            "FROM loom.documents FINAL WHERE org = {org:String} AND namespace = {ns:String} "
+            "AND source_uri = {uri:String} AND version = {version:UInt64} "
+            "AND revision = {revision:UInt64} AND superseded_at IS NULL LIMIT 1",
+            params={
+                "org": org,
+                "ns": namespace,
+                "uri": source_uri,
+                "version": version,
+                "revision": revision,
+            },
+        )
+    fields = ", ".join(f"'{col}', row -> '{col}'" for col in _TITLE_COLUMNS)
+    saved = await pg.fetchrow(
+        "WITH selected AS (SELECT h.row, h.source_uri, "
+        "CASE WHEN pg_input_is_valid(h.row ->> 'metadata', 'jsonb') "
+        "THEN (h.row ->> 'metadata')::jsonb ELSE '{}'::jsonb END AS meta "
+        "FROM loom.knowledge_heads h "
+        "WHERE h.org = $1 AND h.namespace = $2 AND h.source_uri = $3 "
+        "AND NOT h.deleted AND h.row ->> 'version' = $4 AND h.revision = $5 "
+        "AND h.row ->> 'revision' = $6 AND h.row ->> 'superseded_at' IS NULL LIMIT 1), "
+        "formatted AS (SELECT row, source_uri, meta, "
+        "coalesce(lower(substring(CASE WHEN coalesce(row ->> 'original_filename', '') != '' "
+        "THEN row ->> 'original_filename' ELSE "
+        "regexp_replace(regexp_replace(source_uri, '^[A-Za-z][A-Za-z0-9+.-]*://[^/]*', ''), "
+        "'[?#].*$', '') END from '[.]([A-Za-z0-9]{1,10})$')), '') AS ext FROM selected) "
+        f"SELECT jsonb_build_object({fields}, 'doc_format', {_PG_TITLE_FORMAT}, "
+        "'source_scheme', coalesce(nullif(lower(substring(source_uri "
+        "from '^([A-Za-z][A-Za-z0-9+.-]*)://')), ''), '(none)'), "
+        "'source_revision', CASE WHEN jsonb_typeof(meta -> 'source_revision') = 'string' "
+        "THEN meta ->> 'source_revision' ELSE '' END) AS row FROM formatted",
+        org,
+        namespace,
+        source_uri,
+        str(version),
+        revision,
+        str(revision),
+    )
+    return None if saved is None else decode_row(saved["row"])
 
 
 async def _pg_list_candidates(

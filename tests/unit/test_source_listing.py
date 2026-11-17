@@ -81,10 +81,12 @@ def world(monkeypatch):
 
     @asynccontextmanager
     async def discovery(org, selected, coarse):
-        assert org == "acme" and selected == sources
+        assert org == "acme" and selected and selected.items() <= sources.items()
 
         async def rows():
             for ns, stored in sorted(state.docs, key=lambda key: (key[1].rsplit("#", 1)[0], *key)):
+                if (ns, stored.rsplit("#", 1)[1]) not in selected:
+                    continue
                 state.discovered += 1
                 yield {
                     "namespace": ns,
@@ -130,6 +132,63 @@ async def collect(world, *, cursor=None, **fields):
     return await source_listing.collect(
         plan, KnowledgeListInput(org="acme", namespace="team", **fields), cursor=cursor
     )
+
+
+async def test_selection_reads_no_preview_or_chunk_count_before_title_projection(world):
+    from server.knowledge.app import source_listing
+
+    _state, plan, add = world
+    add("gdrive:a", 10)
+    selected = await source_listing.select(
+        plan, KnowledgeListInput(org="acme", namespace="team", limit=1), None
+    )
+    assert [item.candidate["source_uri"] for item in selected] == ["gdrive:a#" + SID]
+    source_documents.store.list_projection.assert_not_awaited()
+    source_documents.store.list_chunk_count.assert_not_awaited()
+
+
+async def test_source_selection_keeps_its_own_copy_despite_other_source_and_ordinary_copy(world):
+    from server.knowledge.app import source_listing
+
+    state, plan, add = world
+    add("gdrive:a", 10, title="Requested source")
+    add("gdrive:a", 20, source=OTHER_SID, title="Another source")
+    state.shadows.add(("team", "gdrive:a"))
+    selected = await source_listing.select(
+        plan, KnowledgeListInput(org="acme", namespace="team", limit=1), None, source_id=SID
+    )
+    assert [item.document["title"] for item in selected] == ["Requested source"]
+    assert len(plan.discovery_sources) == 2 and state.discovered == 1
+    source_documents.store.ordinary_families.assert_not_awaited()
+
+
+async def test_unknown_source_selection_opens_no_conditional_discovery(world):
+    from server.knowledge.app import source_listing
+
+    state, plan, add = world
+    add("gdrive:a", 10)
+    assert (
+        await source_listing.select(
+            plan, KnowledgeListInput(org="acme", namespace="team"), None, source_id="unregistered"
+        )
+        == []
+    )
+    assert state.discovered == 0
+    plan.check.assert_not_awaited()
+
+
+@pytest.mark.parametrize("source_id", [None, SID])
+async def test_final_selection_barrier_only_catalogs_apply_ordinary_shadows(world, source_id):
+    from server.knowledge.app import source_listing
+
+    state, plan, add = world
+    add("gdrive:a", 10)
+    input = KnowledgeListInput(org="acme", namespace="team")
+    selected = await source_listing.select(plan, input, None, source_id=source_id)
+    state.shadows.add(("team", "gdrive:a"))
+    final = await source_listing.finish(plan, input, selected, source_id=source_id)
+    assert (final is not None) == (source_id is not None)
+    assert not plan.unread
 
 
 async def test_family_winner_is_chosen_before_cursor_so_older_copy_never_reappears(world):

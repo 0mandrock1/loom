@@ -62,6 +62,7 @@ class _Selection:
     input: KnowledgeListInput
     cursor: Position | None
     sources: dict[tuple[str, str], str]
+    source_id: str | None = None
     heap: list[tuple[Position, Admitted]] = field(default_factory=list)
     pending: list[Admitted] = field(default_factory=list)
     family: Family | None = None
@@ -82,10 +83,14 @@ class _Selection:
         if not batch or self.plan.failed or self.plan.unread:
             return
         try:
-            shadows = await store.ordinary_families(
-                self.plan.org,
-                [_family(item) for item in batch],
-                include_superseded=self.input.include_superseded,
+            shadows = (
+                await store.ordinary_families(
+                    self.plan.org,
+                    [_family(item) for item in batch],
+                    include_superseded=self.input.include_superseded,
+                )
+                if self.source_id is None
+                else set()
             )
             for item in batch:
                 if _family(item) not in shadows:
@@ -139,13 +144,21 @@ class _Selection:
                 self.plan.failed = True
 
 
-async def _discover(
-    plan: ReadPlan, input: KnowledgeListInput, cursor: Position | None
+async def select(
+    plan: ReadPlan,
+    input: KnowledgeListInput,
+    cursor: Position | None,
+    *,
+    source_id: str | None = None,
 ) -> list[Admitted]:
+    """Select metadata families; a source inspection selects only its own copies."""
+    set_query_tag("knowledge.mirror.select")
     sources = plan.discovery_sources
+    if source_id is not None:
+        sources = {key: value for key, value in sources.items() if key[1] == source_id}
     if not sources:
         return []
-    selected = _Selection(plan, input, cursor, sources)
+    selected = _Selection(plan, input, cursor, sources, source_id=source_id)
     reader = plan.discovery_reader
     coarse = (
         None
@@ -178,7 +191,8 @@ async def _discover(
     )
 
 
-async def _renew(plan: ReadPlan, items: list[Admitted]) -> list[Admitted] | None:
+async def renew(plan: ReadPlan, items: list[Admitted]) -> list[Admitted] | None:
+    set_query_tag("knowledge.mirror.renew")
     refreshed = []
     for start in range(0, len(items), 64):
         batch = items[start : start + 64]
@@ -196,12 +210,34 @@ async def _renew(plan: ReadPlan, items: list[Admitted]) -> list[Admitted] | None
     return refreshed if all(plan.current(item) for item in refreshed) else None
 
 
+async def finish(
+    plan: ReadPlan,
+    input: KnowledgeListInput,
+    items: list[Admitted],
+    *,
+    source_id: str | None = None,
+) -> list[Admitted] | None:
+    """Refresh selected copies after all projection and catalog-shadow reads."""
+    set_query_tag("knowledge.mirror.list_proof")
+    if plan.failed or plan.unread:
+        return None
+    if source_id is None:
+        for start in range(0, len(items), 64):
+            if await store.ordinary_families(
+                plan.org,
+                [_family(item) for item in items[start : start + 64]],
+                include_superseded=input.include_superseded,
+            ):
+                return None
+    return await renew(plan, items)
+
+
 async def _materialize(
-    plan: ReadPlan, items: list[Admitted], *, include_superseded: bool
+    plan: ReadPlan, items: list[Admitted], input: KnowledgeListInput
 ) -> list[DocumentListRow]:
     out = []
     for item in items:
-        fresh = await _renew(plan, [item])
+        fresh = await renew(plan, [item])
         if fresh is None:
             return []
         item = fresh[0]
@@ -222,15 +258,7 @@ async def _materialize(
             plan.org, namespace, uri, revision, item.serving
         )
         out.append(row)
-    # Shadow checks precede the last permission refresh, including the lookahead copy.
-    for start in range(0, len(items), 64):
-        if await store.ordinary_families(
-            plan.org,
-            [_family(item) for item in items[start : start + 64]],
-            include_superseded=include_superseded,
-        ):
-            return []
-    final = await _renew(plan, items)
+    final = await finish(plan, input, items)
     if final is None:
         return []
     return [_public(row, item) for row, item in zip(out, final, strict=True)]
@@ -260,11 +288,11 @@ async def collect(
     """Return at most limit+1 complete admitted families, or an empty mirror leg."""
     set_query_tag("knowledge.mirror.list")
     with private_work(), sequential_reads():
-        items = await _discover(plan, input, cursor)
+        items = await select(plan, input, cursor)
         if not items or plan.failed or plan.unread:
             return []
         try:
-            return await _materialize(plan, items, include_superseded=input.include_superseded)
+            return await _materialize(plan, items, input)
         except Exception:  # noqa: BLE001 — selected fields, counts and final proofs fail closed together
             plan.failed = True
             return []
