@@ -12,7 +12,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from server.auth.fanout import namespaces_to_search
-from server.core import pg
 from server.core.vectors.private_first import search_private_first
 from server.embedding import get_embedder
 from server.identity.app import namespace_visibility
@@ -246,13 +245,8 @@ def _namespaces_search(
     (`pg_serving.served_search`), and what is left out is counted in `dropped`."""
     from server.knowledge.app import bm25 as knowledge_bm25
     from server.knowledge.app import pg_serving
-    from server.knowledge.app.search import (
-        HybridSearchQuery,
-        fuse_rrf,
-        hybrid_search,
-        keys_search,
-        lexical_search,
-    )
+    from server.knowledge.app.search import HybridSearchQuery
+    from server.knowledge.app.search_legs import collect
     from server.knowledge.domain.exact_keys import query_keys
 
     tokens = knowledge_bm25.tokenize(input.query) if input.search_mode != "semantic" else []
@@ -278,42 +272,11 @@ def _namespaces_search(
             source_classes=list(input.source_classes),
             formats=list(input.formats),
             block_types=list(input.block_types),
-        )
-        if input.search_mode == "semantic" or not tokens:
-            # No lexical leg; a hybrid query of short identifiers (`id`, `db.ts`) still
-            # has its exact keys.
-            if not keys:
-                return await hybrid_search(base)
-            keyed_q = dataclasses.replace(base, top_k=max(top_k * 3, 20), keys=keys)
-            sem, keyed = await asyncio.gather(hybrid_search(keyed_q), keys_search(keyed_q))
-            # Fused even when no key matched: every pass of a private-first search
-            # then scores on one scale, and the passes' hits are sorted together.
-            return fuse_rrf(sem, [], top_k=top_k, keyed=keyed, by_version=pg.enabled())
-        # Lexical leg needs corpus statistics; a cold corpus (no view rows, no avgdl)
-        # or a failed read degrades to the vector leg (and, in hybrid mode, the
-        # exact-key leg).
-        from server.core.ch import get_client as _get_ch
-
-        avgdl, idfs = await knowledge_bm25.lexical_stats(
-            _get_ch(),
-            org=input.org,
-            namespaces=namespaces,
-            embedding_model=embedder.model_name,
             tokens=tokens,
+            keys=keys,
         )
-        lex_q = dataclasses.replace(base, tokens=tokens, idfs=idfs, avgdl=avgdl)
-        if input.search_mode == "lexical":
-            return await lexical_search(lex_q)
-        # Fusion candidates: fetch a wider slice from each leg so the top_k of
-        # the fused list is drawn from more than top_k on either side.
-        wide = dataclasses.replace(lex_q, top_k=max(top_k * 3, 20), keys=keys)
-        sem, lex, keyed = await asyncio.gather(
-            hybrid_search(wide), lexical_search(wide), keys_search(wide)
-        )
-        # Fused even when the other legs found nothing, for the same one scale.
-        return fuse_rrf(
-            sem, lex, top_k=top_k, w_lex=input.lexical_weight, keyed=keyed, by_version=pg.enabled()
-        )
+        legs = await collect(base, input.search_mode, lexical_weight=input.lexical_weight)
+        return legs.ranked()
 
     async def _search(namespaces: list[str]) -> list[tuple[str, list[ChunkHit]]]:
         hits, gone = await pg_serving.served_search(
