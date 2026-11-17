@@ -243,7 +243,7 @@ def test_replication_waits_for_primary_tcp_after_temporary_socket_ready(tmp_path
     assert stores.tcp_attempts == 2 and stores.tcp_ready
 
 
-@pytest.mark.parametrize("setting", ["config_mount", "database"])
+@pytest.mark.parametrize("setting", ["config_mount", "database", "data_owner"])
 def test_clickhouse_creation_uses_ci_server_configuration(tmp_path, monkeypatch, setting):
     from scripts.gates import cell_trigger_acceptance as creator
 
@@ -279,9 +279,18 @@ def test_clickhouse_creation_uses_ci_server_configuration(tmp_path, monkeypatch,
                 + filename
                 + ":ro"
             ) in mounts
-    else:
+    elif setting == "database":
         environment = [args[index + 1] for index, value in enumerate(args) if value == "-e"]
         assert "CLICKHOUSE_DB=loom" in environment
+    else:
+        environment = [args[index + 1] for index, value in enumerate(args) if value == "-e"]
+        owner = (tmp_path / "clickhouse-data").stat()
+        assert f"CLICKHOUSE_UID={owner.st_uid}" in environment
+        assert f"CLICKHOUSE_GID={owner.st_gid}" in environment
+        assert not any(
+            value.startswith(("CLICKHOUSE_RUN_AS_ROOT=", "CLICKHOUSE_DO_NOT_CHOWN="))
+            for value in environment
+        )
 
 
 def test_failure_diagnostics_expose_only_allowlisted_owned_state(tmp_path):

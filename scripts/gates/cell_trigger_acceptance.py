@@ -330,6 +330,8 @@ class Stores:
         ch_data = self.folder / "clickhouse-data"
         ch_data.mkdir(mode=0o777)
         ch_data.chmod(0o777)
+        # Matching ownership avoids recursive chown through the read-only dictionary mount.
+        ch_owner = ch_data.stat()
         mounts = [
             (ch_data, "/var/lib/clickhouse", False),
             (self.root / "deploy/lemmagen3", "/var/lib/clickhouse/lemmagen3", True),
@@ -370,6 +372,10 @@ class Stores:
             f"127.0.0.1:{native_port}:9000",
             "-e",
             "CLICKHOUSE_DB=loom",
+            "-e",
+            f"CLICKHOUSE_UID={ch_owner.st_uid}",
+            "-e",
+            f"CLICKHOUSE_GID={ch_owner.st_gid}",
             "-e",
             "CLICKHOUSE_USER=loom",
             "-e",
