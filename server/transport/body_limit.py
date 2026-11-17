@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from server.core.ch_bounded import BoundedReadError, decode_json
 from server.core.errors import classified
 
 CODE = "PAYLOAD_TOO_LARGE"
@@ -43,6 +44,11 @@ _CELL_BODY_LIMITS = {
     "/v1/admin/cell.signing_keys_rotate": 65536,
     "/v1/admin/cell.signing_keys_retire": 65536,
     "/v1/admin/cell.subject_revoke": 65536,
+    "/v1/admin/cell.ratelimit_namespace_set": 65536,
+    "/v1/admin/cell.budget_set": 65536,
+    "/v1/admin/cell.blacklist_global_add": 65536,
+    "/v1/admin/cell.blacklist_global_list": 65536,
+    "/v1/admin/cell.blacklist_global_remove": 65536,
 }
 
 
@@ -57,6 +63,58 @@ def _too_large_response(limit: int, declared: int | None) -> tuple[dict[str, Any
         (b"content-length", str(len(body)).encode()),
     ]
     return {"type": "http.response.start", "status": 413, "headers": headers}, body
+
+
+def _invalid_json_response() -> tuple[dict[str, Any], bytes]:
+    detail = classified(
+        {"code": "VALIDATION_FAILED", "message": "Expected finite UTF-8 JSON with unique fields"},
+        400,
+    )
+    body = json.dumps({"detail": detail}).encode()
+    return {
+        "type": "http.response.start", "status": 400,
+        "headers": [(b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode())],
+    }, body
+
+
+async def _fixed_body(receive: Any, limit: int) -> tuple[bytes | None, int]:
+    """Finish a fixed small body before giving the framework any JSON bytes."""
+    body = bytearray()
+    while True:
+        message = await receive()
+        if message.get("type") != "http.request":
+            return None, 400
+        chunk = message.get("body") or b""
+        if len(body) + len(chunk) > limit:
+            return None, 413
+        body.extend(chunk)
+        if not message.get("more_body", False):
+            break
+    try:
+        decode_json(body.decode("utf-8"))
+    except (BoundedReadError, UnicodeError):
+        return None, 400
+    return bytes(body), 0
+
+
+async def _fixed_request(app: Any, scope: Any, receive: Any, send: Any, limit: int) -> None:
+    body, error = await _fixed_body(receive, limit)
+    if error:
+        start, answer = _too_large_response(limit, None) if error == 413 else _invalid_json_response()
+        await send(start)
+        await send({"type": "http.response.body", "body": answer})
+        return
+    delivered = False
+
+    async def replay() -> Any:
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return await receive()
+
+    await app(scope, replay, send)
 
 
 class BodyLimitMiddleware:
@@ -92,6 +150,10 @@ class BodyLimitMiddleware:
             start, body = _too_large_response(limit, declared)
             await send(start)
             await send({"type": "http.response.body", "body": body})
+            return
+
+        if fixed_limit is not None:
+            await _fixed_request(self.app, scope, receive, send, limit)
             return
 
         seen = 0

@@ -12,9 +12,14 @@ statements it runs (the active patterns, the version watermark) are here.
 
 from __future__ import annotations
 
-from datetime import datetime
+import asyncio
+import time
+from datetime import datetime, timedelta
 from typing import Any
+from uuid import UUID
 
+from server.core.ch import set_query_tag, statement_timeout
+from server.core.ch_bounded import BoundedReadError, read_rows
 from server.core.repo_base import _CHClient, _default_client
 
 
@@ -22,15 +27,15 @@ async def insert_row(
     row: dict[str, Any],
     *,
     ch: _CHClient | None = None,
+    deadline: float | None = None,
 ) -> None:
     """Insert one blacklist pattern. async_insert=0 so the next list
     sees the new row."""
     ch = ch or _default_client()
-    await ch.insert(
-        "loom.blacklist",
-        [row],
-        settings={"async_insert": 0, "wait_for_async_insert": 1},
-    )
+    if deadline is None:
+        await ch.insert("loom.blacklist", [row], settings={"async_insert": 0, "wait_for_async_insert": 1})
+    else:
+        await _bounded_insert("loom.blacklist", row, ch=ch, deadline=deadline)
 
 
 async def list_for_scope(
@@ -164,11 +169,139 @@ async def version_watermark(*, ch: _CHClient | None = None) -> tuple[int, int]:
     return (int(row.get("n") or 0), int(row.get("s") or 0))
 
 
-async def insert_version(version: int, *, updated_by: str, ch: _CHClient | None = None) -> None:
+async def insert_version(
+    version: int, *, updated_by: str, ch: _CHClient | None = None,
+    deadline: float | None = None,
+) -> None:
     """Append one watermark row. No read first: two concurrent bumps write two
     distinct rows."""
     ch = ch or _default_client()
-    await ch.insert(
-        "loom.blacklist_version",
-        [{"singleton": 0, "version": int(version), "updated_by": updated_by}],
+    row = {"singleton": 0, "version": int(version), "updated_by": updated_by}
+    if deadline is None:
+        await ch.insert("loom.blacklist_version", [row])
+    else:
+        await _bounded_insert("loom.blacklist_version", row, ch=ch, deadline=deadline)
+
+
+async def _bounded_insert(table: str, row: dict[str, Any], *, ch: Any, deadline: float) -> None:
+    remaining = min(2.0, deadline - time.monotonic())
+    if remaining <= 0:
+        raise BoundedReadError("Blacklist write allowance exhausted")
+    set_query_tag("cell.each.blacklist_write")
+    async with asyncio.timeout(remaining):
+        with statement_timeout(remaining):
+            await ch.insert(table, [row], settings={
+                "async_insert": 0, "wait_for_async_insert": 1, "max_memory_usage": 128 * 1024**2,
+            })
+
+
+_COLUMN_TYPES = {
+    "pattern_id": "UUID", "org": "LowCardinality(String)",
+    "namespace": "LowCardinality(String)", "pattern": "String",
+    "pattern_type": "Enum8('substring'=1,'regex'=2)",
+    "scope": "Enum8('namespace'=1,'org'=2,'global'=3)",
+    "reason": "String", "created_by": "String", "hit_count": "UInt64",
+    "created_at": "DateTime", "tombstoned_at": "Nullable(DateTime)",
+    "last_hit_at": "Nullable(DateTime)",
+}
+_ROW_PROJECTION = (
+    "pattern_id, org, namespace, pattern, pattern_type, scope, "
+    "reason, created_by, hit_count, toUnixTimestamp(created_at) AS created_at, "
+    "toUnixTimestamp(tombstoned_at) AS tombstoned_at, "
+    "toUnixTimestamp(last_hit_at) AS last_hit_at"
+)
+
+
+async def check_bounded_storage(*, ch: Any, deadline: float) -> None:
+    import re
+
+    tables = await read_rows(
+        "SELECT engine, engine_full, sorting_key FROM system.tables "
+        "WHERE database = 'loom' AND name = 'blacklist' LIMIT 2 FORMAT JSONEachRow", {},
+        ch=ch, deadline=deadline, row_bytes=16384, total_bytes=16384, max_rows=1,
+        tag="cell.each.blacklist_shape",
     )
+    if len(tables) != 1 or set(tables[0]) != {"engine", "engine_full", "sorting_key"}:
+        raise BoundedReadError("Unsupported blacklist storage")
+    table = tables[0]
+    if (table["engine"] not in {"ReplacingMergeTree", "ReplicatedReplacingMergeTree", "SharedReplacingMergeTree"}
+            or type(table["engine_full"]) is not str or type(table["sorting_key"]) is not str
+            or not table["engine_full"].startswith(table["engine"] + "(")
+            or re.search(r"(?:\(|,)\s*created_at\s*\)$", table["engine_full"]) is None
+            or table["sorting_key"].replace(" ", "").strip("()") != "org,namespace,pattern_id"):
+        raise BoundedReadError("Unsupported blacklist storage")
+    columns = await read_rows(
+        "SELECT name, type FROM system.columns WHERE database = 'loom' AND table = 'blacklist' "
+        "ORDER BY position LIMIT 13 FORMAT JSONEachRow", {}, ch=ch, deadline=deadline,
+        row_bytes=1024, total_bytes=16384, max_rows=12, tag="cell.each.blacklist_columns",
+    )
+    found: dict[str, str] = {}
+    for column in columns:
+        if (set(column) != {"name", "type"} or type(column["name"]) is not str
+                or type(column["type"]) is not str or column["name"] in found):
+            raise BoundedReadError("Unsupported blacklist columns")
+        found[column["name"]] = column["type"].replace(" ", "")
+    if found != _COLUMN_TYPES:
+        raise BoundedReadError("Unsupported blacklist columns")
+
+
+def _decode_bounded_row(row: dict[str, Any]) -> dict[str, Any]:
+    if set(row) != set(_COLUMN_TYPES):
+        raise BoundedReadError("Malformed blacklist row")
+    for key in ("pattern_id", "org", "namespace", "pattern", "pattern_type", "scope", "reason", "created_by"):
+        if type(row[key]) is not str:
+            raise BoundedReadError("Malformed blacklist field")
+    try:
+        if str(UUID(row["pattern_id"])) != row["pattern_id"]:
+            raise ValueError
+    except ValueError as error:
+        raise BoundedReadError("Malformed blacklist identity") from error
+    if (row["scope"] not in {"global", "org", "namespace"}
+            or row["pattern_type"] not in {"substring", "regex"}
+            or type(row["hit_count"]) is not int or not 0 <= row["hit_count"] <= 2**64 - 1):
+        raise BoundedReadError("Malformed blacklist row")
+    for key in ("created_at", "last_hit_at", "tombstoned_at"):
+        value = row[key]
+        if value is None and key != "created_at":
+            continue
+        if type(value) is not int or not 0 <= value <= 2**32 - 1:
+            raise BoundedReadError("Malformed blacklist timestamp")
+        row[key] = datetime(1970, 1, 1) + timedelta(seconds=value)
+    return row
+
+
+async def collision_bounded(pattern_id: str, *, ch: Any, deadline: float) -> bool:
+    rows = await read_rows(
+        "SELECT " + _ROW_PROJECTION + " FROM loom.blacklist FINAL "
+        "WHERE pattern_id = {pid:UUID} LIMIT 3 FORMAT JSONEachRow", {"pid": pattern_id},
+        ch=ch, deadline=deadline, row_bytes=32768, total_bytes=65536, max_rows=2,
+        tag="cell.each.blacklist_collision",
+    )
+    for row in rows:
+        _decode_bounded_row(row)
+    return bool(rows)
+
+
+async def global_list_bounded(limit: int, *, ch: Any, deadline: float) -> list[dict[str, Any]]:
+    if not 1 <= limit <= 50:
+        raise BoundedReadError("Unsupported blacklist display limit")
+    rows = await read_rows(
+        "SELECT " + _ROW_PROJECTION + " FROM loom.blacklist FINAL "
+        "WHERE org = '*' AND namespace = '*' AND scope = 'global' AND tombstoned_at IS NULL "
+        "ORDER BY created_at DESC, pattern_id LIMIT {limit:UInt32} FORMAT JSONEachRow",
+        {"limit": limit + 1}, ch=ch, deadline=deadline, row_bytes=32768,
+        total_bytes=1792 * 1024, max_rows=limit + 1, tag="cell.each.blacklist_list",
+    )
+    return [_decode_bounded_row(row) for row in rows]
+
+
+async def global_regexes_bounded(*, ch: Any, deadline: float) -> list[str]:
+    rows = await read_rows(
+        "SELECT pattern FROM loom.blacklist FINAL WHERE org = '*' AND namespace = '*' "
+        "AND scope = 'global' AND pattern_type = 'regex' AND tombstoned_at IS NULL "
+        "LIMIT 1025 FORMAT JSONEachRow", {}, ch=ch, deadline=deadline, row_bytes=2048,
+        total_bytes=1024**2, max_rows=1024, tag="cell.each.blacklist_regexes",
+    )
+    if any(set(row) != {"pattern"} or type(row["pattern"]) is not str for row in rows):
+        raise BoundedReadError("Malformed global regex programme")
+    return [row["pattern"] for row in rows]

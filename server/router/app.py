@@ -61,7 +61,7 @@ from starlette.routing import Route
 
 from server.core import cell as cell_state
 from server.core.cell_probe import PATH as PROBE_PATH
-from server.router import directory, routing
+from server.router import cell_admin, directory, routing
 from server.router.limits import (
     ATTACH_BATCH,
     ATTACH_BEGIN_MAX_BYTES,
@@ -198,6 +198,9 @@ class Router:
         self._probe_transport = probe_transport
         self.placements = Limiter(settings.router_placements_per_minute, clock=clock)
         self.lookups = Limiter(settings.router_lookups_per_minute, clock=clock)
+        # Fresh administration reads share lookup admission's configured per-address
+        # budget, with separate counters so they do not consume ordinary lookups.
+        self._administration = Limiter(settings.router_lookups_per_minute, clock=clock)
         # The cells' credential hashes, read from the directory at most once per
         # LOOM_ROUTER_DIRECTORY_CACHE_S: a call with a wrong credential reads nothing.
         # A failed read stands for the window too, so an outage is not read once per call.
@@ -647,6 +650,51 @@ class Router:
         if not isinstance(body, dict):
             return _refused(400, "this call's body is a JSON object")
         return body
+
+    def _administration_limit(self, request: Request) -> JSONResponse | None:
+        key = request.client.host if request.client else "unknown"
+        if not self._administration.admit(key):
+            return _refused(
+                429,
+                "administration read limit reached",
+                {"Retry-After": str(self._administration.wait_s(key))},
+            )
+        return None
+
+    async def administration_identity(self, request: Request) -> JSONResponse:
+        """Return only this freshly authenticated cell's two public bot identities."""
+        if refusal := _malformed_cell_refusal(request):
+            return refusal
+        token = _bearer(request)
+        if not token.startswith("lcr_") or len(token) > 256:
+            return _refused(401, "the cell credential is not this cell's")
+        if refusal := self._administration_limit(request):
+            return refusal
+        try:
+            answer = await directory.administration_identity(
+                request.path_params["cell"], hashlib.sha256(token.encode()).hexdigest()
+            )
+        except (directory.DirectoryUnavailable, cell_admin.InvalidAdministration):
+            return _refused(503, "cell administration identity is unavailable")
+        if answer is None:
+            return _refused(401, "the cell credential is not this cell's")
+        return JSONResponse(answer)
+
+    async def administration_cells(self, request: Request) -> JSONResponse:
+        """The operator's closed, bounded fleet census or fresh exact point read."""
+        if refusal := self._operator(request):
+            return refusal
+        if "cell" in request.path_params:
+            if refusal := _malformed_cell_refusal(request):
+                return refusal
+        if refusal := self._administration_limit(request):
+            return refusal
+        try:
+            return JSONResponse(
+                await directory.administration_cells(request.path_params.get("cell"))
+            )
+        except (directory.DirectoryUnavailable, cell_admin.InvalidAdministration):
+            return _refused(503, "cell administration census is unavailable")
 
     async def operator_cell(self, request: Request) -> JSONResponse:
         """`GET /cells/v1/operator/cells/<cell>`: the cell's row as attach reads it (its
@@ -1366,6 +1414,17 @@ def build_app(router: Router | None = None) -> Starlette:
         routes=[
             Route("/cells/v1/placements", router.place, methods=["POST"]),
             Route("/cells/v1/cells/{cell}", router.cell_state, methods=["GET"]),
+            Route(
+                "/cells/v1/cells/{cell}/administration",
+                router.administration_identity,
+                methods=["GET"],
+            ),
+            Route("/cells/v1/operator/cells", router.administration_cells, methods=["GET"]),
+            Route(
+                "/cells/v1/operator/cells/{cell}/administration",
+                router.administration_cells,
+                methods=["GET"],
+            ),
             Route("/cells/v1/operator/cells/{cell}/limit", router.set_limit, methods=["POST"]),
             Route("/cells/v1/operator/cells/{cell}/register", router.register, methods=["POST"]),
             Route(

@@ -519,10 +519,12 @@ _scim_routes.attach(app)
 
 from server.insights.app.admin_routes import admin_router as _admin_router  # noqa: E402
 from server.insights.app.admin_routes import org_admin_router as _org_admin_router  # noqa: E402
+from server.insights.app.cell_admin_routes import cell_admin_router as _cell_admin_router  # noqa: E402
 from server.insights.app.provider_routes import provider_router as _provider_router  # noqa: E402
 
 app.include_router(_admin_router)
 app.include_router(_org_admin_router)
+app.include_router(_cell_admin_router)
 app.include_router(_provider_router)
 
 from server.identity.app.admin_account_routes import router as _account_admin_router  # noqa: E402

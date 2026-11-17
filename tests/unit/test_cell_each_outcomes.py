@@ -29,7 +29,7 @@ def _state(module: Any) -> dict[str, Any]:
                 "origin": "https://alpha.example.com",
                 "state": "serving",
                 "mode": "enforced",
-                "mutation_generation": 1,
+                "mutation_generation": "c33e76ce-f023-4b45-92ea-2e9bfa008583",
                 "configuration_digests": ["1" * 64],
                 "automation": {"name": "automation-alpha", "thumbprint": "A" * 43},
                 "recovery": {"name": "recovery-alpha", "thumbprint": "B" * 43},
