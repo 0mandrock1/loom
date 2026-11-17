@@ -90,10 +90,19 @@ class Router:
     async def health(self, host: str) -> str:
         """The deployment id `https://<host>/v1/health/deployment` answers ('' when none)."""
         try:
-            async with httpx.AsyncClient(
-                timeout=_HEALTH_TIMEOUT, transport=self.transport
-            ) as client:
+            manager = httpx.AsyncClient(timeout=_HEALTH_TIMEOUT, transport=self.transport)
+            client = await manager.__aenter__()
+            try:
                 r = await client.get(f"https://{host}/v1/health/deployment")
+            except BaseException:  # Client exit preserves the request's first failure.
+                with contextlib.suppress(BaseException):
+                    await manager.__aexit__(*sys.exc_info())
+                raise
+        except (httpx.HTTPError, ValueError):
+            return ""
+        # A required close failure after a successful read must reach the owner.
+        await manager.__aexit__(None, None, None)
+        try:
             answer = r.json()
         except (httpx.HTTPError, ValueError):
             return ""

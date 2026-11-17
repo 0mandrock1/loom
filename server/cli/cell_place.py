@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import sys
 from typing import Any
@@ -69,13 +70,21 @@ async def _directory(
     router: httpx.URL, name: str, org: str, deployment: str, fingerprint: dict[str, Any]
 ) -> None:
     url = cell_cli.at(router, f"/cells/v1/operator/cells/{name}/place")
-    async with httpx.AsyncClient(trust_env=router.scheme == "https") as client:
+    manager = httpx.AsyncClient(trust_env=router.scheme == "https")
+    client = await manager.__aenter__()
+    try:
         answer = await client.post(
             url,
             headers={"Authorization": f"Bearer {settings.router_operator_token}"},
             json={"org": org, "deployment_id": deployment, "fingerprint": fingerprint},
             timeout=httpx.Timeout(REQUEST_S, connect=5.0),
         )
+    except BaseException:  # Client exit preserves the request's first failure.
+        with contextlib.suppress(BaseException):
+            await manager.__aexit__(*sys.exc_info())
+        raise
+    else:
+        await manager.__aexit__(None, None, None)
     posted = cell_cli.router_answer(answer, {"org": org}, cell_cli.OPERATOR_REFUSALS)
     if posted is None:
         raise PlacementRefused(cell_cli.not_the_router(answer))
