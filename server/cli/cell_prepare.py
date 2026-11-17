@@ -41,6 +41,7 @@ from server.cli import cell as cell_cli
 from server.cli import cell_control
 from server.cli._ch import writes
 from server.core import cell
+from server.router import routing
 from server.settings import settings
 
 # How long a run retries a busy or unreachable probe listener by default.
@@ -101,6 +102,12 @@ def _args_problem(args: argparse.Namespace) -> str:
             "--credential-sha256 takes the cell credential's sha256 (64 lowercase hex), never "
             "the credential: `loom cell credential new` prints both"
         )
+    if args.upstream_url is not None and (
+        not args.probe_url or routing.cell_address(args.upstream_url) is None
+    ):
+        return "--upstream-url names a later cell's main-port origin, with --probe-url"
+    if args.probe_url and args.upstream_url is None:
+        return "a later cell names --upstream-url with --probe-url"
     if not 0 <= args.wait <= _WAIT_MAX_S:
         return f"--wait is a number of seconds from 0 to {_WAIT_MAX_S}"
     return ""
@@ -330,6 +337,15 @@ async def _register(
                     f"{cell_cli.not_the_router(r)}; run {command} again once the router answers"
                 )
             if r.status_code == 200:
+                if command == "prepare" and "upstream_url" in body:
+                    if (
+                        answer.get("upstream_url") != body["upstream_url"]
+                        or answer.get("deployment_id") != body["deployment_id"]
+                        or answer.get("is_first") is not False
+                    ):
+                        raise Refused(
+                            "the router did not confirm the later upstream; upgrade all routers"
+                        )
                 break
             code = answer.get("code")
             if code == "BACKEND_UNAVAILABLE":
@@ -518,6 +534,8 @@ async def _prepare_locked(
     }
     if args.probe_url:
         body["probe_url"] = args.probe_url
+    if args.upstream_url is not None:
+        body["upstream_url"] = routing.cell_address(args.upstream_url)
     body["nonces"] = _new_nonces()
     try:
         await _write_nonces(ch, body["nonces"])
@@ -539,6 +557,16 @@ async def _prepare_locked(
         return await cell_control.request(router, args.cell, transport, path, body)
 
     snapshot = await cell_control.request(router, args.cell, transport, "", method="GET")
+    if args.upstream_url is not None and (
+        snapshot.get("upstream_url") != body["upstream_url"]
+        or snapshot.get("deployment_id") != rows.deployment_id
+        or snapshot.get("host") != body["host"]
+        or snapshot.get("probe_url") != routing.cell_address(args.probe_url)
+        or snapshot.get("bucket") != body["bucket"]
+        or snapshot.get("bucket_prefix") != body["bucket_prefix"]
+        or snapshot.get("is_first") is not False
+    ):
+        raise Refused("the registered later upstream or identity changed; stop and rerun prepare")
     snapshot = await cell_control.claim(conn, call, snapshot)
     # A queued earlier controller may have committed before this claim. Its returned
     # row, including the highest mode, supersedes the registration response.
@@ -613,6 +641,9 @@ def add_prepare_parser(csub: Any) -> None:
     )
     p.add_argument(
         "--probe-url", default="", help="A later cell's probe listener address (not the first's)"
+    )
+    p.add_argument(
+        "--upstream-url", help="A later cell's internal main-port origin (with --probe-url)"
     )
     p.add_argument(
         "--wait",

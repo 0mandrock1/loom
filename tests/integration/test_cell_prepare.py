@@ -103,6 +103,7 @@ def _args(**over: Any) -> argparse.Namespace:
         "host": "LOOM.example",
         "credential_sha256": CREDENTIAL_SHA,
         "probe_url": "",
+        "upstream_url": None,
         "wait": 0,
         "router": "http://127.0.0.1:7900",
     }
@@ -298,6 +299,7 @@ async def test_a_later_cell_registers_after_the_first_as_enforced(
             host="eu-2.loom.example",
             credential_sha256=sha,
             probe_url="http://eu-2.internal:7790",
+            upstream_url="http://eu-2.internal:7777",
         )
         # A live process without its LOOM_CELL: a later cell runs with it from its first
         # boot, so the router registers nothing.

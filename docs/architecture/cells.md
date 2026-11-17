@@ -156,7 +156,7 @@ included, to `attaching` and `serving` cells alike, in order:
 
 The router reaches a cell at the `upstream_url` its directory row records, an address
 inside the deployment's network (the first cell's is `LOOM_ROUTER_UPSTREAM_URL`, written
-by prepare, so registering it changes no route; a later cell's attach writes), never at
+by prepare, so registering it changes no route; a later cell names at prepare), never at
 the cell's public host, which names the router itself; before the first cell is
 registered, rule 4's cell is the deployment it was put in front of
 (`LOOM_ROUTER_UPSTREAM_URL`). The shared host is `LOOM_ROUTER_SHARED_HOST`, the first
@@ -376,7 +376,7 @@ with the operator credential); the router reads the probe listener itself and re
 the cell only when it answers the cell's deployment id, those nonces, and the bucket and
 prefix the registration names (so one naming no bucket cannot pass for a cell that has
 one). The router answers a listener past its rate (429) as `PROBE_BUSY`, and one it
-cannot reach or that cannot read a store, or a first cell's upstream main port it cannot
+cannot reach or that cannot read a store, or a cell's upstream main port it cannot
 reach yet, as `PROBE_UNREACHABLE`, both 503, and prepare waits for them within `--wait`.
 A rerun whose addresses differ from the row's is refused before the probe.
 
@@ -410,10 +410,31 @@ fingerprint gate:
   up is unreachable a while), and attach and `loom cell update --probe-url` a 429 from
   the listener they probe, for at most `--wait` (default 10 minutes), and then name it.
 
-A later cell's `probe_url` is given to prepare, normalised (`http` or `https`, no
-userinfo), and accepted only when it reports the deployment id prepare reads from the
-target stores; attach then checks that the cell's own host reports the same id. Prepare
-refuses a probe address argument for the first cell. `loom cell update --probe-url`
+A later cell requires both `--probe-url`, its separate probe listener, and
+`--upstream-url`, its internal main-port HTTP(S) origin. Both use the same address
+normalization: no userinfo, query, fragment or non-root path. The router verifies the
+three-store nonce response at the probe listener, then checks the proposed main port
+reports the same deployment id without listener-only nonce fields. It records the
+verified main origin in the registration transaction before any local prepared-row
+acknowledgment. The first cell accepts neither a caller-supplied upstream field nor a
+probe address; its addresses remain the router's configuration.
+
+Every router must support this registration input before preparing a later cell.
+An unknown field or a response missing the exact verified origin refuses; the client
+does not retry without the field. A rerun preserves the exact registered origin,
+including refusing a registered later cell whose origin is blank. It never fills or
+moves that address. Surviving local state is not cleared to bypass this refusal.
+Registration makes this replica's credential and routing caches stale after any
+in-flight old routing read; its last routing table remains available during a directory
+outage. Other replicas retain their ordinary refresh bounds. Unknown commit or reply
+outcomes stop the invocation before local writes; a fresh normal prepare rerun reads
+and verifies the actual row.
+
+This preparation contract does not implement later-cell attach or a read-only attach
+preview. Those paths still require their own peer, automation and state-transition
+proofs. Preparing an origin is not an attach-success or public-readiness result.
+
+`loom cell update --probe-url`
 replaces a later cell's under the directory lock after the same check and a fresh nonce
 echo. The first cell's probe and upstream addresses are copied from the router's
 configuration at registration, and `loom cell update` replaces them from it, once every

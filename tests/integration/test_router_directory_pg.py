@@ -375,7 +375,9 @@ async def test_prepare_registers_a_cell_once_and_refuses_what_another_holds(own_
             "bucket_prefix": f"cells/{name}",
             "probe_url": f"http://{name}.internal:7790",
             "is_first": name == first,
-            "upstream_url": "http://upstream.internal:7777" if name == first else "",
+            "upstream_url": (
+                "http://upstream.internal:7777" if name == first else f"http://{name}.internal:7777"
+            ),
             "tenancy_rows": 0,
             "state_rows": 0,
             "prefix_objects": 0,

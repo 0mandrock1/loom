@@ -39,6 +39,8 @@ def _body(**over: Any) -> dict[str, Any]:
         "held": dict(HELD),
     }
     body.update(over)
+    if body.get("probe_url") and body.get("host") != "loom.example":
+        body.setdefault("upstream_url", "http://eu-2.internal:7777")
     return {k: v for k, v in body.items() if v is not ...}
 
 
@@ -234,7 +236,7 @@ def test_an_address_is_written_one_way_however_it_is_spelled(router) -> None:
         ("http://[FD00:0:0:0:0:0:0:7]:7790", "http://[fd00::7]:7790"),
         ("https://eu-2.internal:443/", "https://eu-2.internal"),
     ):
-        assert router_app._cell_address(spelled) == written
+        assert router_app.routing.cell_address(spelled) == written
 
 
 def test_a_rerun_the_directory_refuses_is_refused_before_the_probe(router) -> None:
@@ -621,6 +623,7 @@ def test_the_registration_bounds_count_the_statements_the_code_sends(monkeypatch
         bucket="docs",
         bucket_prefix="eu-2",
         probe_url="http://eu-2.internal:7790",
+        upstream_url="http://eu-2.internal:7777",
         is_first=False,
         tenancy_rows=0,
         state_rows=0,

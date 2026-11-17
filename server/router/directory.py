@@ -78,6 +78,7 @@ OPERATOR_CHANGE_MAX_S = _bound_s(10)  # not a setting: derived from the bound ab
 REGISTER_STATEMENTS, REFUSAL_READ_STATEMENTS = 13, 6
 REGISTER_MAX_S = _bound_s(REGISTER_STATEMENTS)
 REFUSAL_READ_MAX_S = _bound_s(REFUSAL_READ_STATEMENTS)
+ROUTING_READ_MAX_S = _bound_s(2)  # connection, two reads and release in routing()
 # The attach calls' statements, which tests/unit/test_router_attach.py counts against the
 # code: the operator's read of a cell's row (the row, any other row, audit); the read before
 # `begin`'s and `serving`'s probe (the row, any other row); `begin`, `enforced` and
@@ -453,7 +454,7 @@ class Registration:
     processes_without_cell: int
     # Where the router forwards to the cell: the first cell's is the deployment the
     # router was put in front of (LOOM_ROUTER_UPSTREAM_URL), so registering it changes no
-    # route; a later cell's is '' until attach writes it.
+    # route; a later cell supplies its independently verified main-port origin.
     upstream_url: str = ""
 
 
@@ -556,6 +557,8 @@ def _rerun_refusal(held: Mapping[str, Any], reg: Registration) -> str:
             f"cell {cell!r} is registered with probe address {held['probe_url']}: run "
             "`loom cell prepare` with that --probe-url"
         )
+    if not reg.is_first and (not held["upstream_url"] or held["upstream_url"] != reg.upstream_url):
+        return f"cell {cell!r} is registered with another or blank upstream; prepare never moves it"
     if reg.is_first and reg.upstream_url and held["upstream_url"] != reg.upstream_url:
         return (
             f"cell {cell!r} is registered with upstream {held['upstream_url']}: set this router "
@@ -578,6 +581,8 @@ def _order_refusal(reg: Registration, first: Mapping[str, Any] | None) -> str:
             f"the first cell {first['cell']!r} is not serving yet: a later cell registers "
             "once the first cell's attach is done"
         )
+    if not reg.is_first and not reg.upstream_url:
+        return "a later cell needs its verified main-port upstream"
     if reg.is_first and not reg.upstream_url:
         return (
             "the router needs LOOM_ROUTER_UPSTREAM_URL (http or https with a host) to register "
