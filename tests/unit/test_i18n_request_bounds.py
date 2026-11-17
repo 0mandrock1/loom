@@ -68,6 +68,14 @@ def test_table_without_outer_pipes_splits_between_complete_rows() -> None:
     assert requests[0].startswith(header)
 
 
+def test_single_column_table_keeps_header_with_delimiter_at_byte_boundary() -> None:
+    header = "| " + "x" * 176 + " |\n| --- |\n"
+    text = "Loom\n\n" * 2700 + header
+    requests = assert_bounded(text)
+    assert any(header in part for part in requests)
+    assert all(not part.startswith("| --- |") for part in requests)
+
+
 @pytest.mark.parametrize(
     "unit",
     [
@@ -139,6 +147,19 @@ def test_assembled_table_without_outer_pipes_rejects_row_loss(monkeypatch, tmp_p
     monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
     monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
     monkeypatch.setattr(t, "translate_text", lambda *args: "Loom | Loom\n--- | ---\n")
+    with pytest.raises(t.TranslationDiffers, match="table"):
+        t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
+    assert not (tmp_path / "i18n").exists()
+
+
+@pytest.mark.parametrize("delimiter", ["| Loom | Loom |\n", "| --- | --- |\n\n"])
+def test_assembled_table_preserves_delimiter_and_membership(monkeypatch, tmp_path, delimiter):
+    source = "| Loom | Loom |\n| --- | --- |\n| Loom | Loom |\n"
+    reply = "| Loom | Loom |\n" + delimiter + "| Loom | Loom |\n"
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
+    monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
+    monkeypatch.setattr(t, "translate_text", lambda *args: reply)
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()

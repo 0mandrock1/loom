@@ -207,17 +207,6 @@ def anchor_headings(text: str, seen: Counter[str]) -> str:
     return "\n".join(out)
 
 
-def sections(text: str) -> list[str]:
-    """The page cut before every `## ` heading outside code; the pieces join back to it
-    with newlines."""
-    pieces: list[list[str]] = [[]]
-    for line, in_code in outside_fences(text):
-        if not in_code and line.startswith("## ") and pieces[-1]:
-            pieces.append([])
-        pieces[-1].append(line)
-    return ["\n".join(p) for p in pieces]
-
-
 # ---- links ----------------------------------------------------------------------------
 
 

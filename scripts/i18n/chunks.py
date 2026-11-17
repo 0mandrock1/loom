@@ -38,7 +38,7 @@ def outside_fences(text: str) -> list[tuple[str, bool]]:
 
 MAX_BYTES = 16_384
 _LIST = re.compile(r"^( {0,3})(?:[-+*]|\d+[.)])\s")
-_SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)+\|?\s*$")
+_SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$")
 _TAG_NAME = re.compile(r"</?([A-Za-z][^\s/<>\"']*)")
 _BLOCK = frozenset(
     "address article aside blockquote details dialog div dl fieldset figure footer form "
@@ -152,19 +152,27 @@ def _row_width(line: str) -> int:
     return prose.count("|") + 1
 
 
-def _table_rows(text: str) -> dict[int, int]:
-    """Row offsets and cell counts; outer pipes are optional Markdown table syntax."""
+def _table_rows(text: str) -> dict[int, tuple[str, int]]:
+    """Row roles and cell counts preserve table boundaries as well as optional pipes."""
     lines = outside_fences(text)
-    rows: dict[int, int] = {}
-    active, offset = False, 0
+    rows: dict[int, tuple[str, int]] = {}
+    active, delimiter, offset = False, -1, 0
     for index, (line, fenced) in enumerate(lines):
+        role = "pipe"
         if fenced or not line.strip():
             active = False
-        elif index + 1 < len(lines) and not lines[index + 1][1]:
-            if _SEPARATOR.fullmatch(lines[index + 1][0]):
-                active = True
+        elif not active and index + 1 < len(lines) and not lines[index + 1][1]:
+            following = lines[index + 1][0]
+            if (
+                "|" in line + following
+                and _SEPARATOR.fullmatch(following)
+                and _row_width(line) == _row_width(following)
+            ):
+                active, delimiter, role = True, index + 1, "header"
+        if active and role != "header":
+            role = "delimiter" if index == delimiter else "data"
         if not fenced and line.strip() and (active or line.lstrip().startswith("|")):
-            rows[offset] = _row_width(line)
+            rows[offset] = (role, _row_width(line))
         offset += len(line) + 1
     return rows
 
@@ -208,5 +216,5 @@ def split(text: str) -> list[str]:
     return [part.removesuffix("\n") for part in parts[:-1]] + parts[-1:]
 
 
-def table_shape(text: str) -> list[int]:
+def table_shape(text: str) -> list[tuple[str, int]]:
     return list(_table_rows(text).values())
