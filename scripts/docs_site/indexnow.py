@@ -56,7 +56,7 @@ def page_url(path: str) -> str | None:
         return SITE + localized if localized is not None else None
     if not (path.startswith("docs/") and path.endswith(".md")):
         return None
-    return SITE + page_path(path)
+    return SITE + urllib.parse.quote(page_path(path))
 
 
 def every_page() -> list[str]:
@@ -64,7 +64,9 @@ def every_page() -> list[str]:
 
     paths = [f"docs/{p.relative_to(DOCS).as_posix()}" for p in DOCS.rglob("*.md")]
     english = [u for p in paths if (u := page_url(p))]
-    localized = [SITE + page_path(f"docs/{uri}") for uri in translations(DOCS.parent)]
+    localized = [
+        SITE + urllib.parse.quote(page_path(f"docs/{uri}")) for uri in translations(DOCS.parent)
+    ]
     return sorted([*english, *localized])
 
 

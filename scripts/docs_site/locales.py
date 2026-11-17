@@ -9,6 +9,7 @@ import re
 import sys
 from collections.abc import Iterable
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -24,7 +25,7 @@ LANGUAGES = {
     "pt-BR": "Português (Brasil)",
     "es": "Español",
 }
-PUBLISHED_LANGUAGES = ("ja",)
+PUBLISHED_LANGUAGES = ("zh-CN", "ja", "ko", "pt-BR", "es")
 # Generic language codes do not identify an Open Graph territory.
 _OG_LOCALES = {"zh-CN": "zh_CN", "pt-BR": "pt_BR"}
 _STAMP = re.compile(r"<!-- i18n: source=(.*?) blob=([0-9a-f]{40}) model=\S+ -->")
@@ -47,7 +48,7 @@ def localized_page_path(path: str, *, languages: Iterable[str] | None = None) ->
         or not parts[3].endswith(".md")
     ):
         return None
-    return page_path(f"docs/{localized_uri(parts[1], parts[3])}")
+    return quote(page_path(f"docs/{localized_uri(parts[1], parts[3])}"))
 
 
 def translations(root: Path, *, languages: Iterable[str] | None = None) -> dict[str, dict]:
@@ -98,14 +99,18 @@ def alternates(source: str, pages: dict, site_url: str) -> list[dict[str, str]]:
         {
             "lang": entry["language"],
             "name": LANGUAGES[entry["language"]],
-            "url": site_url + page_path(f"docs/{uri}"),
+            "url": site_url + quote(page_path(f"docs/{uri}")),
         }
         for uri, entry in pages.items()
         if entry["source"] == source and not entry["obsolete"]
     ]
     if not available:
         return []
-    english = {"lang": "en", "name": "English", "url": site_url + page_path(f"docs/{source}")}
+    english = {
+        "lang": "en",
+        "name": "English",
+        "url": site_url + quote(page_path(f"docs/{source}")),
+    }
     return [english, *available, {**english, "lang": "x-default"}]
 
 
@@ -116,7 +121,11 @@ def language_landings(pages: dict, site_url: str) -> list[dict[str, str]]:
             uri = localized_uri(language, source)
             if uri in pages and not pages[uri]["obsolete"]:
                 landings.append(
-                    {"lang": language, "name": name, "url": site_url + page_path(f"docs/{uri}")}
+                    {
+                        "lang": language,
+                        "name": name,
+                        "url": site_url + quote(page_path(f"docs/{uri}")),
+                    }
                 )
                 break
     return landings
@@ -128,30 +137,32 @@ def _link_target(target: str, entry: dict, pages: dict, site_url: str, *, banner
         if not banner:
             # The producer chooses English when a translated anchor is absent.
             return target
-        source = target[len(BLOB + "docs/") :]
+        source = unquote(target[len(BLOB + "docs/") :])
     elif target.startswith(BLOB + "i18n/"):
-        parts = target[len(BLOB + "i18n/") :].split("/", 2)
+        parts = unquote(target[len(BLOB + "i18n/") :]).split("/", 2)
         if len(parts) != 3 or parts[1] != "docs":
             return target
         language, _, source = parts
     elif target and not re.match(r"(?:[a-zA-Z][\w+.-]*:|/)", target):
-        source = posixpath.normpath(posixpath.join(posixpath.dirname(entry["source"]), target))
+        source = posixpath.normpath(
+            posixpath.join(posixpath.dirname(entry["source"]), unquote(target))
+        )
         if source.startswith("../"):
             repository = posixpath.normpath(posixpath.join("docs", source))
             translated = f"i18n/{language}/{repository}"
-            return BLOB + (translated if (ROOT / translated).is_file() else repository)
+            return BLOB + quote(translated if (ROOT / translated).is_file() else repository)
     else:
         return target
     uri = localized_uri(language, source)
     if not banner and uri in pages:
-        return site_url + page_path(f"docs/{uri}")
+        return site_url + quote(page_path(f"docs/{uri}"))
     if not (ROOT / "docs" / source).is_file():
         return target
     if not source.endswith(".md"):
-        return site_url + source
+        return site_url + quote(source)
     if banner or uri not in pages:
         uri = source
-    return site_url + page_path(f"docs/{uri}")
+    return site_url + quote(page_path(f"docs/{uri}"))
 
 
 def translated_markdown(markdown: str, entry: dict, pages: dict, site_url: str) -> str:
@@ -216,12 +227,12 @@ def on_post_build(config):
             Path(entry["path"]).read_text(encoding="utf-8"), entry, pages, config.site_url
         )
         if entry["stale"] and not entry["obsolete"]:
-            source_url = config.site_url + page_path(f"docs/{entry['source']}")
+            source_url = config.site_url + quote(page_path(f"docs/{entry['source']}"))
             body = (
                 "> The English source has changed since this machine translation. "
                 f"Read the [English page]({source_url}) for the current instructions.\n\n{body}"
             )
-        text = _with_source(body, config.site_url, uri)
+        text = _with_source(body, config.site_url, quote(uri))
         places = [site / uri, site / page_path(f"docs/{uri}") / "index.html.md"]
         if uri.endswith("/index.md"):
             places.append(site / f"{uri[: -len('/index.md')]}.md")

@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote
 
 import pytest
 
@@ -133,7 +134,9 @@ def test_indexnow_maps_translation_paths_and_omits_readme():
         )
         == "es/getting-started/quickstart/"
     )
-    assert indexnow.page_url("i18n/es/docs/getting-started/quickstart.md") is None
+    assert indexnow.page_url("i18n/es/docs/getting-started/quickstart.md") == (
+        indexnow.SITE + "es/getting-started/quickstart/"
+    )
     assert indexnow.page_url("i18n/ja/README.md") is None
     assert indexnow.page_url("i18n/unknown/docs/page.md") is None
 
@@ -506,7 +509,7 @@ def test_relative_translated_readme_stays_on_repository_in_html_and_aliases(
     assert set(pages) == {uri}
 
 
-def test_default_site_publishes_only_japanese_and_keeps_other_artifacts(tmp_path, monkeypatch):
+def test_default_site_publishes_all_five_locales_and_keeps_artifacts(tmp_path, monkeypatch):
     from scripts.docs_site import indexnow
 
     blob = _source(tmp_path, "use-cases/index.md")
@@ -515,20 +518,104 @@ def test_default_site_publishes_only_japanese_and_keeps_other_artifacts(tmp_path
         _translation(tmp_path, language, "use-cases/index.md", blob)
     monkeypatch.setattr(indexnow, "DOCS", tmp_path / "docs")
     pages = locales.translations(tmp_path)
-    assert set(pages) == {"ja/use-cases/index.md"}
+    assert set(pages) == {f"{language}/use-cases/index.md" for language in locales.LANGUAGES}
     assert {a["lang"] for a in locales.alternates("use-cases/index.md", pages, URL)} == {
         "en",
-        "ja",
+        *locales.LANGUAGES,
         "x-default",
     }
     assert locales.language_landings(pages, URL) == [
-        {"lang": "ja", "name": "日本語", "url": URL + "ja/use-cases/"}
+        {"lang": language, "name": name, "url": URL + language + "/use-cases/"}
+        for language, name in locales.LANGUAGES.items()
     ]
-    assert indexnow.every_page() == sorted(
-        indexnow.SITE + suffix for suffix in ("", "use-cases/", "ja/use-cases/")
+    every = sorted(
+        indexnow.SITE + suffix
+        for suffix in (
+            "",
+            "use-cases/",
+            *(language + "/use-cases/" for language in locales.LANGUAGES),
+        )
     )
-    for language in ("zh-CN", "ko", "pt-BR", "es"):
+    assert indexnow.every_page() == every
+    for language in locales.LANGUAGES:
         path = f"i18n/{language}/docs/use-cases/index.md"
         assert (tmp_path / path).is_file()
-        assert indexnow.page_url(path) is None
-        assert indexnow.urls_for([path]) == []
+        assert indexnow.page_url(path) == indexnow.SITE + language + "/use-cases/"
+        assert indexnow.urls_for([path]) == every
+
+
+@pytest.mark.parametrize("source", ["use-cases/agent-memory.md", "use-cases/index.md"])
+@pytest.mark.parametrize("target", ["space name.md", "日本語 guide.md", "percent%25 guide.md"])
+def test_encoded_translated_links_keep_destinations_in_every_markdown_alias(
+    tmp_path, monkeypatch, source, target
+):
+    blob = _source(tmp_path, source)
+    _translation(tmp_path, "ja", source, blob)
+    target_source = "use-cases/" + target
+    target_blob = _source(tmp_path, target_source, '# Target\n\n<a id="beta"></a>\n')
+    _translation(tmp_path, "ja", target_source, target_blob)
+    target_path = tmp_path / "i18n/ja/docs" / target_source
+    target_path.write_text(target_path.read_text() + '\n<a id="beta"></a>\n')
+    path = tmp_path / "i18n/ja/docs" / source
+    path.write_text(
+        path.read_text() + f"\n[relative]({quote(target)}#beta) "
+        f"[absolute]({locales.BLOB}i18n/ja/docs/{quote(target_source)}#beta) "
+        f"[English]({locales.BLOB}docs/{quote(target_source)}#beta)\n"
+    )
+    monkeypatch.setattr(locales, "ROOT", tmp_path)
+    pages = locales.translations(tmp_path)
+    uri = "ja/" + source
+    page = SimpleNamespace(file=SimpleNamespace(src_uri=uri), meta={})
+    config = SimpleNamespace(
+        extra={"locale_pages": pages}, site_url=URL, site_dir=tmp_path / "site"
+    )
+    expected = URL + "ja/use-cases/" + quote(target.removesuffix(".md")) + "/#beta"
+    html_markdown = locales.on_page_markdown(path.read_text(), page, config, None)
+    locales.on_post_build(config)
+    aliases = [uri, locales.page_path("docs/" + uri) + "index.html.md"]
+    if source.endswith("/index.md"):
+        aliases.append("ja/use-cases.md")
+    for output in [html_markdown, *((config.site_dir / alias).read_text() for alias in aliases)]:
+        assert f"[relative]({expected})" in output
+        assert f"[absolute]({expected})" in output
+        assert f"[English]({locales.BLOB}docs/{quote(target_source)}#beta)" in output
+
+
+@pytest.mark.parametrize("name", ["space name.md", "日本語 guide.md"])
+def test_encoded_english_source_banner_and_stale_alias_keep_source_url(tmp_path, monkeypatch, name):
+    from scripts.docs_site import indexnow
+
+    source = "use-cases/" + name
+    blob = _source(tmp_path, source)
+    _translation(tmp_path, "ja", source, blob)
+    path = tmp_path / "i18n/ja/docs" / source
+    path.write_text(
+        f"<!-- i18n: source=docs/{source} blob={blob} model=test -->\n"
+        f"> [English]({locales.BLOB}docs/{quote(source)})\n\n# Page\n"
+    )
+    _source(tmp_path, source, "# Changed\n")
+    monkeypatch.setattr(locales, "ROOT", tmp_path)
+    pages = locales.translations(tmp_path)
+    uri = "ja/" + source
+    page = SimpleNamespace(file=SimpleNamespace(src_uri=uri), meta={})
+    config = SimpleNamespace(
+        extra={"locale_pages": pages}, site_url=URL, site_dir=tmp_path / "site"
+    )
+    expected = URL + "use-cases/" + quote(name.removesuffix(".md")) + "/"
+    monkeypatch.setattr(indexnow, "DOCS", tmp_path / "docs")
+    assert f"[English]({expected})" in locales.on_page_markdown(
+        path.read_text(), page, config, None
+    )
+    localized = URL + "ja/use-cases/" + quote(name.removesuffix(".md")) + "/"
+    assert [a["url"] for a in page.meta["alternates"]] == [expected, localized, expected]
+    site_suffix = "use-cases/" + quote(name.removesuffix(".md")) + "/"
+    assert indexnow.page_url("i18n/ja/docs/" + source) == indexnow.SITE + "ja/" + site_suffix
+    assert indexnow.every_page() == sorted(
+        [indexnow.SITE + site_suffix, indexnow.SITE + "ja/" + site_suffix]
+    )
+    locales.on_post_build(config)
+    for alias in (uri, locales.page_path("docs/" + uri) + "index.html.md"):
+        output = (config.site_dir / alias).read_text()
+        assert f"[English]({expected})" in output
+        assert f"Read the [English page]({expected})" in output
+        assert f"> Source: {localized} (Markdown: {URL}{quote(uri)})" in output
