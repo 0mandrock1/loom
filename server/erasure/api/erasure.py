@@ -93,38 +93,28 @@ class ErasureRequestOutput(BaseModel):
     # `completed`, or `failed` when a step or the residue check failed;
     # the recovery worker retries a failed saga.
     status: ErasureStatus
-    # One entry per saga step with the rows it touched; a step done by an earlier attempt
-    # reads `rows_affected` 0 and a `skipped` note. Marked mirror receipts return zero
-    # counts for every caller; these placeholders do not prove no rows remain.
-    # Their step lists are empty so a failed stage discloses no cause.
+    # Per-step row counts; empty for a withheld mirror receipt, disclosing no failed stage.
+    # A step done by an earlier attempt reads `rows_affected` 0 and a `skipped` note.
     steps: list[_ErasureStepResult]
     # When the saga was registered (UTC).
     requested_at: datetime
     # When the saga reached its terminal state (UTC); `None` while it runs.
     completed_at: datetime | None = None
-    # Verified forgetting: live rows and bucket objects the post-erasure
-    # census still found in scope, per substrate; 0 / {} on a completed saga.
+    # Live residue count; zero for a withheld mirror receipt, so zero alone does not prove absence.
     residue_count: int = 0
-    # Rows still live per table after the saga, only tables with a non-zero count (the
-    # Postgres authority's under `pg:<table>`), and the bucket objects left, under the key
-    # `objects.document_originals`; `{}` on success.
+    # Nonzero live counts by substrate; `{}` for a withheld mirror receipt does not prove absence.
+    # Postgres tables use `pg:<table>`, bucket objects `objects.document_originals`.
     residue: dict[str, int] = Field(default_factory=dict)
-    # When the residue census ran (UTC); `None` if it never ran or left a store uncounted
-    # (the Postgres authority or the bucket, which the server log names); `residue` then
-    # holds what it did count. Withheld mirror receipts also return `None`, with
-    # zero counts and empty residue; only status/list to a flat platform admin
-    # expose their evidence.
+    # Census completion time (UTC), or `None` when incomplete, never run or withheld;
+    # only status/list to a flat platform admin expose marked evidence.
     verified_at: datetime | None = None
-    # The receipt: every count of this run's census, zeros included; `None` when no census
-    # counted every store (none ran, or one left a store uncounted).
+    # Complete census counts including zeros, or `None` when unavailable or withheld.
     census: dict[str, int] | None = None
     # The scope's delete-or-tombstone mode (a single namespace's is tombstone whatever
     # was asked); a scope that holds a mirror is deleted whatever this says.
     purge: bool = False
-    # Why a failed saga failed, `""` otherwise: `<step>: <error>` or a bare `<error>`
-    # outside a step, where `<error>` is the exception's kind or a Loom error's
-    # `<CODE>: <message>`, or `verify.residue: ErasureResidueError: residue after
-    # erasure: {table: n}`. Withheld mirror receipts use `ERASURE_FAILED` for every cause.
+    # Failure reason, or `""` on success; withheld mirror receipts use `ERASURE_FAILED`
+    # for every cause. Ordinary reasons name the step and exception kind or Loom error.
     failure_reason: str = ""
     # Names of the steps finished so far, sorted; empty for a withheld mirror receipt.
     steps_completed: list[str] = Field(default_factory=list)
@@ -161,26 +151,18 @@ class ErasureStatusOutput(BaseModel):
     requested_at: datetime | None = None
     # When the saga reached its terminal state (UTC); `None` while in progress.
     completed_at: datetime | None = None
-    # Why a failed saga failed, `None` otherwise: a reason `erasure.request` names, or
-    # `max_attempts (N) exceeded` once recovery gave up, then `; last: <reason>` if any;
-    # `the saga failed; the error is in the server log` for a reason in neither shape.
-    # Withheld mirror receipts use `ERASURE_FAILED` for every cause.
+    # Failure reason, or `None` without a failure; withheld mirror receipts use
+    # `ERASURE_FAILED` for every cause. Ordinary reasons name the step, error or recovery limit.
     failure_reason: str | None = None
-    # Verified forgetting.
+    # Live residue count; zero for a withheld mirror receipt, so zero alone does not prove absence.
     residue_count: int = 0
-    # Rows still live per table at the last census (the Postgres authority's under
-    # `pg:<table>`), and the bucket objects left, under the key
-    # `objects.document_originals`; `{}` when none.
+    # Nonzero live counts by substrate; `{}` for a withheld mirror receipt does not prove absence.
+    # Postgres tables use `pg:<table>`, bucket objects `objects.document_originals`.
     residue: dict[str, int] = Field(default_factory=dict)
-    # When the last residue census ran (UTC); `None` if it has not run or left a store
-    # uncounted (the Postgres authority or the bucket, which the server log names);
-    # `residue` then holds what it did count. A mirror receipt withheld from this
-    # reader also returns `None`, zero counts and empty residue; these placeholders
-    # do not prove verified absence. A flat platform admin retains the full receipt.
+    # Census completion time (UTC), or `None` when incomplete, never run or withheld;
+    # a flat platform admin retains marked evidence.
     verified_at: datetime | None = None
-    # The receipt: every count of the latest run's census, zeros included; `None` when the
-    # latest row holds no census that counted every store (a run in progress, none ran, one
-    # left a store uncounted, or a build that keeps no census wrote the row).
+    # Complete census counts including zeros, or `None` when unavailable or withheld.
     census: dict[str, int] | None = None
     # The scope's delete-or-tombstone mode (a single namespace's is tombstone whatever
     # was asked); a scope that holds a mirror is deleted whatever this says.
