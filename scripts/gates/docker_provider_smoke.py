@@ -59,9 +59,19 @@ def control(compose: list[str], failed_model: str) -> None:
     run(*compose, "exec", "-T", "provider-smoke", "python", "-c", script)
 
 
-def data_check(compose: list[str], *args: str) -> None:
+def data_check(compose: list[str], *args: str) -> list[dict] | None:
     source = (ROOT / "scripts/gates/docker_provider_data.py").read_text()
+    if args[0] == "workers":
+        result = subprocess.run(
+            [*compose, "exec", "-T", "loom", "python", "-", *args],
+            input=source,
+            text=True,
+            check=True,
+            capture_output=True,
+        )
+        return json.loads(result.stdout)
     run(*compose, "exec", "-T", "loom", "python", "-", *args, input=source, text=True)
+    return None
 
 
 def dashboard_action(base: str, action: str, *args: str) -> dict:
@@ -105,6 +115,7 @@ def wait_admission(base: str) -> None:
 def smoke_providers(base: str, compose: list[str]) -> None:
     override = Path(compose[-1])
     configuration = json.loads(override.read_text())
+    # Match serve.sh's finite request grace so the lifespan fits Compose's stop grace.
     configuration["services"]["loom"]["entrypoint"] = [
         "python",
         "-m",
@@ -116,6 +127,8 @@ def smoke_providers(base: str, compose: list[str]) -> None:
         "7777",
         "--workers",
         "2",
+        "--timeout-graceful-shutdown",
+        "10",
     ]
     configuration["services"]["loom"]["volumes"] = [
         f"{ROOT / 'tests/fixtures/docker_provider_app.py'}:/app/docker_provider_app.py:ro"
@@ -171,15 +184,19 @@ def smoke_providers(base: str, compose: list[str]) -> None:
 
     control(compose, "")
     dashboard_action(base, "retry")
-    # SIGKILL exercises persistent process proofs and ambiguous-effect recovery,
-    # not just an orderly shutdown. Restart only this generated stack's Loom.
-    run(*compose, "kill", "-s", "SIGKILL", "loom")
-    run(*compose, "up", "-d", "--wait", "--wait-timeout", "180", "loom")
+    # Keep the supervisor's PID namespace: a different namespace cannot certify
+    # death. A live worker retires the exact crashed worker after its queries end.
+    data_check(compose, "crash-worker")
     status = wait_status(base, lambda row: row["pending"] is None)
     assert status["embedding_model"] == "docker-smoke-16" and status["embedding_dimensions"] == 16
     wait_admission(base)
     data_check(compose, "docker-smoke-16", "16")
+    workers = data_check(compose, "workers")
+    assert workers is not None and len(workers) == 2
     run(*compose, "up", "-d", "--force-recreate", "--wait", "--wait-timeout", "180", "loom")
+    # Recreation is graceful; prove the captured workers actually retired instead
+    # of treating Docker's container replacement as process-death evidence.
+    data_check(compose, "retired", json.dumps(workers))
     status = request(base, "/v1/admin/models")
     assert status["source"] == "dashboard" and status["embedding_model"] == "docker-smoke-16"
     wait_admission(base)
