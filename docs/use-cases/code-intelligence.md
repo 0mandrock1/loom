@@ -103,11 +103,12 @@ placeholders below with your organization, indexed namespace and qualified funct
    and `confidence`. Verify that the source at that tier's recorded commit contains
    the direct call; a reference to the name alone does not establish a call. If
    `ambiguous` is true, choose the intended qualified name from `candidates` first.
+
 3. Call `loom_op` again with `op: "code.impact"` and
    `arguments: {"org": "<org>", "namespace": "<indexed namespace>", "name": "<qualified function name>", "depth": 1, "per_hop_limit": 20}`.
    Look for the checked caller in `impacted_symbols`: `qualified_name`, `path`,
-   `hop: 1` and `tier`. This symbol-shaped request follows one function; `files`
-   would seed every function in those files. `impacted_tests` lists mapped tests;
+   `hop: 1` and `tier`. This request resolves the supplied name; `files` would
+   seed every function in those files. `impacted_tests` lists mapped tests;
    the op does not execute them.
 4. Read `epistemic`, `causes`, `counts_floor` and `truncated` on both answers, and
    repeat the status request. Compare returned locations with source at the relevant
