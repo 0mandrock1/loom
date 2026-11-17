@@ -264,7 +264,7 @@ def test_a_page_that_still_differs_lets_the_others_finish(
 
     monkeypatch.setattr(t, "bedrock_client", lambda: None)
     monkeypatch.setattr(t, "translate_page", fake_page)
-    monkeypatch.setattr(t, "write_language_lines", lambda: None)
+    monkeypatch.setattr(t, "write_language_lines", lambda codes=None: None)
     monkeypatch.setattr(t, "request_chars", lambda source, lang: 1)
     with pytest.raises(
         SystemExit, match="pages not written:\ni18n/ja/README.md: still differs after a retry"
@@ -284,7 +284,7 @@ def test_a_fatal_error_after_a_differing_page_still_names_that_page(
 
     monkeypatch.setattr(t, "bedrock_client", lambda: None)
     monkeypatch.setattr(t, "translate_page", fake_page)
-    monkeypatch.setattr(t, "write_language_lines", lambda: None)
+    monkeypatch.setattr(t, "write_language_lines", lambda codes=None: None)
     monkeypatch.setattr(t, "request_chars", lambda source, lang: 1)
     with pytest.raises(SystemExit, match="Bedrock 500"):
         t.update(every=True, codes=["ja"])
@@ -313,7 +313,7 @@ def test_a_fatal_error_stops_the_other_pages(
 
     monkeypatch.setattr(t, "bedrock_client", lambda: None)
     monkeypatch.setattr(t, "translate_page", fake_page)
-    monkeypatch.setattr(t, "write_language_lines", lambda: None)
+    monkeypatch.setattr(t, "write_language_lines", lambda codes=None: None)
     monkeypatch.setattr(t, "request_chars", lambda source, lang: 1)
     with pytest.raises(SystemExit, match="boom"):
         t.update(every=True, codes=["ja"])
@@ -575,3 +575,44 @@ def test_a_lost_connection_is_retried_up_to_four_attempts(monkeypatch: pytest.Mo
     with pytest.raises(SystemExit, match="unreachable"):
         t.call(types.SimpleNamespace(messages=messages), "claude-sonnet-5-5", "s", [])
     assert len(messages.sent) == 4
+
+
+def test_update_cli_selects_only_rollout_languages_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[bool, list[str] | None]] = []
+    monkeypatch.setattr(t, "update", lambda every, codes: calls.append((every, codes)) or 0)
+    assert t.ROLLOUT_LANGUAGES == ("ja",)
+    assert {language.code for language in t.LANGUAGES} == {"zh-CN", "ja", "ko", "pt-BR", "es"}
+    assert t.main(["update"]) == 0
+    assert calls == [(False, ["ja"])]
+
+
+@pytest.mark.parametrize("code", ["zh-CN", "ko", "pt-BR", "es"])
+def test_update_cli_refuses_deferred_languages_before_any_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+) -> None:
+    monkeypatch.setattr(t, "update", lambda *args: pytest.fail("deferred locale reached update"))
+    with pytest.raises(SystemExit):
+        t.main(["update", "--all", "--lang", code])
+
+
+def test_language_line_maintenance_preserves_nonselected_locale_bytes(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    original = "# Loom\n\n<!-- languages -->retained<!-- /languages -->\n"
+    paths = ["README.md"] + [t.target_path(lg.code, "README.md") for lg in t.LANGUAGES]
+    for name in paths:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(original)
+    t.write_language_lines(["ja"])
+    for name in paths:
+        text = (tmp_path / name).read_text()
+        if name in {"README.md", "i18n/ja/README.md"}:
+            assert t.language_line(name) in text
+        else:
+            assert text == original

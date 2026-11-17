@@ -31,6 +31,7 @@ from scripts.i18n import lifecycle, refresh
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = "i18n"
 REPO_URL = "https://github.com/ClickHouse/loom"
+ROLLOUT_LANGUAGES = ("ja",)
 
 
 def sources() -> tuple[str, ...]:
@@ -677,8 +678,11 @@ def translate_page(source: str, lang: Language, client: Any, spend: Spend) -> No
     print(f"verified {path}  (${spend.usd:.2f} so far)", flush=True)
 
 
-def write_language_lines() -> None:
+def write_language_lines(codes: list[str] | None = None) -> None:
+    selected = None if codes is None else {target_path(code, "README.md") for code in codes}
     for path in language_lines_differ():
+        if selected is not None and path != "README.md" and path not in selected:
+            continue
         file = ROOT / path
         text = file.read_text()
         match = LANGUAGE_LINE.search(text)
@@ -786,7 +790,7 @@ def update(every: bool = False, codes: list[str] | None = None) -> int:
     spend = Spend(model, cap)
     written = 0
     failed: list[str] = []
-    write_language_lines()
+    write_language_lines(codes)
     try:
         client = bedrock_client() if work else None
         for index, (source, lang) in enumerate(work):
@@ -804,7 +808,7 @@ def update(every: bool = False, codes: list[str] | None = None) -> int:
     finally:
         # Preserve verified progress even when a later page fails.
         lifecycle.activate_ready(codes)
-        removed, blocked = lifecycle.retire_obsolete()
+        removed, blocked = lifecycle.retire_obsolete(codes)
         print(f"obsolete_removed={removed} obsolete_deferred={blocked}")
         print(
             f"translated={written} failed={len(failed)} deferred={deferred} "
@@ -834,7 +838,10 @@ def main(argv: list[str] | None = None) -> int:
         return check(args.skip_stale)
     if args.skip_stale:
         parser.error("--skip-stale goes with check")
-    return update(args.all, args.lang)
+    codes = args.lang if args.lang is not None else list(ROLLOUT_LANGUAGES)
+    if not set(codes) <= set(ROLLOUT_LANGUAGES):
+        parser.error("--lang is outside the active translation rollout")
+    return update(args.all, codes)
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ on:
         type: boolean
         default: false
       languages:
-        description: Approved language codes, separated by spaces (empty for approved subset)
+        description: Selected Japanese rollout codes (empty for configured subset)
         type: string
         default: ""
 

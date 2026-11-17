@@ -380,3 +380,147 @@ def test_fallback_validation_checks_english_fragments_but_excludes_banner_and_ex
         lc.link_problems() == []
     )  # Missing original-source provenance is distinct from body links.
     assert lc.retire_obsolete() == (1, 0)
+
+
+def test_selected_retirement_preserves_deferred_locale_artifacts_and_cross_locale_dependencies(
+    repo: pathlib.Path,
+) -> None:
+    publish(repo, "docs/a.md")
+    es = next(lang for lang in t.LANGUAGES if lang.code == "es")
+    preserved = t.header("docs/a.md", es, t.DEFAULT_MODEL, t.blob("docs/a.md")) + "# Uno\n"
+    put(repo, "i18n/es/docs/a.md", preserved)
+    cross_locale = (
+        t.header("docs/b.md", es, t.DEFAULT_MODEL, t.blob("docs/b.md"))
+        + "[guía](../../ja/docs/a.md)\n"
+    )
+    put(repo, "i18n/es/docs/b.md", cross_locale)
+    (repo / "docs/a.md").unlink()
+    assert lc.retire_obsolete(["ja"]) == (0, 2)
+    assert (repo / "i18n/es/docs/a.md").read_text() == preserved
+    assert (repo / "i18n/es/docs/b.md").read_text() == cross_locale
+    # The retained nonselected inbound edge prevents deleting the Japanese target.
+    assert (repo / "i18n/ja/docs/a.md").exists()
+
+
+def test_selected_fallback_repair_leaves_deferred_body_bytes_untouched(repo: pathlib.Path) -> None:
+    put(repo, "docs/b.md", "# Beta\n\n[guide](a.md#alpha)\n")
+    publish(repo, "docs/b.md")
+    es = next(lang for lang in t.LANGUAGES if lang.code == "es")
+    spanish = translated("docs/b.md").replace(
+        t.header("docs/b.md", JA, t.DEFAULT_MODEL, t.blob("docs/b.md")),
+        t.header("docs/b.md", es, t.DEFAULT_MODEL, t.blob("docs/b.md")),
+        1,
+    )
+    put(repo, "i18n/es/docs/b.md", spanish)
+    publish(repo, "docs/a.md")
+    put(
+        repo,
+        "i18n/es/docs/a.md",
+        translated("docs/a.md").replace(
+            t.header("docs/a.md", JA, t.DEFAULT_MODEL, t.blob("docs/a.md")),
+            t.header("docs/a.md", es, t.DEFAULT_MODEL, t.blob("docs/a.md")),
+            1,
+        ),
+    )
+    git(repo, "mv", "docs/a.md", "docs/new.md")
+    put(repo, "docs/b.md", "# Beta\n\n[guide](new.md#alpha)\n")
+    lc.retire_obsolete(["ja"])
+    assert "[guía](a.md#alpha)" in (repo / "i18n/ja/docs/b.md").read_text()
+    assert (repo / "i18n/es/docs/b.md").read_text() == spanish
+    assert (repo / "i18n/es/docs/a.md").exists()
+
+
+def test_selected_activation_never_deletes_deferred_stale_checkpoint(repo: pathlib.Path) -> None:
+    es = next(lang for lang in t.LANGUAGES if lang.code == "es")
+    retained = t.header("docs/a.md", es, t.DEFAULT_MODEL, "0" * 40) + "# Conservado\n"
+    put(repo, "i18n/.pending/es/docs/a.md", retained)
+    assert lc.activate_ready(["ja"]) == 0
+    assert (repo / "i18n/.pending/es/docs/a.md").read_text() == retained
+
+
+def test_import_never_overwrites_existing_nonselected_published_or_checkpoint_bytes(
+    repo: pathlib.Path,
+) -> None:
+    es = next(lang for lang in t.LANGUAGES if lang.code == "es")
+    base = translated("docs/a.md").replace(
+        t.header("docs/a.md", JA, t.DEFAULT_MODEL, t.blob("docs/a.md")),
+        t.header("docs/a.md", es, t.DEFAULT_MODEL, t.blob("docs/a.md")),
+        1,
+    )
+    incoming = base + "\nTexto remoto.\n"
+    sha = pending_branch(repo, "i18n/es/docs/a.md", incoming)
+    published = base.replace(t.blob("docs/a.md"), "0" * 40)
+    checkpoint = base + "\nTexto conservado.\n"
+    put(repo, "i18n/es/docs/a.md", published)
+    put(repo, "i18n/.pending/es/docs/a.md", checkpoint)
+    with pytest.raises(SystemExit, match="pending replacement refused"):
+        t.import_pending(sha, ["ja"])
+    assert (repo / "i18n/es/docs/a.md").read_text() == published
+    assert (repo / "i18n/.pending/es/docs/a.md").read_text() == checkpoint
+
+
+@pytest.mark.parametrize("source_state", ["stale", "deleted"])
+@pytest.mark.parametrize("incoming_path", ["i18n/es/docs/a.md", "i18n/.pending/es/docs/a.md"])
+def test_replacing_pending_branch_preserves_remote_only_deferred_stale_or_orphan_bytes(
+    repo: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_state: str,
+    incoming_path: str,
+) -> None:
+    es = next(lang for lang in t.LANGUAGES if lang.code == "es")
+    retained = (
+        t.header("docs/a.md", es, t.DEFAULT_MODEL, t.blob("docs/a.md"))
+        + '<a id="alpha"></a>\n# Uno\n\nTexto conservado.\n'
+    )
+    previous = pending_branch(repo, incoming_path, retained)
+    if source_state == "deleted":
+        (repo / "docs/a.md").unlink()
+    else:
+        put(repo, "docs/a.md", "# Alpha\n\nContenido cambiado.\n")
+    git(repo, "add", "docs")
+    git(repo, "commit", "-qm", "English lifecycle")
+    monkeypatch.setenv("LOOM_I18N_MAX_USD", "0")
+    monkeypatch.setattr(
+        t, "bedrock_client", lambda: pytest.fail("archival data must not regenerate")
+    )
+    assert t.import_pending(previous, ["ja"]) == 1
+    archive = "i18n/.pending/es/docs/a.md"
+    assert (repo / archive).read_bytes() == retained.encode()
+    assert not (repo / "i18n/es/docs/a.md").exists()
+    assert "i18n/es/docs/a.md" not in lc.current_checkpoints()
+    assert t.update(codes=["ja"]) == 0
+    assert (repo / archive).read_bytes() == retained.encode()
+    git(repo, "add", "i18n")
+    tree = git(repo, "write-tree")
+    replacement = git(
+        repo,
+        "commit-tree",
+        tree,
+        "-p",
+        git(repo, "rev-parse", "HEAD"),
+        "-m",
+        "Prepared Japanese batch",
+    )
+    git(repo, "update-ref", "refs/heads/i18n/update", replacement, previous)
+    assert (
+        subprocess.check_output(["git", "show", f"i18n/update:{archive}"], cwd=repo)
+        == retained.encode()
+    )
+
+
+@pytest.mark.parametrize("damage", ["banner", "model"])
+def test_deferred_archival_refuses_unknown_ownership_metadata(
+    repo: pathlib.Path,
+    damage: str,
+) -> None:
+    es = next(lang for lang in t.LANGUAGES if lang.code == "es")
+    text = t.header("docs/a.md", es, t.DEFAULT_MODEL, "0" * 40) + "# Uno\n"
+    text = (
+        text.replace("Machine-translated", "Altered")
+        if damage == "banner"
+        else text.replace(t.DEFAULT_MODEL, "unknown-model")
+    )
+    sha = pending_branch(repo, "i18n/.pending/es/docs/a.md", text)
+    with pytest.raises(SystemExit, match="ownership/banner/model"):
+        t.import_pending(sha, ["ja"])
+    assert not (repo / "i18n/.pending/es/docs/a.md").exists()

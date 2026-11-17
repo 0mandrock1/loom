@@ -195,7 +195,7 @@ def link_failures(extra: dict[str, str] | None = None) -> list[tuple[str, str, s
     return problems
 
 
-def repair_english_fallbacks() -> None:
+def repair_english_fallbacks(codes: list[str] | None = None) -> None:
     """Keep deleted English body links on an owned published target that retains the anchor."""
     inventory = frozenset(t.sources())
     for path in output_files():
@@ -204,7 +204,7 @@ def repair_english_fallbacks() -> None:
         text = (t.ROOT / path).read_text()
         start = body_start(path, text)
         owned = owner(path, text)
-        if not start or not owned:
+        if not start or not owned or (codes is not None and owned[1].code not in codes):
             continue
 
         def fix(prose: str, path: str = path, language: str = owned[1].code) -> str:
@@ -280,11 +280,17 @@ def present_problems() -> list[str]:
     return problems
 
 
-def retire_obsolete() -> tuple[int, int]:
+def retire_obsolete(codes: list[str] | None = None) -> tuple[int, int]:
     """Remove only owned obsolete pages with no inbound dependency from retained output."""
-    repair_english_fallbacks()
+    repair_english_fallbacks(codes)
     obsolete = t.orphans()
-    candidates = {p for p in obsolete if regular(p) and owner(p, (t.ROOT / p).read_text())}
+    candidates = {
+        p
+        for p in obsolete
+        if regular(p)
+        and owner(p, (t.ROOT / p).read_text())
+        and (codes is None or p.split("/", 2)[1] in codes)
+    }
     inbound: dict[str, set[str]] = {p: set() for p in candidates}
     for path in output_files():
         if not regular(path) or not path.endswith(".md"):
@@ -370,7 +376,7 @@ def activate_ready(codes: list[str] | None = None) -> int:
         destination.write_text(text)
         (t.ROOT / checkpoint_path(path)).unlink()
     for path in checkpoint_files():
-        if regular(path):
+        if regular(path) and (codes is None or publication_path(path).split("/", 2)[1] in codes):
             text = (t.ROOT / path).read_text()
             if owner(path, text) and candidate_problems(path, text):
                 (t.ROOT / path).unlink()
@@ -379,12 +385,7 @@ def activate_ready(codes: list[str] | None = None) -> int:
     return len(ready)
 
 
-def import_pending(ref: str, codes: list[str] | None = None) -> int:
-    """Read only blob objects, never branch code; current main output wins."""
-    require_owned_outputs()
-    refresh.clear_merged()
-    if not re.fullmatch(r"[0-9a-f]{40}", ref):
-        raise SystemExit("pending ref must be an exact commit SHA")
+def pending_blobs(ref: str) -> dict[str, str]:
     tree = subprocess.run(
         ["git", "ls-tree", "-rz", ref, "--", t.OUT_DIR], cwd=t.ROOT, check=True, capture_output=True
     ).stdout
@@ -412,11 +413,46 @@ def import_pending(ref: str, codes: list[str] | None = None) -> int:
             ["git", "cat-file", "blob", oid], cwd=t.ROOT, check=True, capture_output=True
         ).stdout
         blobs[path] = data.decode()
+    return blobs
+
+
+def preserve_deferred(path: str, text: str) -> bool:
+    """Retain owned deferred data without granting it current-page validation or activation."""
+    stamp = t.STAMP.match(text)
+    problems = candidate_problems(path, text, current=False)
+    if problems or stamp is None or stamp[3] not in t.PRICES:
+        raise SystemExit(f"{path}: refusing deferred data without verified ownership/banner/model")
+    published = publication_path(path)
+    if regular(published) and (t.ROOT / published).read_bytes() == text.encode():
+        return False
+    destination = checkpoint_path(published)
+    file = t.ROOT / destination
+    if file.exists() or file.is_symlink():
+        if regular(destination) and file.read_bytes() == text.encode():
+            return False
+        raise SystemExit(
+            f"{destination}: cannot replace differing deferred data; pending replacement refused"
+        )
+    if any(parent.is_symlink() for parent in file.parents):
+        raise SystemExit(f"{destination}: refusing symlink archive destination")
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_bytes(text.encode())
+    return True
+
+
+def import_pending(ref: str, codes: list[str] | None = None) -> int:
+    """Read only blob objects, never branch code; current main output wins."""
+    require_owned_outputs()
+    refresh.clear_merged()
+    if not re.fullmatch(r"[0-9a-f]{40}", ref):
+        raise SystemExit("pending ref must be an exact commit SHA")
+    blobs = pending_blobs(ref)
     for path, text in blobs.items():
         if path != refresh.PATH and owner(path, text) is None:
             raise SystemExit(f"{path}: refusing unknown pending output")
     force = refresh.import_receipt(blobs[refresh.PATH], blobs) if refresh.PATH in blobs else set()
     proposed: dict[str, str] = {}
+    preserved = 0
     model = t.os.environ.get("LOOM_I18N_MODEL", t.DEFAULT_MODEL)
     job = refresh.plan()
     for path, text in blobs.items():
@@ -426,6 +462,9 @@ def import_pending(ref: str, codes: list[str] | None = None) -> int:
         if owned is None:
             raise SystemExit(f"{path}: refusing unknown pending output")
         source, lang = owned
+        if codes is not None and lang.code not in codes:
+            preserved += preserve_deferred(path, text)
+            continue
         path = publication_path(path)
         if source not in t.sources():
             continue
@@ -447,5 +486,5 @@ def import_pending(ref: str, codes: list[str] | None = None) -> int:
     for path, text in proposed.items():
         stage(path, text)
     activate_ready(codes)
-    print(f"reused={len(proposed)}")
-    return len(proposed)
+    print(f"reused={len(proposed)} preserved_deferred={preserved}")
+    return len(proposed) + preserved

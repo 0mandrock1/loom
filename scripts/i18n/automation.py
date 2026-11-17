@@ -151,6 +151,8 @@ def approved_languages(codes: list[str] | None = None) -> list[str]:
     known = {lang.code for lang in t.LANGUAGES}
     if not set(approved) <= known:
         raise ValueError("LOOM_I18N_LANGUAGES contains an unknown language")
+    if not set(approved) <= set(t.ROLLOUT_LANGUAGES):
+        raise ValueError("configured language is outside the Japanese rollout")
     if codes is not None and not set(codes) <= set(approved):
         raise ValueError("requested language lacks repository approval")
     return sorted(set(approved if codes is None else codes))
@@ -199,12 +201,12 @@ def generated_path(path: str, text: str, *, deleted: bool) -> bool:
     language = next((item for item in t.LANGUAGES if item.code == parts[1]), None)
     if language is None or mapped != t.target_path(language.code, source):
         return False
-    if not (source == "README.md" or source.startswith("docs/") and source.endswith(".md")):
-        return False
-    if ".." in PurePosixPath(source).parts or model not in t.PRICES:
+    if not t.lifecycle.source_path(source) or model not in t.PRICES:
         return False
     if not text.startswith(t.header(source, language, model, blob)):
         return False
+    if checkpoint and language.code not in t.ROLLOUT_LANGUAGES and not deleted:
+        return True
     return (
         (checkpoint or source not in t.sources())
         if deleted
@@ -265,7 +267,8 @@ def publish() -> None:
             "-p",
             base,
             input_text=(
-                f"Translations follow {base[:9]}\n\nSigned-off-by: {BOT_NAME} <{BOT_EMAIL}>\n"
+                f"Japanese translations follow {base[:9]}\n\n"
+                f"Signed-off-by: {BOT_NAME} <{BOT_EMAIL}>\n"
             ),
         )
     validate_changes(base, candidate)
@@ -276,7 +279,7 @@ def publish() -> None:
             f"{candidate}:{PENDING}",
             f"--force-with-lease={PENDING}:{previous or ''}",
         )
-    publish_pr(f"Translations follow {base[:9]}")
+    publish_pr(f"Japanese translations follow {base[:9]}")
     command(
         "gh",
         "workflow",
@@ -300,7 +303,8 @@ Machine translations follow the English source after its merge.
 ### Scope and risk
 
 This generated-data batch preserves pending coverage and link dependencies. Missing
-or stale pages remain queued for bounded batches. No executable source changes.
+or stale Japanese pages remain queued for bounded batches. Deferred locale artifacts
+stay intact. No executable source changes.
 
 ### Compatibility, rollout and rollback
 
@@ -406,6 +410,19 @@ def sync_site(repository: str) -> None:
     command("gh", "workflow", "run", "docs-site.yml", "--ref", "main")
 
 
+def rollout_changes_allowed(base: str, candidate: str, codes: list[str]) -> bool:
+    """Retain deferred data; new hidden copies may preserve an earlier pending batch."""
+    changed = git("diff", "--name-status", "--no-renames", "-z", base, candidate).split("\0")[:-1]
+    for status, path in zip(changed[::2], changed[1::2], strict=True):
+        if not path.startswith("i18n/") or path == refresh.PATH:
+            continue
+        checkpoint = path.startswith("i18n/.pending/")
+        published = t.lifecycle.publication_path(path)
+        if published.split("/", 2)[1] not in codes and (not checkpoint or status != "A"):
+            return False
+    return True
+
+
 def finalize() -> None:
     """Merge only an exact successful hosted CI head, with repository protections."""
     repository = os.environ["GITHUB_REPOSITORY"]
@@ -453,14 +470,7 @@ def finalize() -> None:
         return
     validate_changes(base, sha)
     approved = approved_languages()
-    changed = git("diff", "--name-status", "--no-renames", "-z", base, sha).split("\0")[:-1]
-    if any(
-        status != "D"
-        and path.startswith("i18n/")
-        and not path.startswith("i18n/.pending/")
-        and path.split("/", 2)[1] not in approved
-        for status, path in zip(changed[::2], changed[1::2], strict=True)
-    ):
+    if not rollout_changes_allowed(base, sha, approved):
         print("Translation merge waits for the producer to apply current language approval")
         return
     # Only validated generated data enters the trusted main checkout.

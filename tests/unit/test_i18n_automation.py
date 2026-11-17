@@ -337,7 +337,16 @@ def test_finalizer_requires_nonempty_successful_checks(checks: list[dict[str, An
     ],
 )
 @pytest.mark.parametrize("site_raises", [False, True])
-@pytest.mark.parametrize("published_code,approved", [("ja", "ja"), ("es", "ja"), ("es", "")])
+@pytest.mark.parametrize(
+    "published_code,approved,deleted",
+    [
+        ("ja", "ja", False),
+        ("es", "ja", False),
+        ("es", "", False),
+        ("es", "ja", True),
+        ("ja", "ja", True),
+    ],
+)
 def test_hosted_finalizer_respects_reviews_and_merges_only_exact_successful_head(
     repository: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -347,10 +356,21 @@ def test_hosted_finalizer_respects_reviews_and_merges_only_exact_successful_head
     site_raises: bool,
     published_code: str,
     approved: str,
+    deleted: bool,
 ) -> None:
     output(repository, code="ko")
+    if deleted:
+        lang = next(lang for lang in a.t.LANGUAGES if lang.code == published_code)
+        path = repository / a.t.target_path(published_code, "docs/obsolete.md")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            a.t.header("docs/obsolete.md", lang, a.t.DEFAULT_MODEL, "0" * 40) + "# Original\n"
+        )
     base = commit_all()
-    output(repository, code=published_code)
+    if deleted:
+        path.unlink()
+    else:
+        output(repository, code=published_code)
     a.git("add", ".")
     sha = a.git("commit-tree", a.git("write-tree"), "-p", base, input_text="Generated\n")
     monkeypatch.setenv("GITHUB_REPOSITORY", "ClickHouse/loom")
@@ -566,7 +586,18 @@ def test_persistent_approval_selects_only_configured_languages(
     assert calls == [["ja"]]
 
 
-@pytest.mark.parametrize("approved,requested", [("unknown", None), ("ja", ["es"]), ("", ["ja"])])
+@pytest.mark.parametrize(
+    "approved,requested",
+    [
+        ("unknown", None),
+        ("ja", ["es"]),
+        ("", ["ja"]),
+        ("es", None),
+        ("zh-CN ja", None),
+        ("ko", ["ko"]),
+        ("pt-BR", None),
+    ],
+)
 def test_unapproved_or_unknown_languages_refuse_before_budget_reservation(
     monkeypatch: pytest.MonkeyPatch,
     approved: str,
@@ -601,3 +632,54 @@ def test_finalize_retries_merged_site_while_next_translation_pr_waits_for_ci(
     monkeypatch.setattr(a, "command", lambda *args: calls.append(args) or "")
     a.finalize()
     assert calls == [("gh", "workflow", "run", "docs-site.yml", "--ref", "main")]
+
+
+def test_rollout_scope_preserves_generic_language_capability() -> None:
+    assert a.t.ROLLOUT_LANGUAGES == ("ja",)
+    assert {lang.code for lang in a.t.LANGUAGES} == {"zh-CN", "ja", "ko", "pt-BR", "es"}
+
+
+@pytest.mark.parametrize("action", ["replace", "delete"])
+def test_rollout_retains_deferred_checkpoints_while_accepting_new_preservation_copies(
+    repository: Path, action: str
+) -> None:
+    base = a.git("rev-parse", "HEAD")
+    published = output(repository, code="es")
+    checkpoint = repository / "i18n/.pending/es/README.md"
+    checkpoint.parent.mkdir(parents=True)
+    published.rename(checkpoint)
+    added = commit_all()
+    assert a.rollout_changes_allowed(base, added, ["ja"])
+    if action == "replace":
+        checkpoint.write_text(checkpoint.read_text() + "\nTexto.\n")
+    else:
+        checkpoint.unlink()
+    changed = commit_all()
+    assert not a.rollout_changes_allowed(added, changed, ["ja"])
+
+
+@pytest.mark.parametrize("source", ["README.md", "docs/removed.md"])
+def test_publisher_accepts_only_owned_deferred_archives_without_current_source(
+    repository: Path, source: str
+) -> None:
+    base = a.git("rev-parse", "HEAD")
+    for code in ("es", "ja"):
+        lang = next(lang for lang in a.t.LANGUAGES if lang.code == code)
+        path = repository / a.t.lifecycle.checkpoint_path(a.t.target_path(code, source))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(a.t.header(source, lang, a.t.DEFAULT_MODEL, "0" * 40) + "# Archivo\n")
+        candidate = commit_all()
+        if code == "es":
+            a.validate_changes(base, candidate)
+            assert a.t.target_path(code, source) not in a.t.lifecycle.current_checkpoints()
+            original = path.read_text()
+            banner = lang.banner.format(url=f"{a.t.REPO_URL}/blob/main/{source}")
+            invalid = original.replace(banner, "Unknown ownership", 1)
+            assert invalid != original
+            path.write_text(invalid)
+            with pytest.raises(ValueError, match="refuses path"):
+                a.validate_changes(base, commit_all())
+            path.write_text(original)
+        else:
+            with pytest.raises(ValueError, match="refuses path"):
+                a.validate_changes(base, candidate)
