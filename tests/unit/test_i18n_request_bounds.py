@@ -133,9 +133,7 @@ def test_assembled_table_layout_is_verified_before_writing(monkeypatch, tmp_path
     monkeypatch.setattr(t, "ROOT", tmp_path)
     monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
     monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
-    monkeypatch.setattr(
-        t, "translate_text", lambda part, *args: part + "\n| Loom | Loom | Loom |\n"
-    )
+    monkeypatch.setattr(t, "translate_text", lambda part, *args: part + "| Loom | Loom | Loom |\n")
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()
@@ -180,3 +178,64 @@ def test_assembled_table_cannot_become_another_block(monkeypatch, tmp_path, cont
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()
+
+
+@pytest.mark.parametrize("context", ["quote-row-loss", "raw-pre"])
+def test_assembled_tables_preserve_nested_and_raw_html_context(monkeypatch, tmp_path, context):
+    table = "| Loom | Loom |\n| --- | --- |\n| Loom | Loom |\n"
+    if context == "quote-row-loss":
+        source = "".join("> " + line for line in table.splitlines(keepends=True))
+        reply = "> | Loom | Loom |\n> | --- | --- |\n"
+    else:
+        source, reply = table, "<pre>\n" + table + "</pre>\n"
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
+    monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
+    monkeypatch.setattr(t, "translate_text", lambda *args: reply)
+    with pytest.raises(t.TranslationDiffers, match="table"):
+        t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
+    assert not (tmp_path / "i18n").exists()
+
+
+@pytest.mark.parametrize("container", ["list", "admonition"])
+def test_assembled_tables_inside_site_containers_reject_row_loss(monkeypatch, tmp_path, container):
+    table = "| Loom | Loom |\n| --- | --- |\n| Loom | Loom |\n"
+    prefix, indent = ("- Loom\n\n", "  ") if container == "list" else ("!!! note\n\n", "    ")
+    source = prefix + "".join(indent + line for line in table.splitlines(keepends=True))
+    reply = "\n".join(source.splitlines()[:-1]) + "\n"
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
+    monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
+    monkeypatch.setattr(t, "translate_text", lambda *args: reply)
+    with pytest.raises(t.TranslationDiffers, match="table"):
+        t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
+    assert not (tmp_path / "i18n").exists()
+
+
+@pytest.mark.parametrize("container", ["plain", "quote", "list", "admonition"])
+def test_valid_table_reflow_is_written_in_each_supported_container(
+    monkeypatch, tmp_path, container
+):
+    table = "| Loom | Loom |\n| --- | --- |\n| Loom | Loom |\n"
+    prefix, indent = {
+        "plain": ("", ""),
+        "quote": ("", "> "),
+        "list": ("- Loom\n\n", "  "),
+        "admonition": ("!!! note\n\n", "    "),
+    }[container]
+    source = prefix + "".join(indent + line for line in table.splitlines(keepends=True))
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
+    monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
+    monkeypatch.setattr(
+        t,
+        "translate_text",
+        lambda part, *args: part.replace("| Loom | Loom |", "Loom | Loom").replace(
+            "| --- | --- |", "--- | ---"
+        ),
+    )
+    t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
+    assert (
+        "Loom | Loom"
+        in (tmp_path / t.target_path(t.LANGUAGES[0].code, "docs/example.md")).read_text()
+    )

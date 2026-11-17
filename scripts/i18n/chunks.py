@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import re
 from itertools import pairwise
+from xml.etree.ElementTree import Element
+
+from markdown import Markdown
+from markdown.treeprocessors import Treeprocessor
+from markdown_it import MarkdownIt
 
 FENCE = re.compile(r"^(`{3,}|~{3,})")
 # A literal comparison is prose; quoted delimiters and comments belong to their tag.
@@ -37,8 +42,6 @@ def outside_fences(text: str) -> list[tuple[str, bool]]:
 
 
 MAX_BYTES = 16_384
-_LIST = re.compile(r"^( {0,3})(?:[-+*]|\d+[.)])\s")
-_SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$")
 _TAG_NAME = re.compile(r"</?([A-Za-z][^\s/<>\"']*)")
 _BLOCK = frozenset(
     "address article aside blockquote details dialog div dl fieldset figure footer form "
@@ -95,30 +98,20 @@ def _html(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _lists(text: str, protected: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    spans = []
-    active, after_blank, offset = None, False, 0
+def _line_starts(text: str) -> list[int]:
+    starts = [0]
     for line in text.splitlines(keepends=True):
-        inside = any(a <= offset < b for a, b in protected)
-        item = None if inside else _LIST.match(line)
-        expanded = line.expandtabs(4)
-        indent = len(expanded) - len(expanded.lstrip(" "))
-        if item and (active is None or len(item[1]) <= active[1]):
-            if active is not None:
-                spans.append((active[0], offset))
-            active, after_blank = (offset, len(item[1])), False
-        elif active is not None and not inside:
-            if not line.strip():
-                after_blank = True
-            elif after_blank and indent <= active[1]:
-                spans.append((active[0], offset))
-                active, after_blank = None, False
-            else:
-                after_blank = False
-        offset += len(line)
-    if active is not None:
-        spans.append((active[0], len(text)))
-    return spans
+        starts.append(starts[-1] + len(line))
+    return starts
+
+
+def _lists(text: str) -> list[tuple[int, int]]:
+    starts = _line_starts(text)
+    return [
+        (starts[token.map[0]], starts[token.map[1]])
+        for token in MarkdownIt("commonmark").enable("table").parse(text)
+        if token.type == "list_item_open" and token.map is not None
+    ]
 
 
 def _protected(text: str) -> list[tuple[int, int]]:
@@ -130,7 +123,7 @@ def _protected(text: str) -> list[tuple[int, int]]:
         spans.append(match.span())
         masked[match.start() : match.end()] = ["\n" if c == "\n" else " " for c in match[0]]
     spans.extend(_html("".join(masked)))
-    return spans + _lists(text, spans)
+    return spans + _lists(text)
 
 
 def heading_sections(text: str) -> list[str]:
@@ -146,54 +139,17 @@ def heading_sections(text: str) -> list[str]:
     return [part.removesuffix("\n") for part in parts[:-1]] + parts[-1:]
 
 
-def _row_width(line: str) -> int:
-    prose = CODE_SPAN.sub("", line.strip())
-    prose = re.sub(r"\\.", "", prose).removeprefix("|").removesuffix("|")
-    return prose.count("|") + 1
-
-
-def _starts_block(line: str) -> bool:
-    """A new block interrupts a pipe table even without a preceding blank line."""
-    if _LIST.match(line) or re.match(r"^ {0,3}(?:>|#{1,6}(?:\s|$))", line):
-        return True
-    if re.fullmatch(r" {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})", line):
-        return True
-    raw = line.lstrip(" ")
-    if raw.startswith(("<!--", "<?", "<!")):
-        return True
-    tag = _TAG_NAME.match(raw)
-    return bool(tag and tag[1].lower() in _BLOCK)
-
-
-def _table_rows(text: str) -> dict[int, tuple[str, int]]:
-    """Row roles and cell counts preserve table boundaries as well as optional pipes."""
-    lines = outside_fences(text)
-    rows: dict[int, tuple[str, int]] = {}
-    active, delimiter, offset = False, -1, 0
-    for index, (line, fenced) in enumerate(lines):
-        role = "pipe"
-        expanded = line.expandtabs(4)
-        indent = len(expanded) - len(expanded.lstrip(" "))
-        interrupted = (not active and indent >= 4) or (
-            index != delimiter and _starts_block(expanded)
-        )
-        if fenced or not line.strip() or interrupted:
-            active = False
-            offset += len(line) + 1
+def _table_rows(text: str) -> dict[int, str]:
+    """Source row offsets from the parser; a header and delimiter stay together."""
+    starts = _line_starts(text)
+    rows = {}
+    for token in MarkdownIt("commonmark").enable("table").parse(text):
+        if token.map is None:
             continue
-        elif not active and index + 1 < len(lines) and not lines[index + 1][1]:
-            following = lines[index + 1][0]
-            if (
-                "|" in line + following
-                and _SEPARATOR.fullmatch(following)
-                and _row_width(line) == _row_width(following)
-            ):
-                active, delimiter, role = True, index + 1, "header"
-        if active and role != "header":
-            role = "delimiter" if index == delimiter else "data"
-        if not fenced and line.strip() and (active or line.lstrip().startswith("|")):
-            rows[offset] = (role, _row_width(line))
-        offset += len(line) + 1
+        if token.type == "table_open":
+            rows[starts[token.map[0] + 1]] = "delimiter"
+        elif token.type == "tr_open":
+            rows[starts[token.map[0]]] = "row"
     return rows
 
 
@@ -201,16 +157,15 @@ def _boundaries(text: str) -> list[int]:
     lines, offset, last = text.splitlines(keepends=True), 0, ""
     protected = _protected(text)
     rows = _table_rows(text)
+    items = {a for a, _ in _lists(text)}
     boundaries = [0]
-    for previous, current in pairwise(lines):
+    for previous, _current in pairwise(lines):
         offset += len(previous)
         if previous.strip():
             last = previous.strip()
         blank = not previous.strip() and not ANCHOR.fullmatch(last)
-        row = (
-            offset in rows and offset - len(previous) in rows and not _SEPARATOR.fullmatch(current)
-        )
-        if (blank or row or _LIST.match(current)) and not any(a < offset < b for a, b in protected):
+        row = offset in rows and offset - len(previous) in rows and rows[offset] != "delimiter"
+        if (blank or row or offset in items) and not any(a < offset < b for a, b in protected):
             boundaries.append(offset)
     return [*boundaries, len(text)]
 
@@ -236,5 +191,64 @@ def split(text: str) -> list[str]:
     return [part.removesuffix("\n") for part in parts[:-1]] + parts[-1:]
 
 
-def table_shape(text: str) -> list[tuple[str, int]]:
-    return list(_table_rows(text).values())
+def _layout(element: Element) -> object:
+    tags = {"thead", "tbody", "tr", "th", "td"}
+    return (
+        element.tag,
+        tuple(sorted(element.attrib.items())),
+        bool("".join(element.itertext()).strip()) if element.tag in {"th", "td"} else None,
+        tuple(_layout(child) for child in element if child.tag in tags),
+    )
+
+
+def _tables(element: Element, parents: tuple[object, ...] = ()) -> list[object]:
+    if element.tag == "table":
+        return [(parents, _layout(element))]
+    context = (*parents, (element.tag, tuple(sorted(element.attrib.items()))))
+    return [table for child in element for table in _tables(child, context)]
+
+
+class _TableShape(Treeprocessor):
+    def __init__(self, md: Markdown) -> None:
+        super().__init__(md)
+        self.tables: list[object] = []
+
+    def run(self, root: Element) -> None:
+        self.tables = _tables(root)
+
+
+def _github_tables(text: str) -> list[object]:
+    stack, tables = [], []
+    inside = False
+    for token in MarkdownIt("commonmark").enable("table").parse(text):
+        attributes = tuple(sorted(token.attrs.items()))
+        if token.type == "table_open":
+            tables.append(tuple(stack))
+            inside = True
+        if inside and token.nesting:
+            tables.append((token.type, attributes))
+        if token.type == "table_close":
+            inside = False
+        if token.nesting == 1:
+            stack.append((token.type, attributes))
+        elif token.nesting == -1:
+            stack.pop()
+    return tables
+
+
+def table_shape(text: str) -> tuple[list[object], list[object]]:
+    """Rendered table structure, including containers, rows, cells and alignment."""
+    md = Markdown(
+        extensions=[
+            "tables",
+            "admonition",
+            "attr_list",
+            "mdx_truly_sane_lists",
+            "pymdownx.tasklist",
+            "pymdownx.superfences",
+        ]
+    )
+    shape = _TableShape(md)
+    md.treeprocessors.register(shape, "translation_table_shape", 0)
+    md.convert(text)
+    return shape.tables, _github_tables(text)
