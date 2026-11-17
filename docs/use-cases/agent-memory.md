@@ -40,6 +40,28 @@ prompt tokens (excluding the one-time cost of building the memory); the accuracy
 difference is not statistically established.
 [With and without Loom](../benchmarks/results.md#with-and-without-loom)
 
+## A research assistant that remembers your reading preferences
+
+After the [quickstart](../getting-started/quickstart.md), connect Claude Desktop or
+Cursor through the dashboard's [client setup](../getting-started/connect-a-coding-agent.md#how-do-i-give-cursor-or-another-mcp-client-shared-memory).
+The tools work with the stock LLM: your chat app supplies the model that calls them.
+
+1. Tell the assistant: “Use `loom_memory_set` to save my research preference under
+   `example/research/source-policy`: include peer-reviewed papers in my reading list.”
+2. Check that the tool response contains a `memory_id`. Open **Memories** in the
+   dashboard and confirm the value and writer. If the tool refuses the write, resolve
+   its reported problem before continuing.
+3. Start a fresh chat. Tell the assistant: “Use `loom_memory_get` to read
+   `example/research/source-policy`, then tell me which sources belong in my reading list.”
+   Check that the tool returns `found: true` and the preference you saved.
+4. Ask the assistant to delete that example key when finished, then confirm the
+   dashboard no longer lists it as a live memory.
+
+The second chat reads a stored preference without the first chat's transcript. This
+checks persistence and client wiring; it does not test whether the assistant can judge
+papers or answer research questions. For searches over the papers themselves, use
+[document search](document-search.md).
+
 ## Start
 
 [Quickstart](../getting-started/quickstart.md) boots the local stack and saves a first
