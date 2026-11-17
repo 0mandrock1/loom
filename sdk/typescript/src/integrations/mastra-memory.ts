@@ -22,7 +22,7 @@ export interface LoomMemoryStorageOptions {
 
 type Entities = { thread: StorageThreadType; message: MastraDBMessage; resource: StorageResourceType };
 type Kind = keyof Entities;
-type Stored<K extends Kind> = { key: string; data: Entities[K]; hash: string };
+type Stored<K extends Kind> = { key: string; data: Entities[K]; hash: string; version: string };
 type UpdateMessages = Omit<Parameters<MemoryStorage["updateMessages"]>[0], "messages"> & {
   messages: (Omit<Partial<MastraDBMessage>, "content" | "createdAt"> & {
     id: string;
@@ -77,7 +77,7 @@ export class LoomMemoryStorage extends MemoryStorage {
   private async readKey<K extends Kind>(kind: K, key: string): Promise<Stored<K> | null> {
     const out = await this.call("memory.get", {
       memory_key: key,
-      fields: ["value", "content_sha256", "agent", "user_id", "session_id"],
+      fields: ["value", "content_sha256", "agent", "user_id", "session_id", "version_text"],
     });
     if (!out.found) return null;
     if (
@@ -97,7 +97,7 @@ export class LoomMemoryStorage extends MemoryStorage {
     if (kind === "resource" && data.id !== this.resourceId) return null;
     data.createdAt = validDate(data.createdAt);
     if (kind !== "message") (data as StorageThreadType).updatedAt = validDate(value.data.updatedAt);
-    return { key, data, hash: out.content_sha256 ?? "" };
+    return { key, data, hash: out.content_sha256 ?? "", version: out.version_text ?? "" };
   }
 
   private read<K extends Kind>(kind: K, id: string): Promise<Stored<K> | null> {
@@ -124,19 +124,30 @@ export class LoomMemoryStorage extends MemoryStorage {
     }
   }
 
+  private async remove(row: Stored<Kind>): Promise<void> {
+    if (!/^[0-9]+$/.test(row.version)) {
+      throw new Error("Loom omitted the exact version required for deletion");
+    }
+    const out = await this.call("memory.delete_version", { memory_key: row.key, version: row.version });
+    if (!out.tombstoned && out.found !== false) {
+      throw new Error("Mastra entity changed during deletion; retry the operation");
+    }
+  }
+
   private async change<K extends Kind>(
     kind: K,
     id: string,
     update: (data: Entities[K]) => Entities[K] | undefined,
+    create?: () => Entities[K],
   ): Promise<Entities[K] | null> {
     for (let attempt = 0; attempt < 4; attempt++) {
       const row = await this.read(kind, id);
-      if (!row) return null;
-      if (!row.hash) throw new Error("Loom omitted the entity hash required for a partial update");
-      const data = update(row.data);
-      if (data === undefined) return row.data;
+      if (!row && !create) return null;
+      if (row && !row.hash) throw new Error("Loom omitted the entity hash required for a partial update");
+      const data = row ? update(row.data) : create?.();
+      if (data === undefined) return row?.data ?? null;
       try {
-        await this.write(kind, data, row.hash);
+        await this.write(kind, data, row ? row.hash : "absent");
         return data;
       } catch (error) {
         if (!(error instanceof LoomError) || error.code !== "PRECONDITION_FAILED" || attempt === 3) throw error;
@@ -178,7 +189,7 @@ export class LoomMemoryStorage extends MemoryStorage {
   override async dangerouslyClearAll(): Promise<void> {
     for (const kind of ["message", "thread", "resource"] as const) {
       const rows = await this.all(kind);
-      for (const row of rows) await this.call("memory.delete", { memory_key: row.key });
+      for (const row of rows) await this.remove(row);
     }
   }
 
@@ -221,9 +232,10 @@ export class LoomMemoryStorage extends MemoryStorage {
   }
 
   override async deleteThread({ threadId }: Parameters<MemoryStorage["deleteThread"]>[0]) {
+    const thread = await this.read("thread", threadId);
     const messages = (await this.all("message")).filter((row) => row.data.threadId === threadId);
-    for (const row of messages) await this.call("memory.delete", { memory_key: row.key });
-    await this.call("memory.delete", { memory_key: await this.key("thread", threadId) });
+    for (const row of messages) await this.remove(row);
+    if (thread) await this.remove(thread);
   }
 
   override async listThreads(args: StorageListThreadsInput): Promise<StorageListThreadsOutput> {
@@ -377,7 +389,7 @@ export class LoomMemoryStorage extends MemoryStorage {
     for (const id of new Set(messageIds)) {
       const row = await this.read("message", id);
       if (!row) continue;
-      await this.call("memory.delete", { memory_key: row.key });
+      await this.remove(row);
       threads.add(row.data.threadId);
     }
     await this.touch(threads);
@@ -405,17 +417,22 @@ export class LoomMemoryStorage extends MemoryStorage {
   }: Parameters<MemoryStorage["updateResource"]>[0]) {
     refuseFence(fence);
     this.requireResource(resourceId);
-    const result = await this.change("resource", resourceId, (resource) => ({
-      ...resource,
-      ...(workingMemory !== undefined ? { workingMemory } : {}),
-      ...(metadata !== undefined ? { metadata: { ...resource.metadata, ...copy(metadata) } } : {}),
-      updatedAt: nextDate(resource.updatedAt),
-    }));
-    if (result) return result;
-    const now = new Date();
-    return this.saveResource({
-      resource: { id: resourceId, workingMemory, metadata: copy(metadata), createdAt: now, updatedAt: now },
-    });
+    const result = await this.change(
+      "resource",
+      resourceId,
+      (resource) => ({
+        ...resource,
+        ...(workingMemory !== undefined ? { workingMemory } : {}),
+        ...(metadata !== undefined ? { metadata: { ...resource.metadata, ...copy(metadata) } } : {}),
+        updatedAt: nextDate(resource.updatedAt),
+      }),
+      () => {
+        const now = new Date();
+        return { id: resourceId, workingMemory, metadata: copy(metadata), createdAt: now, updatedAt: now };
+      },
+    );
+    if (!result) throw new Error("Loom did not persist the requested Mastra resource");
+    return result;
   }
 
   override async updateThreadResourceId({

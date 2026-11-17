@@ -722,11 +722,23 @@ Native listing supports thread/resource filters, date and metadata filters, orde
 pagination and included message context across that user's threads. Lists scan the
 store's scoped rows and retrieve full values by key before filtering; large histories
 cost multiple HTTP calls. Partial updates use Loom's hash precondition and retry a
-conflict up to three times. Records have no expiry; the adapter clears retention defaults
-on its writes. Explicit deletion, user erasure and server policy refusals still apply.
-Deletes are logical Loom tombstones. Batches, thread timestamp updates and cascading
-deletes are separate operations: a failure can leave partial work and is returned to the
-caller. The adapter provides no transaction, local fallback or additional storage.
+conflict up to three times. A missing resource is created with
+`memory.set.if_match_sha256="absent"`; this requires a server that supports the absence
+precondition. Older servers return `PRECONDITION_FAILED` instead of creating it, and the
+adapter never retries unconditionally. Concurrent partial resource patches preserve
+omitted working memory and merge metadata; whole-resource saves remain replacements.
+Records have no expiry; the adapter clears retention defaults on its writes. Explicit
+deletion, user erasure and server policy refusals still apply.
+
+Deletes use `memory.delete_version` with the exact identity and lossless version from
+the validated read. A missing row is a no-op; a concurrent rewrite is preserved and
+returns an error. Thread deletion captures the parent before deleting its observed
+messages and still removes own orphan messages when that parent is missing. Deletes are
+logical Loom tombstones; later explicit saves can recreate an entity. Batches, thread
+timestamp updates and cascading deletes are separate operations: a failure can leave
+partial work and is returned to the caller. A cascade cannot prevent a new message
+after enumeration. The adapter provides no transaction, local fallback or additional
+storage.
 
 Semantic recall, observational memory, run fencing, atomic working-memory merges and
 thread cloning are unsupported. Other storage domains are absent. The existing tools

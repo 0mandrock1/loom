@@ -12,24 +12,52 @@ type Row = {
   body: Record<string, unknown>;
   value: { kind: string; resourceId: string; data: Record<string, unknown> };
   hash: string;
+  version: string;
 };
 type Call = { op: string; body: Record<string, unknown> };
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function harness() {
   const rows = new Map<string, Row>();
   const calls: Call[] = [];
+  let version = 1792436295126090000n;
   const controls = {
     cap: 2,
     emptyPages: 0,
     noHash: false,
+    noVersion: false,
     disappear: false,
     refuseSet: false,
+    refuseAbsence: false,
     beforeSet: undefined as ((row: Row) => void) | undefined,
+    afterGet: undefined as ((body: Call["body"], found: boolean) => Promise<void>) | undefined,
+    beforeWrite: undefined as ((body: Call["body"]) => Promise<void>) | undefined,
+    afterWrite: undefined as ((row: Row) => void) | undefined,
+    beforeDelete: undefined as ((body: Call["body"]) => void) | undefined,
     failMessage: "",
+    failDelete: "",
   };
   const id = (body: Record<string, unknown>) =>
     JSON.stringify([body.org, body.namespace, body.agent, body.user_id, body.session_id, body.memory_key]);
+  const rewrite = (row: Row, update: (row: Row) => void = () => {}) => {
+    update(row);
+    row.hash = hash(row.value);
+    row.version = String(++version);
+  };
+  const fallback = (body: Call["body"]) =>
+    [...rows.values()].find((row) =>
+      ["org", "namespace", "user_id", "session_id", "memory_key"].every((field) => row.body[field] === body[field]),
+    );
+  const conflict = () =>
+    new Response(JSON.stringify({ detail: { code: "PRECONDITION_FAILED", message: "Changed" } }), { status: 409 });
   const fetch = async (url: string, init: RequestInit) => {
     const op = url.split("/v1/")[1];
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
@@ -37,37 +65,45 @@ function harness() {
     let reply: unknown = {};
     const key = id(body);
     if (op === "memory.set") {
+      await controls.beforeWrite?.(body);
       const value = JSON.parse(body.value as string) as Row["value"];
       const current = rows.get(key);
       if (current && controls.beforeSet) {
         const update = controls.beforeSet;
         controls.beforeSet = undefined;
-        update(current);
-        current.hash = hash(current.value);
+        rewrite(current, update);
       }
-      if (body.if_match_sha256 && body.if_match_sha256 !== current?.hash) {
-        return new Response(JSON.stringify({ detail: { code: "PRECONDITION_FAILED", message: "Changed" } }), {
-          status: 409,
-        });
+      if (body.if_match_sha256 === "absent") {
+        if (current || controls.refuseAbsence) return conflict();
+      } else if (body.if_match_sha256 && body.if_match_sha256 !== current?.hash) {
+        return conflict();
       }
       if (value.data.id === controls.failMessage) {
         return new Response(JSON.stringify({ detail: { message: "Write refused" } }), { status: 422 });
       }
       if (controls.refuseSet) return new Response(JSON.stringify({ version: 0, status: "proposed" }));
-      rows.set(key, { body: { ...body }, value, hash: hash(value) });
-      reply = { version: 1, memory_key: body.memory_key, content_sha256: hash(value) };
+      const row = { body: { ...body }, value, hash: hash(value), version: String(++version) };
+      rows.set(key, row);
+      controls.afterWrite?.(row);
+      reply = { version: Number(row.version), memory_key: body.memory_key, content_sha256: row.hash };
     } else if (op === "memory.get") {
-      const row = controls.disappear ? undefined : rows.get(key);
-      reply = row
+      const row = controls.disappear ? undefined : (rows.get(key) ?? fallback(body));
+      const out = row
         ? {
             found: true,
             value: structuredClone(row.value),
             content_sha256: controls.noHash ? "" : row.hash,
+            version: Number(row.version),
+            version_text: controls.noVersion ? undefined : row.version,
             agent: row.body.agent,
             user_id: row.body.user_id,
             session_id: row.body.session_id,
           }
         : { found: false };
+      reply = Object.fromEntries(
+        Object.entries(out).filter(([field]) => field === "found" || (body.fields as string[]).includes(field)),
+      );
+      await controls.afterGet?.(body, !!row);
     } else if (op === "memory.list") {
       const scope = ["org", "namespace", "agent", "user_id", "session_id"];
       const matching = [...rows.values()].filter(
@@ -83,14 +119,26 @@ function harness() {
         entries: page.filter((row) => row !== null).map((row) => ({ memory_key: row.body.memory_key })),
         truncated: offset + controls.cap < scanned.length,
       };
-    } else if (op === "memory.delete") {
-      reply = { version: 2, tombstoned: rows.delete(key) };
+    } else if (op === "memory.delete_version" || op === "memory.delete") {
+      controls.beforeDelete?.(body);
+      const row = rows.get(key) ?? (op === "memory.delete" ? fallback(body) : undefined);
+      if (row?.value.data.id === controls.failDelete) {
+        return new Response(JSON.stringify({ detail: { message: "Delete refused" } }), { status: 422 });
+      }
+      if (!row) reply = { found: false, tombstoned: false };
+      else if (op === "memory.delete_version" && body.version !== row.version)
+        reply = { found: true, tombstoned: false, reason: "version_changed" };
+      else reply = { tombstoned: rows.delete(id(row.body)) };
     } else throw new Error(`Unexpected operation ${op}`);
     return new Response(JSON.stringify(reply));
   };
   const agent = new Agent("o", "n", "bot", { baseUrl: "http://x", fetch, logLevel: "off" });
-  const storage = (resourceId = "alice", storeId = "app") => new LoomMemoryStorage(agent, { resourceId, storeId });
-  return { agent, rows, calls, controls, storage };
+  const storage = (resourceId = "alice", storeId = "app", name = "bot") =>
+    new LoomMemoryStorage(
+      name === "bot" ? agent : new Agent("o", "n", name, { baseUrl: "http://x", fetch, logLevel: "off" }),
+      { resourceId, storeId },
+    );
+  return { agent, rows, calls, controls, storage, rewrite };
 }
 
 const date = (second: number) => new Date(Date.UTC(2025, 0, 1, 0, 0, second));
@@ -418,5 +466,233 @@ describe("LoomMemoryStorage native memory domain", () => {
     const h = harness();
     h.controls.refuseSet = true;
     await expect(h.storage().saveThread({ thread: thread("t1") })).rejects.toThrow("did not persist");
+  });
+
+  it.each([
+    { first: 0, metadataOnly: false },
+    { first: 1, metadataOnly: false },
+    { first: 0, metadataOnly: true },
+    { first: 1, metadataOnly: true },
+  ])(
+    "preserves disjoint first resource patches in order $first (metadata only: $metadataOnly)",
+    async ({ first, metadataOnly }) => {
+      const h = harness();
+      const bothRead = deferred();
+      const firstWritten = deferred();
+      let missingReads = 0;
+      let creations = 0;
+      let winnerCreatedAt: unknown;
+      h.controls.afterGet = async (body, found) => {
+        if (!found && String(body.memory_key).includes("/resource/") && missingReads < 2) {
+          if (++missingReads === 2) bothRead.resolve();
+          await bothRead.promise;
+        }
+      };
+      h.controls.beforeWrite = async (body) => {
+        const data = JSON.parse(body.value as string).data;
+        const index = data.metadata.first === 1 && data.metadata.second === undefined ? 0 : 1;
+        if (index !== first) await firstWritten.promise;
+      };
+      h.controls.afterWrite = (row) => {
+        if (++creations === 1) winnerCreatedAt = row.value.data.createdAt;
+        firstWritten.resolve();
+      };
+      await Promise.all([
+        h.storage().updateResource({
+          resourceId: "alice",
+          ...(metadataOnly ? {} : { workingMemory: "" }),
+          metadata: { first: 1, shared: "a" },
+        }),
+        h.storage().updateResource({ resourceId: "alice", metadata: { second: 2, shared: "b" } }),
+      ]);
+      const out = await h.storage().getResourceById({ resourceId: "alice" });
+      expect(out).toMatchObject({
+        metadata: { first: 1, second: 2, shared: first === 0 ? "b" : "a" },
+      });
+      expect(out?.workingMemory).toBe(metadataOnly ? undefined : "");
+      expect(out?.createdAt.toISOString()).toBe(winnerCreatedAt);
+      const writes = h.calls.filter((call) => call.op === "memory.set");
+      expect(writes).toHaveLength(3);
+      expect(writes.filter((call) => call.body.if_match_sha256 === "absent")).toHaveLength(2);
+      expect(writes.every((call) => !!call.body.if_match_sha256)).toBe(true);
+      expect(creations).toBe(2);
+    },
+  );
+
+  it("retries a first metadata-only patch after clear and recreates without old fields or dates", async () => {
+    const h = harness();
+    await h.storage().saveResource({
+      resource: {
+        id: "alice",
+        workingMemory: "old",
+        metadata: { old: true },
+        createdAt: date(0),
+        updatedAt: date(0),
+      },
+    });
+    await h.storage().dangerouslyClearAll();
+    const bothRead = deferred();
+    let reads = 0;
+    h.controls.afterGet = async (_body, found) => {
+      if (!found && reads < 2) {
+        if (++reads === 2) bothRead.resolve();
+        await bothRead.promise;
+      }
+    };
+    await Promise.all([
+      h.storage().updateResource({ resourceId: "alice", metadata: { first: 1 } }),
+      h.storage().updateResource({ resourceId: "alice", metadata: { second: 2 } }),
+    ]);
+    const out = await h.storage().getResourceById({ resourceId: "alice" });
+    expect(out?.metadata).toEqual({ first: 1, second: 2 });
+    expect(out?.workingMemory).toBeUndefined();
+    expect(out?.createdAt).not.toEqual(date(0));
+    expect(
+      h.calls
+        .filter((call) => call.op === "memory.set")
+        .slice(1)
+        .every((call) => !!call.body.if_match_sha256),
+    ).toBe(true);
+  });
+
+  it("creates an empty resource conditionally and refuses an old server without an unconditional fallback", async () => {
+    const h = harness();
+    const empty = await h.storage().updateResource({ resourceId: "alice" });
+    expect(empty).toMatchObject({ id: "alice" });
+    expect(empty.createdAt).toEqual(empty.updatedAt);
+    await h.storage().dangerouslyClearAll();
+    h.controls.refuseAbsence = true;
+    const before = h.calls.length;
+    await expect(h.storage().updateResource({ resourceId: "alice", metadata: { flag: true } })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+    const writes = h.calls.slice(before).filter((call) => call.op === "memory.set");
+    expect(writes).toHaveLength(4);
+    expect(writes.every((call) => call.body.if_match_sha256 === "absent")).toBe(true);
+    expect(h.rows.size).toBe(0);
+  });
+
+  it("keeps a concurrent existing resource patch and fails if its hash is omitted", async () => {
+    const h = harness();
+    await h.storage().updateResource({ resourceId: "alice", workingMemory: "notes" });
+    h.controls.beforeSet = (row) => {
+      row.value.data.metadata = { winner: true };
+    };
+    const out = await h.storage().updateResource({ resourceId: "alice", metadata: { added: true } });
+    expect(out).toMatchObject({ workingMemory: "notes", metadata: { winner: true, added: true } });
+    h.controls.noHash = true;
+    await expect(h.storage().updateResource({ resourceId: "alice", workingMemory: "change" })).rejects.toThrow("hash");
+  });
+
+  it("keeps another agent's namesake thread and still cleans own orphan messages", async () => {
+    const h = harness();
+    await h.storage("alice", "app", "other").saveThread({ thread: thread("t1") });
+    await h.storage().deleteThread({ threadId: "t1" });
+    expect(await h.storage("alice", "app", "other").getThreadById({ threadId: "t1" })).not.toBeNull();
+    await h.storage().saveMessages({ messages: [message("orphan")] });
+    await h.storage().deleteThread({ threadId: "t1" });
+    expect((await h.storage().listMessagesById({ messageIds: ["orphan"] })).messages).toEqual([]);
+    expect(await h.storage("alice", "app", "other").getThreadById({ threadId: "t1" })).not.toBeNull();
+    expect(h.calls.filter((call) => call.op === "memory.delete")).toEqual([]);
+  });
+
+  it.each(["message", "thread", "clear"])(
+    "does not fall back after the owned row disappears during %s deletion",
+    async (path) => {
+      const h = harness();
+      for (const name of ["bot", "other"]) {
+        await h.storage("alice", "app", name).saveThread({ thread: thread("t1") });
+        await h.storage("alice", "app", name).saveMessages({ messages: [message("m1")] });
+      }
+      h.controls.beforeDelete = (body) => {
+        for (const [key, row] of h.rows) {
+          if (row.body.agent === body.agent && row.body.memory_key === body.memory_key) h.rows.delete(key);
+        }
+      };
+      if (path === "message") await h.storage().deleteMessages(["m1"]);
+      else if (path === "thread") await h.storage().deleteThread({ threadId: "t1" });
+      else await h.storage().dangerouslyClearAll();
+      expect(await h.storage("alice", "app", "other").getThreadById({ threadId: "t1" })).not.toBeNull();
+      expect((await h.storage("alice", "app", "other").listMessagesById({ messageIds: ["m1"] })).messages).toHaveLength(
+        1,
+      );
+      expect(h.calls.filter((call) => call.op === "memory.delete")).toEqual([]);
+    },
+  );
+
+  it("deletes with the lossless projected version and permits an explicit later upsert", async () => {
+    const h = harness();
+    await h.storage().saveThread({ thread: thread("t1") });
+    await h.storage().deleteThread({ threadId: "t1" });
+    const deletion = h.calls.find((call) => call.op === "memory.delete_version");
+    expect(deletion?.body).toMatchObject({
+      agent: "bot",
+      user_id: "alice",
+      session_id: "-",
+      version: "1792436295126090001",
+    });
+    expect(
+      h.calls
+        .filter((call) => call.op === "memory.get")
+        .every((call) => (call.body.fields as string[]).includes("version_text")),
+    ).toBe(true);
+    expect(String(Number(deletion?.body.version))).not.toBe(deletion?.body.version);
+    await h.storage().saveThread({ thread: { ...thread("t1"), title: "Recreated" } });
+    expect((await h.storage().getThreadById({ threadId: "t1" }))?.title).toBe("Recreated");
+  });
+
+  it("refuses deletion without an exact version before mutation", async () => {
+    const h = harness();
+    await h.storage().saveThread({ thread: thread("t1") });
+    h.controls.noVersion = true;
+    await expect(h.storage().deleteThread({ threadId: "t1" })).rejects.toThrow("exact version");
+    expect(h.calls.some((call) => call.op.startsWith("memory.delete"))).toBe(false);
+    expect(h.rows.size).toBe(1);
+  });
+
+  it.each(["move", "same-content"])("preserves a newer message version after a %s rewrite", async (kind) => {
+    const h = harness();
+    await h.storage().saveThread({ thread: thread("t1") });
+    await h.storage().saveMessages({ messages: [message("m1")] });
+    h.controls.beforeDelete = () => {
+      h.controls.beforeDelete = undefined;
+      const row = [...h.rows.values()].find((row) => row.value.kind === "message");
+      if (!row) throw new Error("Missing message fixture");
+      h.rewrite(row, (row) => {
+        if (kind === "move") row.value.data.threadId = "t2";
+      });
+    };
+    await expect(h.storage().deleteThread({ threadId: "t1" })).rejects.toThrow("changed during deletion");
+    const out = (await h.storage().listMessagesById({ messageIds: ["m1"] })).messages;
+    expect(out).toHaveLength(1);
+    expect(out[0].threadId).toBe(kind === "move" ? "t2" : "t1");
+    expect(await h.storage().getThreadById({ threadId: "t1" })).not.toBeNull();
+  });
+
+  it("captures the parent version before cascading and preserves a concurrent parent rewrite", async () => {
+    const h = harness();
+    await h.storage().saveThread({ thread: thread("t1") });
+    await h.storage().saveMessages({ messages: [message("m1")] });
+    h.controls.beforeDelete = () => {
+      h.controls.beforeDelete = undefined;
+      const row = [...h.rows.values()].find((row) => row.value.kind === "thread");
+      if (!row) throw new Error("Missing thread fixture");
+      h.rewrite(row);
+    };
+    await expect(h.storage().deleteThread({ threadId: "t1" })).rejects.toThrow("changed during deletion");
+    expect((await h.storage().listMessagesById({ messageIds: ["m1"] })).messages).toEqual([]);
+    expect(await h.storage().getThreadById({ threadId: "t1" })).not.toBeNull();
+  });
+
+  it("propagates a later child deletion failure without deleting the parent", async () => {
+    const h = harness();
+    await h.storage().saveThread({ thread: thread("t1") });
+    await h.storage().saveMessages({ messages: [message("m1"), message("m2")] });
+    h.controls.failDelete = "m2";
+    await expect(h.storage().deleteThread({ threadId: "t1" })).rejects.toThrow("Delete refused");
+    expect((await h.storage().listMessagesById({ messageIds: ["m1", "m2"] })).messages.map((row) => row.id)).toEqual([
+      "m2",
+    ]);
+    expect(await h.storage().getThreadById({ threadId: "t1" })).not.toBeNull();
   });
 });

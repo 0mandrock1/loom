@@ -273,8 +273,11 @@ it becomes the actual Loom `user_id` for threads, messages and resource working 
 Combine it with `MastraCompositeStore({ id, domains: { memory: storage } })` and
 `@mastra/memory` with semantic recall and observational memory disabled. `storeId`
 defaults to `default` and separates applications under one Loom agent and user.
-Lists scan all matching scoped rows; updates use hash preconditions. No transaction,
-resource reassignment, cloning, run fencing or atomic working-memory merge is provided. See
+Lists scan all matching scoped rows; partial updates use hash preconditions. First
+resource updates require server support for `memory.set.if_match_sha256="absent"`;
+older servers safely refuse creation. Deletes use exact observed versions and reject
+concurrent rewrites. The adapter provides no transaction, resource reassignment,
+cloning, run fencing or atomic working-memory merge. See
 [Frameworks](../features/integrations/frameworks.md#mastra).
 
 ## OpenAI Agents SDK adapter

@@ -17,6 +17,10 @@ describe.skipIf(!baseUrl || !apiKey)("Mastra memory on live Loom", () => {
     const resourceId = `mastra-${randomUUID()}`;
     const bot = new Agent(org, namespace, "mastra-memory-test", { baseUrl, apiKey, consumer: "ts-sdk-integ" });
     const domain = () => new LoomMemoryStorage(bot, { resourceId, storeId: "live" });
+    const foreign = new LoomMemoryStorage(
+      new Agent(org, namespace, "mastra-other-agent", { baseUrl, apiKey, consumer: "ts-sdk-integ" }),
+      { resourceId, storeId: "live" },
+    );
     const native = () =>
       new Memory({
         storage: new MastraCompositeStore({ id: "live", domains: { memory: domain() } }),
@@ -43,6 +47,14 @@ describe.skipIf(!baseUrl || !apiKey)("Mastra memory on live Loom", () => {
       });
       await native().updateThread({ id: "t1", metadata: { category: "work" } });
       expect((await domain().getThreadById({ threadId: "t1" }))?.title).toBe("First");
+      await Promise.all([
+        domain().updateResource({ resourceId, workingMemory: "Initial notes" }),
+        domain().updateResource({ resourceId, metadata: { category: "work" } }),
+      ]);
+      expect(await domain().getResourceById({ resourceId })).toMatchObject({
+        workingMemory: "Initial notes",
+        metadata: { category: "work" },
+      });
       await native().updateWorkingMemory({ threadId: "t1", resourceId, workingMemory: "Working notes" });
       expect(await native().getWorkingMemory({ threadId: "t1", resourceId })).toBe("Working notes");
       await expect
@@ -69,8 +81,25 @@ describe.skipIf(!baseUrl || !apiKey)("Mastra memory on live Loom", () => {
       await native().deleteThread("t1");
       expect((await domain().listMessagesById({ messageIds: ["m1"] })).messages).toEqual([]);
       expect(await domain().getThreadById({ threadId: "t1" })).toBeNull();
-    } finally {
+      await foreign.saveThread({
+        thread: { id: "t1", resourceId, title: "Other writer", createdAt, updatedAt: createdAt },
+      });
+      await domain().deleteThread({ threadId: "t1" });
+      expect((await foreign.getThreadById({ threadId: "t1" }))?.title).toBe("Other writer");
       await domain().dangerouslyClearAll();
+      await Promise.all([
+        domain().updateResource({ resourceId, metadata: { first: true } }),
+        domain().updateResource({ resourceId, metadata: { second: true } }),
+      ]);
+      const recreated = await domain().getResourceById({ resourceId });
+      expect(recreated?.metadata).toEqual({ first: true, second: true });
+      expect(recreated?.workingMemory).toBeUndefined();
+    } finally {
+      try {
+        await domain().dangerouslyClearAll();
+      } finally {
+        await foreign.dangerouslyClearAll();
+      }
     }
   });
 });

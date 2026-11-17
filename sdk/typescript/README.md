@@ -447,7 +447,10 @@ instance for each end-user: `resourceId` is the actual Loom `user_id`, so user e
 includes all threads, messages and working memory. Keep the same Loom agent and optional
 `storeId` when resuming in another process. Resource reassignment, observational memory,
 run fencing, atomic working-memory merges and cloning are unsupported. Data stays in
-your Loom deployment; the adapter adds no database, vector store or cache. See
+your Loom deployment; the adapter adds no database, vector store or cache. First
+resource patches require server support for `memory.set.if_match_sha256="absent"`;
+older servers refuse creation without an unconditional fallback. Deletion targets the
+exact observed version and rejects concurrent rewrites. See
 [the memory contract and limits](https://github.com/ClickHouse/loom/blob/main/docs/features/integrations/frameworks.md#mastra).
 
 ## OpenAI Agents SDK
