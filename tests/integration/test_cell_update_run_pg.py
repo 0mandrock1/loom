@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from argparse import Namespace
@@ -12,7 +13,7 @@ import pytest
 
 from server.cli import cell_control, cell_update_participants, cell_update_pg, cell_update_probe
 from server.cli.cell_update_run import Run
-from server.core import cell, deployment_config
+from server.core import cell, deployment_config, pg
 from server.router import app
 from server.settings import settings
 from tests.integration.test_cell_control_fence import control_stores as control_stores
@@ -22,6 +23,34 @@ from tests.unit.test_cell_update_run import value
 
 REAL_POST = cell_update_probe.post
 REAL_STORES_CHECK = app.Router._stores_check
+
+
+async def _assert_widening_rolled_back(local_dsn, directory_conn, backend_pid, before):
+    import asyncpg
+
+    observer = await asyncpg.connect(local_dsn)
+    try:
+        await pg.init_connection(observer)
+        local = await cell_update_pg.read(observer, "first")
+        assert local == before
+        assert await observer.fetchval("SELECT count(*) FROM loom.tenancy") == 0
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", backend_pid
+        )
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1)", backend_pid
+        )
+    finally:
+        await observer.close()
+    recorded = await directory_conn.fetchrow("SELECT current_fp,next_fp FROM loom_router.cells")
+    assert json.loads(recorded["current_fp"]) == value()
+    assert json.loads(recorded["next_fp"]) == value("new", orgs=("permanent",))
+    assert (
+        await directory_conn.fetchval(
+            "SELECT cell FROM loom_router.placements WHERE org=$1", "permanent"
+        )
+        == "first"
+    )
 
 
 @pytest.fixture
@@ -100,6 +129,65 @@ async def update_stores(control_stores, local_control, monkeypatch, tmp_path):
         return Run(None, args, httpx.URL("http://router"), client._transport)
 
     yield make, local_conn, directory_conn, owner(local_conn), events, local_dsn
+
+
+@pytest.mark.asyncio
+async def test_acceptance_error_rolls_back_tenancy_and_preserves_directory_retry(update_stores):
+    import asyncpg
+
+    make, local_conn, directory_conn, owned, _, local_dsn = update_stores
+    backend_pid = local_conn.get_server_pid()
+    before = await cell_update_pg.read(local_conn, "first")
+    await local_conn.execute(
+        "CREATE FUNCTION reject_acceptance() RETURNS trigger LANGUAGE plpgsql AS $$ "
+        "BEGIN RAISE EXCEPTION 'acceptance refused by test'; END $$; "
+        "CREATE TRIGGER reject_acceptance BEFORE UPDATE ON loom.cell_self "
+        "FOR EACH ROW EXECUTE FUNCTION reject_acceptance()"
+    )
+    with pytest.raises(asyncpg.RaiseError, match="acceptance refused by test"):
+        await make().start(owned)
+    assert owned.closed and local_conn.is_closed()
+    await _assert_widening_rolled_back(local_dsn, directory_conn, backend_pid, before)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_acceptance_releases_backend_and_rolls_back_tenancy(update_stores):
+    import asyncpg
+
+    make, local_conn, directory_conn, owned, _, local_dsn = update_stores
+    backend_pid = local_conn.get_server_pid()
+    before = await cell_update_pg.read(local_conn, "first")
+    blocker = await asyncpg.connect(local_dsn)
+    transaction = blocker.transaction()
+    await transaction.start()
+    task = None
+    observer = None
+    try:
+        observer = await asyncpg.connect(local_dsn)
+        await blocker.fetchrow("SELECT id FROM loom.cell_self FOR UPDATE")
+        task = asyncio.create_task(make().start(owned))
+        async with asyncio.timeout(4):
+            while not await observer.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 "
+                "AND wait_event_type='Lock' AND query LIKE 'UPDATE loom.cell_self%')",
+                backend_pid,
+            ):
+                assert not task.done()
+                await asyncio.sleep(0.005)
+        task.cancel("acceptance-stop")
+        with pytest.raises(asyncio.CancelledError, match="acceptance-stop"):
+            await asyncio.wait_for(task, timeout=4)
+        assert owned.closed and local_conn.is_closed()
+    finally:
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await transaction.rollback()
+        if observer is not None:
+            await observer.close()
+        await blocker.close()
+    await _assert_widening_rolled_back(local_dsn, directory_conn, backend_pid, before)
 
 
 @pytest.mark.asyncio

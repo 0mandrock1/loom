@@ -478,7 +478,7 @@ def function(path: str, name: str) -> ast.AST:
             "server/router/directory.py",
             "update_configuration",
             [
-                "_control_transaction(locked)",
+                "_control_transaction(locked, seconds=CONTROL_MAX_S)",
                 "control_refusal(found, expected)",
                 "_configuration_commit(conn, found, current, pending, new, action)",
             ],

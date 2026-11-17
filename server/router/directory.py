@@ -1274,7 +1274,7 @@ async def update_configuration(
                 raise OperatorRefused(reason)
         return await _configuration_commit(conn, found, current, pending, new, action)
 
-    return await _control_transaction(locked)
+    return await _control_transaction(locked, seconds=CONTROL_MAX_S)
 
 
 async def _configuration_commit(
