@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -304,16 +306,22 @@ async def request(
 
     endpoint = cli.at(url, f"/cells/v1/operator/cells/{name}" + path)
     try:
-        async with (
-            asyncio.timeout(REQUEST_S),
-            httpx.AsyncClient(
+        async with asyncio.timeout(REQUEST_S):
+            manager = httpx.AsyncClient(
                 timeout=cli._OPERATOR_TIMEOUT,
                 trust_env=url.scheme == "https",
                 transport=transport,
                 headers={"Authorization": f"Bearer {settings.router_operator_token}"},
-            ) as client,
-        ):
-            response = await client.request(method, endpoint, json=body)
+            )
+            client = await manager.__aenter__()
+            try:
+                response = await client.request(method, endpoint, json=body)
+            except BaseException:  # Client exit preserves the request's first failure.
+                with contextlib.suppress(BaseException):
+                    await manager.__aexit__(*sys.exc_info())
+                raise
+            else:
+                await manager.__aexit__(None, None, None)
     except (httpx.HTTPError, TimeoutError) as e:
         raise _refused(f"router reply unknown ({type(e).__name__}): stop and rerun") from None
     answer = cli.router_answer(response, {"cell": name}, cli.OPERATOR_REFUSALS)
