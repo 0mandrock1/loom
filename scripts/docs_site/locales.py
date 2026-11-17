@@ -7,6 +7,7 @@ import html
 import posixpath
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,9 +24,10 @@ LANGUAGES = {
     "pt-BR": "Português (Brasil)",
     "es": "Español",
 }
+PUBLISHED_LANGUAGES = ("ja",)
 # Generic language codes do not identify an Open Graph territory.
 _OG_LOCALES = {"zh-CN": "zh_CN", "pt-BR": "pt_BR"}
-_STAMP = re.compile(r"<!-- i18n: source=(\S+) blob=([0-9a-f]{40}) model=\S+ -->")
+_STAMP = re.compile(r"<!-- i18n: source=(.*?) blob=([0-9a-f]{40}) model=\S+ -->")
 
 
 def localized_uri(language: str, source: str) -> str:
@@ -33,13 +35,14 @@ def localized_uri(language: str, source: str) -> str:
     return f"{language}/{source}"
 
 
-def localized_page_path(path: str) -> str | None:
+def localized_page_path(path: str, *, languages: Iterable[str] | None = None) -> str | None:
     """The site path for an existing or deleted repository translation."""
     parts = path.split("/", 3)
     if (
         len(parts) != 4
         or parts[0] != "i18n"
         or parts[1] not in LANGUAGES
+        or parts[1] not in (PUBLISHED_LANGUAGES if languages is None else languages)
         or parts[2] != "docs"
         or not parts[3].endswith(".md")
     ):
@@ -47,9 +50,9 @@ def localized_page_path(path: str) -> str | None:
     return page_path(f"docs/{localized_uri(parts[1], parts[3])}")
 
 
-def translations(root: Path) -> dict[str, dict]:
+def translations(root: Path, *, languages: Iterable[str] | None = None) -> dict[str, dict]:
     pages = {}
-    for language in LANGUAGES:
+    for language in PUBLISHED_LANGUAGES if languages is None else languages:
         for path in sorted((root / "i18n" / language / "docs").rglob("*.md")):
             source = path.relative_to(root / "i18n" / language / "docs").as_posix()
             english = root / "docs" / source
@@ -133,6 +136,10 @@ def _link_target(target: str, entry: dict, pages: dict, site_url: str, *, banner
         language, _, source = parts
     elif target and not re.match(r"(?:[a-zA-Z][\w+.-]*:|/)", target):
         source = posixpath.normpath(posixpath.join(posixpath.dirname(entry["source"]), target))
+        if source.startswith("../"):
+            repository = posixpath.normpath(posixpath.join("docs", source))
+            translated = f"i18n/{language}/{repository}"
+            return BLOB + (translated if (ROOT / translated).is_file() else repository)
     else:
         return target
     uri = localized_uri(language, source)
