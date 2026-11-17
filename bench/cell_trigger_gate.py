@@ -455,7 +455,9 @@ async def _health(
 ) -> None:
     from server.settings import settings
 
-    async with httpx.AsyncClient(timeout=IO_S, follow_redirects=False, trust_env=False) as client:
+    context = httpx.AsyncClient(timeout=IO_S, follow_redirects=False, trust_env=False)
+    client = await context.__aenter__()
+    try:
         health = await client.get(f"{args.base_url.rstrip('/')}/v1/health")
         deployment = await client.get(f"{args.base_url.rstrip('/')}/v1/health/deployment")
         _require(health.status_code == deployment.status_code == 200, "health HTTP status")
@@ -492,6 +494,14 @@ async def _health(
         )
         launch = launch if launch is not None else _launch(args, fixture, settings)
         _require(h.get("instance") == launch["health_instance"], "serving owned process")
+    except BaseException as error:
+        try:
+            await context.__aexit__(type(error), error, error.__traceback__)
+        except BaseException:  # noqa: BLE001 — HTTP cleanup cannot replace work failure.
+            pass
+        raise
+    else:
+        await context.__aexit__(None, None, None)
 
 
 def _object(value: Any) -> dict[str, Any]:
@@ -602,6 +612,7 @@ async def _proof(
 
 async def _preflight(args: argparse.Namespace, fixture: Fixture) -> None:
     conn = ch = None
+    failure: BaseException | None = None
     try:
         conn = await asyncpg.connect(
             args.pg_dsn,
@@ -612,13 +623,22 @@ async def _preflight(args: argparse.Namespace, fixture: Fixture) -> None:
         ch = await ReadOnlyCH.open()
         async with asyncio.timeout(IO_S):
             await _proof(conn, ch, args, fixture)
-    finally:
-        try:
-            if ch is not None:
-                await ch.close()
-        finally:
-            if conn is not None:
-                await _close_pg(conn)
+    except BaseException as error:  # noqa: BLE001 — cleanup must retain any preflight failure.
+        failure = error
+    try:
+        if ch is not None:
+            await ch.close()
+    except BaseException as error:  # noqa: BLE001 — both metadata clients must be closed.
+        if failure is None:
+            failure = error
+    try:
+        if conn is not None:
+            await _close_pg(conn)
+    except BaseException as error:  # noqa: BLE001 — preserve the first work or close failure.
+        if failure is None:
+            failure = error
+    if failure is not None:
+        raise failure
 
 
 async def _debt(conn: Any, expected: int) -> None:
@@ -681,7 +701,9 @@ class Triggers:
 
     async def set(self, conn: Any, on: bool) -> None:
         await self.verify(conn)
-        async with conn.transaction():
+        transaction = conn.transaction()
+        await transaction.start()
+        try:
             for table in self.tables:
                 if table == "tenancy":
                     continue
@@ -690,18 +712,34 @@ class Triggers:
                     await conn.execute(f'DROP TRIGGER IF EXISTS {name} ON loom."{table}"')
                     if on:
                         await conn.execute(cell_triggers.create_statement(table, name))
+        except BaseException:
+            try:
+                await transaction.rollback()
+            except BaseException:  # noqa: BLE001 — rollback cannot replace the DDL failure.
+                pass
+            raise
+        await transaction.commit()
         self.on = on
         await self.verify(conn)
 
     async def restore(self, conn: Any) -> None:
         # Recreate the captured exact org guards even after a partial failed toggle.
-        async with conn.transaction():
+        transaction = conn.transaction()
+        await transaction.start()
+        try:
             for table in self.tables:
                 if table == "tenancy":
                     continue
                 for name in cell_triggers.ORG_TRIGGERS:
                     await conn.execute(f'DROP TRIGGER IF EXISTS {name} ON loom."{table}"')
                     await conn.execute(cell_triggers.create_statement(table, name))
+        except BaseException:
+            try:
+                await transaction.rollback()
+            except BaseException:  # noqa: BLE001 — rollback cannot replace the DDL failure.
+                pass
+            raise
+        await transaction.commit()
         self.on = True
         await self.verify(conn)
         _require(not await cell_triggers.missing(conn), "restored canonical triggers")
@@ -772,12 +810,14 @@ async def _memory_set(
 ) -> list[RequestRow]:
     rows = []
     prefix = f"gate-{uuid.uuid4().hex}-{arm}"
-    async with httpx.AsyncClient(
+    context = httpx.AsyncClient(
         timeout=IO_S,
         headers={"Authorization": f"Bearer {args.token}"},
         follow_redirects=False,
         trust_env=False,
-    ) as client:
+    )
+    client = await context.__aenter__()
+    try:
         for i in range(CALLS + WARMUP):
             key = f"{prefix}-{i}"
             value = _payload(key)
@@ -843,18 +883,29 @@ async def _memory_set(
                             code = candidate
                     except (ValueError, TypeError, AttributeError):
                         pass
-                emit(
-                    "request_error",
-                    arm=arm,
-                    index=i,
-                    key=key,
-                    measured=i >= WARMUP,
-                    elapsed_ms=elapsed,
-                    status=response.status_code if response is not None else None,
-                    code=code,
-                    error_type=type(error).__name__,
-                )
+                try:
+                    emit(
+                        "request_error",
+                        arm=arm,
+                        index=i,
+                        key=key,
+                        measured=i >= WARMUP,
+                        elapsed_ms=elapsed,
+                        status=response.status_code if response is not None else None,
+                        code=code,
+                        error_type=type(error).__name__,
+                    )
+                except BaseException:  # noqa: BLE001 — diagnostics cannot replace the request failure.
+                    pass
                 raise
+    except BaseException as error:
+        try:
+            await context.__aexit__(type(error), error, error.__traceback__)
+        except BaseException:  # noqa: BLE001 — HTTP cleanup cannot replace work failure.
+            pass
+        raise
+    else:
+        await context.__aexit__(None, None, None)
     return rows
 
 
@@ -997,6 +1048,7 @@ async def _delivery(
 
     results: list[dict[str, Any]] = []
     _index = 0
+    failure: BaseException | None = None
     with customer.for_org(args.org, namespace=args.namespace, subject=SUBJECT):
         started = time.perf_counter_ns()
         try:
@@ -1009,12 +1061,20 @@ async def _delivery(
                     "real worker claimed/published/failure",
                 )
         except BaseException as error:
-            emit("worker_error", arm=arm, index=_index, error_type=type(error).__name__)
+            failure = error
+            try:
+                emit("worker_error", arm=arm, index=_index, error_type=type(error).__name__)
+            except BaseException:  # noqa: BLE001 — diagnostics cannot replace the worker failure.
+                pass
             raise
         finally:
             elapsed = (time.perf_counter_ns() - started) / 1_000_000_000
             for result_index, outcome in enumerate(results):
-                emit("worker", arm=arm, index=result_index, **outcome)
+                try:
+                    emit("worker", arm=arm, index=result_index, **outcome)
+                except BaseException:  # Prior results cannot replace failed work.
+                    if failure is None:
+                        raise
     _require(math.isfinite(elapsed) and elapsed > 0, "positive worker block elapsed")
     rps = BATCHES * batch / elapsed
     emit("delivery_block", arm=arm, elapsed_seconds=elapsed, rows=BATCHES * batch, rps=rps)

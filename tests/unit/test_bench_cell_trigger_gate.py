@@ -8,7 +8,6 @@ import dataclasses
 import json
 import socket
 import uuid
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -513,9 +512,8 @@ class TriggerConn:
         self.drift = False
         self.statements = []
 
-    @asynccontextmanager
-    async def transaction(self):
-        yield
+    def transaction(self):
+        return SimpleNamespace(start=AsyncMock(), rollback=AsyncMock(), commit=AsyncMock())
 
     async def execute(self, sql):
         self.statements.append(sql)
