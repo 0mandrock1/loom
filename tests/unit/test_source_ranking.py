@@ -35,6 +35,20 @@ def ordinary(uri="drive:ordinary", *, score=0.8):
     return ChunkHit("docs", uri, 0, "ordinary content", ["ordinary"], 0.2, score=score)
 
 
+def test_public_mirror_hits_omit_internal_ownership_tags():
+    item = copy("A")
+    item.row["tags"] = ["source-id:private", "kind:notes"]
+    [result] = app.rank({}, {"semantic": [item]}, legs=("semantic",), fallback=[], top_k=1)
+    assert result.chunk.tags == ["kind:notes"]
+
+
+def test_public_ordinary_hits_keep_their_existing_tags():
+    hit = ordinary()
+    hit.tags[:] = ["source-id:ordinary", "kind:notes"]
+    [result] = app.rank({"semantic": [hit]}, {}, legs=("semantic",), fallback=[hit], top_k=1)
+    assert result.chunk is hit and result.chunk.tags == ["source-id:ordinary", "kind:notes"]
+
+
 def test_different_semantic_and_lexical_copies_never_mix_text_distance_or_credit():
     a, b = copy("A"), copy("B", distance=0.5, lexical=4.0)
     [result] = app.rank(

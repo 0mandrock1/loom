@@ -112,6 +112,15 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert response.status_code == 200, response.text
             return response.json()
 
+        async def get(token):
+            response = await client.post(
+                "/v1/knowledge.get",
+                json={"org": org, "namespace": namespace, "source_uri": public_uri},
+                headers={"Authorization": "Bearer " + token},
+            )
+            assert response.status_code == 200, response.text
+            return response.json()
+
         try:
             anonymous = await client.post(
                 "/v1/knowledge.search",
@@ -140,6 +149,8 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             await write_document(namespace, "ordinary:visible", query + " ordinary")
             baseline = await search(outsider)
             assert [r["source_uri"] for r in baseline["results"]] == ["ordinary:visible"]
+            missing_get = await get(outsider)
+            assert not missing_get["found"]
             row = await write_document(
                 mirror,
                 uri,
@@ -149,10 +160,17 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             )
             assert await search(outsider) == baseline
             assert await search(owner_bot) == baseline
+            assert await get(outsider) == await get(owner_bot) == missing_get
             allowed = await search(owner)
             private = [r for r in allowed["results"] if r["source_uri"] == public_uri]
             assert len(private) == 1 and private[0]["content"] == query + " private"
             assert private[0]["namespace"] == namespace
+            assert not any(tag.startswith("source-id:") for tag in private[0]["tags"])
+            document = await get(owner)
+            assert document["found"] and document["content"] == query + " private"
+            assert document["source_uri"] == public_uri
+            assert not any(tag.startswith("source-id:") for tag in document["tags"])
+            assert "access_json" not in document
             denied = await client.post(
                 "/v1/knowledge.search",
                 json={
@@ -169,15 +187,18 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             else:
                 await ch.insert("loom.documents", [narrowed])
             assert await search(owner) == baseline
+            assert await get(owner) == missing_get
             widened = {**row, "version": 12, "access_json": to_json(AccessList(anyone=True))}
             if pg.enabled():
                 await pg_documents.commit([widened], over={uri: 11}, targets={uri: 1})
             else:
                 await ch.insert("loom.documents", [widened])
             assert public_uri in [r["source_uri"] for r in (await search(owner_bot))["results"]]
+            assert (await get(owner_bot))["found"]
             stale = now - timedelta(seconds=settings.knowledge_source_acl_stale_seconds + 1)
             await mirrors.record_listing(org, mirror, source, "checked", stale)
             assert await search(owner) == baseline
+            assert await get(owner) == missing_get
         finally:
             await ch.disconnect()
             await pg.close_pool()

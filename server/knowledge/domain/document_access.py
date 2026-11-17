@@ -7,6 +7,11 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 
+def public_tags(tags: Sequence[str]) -> list[str]:
+    """Omit a checked mirror's internal source ownership tags."""
+    return [tag for tag in tags if not tag.startswith("source-id:")]
+
+
 def source_id(source_uri: str, tags: Sequence[str]) -> str:
     """One canonical registration id, present in both its ownership tag and address."""
     found = [tag.removeprefix("source-id:") for tag in tags if tag.startswith("source-id:")]

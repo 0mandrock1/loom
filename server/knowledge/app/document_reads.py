@@ -30,10 +30,11 @@ from server.knowledge.app import pg_serving
 from server.knowledge.app.readable import readable_namespaces
 from server.knowledge.domain.chunk_metadata import read_structure
 from server.knowledge.domain.chunking import Chunk
+from server.knowledge.domain.document_access import public_tags
 from server.operations.read_projection import resolve as _resolve_projection
 
 if TYPE_CHECKING:
-    from server.knowledge.store.documents import DocumentListRow
+    from server.knowledge.store.documents import DocumentListRow, DocumentRow
     from server.memory.domain.corpus_synthesis import CorpusChunk
 
 _LIST_ALWAYS = frozenset({"namespace", "source_uri"})
@@ -209,29 +210,52 @@ async def handle_knowledge_outline(input: KnowledgeOutlineInput) -> KnowledgeOut
 
 
 async def handle_knowledge_get(input: KnowledgeGetInput) -> KnowledgeGetOutput:
-    """Fetch one document. Excludes superseded rows by default."""
+    """Fetch an ordinary document or one current, admitted source copy."""
+    from server.knowledge.app import source_access, source_documents
+
+    plan = await source_access.prepare(input.org, [input.namespace])
+    row = await _ordinary_get_row(input)
+    if row is not None or not plan.marked:
+        return _get_output(row, input.source_uri)
+    checked = await source_documents.get(plan, input.namespace, input.source_uri)
+    return _get_output(
+        checked.row if checked else None, input.source_uri, mirrored=checked is not None
+    )
+
+
+async def ordinary_get(input: KnowledgeGetInput) -> KnowledgeGetOutput:
+    """Read an ordinary document for mining without preparing a mirror leg."""
+    return _get_output(await _ordinary_get_row(input), input.source_uri)
+
+
+async def _ordinary_get_row(input: KnowledgeGetInput) -> DocumentRow | None:
     from server.core.ch import own_write_reads
     from server.knowledge.store import documents as documents_repo
 
     with own_write_reads():  # a get right after an add must see it
-        row = await documents_repo.get_one(
+        return await documents_repo.get_one(
             input.org,
             input.namespace,
             input.source_uri,
             include_superseded=input.include_superseded,
         )
+
+
+def _get_output(
+    row: DocumentRow | None, source_uri: str, *, mirrored: bool = False
+) -> KnowledgeGetOutput:
     if row is None:
-        return KnowledgeGetOutput(found=False, source_uri=input.source_uri)
+        return KnowledgeGetOutput(found=False, source_uri=source_uri)
     try:
         metadata = json.loads(row.metadata) if row.metadata else {}
     except json.JSONDecodeError:
         metadata = {}
     return KnowledgeGetOutput(
         found=True,
-        source_uri=row.source_uri,
+        source_uri=source_uri,
         title=row.title,
         content=row.content,
-        tags=row.tags,
+        tags=public_tags(row.tags) if mirrored else row.tags,
         metadata=metadata,
         ingested_at=row.ingested_at,
         superseded=row.superseded_at is not None,

@@ -8,6 +8,7 @@ from typing import Any
 from server.knowledge.app.search import ChunkHit, _provenance, _structure, fuse_rrf
 from server.knowledge.app.source_access import Admitted
 from server.knowledge.app.source_search import Hydrated
+from server.knowledge.domain.document_access import public_tags
 from server.knowledge.store.source_candidates import Leg
 
 
@@ -105,6 +106,7 @@ def rank(
                 hit,
                 namespace=proof.namespace,
                 source_uri=hit.source_uri.rsplit("#", 1)[0],
+                tags=public_tags(hit.tags),
             )
         key = (hit.namespace, hit.source_uri, hit.chunk_idx)
         if key not in seen:
