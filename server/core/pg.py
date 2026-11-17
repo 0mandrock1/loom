@@ -392,16 +392,26 @@ async def close_owned(conn: Any, *, end: float) -> None:
     is a bounded fallback, not evidence that the backend has released its locks.
     The owner preserves an earlier operation failure when this cleanup fails.
     """
+
+    async def close() -> SystemExit | KeyboardInterrupt | None:
+        try:
+            await conn.close(timeout=max(0, end - time.monotonic()))
+        except (SystemExit, KeyboardInterrupt) as error:
+            # A native fatal in a child Task stops the loop before its owner can clean up.
+            return error
+        return None
+
     task: asyncio.Task[Any] | None = None
     try:
         remaining = end - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("Postgres owned-session cleanup deadline expired")
-        task = asyncio.create_task(conn.close(timeout=remaining))
+        task = asyncio.create_task(close())
         done, _ = await asyncio.wait({task}, timeout=max(0, end - time.monotonic()))
         if not done:
             raise TimeoutError("Postgres owned-session cleanup deadline expired")
-        task.result()
+        if isinstance(result := task.result(), (SystemExit, KeyboardInterrupt)):
+            raise result
     except BaseException:
         _terminate(conn)
         if task is not None:

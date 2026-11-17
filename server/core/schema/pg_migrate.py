@@ -21,7 +21,7 @@ import hashlib
 import logging
 import time
 from asyncio import sleep
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any
@@ -110,24 +110,61 @@ async def migrate(
     holds every read and write of the table behind it; the file is retried. For schema
     `loom` it marks the session and runs `cell_triggers.ensure` before the lock goes."""
     files, indexes = _validated(mig_dir, schema)
-    async with (connect or pg.dedicated)() as conn:
-        task = asyncio.create_task(_migrate(conn, files, indexes, schema, lock_key))
-        try:
-            return await asyncio.shield(task)
-        except BaseException:
-            end = time.monotonic() + pg._RELEASE_TIMEOUT_S
-            try:
-                await pg.close_owned(conn, end=end)
-            except BaseException:  # noqa: BLE001 — preserve the migration failure/cancellation.
-                pass
-            if not task.done():
-                task.cancel()
-            task.add_done_callback(pg._retrieve_task)
-            try:
-                await asyncio.wait({task}, timeout=max(0, end - time.monotonic()))
-            except BaseException:  # noqa: BLE001 — preserve the original failure on repeated cancel.
-                pg._terminate(conn)
-            raise
+    cm = (connect or pg.dedicated)()
+    conn = await cm.__aenter__()
+    task = asyncio.create_task(_owned_result(_migrate(conn, files, indexes, schema, lock_key)))
+    try:
+        result = await asyncio.shield(task)
+        if isinstance(result, (SystemExit, KeyboardInterrupt)):
+            raise result
+    except BaseException as error:
+        end = time.monotonic() + pg._RELEASE_TIMEOUT_S
+        await _failed_migration(cm, conn, task, error, end)
+        raise
+    await cm.__aexit__(None, None, None)
+    return result
+
+
+async def _owned_result[T](work: Awaitable[T]) -> T | SystemExit | KeyboardInterrupt:
+    try:
+        return await work
+    except (SystemExit, KeyboardInterrupt) as error:
+        # Transport native failures through child Tasks without stopping their supervisor.
+        return error
+
+
+async def _failed_migration(
+    cm: AbstractAsyncContextManager[Any],
+    conn: Any,
+    task: asyncio.Task[Any],
+    error: BaseException,
+    end: float,
+) -> None:
+    try:
+        await pg.close_owned(conn, end=end)
+    except BaseException:  # noqa: BLE001 — preserve the migration failure/cancellation.
+        pass
+    if not task.done():
+        task.cancel()
+    task.add_done_callback(pg._retrieve_task)
+    try:
+        await asyncio.wait({task}, timeout=max(0, end - time.monotonic()))
+    except BaseException:  # noqa: BLE001 — preserve the first failure on repeated cancellation.
+        pg._terminate(conn)
+    release = asyncio.create_task(
+        _owned_result(cm.__aexit__(type(error), error, error.__traceback__))
+    )
+    try:
+        done, _ = await asyncio.wait({release}, timeout=max(0, end - time.monotonic()))
+        if not done:
+            raise TimeoutError("migration context cleanup deadline expired")
+        release.result()
+    except BaseException:  # noqa: BLE001 — a context exit cannot replace the migration failure.
+        pg._terminate(conn)
+    finally:
+        if not release.done():
+            release.cancel()
+        release.add_done_callback(pg._retrieve_task)
 
 
 def _validated(
