@@ -458,6 +458,7 @@
 37740a4c5dba	SELECT count() AS n FROM loom.memory_code_link_queue WHERE org = {org:String} AND user_id = {uid:String}
 378589d81d6f	SELECT count() AS n FROM loom.operator_edges FINAL WHERE org = {org:String} AND namespace = {ns:String} AND tombstoned_at IS NULL
 379cd09b4b77	ALTER TABLE loom.conversations DELETE WHERE (org = {org:String} AND namespace = {ns:String}) AND ({erasure_mutation_tag:String} = {erasure_mutation_tag:String}) SETTINGS mutations_sync = ?
+37d3add2a1a2	SELECT count() AS n FROM loom.knowledge_source_push WHERE org = {org:String} AND namespace = {ns:String}
 37e82d44def8	SELECT count() AS n FROM loom.memory_reinforcement WHERE org = {org:String} AND namespace = {ns:String}
 380b4d047f79	SELECT m.org AS org, m.namespace AS namespace, m.user_id AS user_id, count() AS n FROM loom.memory AS m FINAL INNER JOIN loom.namespaces AS n FINAL ON m.org = n.org AND m.namespace = n.namespace WHERE
 382ab57c4cce	SELECT count() AS n FROM loom.learnings_supporters WHERE org = {org:String} AND user_id = {uid:String}
@@ -648,6 +649,7 @@
 4f01d06d9c9a	SELECT record_id, parent_memory_key, session_id, schema_name, record_json, field_text, lexical_score, least( ?, ? * lexical_score + ? + if(valid_at IS NOT NULL AND abs(dateDiff(?, valid_at, parseDateT
 4f15bec9d213	SELECT toString(memory_id) AS id, version, value_preview, value_len > ? AS cut FROM loom.memory WHERE org = {org:String} AND namespace = {ns:String} AND (memory_id, version) IN {pairs:Array(Tuple(UUID
 4f6761819225	SELECT concat(?, toString(c.session_id), ?, toString(c.chunk_index)) AS memory_key, ? AS memory_type, substring(c.content, ?, ?) AS content_excerpt, c.content AS content_full, c.agent AS agent, c.user
+4f71b021bf53	ALTER TABLE loom.knowledge_source_push DELETE WHERE (org = {org:String} AND namespace = {ns:String}) AND ({erasure_mutation_tag:String} = {erasure_mutation_tag:String}) SETTINGS mutations_sync = ?
 4fd22a03732e	SELECT count() AS n FROM loom.dataset_rows WHERE org = {org:String} AND namespace = {ns:String}
 5000543b86ce	SELECT agent, user_id, session_id, memory_key, memory_type, content_excerpt, toString(created_at) AS created_at, toString(valid_at) AS valid_at, version FROM loom.memory_embeddings FINAL WHERE org = {
 502b6dac17fa	ALTER TABLE loom.search_trace_log DELETE WHERE (org = {org:String} AND namespace = {ns:String}) AND ({erasure_mutation_tag:String} = {erasure_mutation_tag:String}) SETTINGS mutations_sync = ?
