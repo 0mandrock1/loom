@@ -11,6 +11,7 @@ from pathlib import Path
 
 from gevent import get_hub
 from gevent.event import Event
+from gevent.pool import Pool
 from gevent.pywsgi import WSGIServer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -75,7 +76,7 @@ def invoke(kind, credentials, user_id):
     return messages[0].message.json_object
 
 
-server = WSGIServer(("127.0.0.1", 0), application, log=None)
+server = WSGIServer(("127.0.0.1", 0), application, log=None, spawn=Pool(4))
 pool = None
 server.start()
 first = {
