@@ -44,6 +44,10 @@ kept separately and included in the corresponding item's searchable body. Unsupp
 triage fields use the contract's typed defaults; edges are empty until evidence exists.
 Contract `updated_at` is the latest persisted publication timestamp across the item
 and its comments, so late imports and comment edits advance incremental tracker reads.
+Publication versions use whole milliseconds to match tracker cursors. Under the record's
+writer lease, each content batch receives the later of the record clock and one millisecond
+beyond every persisted content version for its organization, across all repositories.
+This ordering also covers namespaces that read multiple repositories through one cursor.
 Raw upstream timestamps remain separate and drive API cursors. No model or embedding
 call is required. Repository identities retain the registered allowlist's spelling,
 including when the API returns different capitalization.

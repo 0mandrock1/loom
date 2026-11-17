@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from server.core.repo_base import _CHClient
@@ -73,7 +73,7 @@ def create_table(name: str, columns: dict[str, str], key: str) -> str:
     fields = ", ".join(f"`{column}` {kind}" for column, kind in columns.items())
     return (
         f"CREATE TABLE IF NOT EXISTS {name} ({fields}, "
-        "version DateTime64(6, 'UTC') DEFAULT now64(6)) "
+        "version DateTime64(3, 'UTC') DEFAULT now64(3)) "
         f"ENGINE = ReplacingMergeTree(version) ORDER BY ({key})"
     )
 
@@ -182,6 +182,29 @@ async def repository(ch: _CHClient, org: str, repo: str) -> dict[str, Any] | Non
 async def put_items(
     ch: _CHClient, table: str, rows: list[dict[str, Any]], identity: dict[str, str], repo: str
 ) -> None:
+    """Publish a batch under the record writer's lease."""
     if table not in {"feed_issues", "feed_prs", "feed_comments"}:
         raise ValueError("unknown feed record table")
-    await ch.insert(table, [row | identity | {"repository": repo} for row in rows])
+    if not rows:
+        return
+    clock_row = await ch.query_one(
+        """SELECT toUnixTimestamp64Milli(now64(3)) AS now_ms, max(published_ms) AS prior_ms
+FROM (
+    SELECT toUnixTimestamp64Milli(max(version)) AS published_ms
+    FROM feed_issues WHERE org = {org:String}
+    UNION ALL
+    SELECT toUnixTimestamp64Milli(max(version)) AS published_ms
+    FROM feed_prs WHERE org = {org:String}
+    UNION ALL
+    SELECT toUnixTimestamp64Milli(max(version)) AS published_ms
+    FROM feed_comments WHERE org = {org:String}
+) LIMIT 1""",
+        {"org": identity["org"]},
+    )
+    if not clock_row:
+        raise ValueError("record publication clock is unavailable")
+    published_ms = max(int(clock_row["now_ms"]), int(clock_row["prior_ms"]) + 1)
+    version = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=published_ms)
+    await ch.insert(
+        table, [row | identity | {"repository": repo, "version": version} for row in rows]
+    )

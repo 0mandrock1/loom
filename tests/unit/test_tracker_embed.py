@@ -663,7 +663,7 @@ async def test_upstream_statements_carry_the_predicate_the_window_and_the_cursor
         "(closed_at <= toDateTime64(0, 3) OR closed_at >= now64(3) - INTERVAL {days:UInt32} DAY)"
         in q
     )
-    assert "updated_at > {since:DateTime64(6)}" in q and params["since"] == T0
+    assert "updated_at > {since:DateTime64(3)}" in q and params["since"] == T0
     assert "substring(body, 1, {chars:UInt32}) AS body" in q and params["chars"] == 600
     assert (
         "ORDER BY updated_at ASC, source_id ASC LIMIT {limit:UInt32}" in q
@@ -675,7 +675,7 @@ async def test_upstream_statements_carry_the_predicate_the_window_and_the_cursor
         ORG, NS, kind="issue", since=T0, since_id=f"{REPO}#5", closed_days=365, body_chars=600
     )
     sql, params = up.calls[-1]
-    assert "AND (updated_at, source_id) > ({since:DateTime64(6)}, {since_id:String})" in _norm(sql)
+    assert "AND (updated_at, source_id) > ({since:DateTime64(3)}, {since_id:String})" in _norm(sql)
     assert params["since"] == T0 and params["since_id"] == f"{REPO}#5"
     await s.embed_items(ORG, NS, kind="pr", since=None, closed_days=30, body_chars=100, stamp="p1")
     sql, params = up.calls[-1]
