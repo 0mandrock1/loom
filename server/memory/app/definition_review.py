@@ -28,7 +28,7 @@ from server.memory.store import shared as shared_repo
 from server.settings import settings
 
 # The first build whose readers and erasure know private definition candidates.
-DEFINITION_DRAFT_MIGRATION = 101
+DEFINITION_DRAFT_MIGRATION = 102
 
 
 async def require_draft_fleet() -> None:
