@@ -13,6 +13,7 @@ from server.core.diagnostics import private_work
 from server.knowledge.app.source_access import AccessEvidence, Admitted, ReadPlan
 from server.knowledge.domain.chunk_metadata import read_structure
 from server.memory.domain.corpus_synthesis import CorpusChunk
+from server.observability.genai import current_stage, llm_stage
 
 
 class LostCorpus(Exception):
@@ -129,7 +130,9 @@ class CheckedLLM:
 
     async def complete(self, *args: Any, **kwargs: Any) -> Any:
         await self.proofs.check()
-        result = await self.client.complete(*args, **kwargs)
+        # Keep the caller's map, plan or reduce stage through provider forwarding.
+        with llm_stage(current_stage()):
+            result = await self.client.complete(*args, **kwargs)
         await self.proofs.check()
         return result
 

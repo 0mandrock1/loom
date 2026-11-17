@@ -159,16 +159,17 @@ async def list_candidates(
         params["acl_keys"] = access_keys
         coarse = " AND hasAny(access_keys, {acl_keys:Array(String)})"
     sql = (
-        "WITH indexOf({bindings:Array(Tuple(String, String))}, "
+        "SELECT namespace, source_uri, public_namespace, public_uri FROM ("
+        "SELECT namespace, source_uri, indexOf({bindings:Array(Tuple(String, String))}, "
         "(namespace, right(source_uri, 36))) AS binding, "
         "arrayElement({originals:Array(String)}, binding) AS public_namespace, "
         "substring(source_uri, 1, greatest(toInt64(length(source_uri)) - 37, 0)) AS public_uri "
-        "SELECT namespace, source_uri, public_namespace, public_uri "
         "FROM loom.documents FINAL WHERE org = {org:String} "
         "AND namespace IN {nss:Array(String)} AND superseded_at IS NULL "
-        "AND length(source_uri) > 37 AND substring(source_uri, -37, 1) = '#' AND binding > 0"
+        "AND length(source_uri) > 37 AND substring(source_uri, -37, 1) = '#'"
         + coarse
-        + " ORDER BY public_namespace, public_uri, namespace, source_uri FORMAT JSONEachRow"
+        + ") WHERE binding > 0 "
+        "ORDER BY public_namespace, public_uri, namespace, source_uri FORMAT JSONEachRow"
     )
     async with candidates(sql, params) as rows:
         yield rows

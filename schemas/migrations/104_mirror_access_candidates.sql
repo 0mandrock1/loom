@@ -13,9 +13,9 @@ MATERIALIZED arrayDistinct(arrayConcat(
 
 ALTER TABLE loom.documents ADD INDEX IF NOT EXISTS access_keys_bloom access_keys TYPE bloom_filter(0.01) GRANULARITY 4;
 
--- Overlap counts the same chunk key once; writes keep a view throughout replacement.
-CREATE MATERIALIZED VIEW IF NOT EXISTS loom.chunk_term_freq_checked_mv TO loom.chunk_term_freq
-AS SELECT
+-- Keep each insert trigger and target while narrowing its query in place.
+ALTER TABLE loom.chunk_term_freq_mv MODIFY QUERY
+SELECT
     org,
     namespace,
     term,
@@ -27,11 +27,8 @@ WHERE (content != '') AND (doc_superseded_at IS NULL)
     AND NOT match(namespace, '^acl-[0-9a-f]{24}$')
 GROUP BY org, namespace, term;
 
-DROP VIEW IF EXISTS loom.chunk_term_freq_mv;
-RENAME TABLE loom.chunk_term_freq_checked_mv TO loom.chunk_term_freq_mv;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS loom.chunk_context_term_freq_checked_mv TO loom.chunk_term_freq
-AS SELECT
+ALTER TABLE loom.chunk_context_term_freq_mv MODIFY QUERY
+SELECT
     org,
     namespace,
     term,
@@ -42,6 +39,3 @@ ARRAY JOIN arrayDistinct(arrayFilter(t -> (length(t) >= 3), arrayMap(t -> lowerU
 WHERE (content != '') AND (context != '') AND (doc_superseded_at IS NULL)
     AND NOT match(namespace, '^acl-[0-9a-f]{24}$')
 GROUP BY org, namespace, term;
-
-DROP VIEW IF EXISTS loom.chunk_context_term_freq_mv;
-RENAME TABLE loom.chunk_context_term_freq_checked_mv TO loom.chunk_context_term_freq_mv;

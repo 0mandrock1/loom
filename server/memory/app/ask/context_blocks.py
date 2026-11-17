@@ -10,6 +10,7 @@ from typing import Any
 from server.knowledge.app.source_corpus import LostCorpus
 from server.knowledge.app.source_passages import CheckedPassages, collect
 from server.memory.app.ask.source_context import PreparedKnowledge, prepare_knowledge
+from server.observability.genai import current_stage, llm_stage
 from server.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -87,7 +88,9 @@ class CheckedAskLLM:
 
     async def complete(self, *args: Any, **kwargs: Any) -> Any:
         await self.knowledge.require()
-        result = await self.client.complete(*args, **kwargs)
+        # The synthesis tier owns the stage; access renewal must not rename it.
+        with llm_stage(current_stage()):
+            result = await self.client.complete(*args, **kwargs)
         await self.knowledge.require()
         return result
 

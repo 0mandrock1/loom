@@ -897,9 +897,8 @@ schema. These rules keep that safe. The operator procedure is in
     `104_mirror_access_candidates.sql`): `documents.access_keys` is materialized from
     the existing permission JSON; N-1 writers need no new field. N still checks the
     strict current list, and Postgres heads do not depend on published keys. Each
-    replacement chunk-frequency view subscribes before the old view is dropped;
-    overlapping writes count once through the existing `uniqExact` chunk key. The
-    new views exclude mirror namespaces for either build. Mirror creation remains
+    chunk-frequency view changes its query in place, retaining the input, target and
+    output columns. Both views exclude mirror namespaces for either build. Mirror creation remains
     refused until the read, request, session and deployment protections are complete.
 
 ## What checks them

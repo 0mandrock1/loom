@@ -113,9 +113,11 @@ async def test_preparation_also_precedes_a_budget_abstention(world, monkeypatch)
 
 async def test_marked_provider_work_suppresses_public_diagnostics(world):
     from server.core.diagnostics import codes_only
+    from server.observability.genai import current_stage
 
     async def complete(*_args, **_kwargs):
         assert codes_only()
+        assert current_stage() in {"knowledge_synthesize_map", "knowledge_synthesize_reduce"}
         return SimpleNamespace(text="Private uncited prose")
 
     world.model.complete = complete
