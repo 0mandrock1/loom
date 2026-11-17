@@ -94,9 +94,9 @@ class _Interrupted:
     error: BaseException
 
 
-async def _work_result[T](work: Coroutine[Any, Any, T]) -> T | _Interrupted:
+async def _work_result[T](work: Callable[[], Awaitable[T]]) -> T | _Interrupted:
     try:
-        return await work
+        return await work()
     except (KeyboardInterrupt, SystemExit) as error:
         # These exceptions otherwise stop asyncio's loop before the owner can close.
         return _Interrupted(error)
@@ -108,7 +108,7 @@ async def supervise[T](conn: Any, work: Coroutine[Any, Any, T], *, end: float) -
     A failed borrowed transaction must remain alive until public close sends its
     cancellation. Closing the transport first can leave its backend locks held.
     """
-    task = asyncio.create_task(_work_result(work))
+    task = asyncio.create_task(_work_result(lambda: work))
     reserve = min(1.0, max(0.0, end - time.monotonic()) / 4)
     try:
         done, _ = await asyncio.wait({task}, timeout=max(0.0, end - reserve - time.monotonic()))
@@ -131,6 +131,53 @@ async def supervise[T](conn: Any, work: Coroutine[Any, Any, T], *, end: float) -
         except BaseException:  # noqa: BLE001 — repeated cancellation preserves the first failure.
             pg._terminate(conn)
         raise
+
+
+async def close_context(
+    cm: contextlib.AbstractAsyncContextManager[Any],
+    conn: Any,
+    *,
+    error: BaseException | None = None,
+) -> None:
+    """Close an owned session and its context without replacing its first failure.
+
+    Work supervision may have closed it already; context exit then gets no fresh
+    allowance. Both exit invocation and awaiting run inside the fatal capture.
+    """
+    closed = pg._lost(conn)
+    end = time.monotonic() + (0.0 if closed else pg._RELEASE_TIMEOUT_S)
+    failure = error
+    try:
+        if not closed:
+            await pg.close_owned(conn, end=end)
+    except BaseException as caught:  # noqa: BLE001 — keep the first operation failure.
+        if failure is None:
+            failure = caught
+    task = asyncio.create_task(
+        _work_result(
+            lambda: cm.__aexit__(
+                type(failure) if failure is not None else None,
+                failure,
+                failure.__traceback__ if failure is not None else None,
+            )
+        )
+    )
+    try:
+        done, _ = await asyncio.wait({task}, timeout=max(0.0, end - time.monotonic()))
+        if not done:
+            raise TimeoutError("attach context cleanup deadline expired")
+        if isinstance(result := task.result(), _Interrupted):
+            raise result.error
+    except BaseException as caught:  # noqa: BLE001 — exit cannot replace the first failure.
+        pg._terminate(conn)
+        if failure is None:
+            failure = caught
+    finally:
+        if not task.done():
+            task.cancel()
+        task.add_done_callback(pg._retrieve_task)
+    if failure is not None:
+        raise failure
 
 
 def _split(key: int) -> str:

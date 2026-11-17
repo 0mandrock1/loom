@@ -196,30 +196,11 @@ class Run:
             raise Refused(refusals)
         await apg.take_lock(self.lock_conn, "attach")
 
-    async def close_lock(self) -> None:
-        from server.core import pg
-
+    async def close_lock(self, error: BaseException | None = None) -> None:
         if self._lock_cm is not None:
             cm, conn = self._lock_cm, self.lock_conn
             self._lock_cm = self.lock_conn = None
-            closed = pg._lost(conn)
-            end = time.monotonic() + (0.0 if closed else pg._RELEASE_TIMEOUT_S)
-            try:
-                if not closed:
-                    await pg.close_owned(conn, end=end)
-            finally:
-                task = asyncio.create_task(cm.__aexit__(None, None, None))
-                task.add_done_callback(pg._retrieve_task)
-                try:
-                    done, _ = await asyncio.wait({task}, timeout=max(0.0, end - time.monotonic()))
-                    if not done:
-                        task.cancel()
-                        raise TimeoutError("attach lock cleanup deadline expired")
-                    task.result()
-                except BaseException:
-                    pg._terminate(conn)
-                    task.cancel()
-                    raise
+            await apg.close_context(cm, conn, error=error)
 
     async def confirm_lock(self) -> None:
         """The lock is held still, or taken again (refusing when another run holds it now),
@@ -485,16 +466,22 @@ class Run:
             # landed; `recording` again when that try rolled back.
             self.mode = mode
 
+        cm = pg.dedicated(statement_timeout_ms=_LOCK_STATEMENT_MS)
+        conn = await cm.__aenter__()
+        failure: BaseException | None = None
         try:
-            async with pg.dedicated(statement_timeout_ms=_LOCK_STATEMENT_MS) as conn:
-                await apg.commit_enforced(
-                    conn, self.confirm_lock, self.ready_for_commit, self.wait, self.log, mark
-                )
+            await apg.commit_enforced(
+                conn, self.confirm_lock, self.ready_for_commit, self.wait, self.log, mark
+            )
+        except BaseException as error:  # noqa: BLE001 — exit preserves the work failure.
+            failure = error
+        try:
+            await apg.close_context(cm, conn, error=failure)
         except Refused:
             raise
         except Exception as e:
-            if self.mode != "unknown":
-                raise  # no try was in flight: nothing to decide
+            if failure is None or self.mode != "unknown":
+                raise  # Only interrupted work needs the unknown-outcome recovery.
             self.log(f"the mode commit's outcome is unknown ({type(e).__name__}: {e})")
             async with pg.dedicated(statement_timeout_ms=_LOCK_STATEMENT_MS) as conn:
                 await apg.end_mode_transactions(conn, self.confirm_lock)
@@ -691,7 +678,7 @@ class Run:
             raise
         finally:
             try:
-                await self.close_lock()
+                await self.close_lock(failure)
             except BaseException:
                 if failure is None:
                     raise

@@ -724,7 +724,7 @@ async def test_restore_preserves_primary_failure_and_survives_second_cancellatio
         restoring.set()
         await release.wait()
 
-    async def close(c):
+    async def close(c, *_):
         c.closed = True
 
     monkeypatch.setattr(gate.asyncpg, "connect", AsyncMock(return_value=conn))
@@ -992,7 +992,7 @@ async def test_restoration_has_finite_deadline_and_closes_owned_connection(monke
 
     monkeypatch.setattr(gate, "RESTORE_S", 0.01)
 
-    async def close(owned):
+    async def close(owned, *_):
         assert owned is conn
         await conn.close()
 
@@ -1456,3 +1456,130 @@ def test_launch_refusal_precedes_any_native_or_store_setup(monkeypatch, tmp_path
     verdict = json.loads(capsys.readouterr().out)
     assert verdict["verdict"] == "INVALID" and verdict["reason"] == "launch receipt hash"
     assert not (tmp_path / "output.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_restore_closes_before_installed_transaction_rollback_can_overrun(monkeypatch):
+    from asyncpg.transaction import Transaction
+
+    events = []
+    release, rolling_back = asyncio.Event(), asyncio.Event()
+
+    class Connection:
+        _pool_release_ctr = 0
+        _top_xact = None
+        _protocol = SimpleNamespace(is_in_transaction=lambda: False)
+
+        def __init__(self):
+            self.closed = False
+            self.timeouts = []
+
+        def is_closed(self):
+            return self.closed
+
+        def transaction(self):
+            return Transaction(self, None, False, False)
+
+        async def execute(self, sql, *args):
+            if sql.startswith("DROP TRIGGER"):
+                raise ValueError("restoration DDL failed")
+            if sql.startswith("ROLLBACK"):
+                rolling_back.set()
+                try:
+                    while not release.is_set():
+                        try:
+                            await release.wait()
+                        except asyncio.CancelledError:
+                            continue
+                finally:
+                    events.append("rollback ended")
+
+        async def close(self, **kwargs):
+            self.timeouts.append(kwargs["timeout"])
+            events.append("public close")
+            self.closed = True
+            release.set()
+
+        def terminate(self):
+            self.closed = True
+            release.set()
+
+    conn = Connection()
+    monkeypatch.setattr(gate, "RESTORE_S", 0.04)
+    artifact = SimpleNamespace(emit=lambda *a, **k: None)
+    task = asyncio.create_task(
+        gate._cleanup(gate.Triggers(("memory_current",), "", ""), conn, artifact)
+    )
+    try:
+        await asyncio.wait_for(rolling_back.wait(), 1)
+        done, _ = await asyncio.wait({task}, timeout=0.2)
+        assert done, "restoration deadline waited for rollback before closing"
+        with pytest.raises(TimeoutError):
+            task.result()
+        assert conn.closed
+        assert events.index("public close") < events.index("rollback ended")
+        assert conn.timeouts and all(0 < bound <= 0.04 for bound in conn.timeouts)
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("kind", ["SystemExit", "KeyboardInterrupt"])
+@pytest.mark.parametrize("phase", ["restore", "close"])
+def test_driver_cleanup_native_failure_stays_inside_its_owner(kind, phase):
+    import subprocess
+    import sys
+    import textwrap
+
+    program = textwrap.dedent(
+        """
+        import argparse
+        import asyncio
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from bench import cell_trigger_gate as gate
+        kind, phase = sys.argv[1:]
+        original = ValueError('original operation failure')
+        secondary = {'SystemExit': SystemExit, 'KeyboardInterrupt': KeyboardInterrupt}[kind](
+            'cleanup failed')
+        events = []
+        class Connection:
+            async def close(self, **kwargs):
+                events.append('close')
+                if phase == 'close': raise secondary
+            def terminate(self): events.append('abort')
+        class Triggers:
+            tables = ('memory_current',)
+            invariant = org = 'hash'
+            async def set(self, *args): pass
+            async def restore(self, *args):
+                events.append('restore')
+                if phase == 'restore': raise secondary
+        async def main():
+            gate.asyncpg.connect = AsyncMock(return_value=Connection())
+            gate._proof = AsyncMock(return_value={})
+            gate.Triggers.capture = AsyncMock(return_value=Triggers())
+            gate._memory_set = AsyncMock(side_effect=original)
+            artifact = SimpleNamespace(emit=lambda *a, **k: None)
+            try:
+                await gate._run(argparse.Namespace(pg_dsn='unused'), None, artifact, object())
+            except BaseException as error:
+                assert error is original, (type(error).__name__, events)
+                assert events[0] == 'restore' and 'close' in events, events
+                await asyncio.sleep(0)
+                print('original-after-driver-cleanup')
+                return
+            raise AssertionError('operation failure was swallowed')
+        asyncio.run(main())
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program, kind, phase],
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "original-after-driver-cleanup" in result.stdout

@@ -403,10 +403,10 @@ class Artifact:
             self.file.close()
 
 
-async def _close_pg(conn: Any) -> None:
+async def _close_pg(conn: Any, end: float | None = None) -> None:
     from server.core import pg
 
-    await pg.close_owned(conn, end=asyncio.get_running_loop().time() + IO_S)
+    await pg.close_owned(conn, end=time.monotonic() + IO_S if end is None else end)
 
 
 class ReadOnlyCH:
@@ -1307,9 +1307,12 @@ async def _run(
         artifact.emit("provisional_statistics", **summary)
         return summary
     finally:
+        from server.cli import cell_attach_pg as apg
+
         prior = sys.exception()
         cleanup = asyncio.create_task(
-            _cleanup(triggers, conn, artifact), name="trigger-gate-cleanup"
+            apg._work_result(lambda: _cleanup(triggers, conn, artifact)),
+            name="trigger-gate-cleanup",
         )
         interrupted = False
         while not cleanup.done():
@@ -1320,7 +1323,8 @@ async def _run(
             except BaseException:  # noqa: BLE001 — preserve an earlier operation failure
                 break
         try:
-            cleanup.result()
+            if isinstance(result := cleanup.result(), apg._Interrupted):
+                raise result.error
         except BaseException as error:
             try:
                 artifact.emit("cleanup_error", error_type=type(error).__name__)
@@ -1334,23 +1338,25 @@ async def _run(
 
 
 async def _cleanup(triggers: Triggers | None, conn: Any, artifact: Artifact) -> None:
+    end = time.monotonic() + RESTORE_S
     try:
         if triggers is not None:
-            await _restore(triggers, conn)
+            await _restore(triggers, conn, end)
             artifact.emit("triggers_restored", verified=True)
     finally:
         prior = sys.exception()
         try:
-            await _close_pg(conn)
+            await _close_pg(conn, end)
         except BaseException:
             if prior is None:
                 raise
             artifact.emit("connection_cleanup_error", error_type=type(sys.exception()).__name__)
 
 
-async def _restore(triggers: Triggers, conn: Any) -> None:
-    async with asyncio.timeout(RESTORE_S):
-        await triggers.restore(conn)
+async def _restore(triggers: Triggers, conn: Any, end: float) -> None:
+    from server.cli import cell_attach_pg as apg
+
+    await apg.supervise(conn, triggers.restore(conn), end=end)
 
 
 def main() -> int:
