@@ -504,7 +504,7 @@ def with_read_identity[M: BaseModel](input: M, scope: ReadFilters) -> M:
 
 # Ops under a NARROW_SAFE_OPS prefix that still refuse a narrowed token: a knowledge
 # gap lists other people's questions.
-NARROW_REFUSED_PREFIXES: tuple[str, ...] = ("knowledge.gaps.",)
+NARROW_REFUSED_PREFIXES: tuple[str, ...] = ("knowledge.gaps.", "knowledge.query_history.")
 
 
 def honours_read_scope(op_name: str) -> bool:

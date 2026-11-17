@@ -2238,6 +2238,29 @@ class KnowledgeSettings(BaseModel):
     # Namespaces one pass groups, at most; the ones with the most misses first.
     knowledge_gaps_max_namespaces: Annotated[int, LIVE] = Field(default=500, ge=1)
 
+    # ---- query-history definitions ----
+    # Permit opt-in ClickHouse query-history sources to queue definition drafts.
+    knowledge_query_history_enabled: bool = False
+    # Distinct initial ClickHouse accounts required before drafting a query group.
+    knowledge_query_history_min_users: Annotated[int, LIVE] = Field(default=3, ge=3)
+    # Drafts one source may queue in a worker turn, at most.
+    knowledge_query_history_max_drafts: Annotated[int, LIVE] = Field(default=20, ge=1, le=100)
+    # Most-used query groups inspected per source turn before skipping existing drafts.
+    knowledge_query_history_max_groups: Annotated[int, LIVE] = Field(default=200, ge=1, le=1000)
+    # Days of finished SELECT query history a turn groups.
+    knowledge_query_history_window_days: Annotated[int, LIVE] = Field(default=7, ge=1, le=30)
+    # Seconds allowed for one query-history source read.
+    knowledge_query_history_read_timeout_s: Annotated[float, LIVE] = Field(default=30, gt=0, le=120)
+    # Deadline of one query-history pass; it starts no new group after half this budget.
+    knowledge_query_history_max_pass_seconds: float = Field(default=120.0, ge=30.0, le=600.0)
+    # Seconds between query-history passes.
+    knowledge_query_history_interval_seconds: int = Field(default=3600, ge=300)
+    # Sources one pass reads, at most; each turn is separately time bounded.
+    knowledge_query_history_max_sources: Annotated[int, LIVE] = Field(default=100, ge=1, le=1000)
+
+    # Query-history circuit states kept per process, at most; older sources are evicted first.
+    knowledge_query_history_max_breakers: int = Field(default=1000, ge=1, le=100000)
+
     # ---- chunking ----
     # Sliding-window chunking on knowledge.add/upsert, in characters.
     # chunk_size 0 = one chunk per doc (hurts long-form retrieval). Smaller
@@ -6120,6 +6143,10 @@ OP_BUDGETS_P99_MS: dict[str, int] = {
     # most the listing's 5 s bound, and a service it could not read is not waited for
     # again for a minute.
     "knowledge.formats": 5500,
+    "knowledge.gaps.draft": 30000,
+    "knowledge.query_history.add": 30000,
+    "knowledge.query_history.list": 250,
+    "knowledge.query_history.remove": 1000,
     "knowledge.gaps.list": 300,
     "knowledge.get": 30,
     "knowledge.ingest": 60,
@@ -6520,6 +6547,8 @@ OP_SHAPE_BUDGETS_P99_MS: dict[str, dict[str, int]] = {
 # input stays a formula at its call.
 
 LLM_MAX_TOKENS: dict[str, int] = {
+    # The private metric definition drafted from eligible gap or query-history evidence.
+    "definition_draft": 1600,
     # code.ask: the synthesized answer; part of its cached answers' version, so a change
     # marks them stale.
     "code_answer_synth": 900,

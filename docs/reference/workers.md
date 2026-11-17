@@ -247,6 +247,7 @@ adding its row.
 | `pg_payload_clear` | Postgres payload clearing: drops the payload (`row`) of a memory revision once every ClickHouse backup a restore may use holds it. | `LOOM_PG_PAYLOAD_CLEAR_ENABLED` | False | `LOOM_PG_PAYLOAD_CLEAR_INTERVAL_SECONDS` | 60 |
 | `profile_consolidation` | Profile-consolidation worker. | `LOOM_PROFILE_CONSOLIDATION_ENABLED` | False | `LOOM_PROFILE_CONSOLIDATION_INTERVAL_SECONDS` | 21600 |
 | `projection_repair` | Projection repair worker. | `LOOM_PROJECTION_REPAIR_ENABLED` | True | `LOOM_PROJECTION_REPAIR_INTERVAL_SECONDS` | 300 |
+| `query_history` | Opt-in query groups become private drafts; the supervisor persists source rotation. | `LOOM_KNOWLEDGE_QUERY_HISTORY_ENABLED` | False | `LOOM_KNOWLEDGE_QUERY_HISTORY_INTERVAL_SECONDS` | 3600 |
 | `recalibration` | Recalibration worker — re-runs the embedder calibration probe so threshold values stay aligned if the vendor silently revises the embedder. | `LOOM_RECALIBRATION_ENABLED` | True | `LOOM_RECALIBRATION_INTERVAL_SECONDS` | 604800 |
 | `reflection_distill` | Reflection distillation worker (default-off). | `LOOM_REFLECTION_DISTILL_ENABLED` | False | `LOOM_REFLECTION_DISTILL_INTERVAL_SECONDS` | 3600 |
 | `retention_reconcile` | Retention reconcile worker. | `LOOM_RETENTION_RECONCILE_ENABLED` | True | `LOOM_RETENTION_RECONCILE_INTERVAL_SECONDS` | 300 |

@@ -382,6 +382,7 @@ NAMESPACE_STEPS: tuple[NamespaceStep, ...] = (
     ("knowledge_sources.retire", _step_retire_knowledge_sources_by_ns),
     ("pg_memory.delete", pg_steps.delete_pg_memory_by_namespace),
     ("pg_knowledge.delete", pg_steps.delete_pg_knowledge_by_namespace),
+    ("query_history_sources.delete", ledger_steps.delete_query_history_by_namespace),
     ("memory.tombstone", memory_steps.tombstone_memory_by_namespace),
     ("memory_embeddings.tombstone", memory_steps.tombstone_embeddings_by_namespace),
     ("shared.tombstone", memory_steps.tombstone_shared_by_namespace),
