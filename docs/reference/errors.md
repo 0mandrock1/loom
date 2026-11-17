@@ -952,6 +952,10 @@ Raised in `server/memory/app/apply.py`, `server/memory/app/lock.py`, `server/mem
 
 HTTP 422, raised as `server.core.errors.ValidationError`. Category `input`, retryable: no. What to do: [common errors](#common-errors-and-what-to-do).
 
+#### `VECTOR_INPUT_TOO_LARGE`
+
+HTTP 422, raised as `server.core.errors.VectorInputTooLargeError`. 422 — an entity filter exceeds 64 raw names or its canonical alias expansion cannot fit within 256 names. Category `input`, retryable: no.
+
 #### `VIEWS_NOT_READABLE`
 
 Raised in `server/tracker/app/sources.py`.
