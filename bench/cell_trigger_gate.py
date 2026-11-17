@@ -1340,9 +1340,8 @@ async def _run(
         except BaseException as error:
             try:
                 artifact.emit("cleanup_error", error_type=type(error).__name__)
-            except (OSError, ValueError):
-                if prior is None:
-                    raise
+            except BaseException:  # noqa: BLE001 — diagnostics cannot replace work or cleanup failure.
+                pass
             if prior is None:
                 raise
         if interrupted and prior is None:
@@ -1449,18 +1448,19 @@ def main() -> int:
                 artifact.emit(
                     "invalid", phase=phase, reason=reason, error_type=type(error).__name__
                 )
-            except (OSError, ValueError):
+            except BaseException:  # noqa: BLE001 — secondary output cannot replace INVALID.
                 pass
     finally:
         if artifact is not None:
             try:
                 artifact.close()
-            except (OSError, ValueError) as error:
-                verdict = {
-                    "verdict": "INVALID",
-                    "error_type": type(error).__name__,
-                    "phase": "artifact_close",
-                }
+            except BaseException as error:  # noqa: BLE001 — required close fails without losing INVALID.
+                if verdict["verdict"] != "INVALID":
+                    verdict = {
+                        "verdict": "INVALID",
+                        "error_type": type(error).__name__,
+                        "phase": "artifact_close",
+                    }
     print(json.dumps(verdict, sort_keys=True, allow_nan=False), flush=True)
     return 0 if verdict["verdict"] == "PASS" else 1
 
