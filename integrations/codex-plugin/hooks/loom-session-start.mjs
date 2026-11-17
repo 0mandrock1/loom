@@ -187,7 +187,7 @@ async function taskInboxLine(scope, token) {
  *  minute per (server, org, token, toolset), the failures too; "" when there are none or on any error. */
 async function collectionsLine(scope, token) {
   // A read-only toolset routes no write, and the assistant toolset neither tool the line names.
-  const toolset = entryIsFixed() ? "coding" : claudeEndpoint().toolset;
+  const toolset = hookClient() === "claude-code" && !entryIsFixed() ? claudeEndpoint().toolset : "coding";
   const allows = toolsetAllows(toolset);
   if (!scope || !scope.org || !allows) return "";
   // The answer is the token's own (its grants in the org): two agents sharing this home with

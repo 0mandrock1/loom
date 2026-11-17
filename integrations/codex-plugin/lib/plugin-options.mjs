@@ -16,6 +16,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
+  hookClient,
   loomConfigPath,
   loomTokenPath,
   normalizeUrl,
@@ -28,6 +29,9 @@ import { readJsonFile, removeFile, tmpStatePath, writeJsonFile } from "./tmp-sta
 /** The endpoint's control-plane base: an explicit install value, else
  *  the environment default. "" when neither names a server. */
 function namedServerUrl(env) {
+  if (entryIsFixed() || hookClient(process.argv, env) !== "claude-code") {
+    return normalizeUrl(env.LOOM_BASE_URL || env.CLAUDE_PLUGIN_OPTION_SERVER_URL);
+  }
   return env.CLAUDE_PLUGIN_OPTION_SERVER_URL || env.LOOM_BASE_URL ? claudeEndpoint(env).base : "";
 }
 
@@ -67,6 +71,7 @@ const installStatePath = (tmp) => tmpStatePath("install", PLUGIN_ROOT, { tmp });
  *  script, which the agent runs from a shell that carries no option; an
  *  install without the option removes a stale one. */
 export function saveInstallServerUrl(env = process.env, { tmp } = {}) {
+  if (entryIsFixed() || hookClient(process.argv, env) !== "claude-code") return;
   const url = env.CLAUDE_PLUGIN_OPTION_SERVER_URL ? claudeEndpoint(env).base : "";
   if (url) writeJsonFile(installStatePath(tmp), { url });
   else removeFile(installStatePath(tmp));
