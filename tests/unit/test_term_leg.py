@@ -834,6 +834,33 @@ async def test_repromotion_cannot_bypass_the_name_work_budget(store: dict[str, A
     assert store["checked"] == []
 
 
+@pytest.mark.parametrize("sizes", [(60000,), (12000, 12000, 12000, 12000)])
+async def test_name_work_is_bounded_per_definition_before_normalization(
+    store: dict[str, Any], monkeypatch: pytest.MonkeyPatch, sizes: tuple[int, ...]
+) -> None:
+    from server.memory.api.models_crud import MemorySetInput
+    from server.memory.domain.definitions import definition_names
+
+    row = _row("definition/arr", "ARR", ["\ufdfa" * size for size in sizes])
+    value = json.loads(row["value"])
+    MemorySetInput(org="o", namespace="n", agent="-", memory_key="definition/arr", value=value)
+    assert definition_names(value)
+    store["rows"] = [row]
+    original = term_leg._candidate
+    prepared = []
+
+    def candidate(*args: Any) -> Any:
+        prepared.append(args[0]["memory_key"])
+        return original(*args)
+
+    monkeypatch.setattr(term_leg, "_candidate", candidate)
+    result = await _keys("what shipped")
+    assert prepared == []
+    assert result == ("timed_out", [])
+    assert store["checked"] == [] and store["values_read"] == []
+    assert json.loads(row["value"]) == value
+
+
 async def test_changed_source_budget_exhaustion_withholds_the_entire_leg(
     store: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:

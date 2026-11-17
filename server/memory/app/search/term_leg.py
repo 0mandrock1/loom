@@ -163,17 +163,18 @@ class _Work:
             raise TimeoutError
         self.left -= units
 
-    async def names(self, term: str, aliases: list[str]) -> None:
+    def names(self, term: str, aliases: list[str]) -> None:
         # Count empty names too; check the count before walking an arbitrary list.
-        self.charge(32 * (1 + len(aliases)))
-        self.charge(4 * len(term))
-        read = 0
-        for name in aliases:
+        chars = 32 * (1 + len(aliases))
+        self.charge(chars)
+        if chars > ON_LOOP_CHARS:
+            raise TimeoutError
+        for name in (term, *aliases):
+            # Candidate preparation normalizes the entire definition without yielding.
+            chars += len(name)
+            if chars > ON_LOOP_CHARS:
+                raise TimeoutError
             self.charge(4 * len(name))
-            read += len(name) + 32
-            if read >= ON_LOOP_CHARS:
-                await asyncio.sleep(0)
-                read = 0
 
     def first_name(self, query: list[str], folded: str, names: list[str]) -> _Match | None:
         query_size = sum(len(c) for c in query)
@@ -226,7 +227,7 @@ async def _read_bounded(
     candidates: list[_Candidate] = []
     for row in rows[:ceiling]:
         await asyncio.sleep(0)
-        await work.names(row["term"], row["aliases"])
+        work.names(row["term"], row["aliases"])
         c = _candidate(row, org, namespace)
         if c is None:
             continue
@@ -300,7 +301,7 @@ async def _governed(
         if isinstance(value, dict) and isinstance(value.get("term"), str):
             aliases = value.get("aliases") or []
             if isinstance(aliases, list) and all(isinstance(a, str) for a in aliases):
-                await work.names(value["term"], aliases)
+                work.names(value["term"], aliases)
         full.append(replace(d, value=value))
     full = [d for d in full if copy_lapse(d, org=org, namespace=namespace) is None]
     reasons = await source_reasons(org, namespace, full, strong=False, max_value_chars=work.left)
