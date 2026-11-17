@@ -32,18 +32,18 @@ const fact = {
 };
 
 describe("Google ADK LoomMemoryService", () => {
-  it("distinguishes writers of one key/session and leaves unknown rows without ids", async () => {
+  it.each(["fact", "anchor"])("distinguishes %s writers and leaves unknown rows without ids", async (source) => {
     const { service } = harness({
       "memory.search": {
         results: [
-          { ...fact, agent: "writer-a" },
-          { ...fact, agent: "writer-b" },
+          { ...fact, source, agent: "writer-a" },
+          { ...fact, source, agent: "writer-b" },
         ],
       },
     });
     const found = await service.searchMemory({ appName: "app", userId: "alice", query: "seat" });
     expect(found.memories[0].id).not.toBe(found.memories[1].id);
-    const unknown = harness({ "memory.search": { results: [{ ...fact, agent: "" }] } });
+    const unknown = harness({ "memory.search": { results: [{ ...fact, source, agent: "" }] } });
     expect(
       (await unknown.service.searchMemory({ appName: "app", userId: "alice", query: "seat" })).memories[0].id,
     ).toBeUndefined();

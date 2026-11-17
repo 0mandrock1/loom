@@ -612,11 +612,26 @@ def test_knowledge_search_obeys_its_wire_cap():
     assert agent.knowledge.calls[0][1]["top_k"] == 100
 
 
-def test_same_version_different_writers_have_distinct_exact_deletion_ids() -> None:
+@pytest.mark.parametrize("source", ["fact", "anchor"])
+def test_same_version_different_writers_have_distinct_exact_deletion_ids(source: str) -> None:
     fake = _FakeMemory(
         [
-            _hit("seat", "Prefers aisle", agent="writer-a", session_id="shared", version=101),
-            _hit("seat", "Prefers window", agent="writer-b", session_id="shared", version=101),
+            _hit(
+                "seat",
+                "Prefers aisle",
+                agent="writer-a",
+                session_id="shared",
+                version=101,
+                source=source,
+            ),
+            _hit(
+                "seat",
+                "Prefers window",
+                agent="writer-b",
+                session_id="shared",
+                version=101,
+                source=source,
+            ),
         ]
     )
     service = _service(fake)
@@ -637,7 +652,13 @@ def test_same_version_different_writers_have_distinct_exact_deletion_ids() -> No
     )
 
 
-def test_a_fact_without_writer_or_version_has_no_deletion_id() -> None:
-    fake = _FakeMemory([_hit("seat", "aisle", agent=""), _hit("name", "Alice", version=0)])
+@pytest.mark.parametrize("source", ["fact", "anchor"])
+def test_a_fact_without_writer_or_version_has_no_deletion_id(source: str) -> None:
+    fake = _FakeMemory(
+        [
+            _hit("seat", "aisle", agent="", source=source),
+            _hit("name", "Alice", version=0, source=source),
+        ]
+    )
     found = asyncio.run(_service(fake).search_memory(app_name="travel", user_id="alice", query="q"))
     assert [m.id for m in found.memories] == [None, None]
