@@ -19,6 +19,7 @@ def test_actual_attach_owner_keeps_first_failure(owner, secondary):
         from server.cli.cell_attach import Run
         from server.cli import cell_attach_pg as apg
         from server.cli import cell_control
+        from tests.unit.test_cell_control import snapshot
 
         owner, kind = sys.argv[1:]
         original = ValueError('operation failed')
@@ -46,7 +47,7 @@ def test_actual_attach_owner_keeps_first_failure(owner, secondary):
             async def fail(*args): raise original
             cell_control.Owner._open = opening
             router = AsyncMock()
-            router.call.return_value = {'state': 'attaching'}
+            router.call.return_value = {**snapshot(), 'state': 'attaching'}
             run = Run(None, argparse.Namespace(cell='test', wait=0), router, lambda _: None)
             run.row = {'deployment_id': 'test'}
             run.mode = 'recording'
