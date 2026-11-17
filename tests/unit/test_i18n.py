@@ -199,6 +199,17 @@ def test_html_tokens_preserve_complete_markup(markup: str) -> None:
     assert t.HTML_TAG.findall(f"Before {markup} after") == [markup]
 
 
+@pytest.mark.parametrize("name", ["memory_view-panel", "memory.view-panel", "memory-α"])
+def test_custom_element_labels_and_attributes_remain_checked(name: str) -> None:
+    opening, closing = f'<{name} data-state="ready">', f"</{name}>"
+    changed = opening.replace('"ready"', '"waiting"')
+    assert t.labels(f'<a href="#x">{opening}Get started{closing}</a>') == Counter(
+        {"Get started": 1}
+    )
+    assert t.HTML_TAG.findall(opening + closing) == [opening, closing]
+    assert t.HTML_TAG.findall(changed + closing) != t.HTML_TAG.findall(opening + closing)
+
+
 def test_a_translation_may_write_a_spelled_number_as_digits() -> None:
     assert t.differences("two steps", "2 Schritte") == []
 

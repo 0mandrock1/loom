@@ -149,7 +149,7 @@ HTML_LINK_TEXT = re.compile(r"<a\s[^>]*>(.*?)</a>", re.DOTALL)
 # A literal comparison is prose; quoted delimiters and comments belong to their tag.
 HTML_TAG = re.compile(
     r"<!--.*?-->|<\?.*?\?>|<!\[CDATA\[.*?\]\]>"
-    r"|<(?:/?[A-Za-z][A-Za-z0-9:-]*(?=[\s/>])|![A-Za-z])"
+    r"|<(?:/?[A-Za-z][^\s/<>\"']*(?=[\s/>])|![A-Za-z])"
     r"(?:[^<>\"']|\"[^\"]*\"|'[^']*')*>",
     re.DOTALL,
 )
