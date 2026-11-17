@@ -133,9 +133,9 @@ function responsesTurn(body, res) {
 }
 
 /** The fake: the model API under /v1/messages and /v1/responses, Loom for
- *  everything else (any op answers an empty success, MCP answers 401).
+ *  everything else (optional dummy signup, other ops empty success, MCP 401).
  *  `seen` records each request's path and Authorization header. */
-export async function startFake(port, { indexedRepos = [], prefix = "" } = {}) {
+export async function startFake(port, { indexedRepos = [], prefix = "", signup = false } = {}) {
   const seen = [];
   const handler = (req, res) => {
     let raw = "";
@@ -162,7 +162,10 @@ export async function startFake(port, { indexedRepos = [], prefix = "" } = {}) {
         res.end('{"input_tokens":1}');
       } else if (url.startsWith("/v1/messages")) messagesTurn(body, res);
       else if (url.startsWith("/v1/responses")) responsesTurn(body, res);
-      else if (url.startsWith("/mcp")) {
+      else if (signup && url === "/v1/auth/agent-signup") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ token: TOKEN, namespace: "local", org: "e2e", subject: "you", claim_code: "" }));
+      } else if (url.startsWith("/mcp")) {
         // The helper's header is what is under test, not the MCP protocol.
         res.writeHead(401, { "content-type": "application/json" });
         res.end("{}");

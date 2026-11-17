@@ -85,11 +85,16 @@ try {
   );
 
   // A fresh install takes the endpoint default from the environment's base.
-  for (const defaultPrefix of [prefix, prefix + "/"]) {
+  for (const [defaultPrefix, seeded] of [
+    [prefix, true],
+    [prefix + "/", true],
+    [prefix + "/", false],
+  ]) {
     const defaults = scratch();
     let defaultFake;
     try {
-      defaultFake = await startFake(0, { prefix: defaultPrefix });
+      if (!seeded) fs.unlinkSync(path.join(defaults.home, ".loom", "token"));
+      defaultFake = await startFake(0, { prefix: defaultPrefix, signup: !seeded });
       const defaultEnv = {
         ...baseEnv(defaults.home),
         ANTHROPIC_API_KEY: "dummy-endpoint-model-key",
@@ -121,6 +126,21 @@ try {
         ),
         "environment default missed its MCP endpoint",
       );
+      if (!seeded) {
+        const signups = calls.filter((call) => call.url === defaultPrefix + "/v1/auth/agent-signup");
+        assert.equal(signups.length, 1, "first session must sign up once at the configured proxy path");
+        assert.equal(signups[0].auth, "");
+        const config = JSON.parse(fs.readFileSync(path.join(defaults.home, ".loom", "config.json"), "utf8"));
+        assert.equal(config.url, defaultFake.url + defaultPrefix);
+        assert.equal(config.token, "loom-e2e-token");
+        assert.equal(config.signed_up_by, "claude-code");
+        assert.ok(
+          calls
+            .slice(calls.indexOf(signups[0]) + 1)
+            .some((call) => call.path === defaultPrefix + "/v1/context.pack" && call.auth === "Bearer loom-e2e-token"),
+          "signed-up token did not reach the primer",
+        );
+      }
     } finally {
       if (defaultFake) await defaultFake.close();
       fs.rmSync(defaults.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
