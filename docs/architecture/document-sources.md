@@ -351,7 +351,7 @@ The model has four parts: mirrored documents live in a companion namespace no gr
 opens; each document carries its permission list; every read through that namespace
 checks the list and fails closed; and every complete listing reads the lists again. One
 rule holds them together: nothing derived from a mirrored document (its address, title,
-text, counts or existence) is written outside the mirror or answered to a caller. An op
+text, counts or existence) enters a Loom record outside the mirror or an answer to a caller. An op
 that is not a checked leg (a source's probe, status or `remove`, an erasure's receipt)
 therefore answers codes for what a mirror holds, never a count, title, file id or
 address, and a code that depends on the mirror's rows (a residue failure) reads as the
@@ -382,6 +382,18 @@ same code for any cause. The exceptions are these:
    probe's sampled items and their codes, and the oldest listing start), its sync and
    spend, and its erasure counts, as codes and counts, through `loom doctor`,
    `knowledge.source.inspect` and the erasure ops.
+
+The rule covers Loom's records, application logs, spans, metrics and caller-visible
+answers. Database-native query, error, mutation, text, profile and trace logs remain
+privileged deployment infrastructure, under the same trust as the plaintext tables
+and backups. They can retain mirrored addresses, counts and values quoted in errors
+after erasure; the database operator controls their access and retention, and any
+export of them keeps that privileged boundary. This is the existing
+[database-log boundary](assistant.md#stored-data-and-erasure) and
+[erasure limit](../features/memory/retention-and-erasure.md#checking-an-erasure-yourself).
+The SQL surface and analyst must refuse access to these logs. Loom's statement-capture
+files, provider and extractor telemetry, and caller-readable exports remain subject to
+the mirror rule.
 
 A deployment with auth off (`LOOM_AUTH_REQUIRED=false`) has no reader identity to check.
 It refuses to add a mirrored source with `AUTH_REQUIRED`, which wins over
@@ -485,6 +497,21 @@ that for collections, since one missed path leaks.
   mirror's namespace and go with it when it is erased; whatever of a mirror leaves it (a
   source's status, a worker's pass notes, logs, spans and metrics, the extractor
   service's logs and traces) carries codes only (exceptions 3 and 4 apart).
+  Worker pass summaries exclude mirrored turns' completed-source counts, document
+  figures and cut flags. A failed mirrored turn contributes only `SYNC_FAILED`, for
+  every cause; returned turn details remain private. Mirrored per-file failures emit
+  no log record, since the number of records would disclose a document figure.
+  A sync turn enters its private diagnostic scope before taking its source lease or
+  listing files; retirement enters it before reading its queue. That scope suppresses
+  client and provider instrumentation, database
+  work figures, shared metric calls and log records, including their volume. Provider
+  health and embedding caches receive no private contribution. The extractor receives
+  a generic filename; its service emits no per-request access, stderr or fault logs.
+  A pass that touched private work records codes without duration, outcome figures or
+  failure counters, including when invoked from the CLI. Its retry history cannot
+  advance a later ordinary pass's diagnostic streak. Ordinary work keeps its own cost
+  accumulator; private spend is written directly under the mirror, without entering
+  the shared event queue or its statistics.
 - **No scope reaches a mirror.** Every statement a request runs that reads a table
   holding mirror rows other than by a namespace the caller names leaves out the
   `acl-[0-9a-f]{24}` form; the workers named here are the exception, since they must

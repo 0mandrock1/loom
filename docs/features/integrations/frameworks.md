@@ -32,8 +32,10 @@ or needs another database, vector store or cache.
 | LangGraph                      | `LoomStore`                                     | Python, `loom.integrations.langgraph`                     | `BaseStore`                                                              |
 | Strands Agents                 | `LoomMemoryStore`                               | Python, `loom.integrations.strands`                       | the `MemoryStore` protocol                                               |
 | Strands Agents                 | `LoomMemoryStore`                               | TypeScript, `@clickhouse/loom/integrations/strands`       | the same protocol, structurally                                          |
+| Pipecat                        | `LoomMemoryService`                             | Python, `loom.integrations.pipecat`                       | recall and capture `FrameProcessor`s                                     |
 | Dify                           | Remember, Recall, Search knowledge              | `integrations/dify` standalone plugin                     | Native Dify tools                                                        |
 | Haystack                       | `LoomDocumentStore`, `LoomRetriever`            | Python, `loom.integrations.haystack`                      | `DocumentStore` protocol, retrieval component                            |
+| Agno                           | `LoomMemoryDb`                                  | Python, `loom.integrations.agno`                          | `BaseDb` user-memory methods                                             |
 
 Any other framework that can call an HTTP endpoint or an MCP server uses Loom directly:
 see [agent integration](../../guides/agent-integration.md) and
@@ -691,6 +693,49 @@ TypeScript interface has no per-turn append operation. ADK's in-memory session
 service in these examples holds the running conversation only; Loom stores the
 extracted memories and searchable documents in the user's deployment.
 
+## Agno
+
+`LoomMemoryDb` implements Agno 3.2's `BaseDb` user-memory methods for one user and
+store. Install `pip install 'clickhouse-loom[agno]'` (`agno>=3.2,<3.3`). Pass it to a
+`MemoryManager`; configure the agent's session database separately if needed.
+
+```python
+from agno.db.schemas.memory import UserMemory
+from agno.memory import MemoryManager
+from loom import SyncAgent
+from loom.integrations.agno import LoomMemoryDb
+
+with SyncAgent(org="acme", namespace="support", agent="assistant") as loom_agent:
+    manager = MemoryManager(db=LoomMemoryDb(loom_agent, user_id="alice"))
+    manager.add_user_memory(UserMemory(memory="Prefers aisle seats"), user_id="alice")
+    memories = manager.get_user_memories(user_id="alice")
+```
+
+The database stores each native memory, including its id, topics, agent/team attribution,
+input, feedback and timestamps, as an episodic Loom row. This keeps native identifiers
+and updates intact without fact extraction or semantic duplicate merging. The native
+JSON payload follows Loom's sensitivity classification; epoch timestamps can receive
+a contact-detail label. Rows stay in
+the user's Loom deployment; the adapter adds no database, cache or vector store.
+
+Use one `LoomMemoryDb` per end user. An omitted user in a database method means its
+bound user; a different user is refused. Agno's manager defaults an omitted user to
+`default`, so pass the user to manager calls as in the example. Optional `store=`
+(default `default`) separates applications sharing that user. Keys and the derived
+Loom session include both user and store digests. Separate namespaces and restricted
+tokens remain the boundary for mutually untrusted applications.
+
+The database implements single/bulk upsert, get, list, content/topic/agent/team filters,
+sorting, pagination, topic listing, statistics and deletion. Reads hydrate full values
+and page through the bound store. Filters and sorting run over those rows locally;
+large stores therefore incur a full read. `clear_memories` clears only this bound store
+and user. Concurrent writes of one native id keep the later write; a bulk write or
+clear can partially finish when a request fails. Other `BaseDb` capabilities, including
+sessions, tracing and evaluation storage, raise `NotImplementedError`.
+
+Agno's memory manager can make model calls when it extracts or edits memories. This
+adapter makes no model call itself; its tests supply native memory objects directly.
+
 ## Pydantic AI
 
 Pydantic AI extends an agent through tools and toolsets. `loom_toolset` returns Loom's
@@ -968,6 +1013,64 @@ const store = new LoomMemoryStore(agent, { tags: ["customer"] });
 | `key_prefix` / `keyPrefix`                | `strands`  | key prefix                                                    |
 | — / `scope`                               | none       | TypeScript only: a per-store user, session or run scope       |
 
+## Pipecat
+
+`LoomMemoryService` owns two Pipecat `FrameProcessor`s that share one Loom `Agent` and
+user. The recall processor sits after the user context aggregator and before the LLM; the
+capture processor sits after the assistant aggregator. On each `LLMContextFrame` the recall
+processor runs `memory.search` with the turn's latest user text and inserts the matches into
+the shared `LLMContext`. Audio frames, and a second context frame for the same user text,
+pass through with no further Loom call. After the turn, the capture processor sends the
+turn's user and assistant text to `memory.set_from_messages` when it sees the assistant
+aggregator's `LLMContextAssistantTurnFrame`.
+
+```python
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from loom import Agent
+from loom.integrations.pipecat import LoomMemoryService
+
+async with Agent(org="acme", namespace="support") as loom_agent:
+    memory = LoomMemoryService(loom_agent, user_id="alice")
+    context = LLMContext([{"role": "system", "content": "Be helpful."}])
+    user, assistant = LLMContextAggregatorPair(context)
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            stt,
+            user,
+            memory.recall_processor(),
+            llm,
+            tts,
+            transport.output(),
+            assistant,
+            memory.capture_processor(),
+        ]
+    )
+```
+
+Install with `pip install 'clickhouse-loom[pipecat]'` (`pipecat-ai` 1.16.x).
+
+| Pipecat                        | Loom                                                                                                                                                                                         |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LLMContextFrame` (recall)     | `memory.search` with the turn's latest user text; with `honour_abstain`, leaves out memories below Loom's floor and adds nothing when Loom abstains; the matches replace one developer block |
+| `LLMContextAssistantTurnFrame` | the user text of the new turn and the assistant text of its response, sent to `memory.set_from_messages` (400 messages a call, the op's cap); memory blocks and empty text are not sent      |
+
+Extraction runs under a Loom session derived from the user and the service's `session_id`
+(`pipecat-` and a digest of the pair): Loom files a turn's verbatim chunks by session alone,
+and a caller may choose its session ids. When `session_id` is omitted, the service mints one
+for its lifetime, so the turns of one call share a session.
+
+| `LoomMemoryService` argument | Default  | Effect                                                                                                                                                                                      |
+| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`                      | required | the `loom.Agent` the processors call; Pipecat awaits its processors, so a `SyncAgent` is refused                                                                                            |
+| `user_id`                    | none     | the end user the memories belong to; unset, recall reads all namespace memories the token permits and extraction writes shared rows; empty, `-` or whitespace-padded ids raise `ValueError` |
+| `session_id`                 | minted   | the caller's conversation id, folded into the Loom session; unset, a fresh id is used for this service instance                                                                             |
+| `top_k`                      | 5        | memories per turn, from 1 to 500                                                                                                                                                            |
+| `honour_abstain`             | `True`   | leave out memories below Loom's floor; nothing when Loom abstains                                                                                                                           |
+| `defer`                      | `True`   | queue the extraction on the server instead of waiting                                                                                                                                       |
+
 ## Agent orchestrators
 
 A harness that runs several agents gives them shared, durable memory by mounting Loom's
@@ -1021,6 +1124,10 @@ client can speak for several agents.
   dashboard or with `conflicts.list` ([conflicts and refusal](../memory/conflicts-and-refusal.md)).
 - **One store per event loop** for LangGraph's sync API: mixing sync and async calls on
   one store runs the agent on two loops.
+- **A Pipecat turn continues when Loom is unreachable.** The recall and capture processors
+  still push the frame they were given: the context frame reaches the model, and audio
+  frames stay on their path. A failed capture leaves the turn in the conversation but not
+  in Loom.
 
 ## Related
 
