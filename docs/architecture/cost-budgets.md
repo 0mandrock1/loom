@@ -45,3 +45,18 @@ namespace erasure covers both tasks and events. Added columns have defaults for 
 writers. Warning production waits for every live replica to support the migration, so
 an older erasure implementation cannot miss user-bearing warning rows during a rolling
 upgrade. Unknown fleet state defers publication until a later check.
+
+## Source entry points
+
+- `server/observability/budget.py`: `budget_snapshot` reads policy and rolling spend for the guards and status.
+- `server/tasks/app/budget_notifications.py`: `deliver` owns warning claims and erasure fences.
+- `server/tasks/store/repo.py`: `events_since` applies warning scope before cursor pagination.
+- `server/tasks/app/reads.py` and `server/tasks/app/watch_routes.py`: polling and streaming readers bind that scope.
+- `server/erasure/store/steps_ledgers.py`: warning-writer leases protect task-event deletion.
+
+## Invariants
+
+- A named user's allowance never raises the namespace ceiling, and attribution never guesses a token subject.
+- A narrowed reader receives no warning outside its user and session scope.
+- An uncertain warning write keeps erasure fenced until its possible send has finished.
+- Notification failure never changes the cap decision.
