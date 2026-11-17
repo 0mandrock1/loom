@@ -68,7 +68,7 @@ class RollupWorld:
         await self.execute("SYSTEM WAIT VIEW loom.agent_cost_rollup_refresh")
 
     async def cutover(self) -> None:
-        migration = MIGRATIONS / "105_marked_request_measures.sql"
+        migration = MIGRATIONS / "106_marked_request_measures.sql"
         statements = split_statements(migration.read_text())
         for statement in statements:
             words = statement.split()
