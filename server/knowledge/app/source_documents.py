@@ -8,7 +8,9 @@ from typing import Any
 from server.core import pg, request_work
 from server.core.ch import sequential_reads, set_query_tag
 from server.core.diagnostics import private_work
+from server.knowledge.app import source_search
 from server.knowledge.app.source_access import Admitted, ReadPlan
+from server.knowledge.app.source_search import Hydrated, _chunk_key
 from server.knowledge.store import source_access as evidence
 from server.knowledge.store import source_documents as store
 from server.knowledge.store.documents import DocumentRow
@@ -97,3 +99,58 @@ async def get(plan: ReadPlan, namespace: str, source_uri: str) -> CheckedDocumen
         except Exception:  # noqa: BLE001 — conditional content or permission failure invalidates all copies
             plan.failed = True
     return None
+
+
+async def _chunk_batch(plan: ReadPlan, batch: list[dict[str, Any]], model: str) -> list[Hydrated]:
+    admitted = await plan.check(batch, chunks=True)
+    hydrated = await source_search.hydrate(
+        plan, {"semantic": admitted}, model=model, embedded_only=False
+    )
+    return hydrated.get("semantic", [])
+
+
+async def chunks(plan: ReadPlan, document: CheckedDocument, *, model: str) -> list[Hydrated] | None:
+    """Read an admitted copy's chunks; None distinguishes failure from an empty document."""
+    if plan.failed or plan.unread:
+        return None
+    set_query_tag("knowledge.mirror.document_chunks")
+    try:
+        with private_work(), sequential_reads():
+            row = document.row
+            retained: dict[int, Hydrated] = {}
+            async with store.chunk_candidates(
+                plan.org, row.namespace, row.source_uri, model
+            ) as stream:
+                batch = []
+                async for candidate in stream:
+                    if (candidate["namespace"], candidate["source_uri"]) != (
+                        row.namespace,
+                        row.source_uri,
+                    ):
+                        raise ValueError("unexpected document chunk source")
+                    batch.append(candidate)
+                    if len(batch) == 64:
+                        for item in await _chunk_batch(plan, batch, model):
+                            retained.setdefault(int(item.admitted.candidate["chunk_idx"]), item)
+                        batch = []
+                if batch:
+                    for item in await _chunk_batch(plan, batch, model):
+                        retained.setdefault(int(item.admitted.candidate["chunk_idx"]), item)
+            refreshed = await source_search.recheck(
+                plan, {"semantic": [item.admitted for item in retained.values()]}
+            )
+            proof = {_chunk_key(item.candidate): item for item in refreshed.get("semantic", [])}
+            documents = await plan.check([document.admitted.candidate])
+            if plan.failed or plan.unread or not documents or not _same(row, plan, documents[0]):
+                return None
+            if not plan.current(documents[0]):
+                return None
+            return [
+                Hydrated(proof[_chunk_key(item.admitted.candidate)], item.row)
+                for _idx, item in sorted(retained.items())
+                if _chunk_key(item.admitted.candidate) in proof
+                and plan.current(proof[_chunk_key(item.admitted.candidate)])
+            ]
+    except Exception:  # noqa: BLE001 — conditional chunk failure invalidates the entire document
+        plan.failed = True
+        return None

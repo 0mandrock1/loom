@@ -38,7 +38,7 @@ def world(monkeypatch):
         calls.append("check")
         return retained
 
-    async def chunks(org, model, keys):
+    async def chunks(org, model, keys, *, embedded_only=True):
         calls.append((org, model, keys))
         return [
             {
@@ -102,12 +102,12 @@ async def test_candidate_hydration_failure_discards_all_pools_without_unread(
     original = app.store.chunks.side_effect
     count = 0
 
-    async def broken(org, model, keys):
+    async def broken(org, model, keys, *, embedded_only=True):
         nonlocal count
         count += 1
         if failure == "read" or (failure == "late_read" and count == 2):
             raise RuntimeError("private title")
-        rows = await original(org, model, keys)
+        rows = await original(org, model, keys, embedded_only=embedded_only)
         if failure == "duplicate":
             rows.append(dict(rows[0]))
         elif failure == "unexpected":
@@ -119,6 +119,13 @@ async def test_candidate_hydration_failure_discards_all_pools_without_unread(
     monkeypatch.setattr(app.store, "chunks", AsyncMock(side_effect=broken))
     assert await app.hydrate(plan, pools, model="test-model") == {}
     assert plan.failed and not plan.unread
+
+
+async def test_document_hydration_requests_chunks_without_embedding_eligibility(world):
+    plan, pools, _calls = world
+    out = await app.hydrate(plan, pools, model="test-model", embedded_only=False)
+    assert out["semantic"][0].row["content"] == "checked content"
+    assert app.store.chunks.call_args.kwargs == {"embedded_only": False}
 
 
 async def test_missing_exact_chunk_is_omitted_without_fetching_its_replacement(world, monkeypatch):

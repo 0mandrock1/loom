@@ -16,7 +16,12 @@ ChunkKey = tuple[str, str, int, int, int]
 
 
 async def chunks(
-    org: str, model: str, keys: list[ChunkKey], *, ch: CHClient | None = None
+    org: str,
+    model: str,
+    keys: list[ChunkKey],
+    *,
+    ch: CHClient | None = None,
+    embedded_only: bool = True,
 ) -> list[dict[str, Any]]:
     """Fetch one bounded batch at its admitted key, never a replacement version."""
     if not keys:
@@ -32,7 +37,10 @@ async def chunks(
         "toString(source_class) AS source_class "
         "FROM loom.chunks WHERE org = {org:String} "
         "AND namespace IN {nss:Array(String)} AND embedding_model = {model:String} "
-        "AND embedding_dim > 0 AND " + live_chunk_sql() + " "
+        + ("AND embedding_dim > 0 " if embedded_only else "")
+        + "AND "
+        + live_chunk_sql()
+        + " "
         "AND (namespace, source_uri, chunk_idx, doc_version, "
         "JSONExtractUInt(chunk_metadata, 'revision')) "
         "IN {keys:Array(Tuple(String, String, UInt32, UInt64, UInt64))} "

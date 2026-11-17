@@ -85,3 +85,52 @@ async def test_content_identity_and_pending_head_are_exact() -> None:
     finally:
         await ch.disconnect()
         await pg.close_pool()
+
+
+async def test_document_chunk_reads_include_stubs_without_widening_search() -> None:
+    os.environ.get("LOOM_CH_HOST") or pytest.skip("LOOM_CH_HOST not set")
+    from server.core.ch import get_client, set_query_tag
+    from server.core.naming import new_mirror_name
+    from server.knowledge.store import source_candidates, source_documents
+
+    org, mirror, uri = (
+        unique_org("document-stubs"),
+        new_mirror_name(),
+        "gdrive:file#" + str(uuid4()),
+    )
+    model = "fixture"
+    ch = get_client()
+    await ch.connect()
+    set_query_tag("test.checked_document_stubs")
+    rows = [
+        {
+            "org": org,
+            "namespace": mirror,
+            "source_uri": uri,
+            "chunk_idx": idx,
+            "doc_version": 10,
+            "chunk_metadata": '{"revision":0}',
+            "embedding_model": model,
+            "embedding_dim": 3072 if idx == 0 else 0,
+            "embedding": [1.0] + [0.0] * 3071,
+            "content": "embedded" if idx == 0 else "unembedded section",
+        }
+        for idx in range(2)
+    ]
+    keys = [(mirror, uri, idx, 10, 0) for idx in range(2)]
+    try:
+        await ch.insert("loom.chunks", rows)
+        async with source_documents.chunk_candidates(org, mirror, uri, model) as stream:
+            discovered = [row async for row in stream]
+        assert [int(row["chunk_idx"]) for row in discovered] == [0, 1]
+        searchable = await source_candidates.chunks(org, model, keys)
+        assert [row["content"] for row in searchable] == ["embedded"]
+        document = await source_candidates.chunks(org, model, keys, embedded_only=False)
+        assert {row["chunk_idx"]: row["content"] for row in document} == {
+            0: "embedded",
+            1: "unembedded section",
+        }
+        async with source_documents.chunk_candidates(org, mirror, uri, "other-model") as stream:
+            assert [row async for row in stream] == []
+    finally:
+        await ch.disconnect()

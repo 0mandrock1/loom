@@ -2,10 +2,34 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any
+
 from server.core import pg
 from server.core.ch import get_client
+from server.knowledge.domain.live_chunks import live_chunk_sql
 from server.knowledge.store.documents import DOCUMENT_COLUMNS, DocumentRow, _hydrate
 from server.knowledge.store.pg_documents import decode_row
+from server.knowledge.store.source_candidates import candidates
+
+
+@asynccontextmanager
+async def chunk_candidates(
+    org: str, namespace: str, source_uri: str, model: str
+) -> AsyncIterator[AsyncIterator[dict[str, Any]]]:
+    """Stream one admitted document's live chunk identities, including embedding stubs."""
+    sql = (
+        "SELECT namespace, source_uri, chunk_idx, doc_version, "
+        "JSONExtractUInt(chunk_metadata, 'revision') AS revision "
+        "FROM loom.chunks WHERE org = {org:String} AND namespace = {ns:String} "
+        "AND source_uri = {uri:String} AND embedding_model = {model:String} "
+        "AND " + live_chunk_sql() + " ORDER BY chunk_idx, doc_version DESC FORMAT JSONEachRow"
+    )
+    async with candidates(
+        sql, {"org": org, "ns": namespace, "uri": source_uri, "model": model}
+    ) as rows:
+        yield rows
 
 
 async def contents(

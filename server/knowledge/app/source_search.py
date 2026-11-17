@@ -122,7 +122,11 @@ def _chunk_key(row: dict[str, Any]) -> tuple[str, str, int, int, int]:
 
 
 async def hydrate(
-    plan: ReadPlan, pools: dict[store.Leg, list[Admitted]], *, model: str
+    plan: ReadPlan,
+    pools: dict[store.Leg, list[Admitted]],
+    *,
+    model: str,
+    embedded_only: bool = True,
 ) -> dict[store.Leg, list[Hydrated]]:
     """Keep text private until its exact key passes the post-fetch permission check."""
     if plan.failed or plan.unread:
@@ -140,7 +144,7 @@ async def hydrate(
             for start in range(0, len(keys), 64):
                 batch = keys[start : start + 64]
                 wanted = set(batch)
-                for row in await store.chunks(plan.org, model, batch):
+                for row in await store.chunks(plan.org, model, batch, embedded_only=embedded_only):
                     key = _chunk_key(row)
                     # MergeTree retries can leave physical duplicates. Ambiguous
                     # hydration discards the leg rather than picking one payload.

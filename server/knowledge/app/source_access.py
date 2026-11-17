@@ -105,6 +105,7 @@ class ReadPlan:
         permissions = {p: from_json(r.get("access_json") or "") for p, r in docs.items()}
         groups = await self._groups(docs, permissions)
         out = []
+        owners: dict[str, str] = {}
         for candidate in candidates:
             pair = (candidate["namespace"], candidate["source_uri"])
             doc = docs.get(pair)
@@ -120,11 +121,11 @@ class ReadPlan:
             if chunks and not pg.enabled() and int(candidate["revision"]) != doc["revision"]:
                 continue
             access = permissions[pair]
-            owner = (
-                await canonical_subject(self.org, access.owner)
-                if access.owner and self.reader
-                else ""
-            )
+            owner = ""
+            if access.owner and self.reader:
+                if access.owner not in owners:
+                    owners[access.owner] = await canonical_subject(self.org, access.owner)
+                owner = owners[access.owner]
             item = Admitted(
                 original, candidate, doc, access, owner, tuple(groups.get(key, {}).items())
             )

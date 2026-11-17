@@ -83,6 +83,17 @@ def candidate(**changes):
     return {"namespace": MIRROR, "source_uri": URI, "doc_version": 10, "revision": 0, **changes}
 
 
+async def test_owner_resolution_is_shared_within_one_batch_and_fresh_in_the_next(world):
+    world["doc"]["access_json"] = to_json(AccessList(owner="owner@example.com"))
+    plan = await app.prepare("acme", ["docs"])
+    rows = [candidate(chunk_idx=i) for i in range(64)]
+    assert len(await plan.check(rows, chunks=True)) == 64
+    assert world["owner"].await_count == 1
+    world["owner"].return_value = "somebody-else"
+    assert await plan.check(rows, chunks=True) == []
+    assert world["owner"].await_count == 2
+
+
 async def test_active_source_marks_even_without_admitted_documents(world):
     plan = await app.prepare("acme", ["docs"])
     world["doc"]["access_json"] = to_json(AccessList(emails=("other@example.com",)))
@@ -354,7 +365,8 @@ async def test_content_is_discarded_if_access_changes_during_hydration(world, mo
     plan = await app.prepare("acme", ["docs"])
     [retained] = await plan.check([candidate(chunk_idx=0)], chunks=True)
 
-    async def chunks(_org, _model, _keys):
+    async def chunks(_org, _model, _keys, *, embedded_only=True):
+        assert embedded_only
         if change == "permission":
             world["doc"]["access_json"] = to_json(AccessList())
         elif change == "revision":
