@@ -2,6 +2,8 @@ version: 0.1.0
 type: plugin
 author: clickhouse
 name: loom
+repo: https://github.com/ClickHouse/loom
+contact: feedback@clickhouse.com
 tags:
   - agent
   - search
