@@ -259,3 +259,69 @@ async def test_self_cancelled_close_is_terminal_before_a_long_end(owned, monkeyp
     assert caught.value is original
     assert time.monotonic() - began < 0.2
     conn.terminate.assert_called_once_with()
+
+
+@pytest.mark.parametrize("abort_kind", ["ordinary", "cancel", "exit", "keyboard"])
+@pytest.mark.parametrize(
+    "first_kind", ["ordinary", "cancel", "exit", "keyboard", "outer_cancel", "deadline"]
+)
+async def test_secondary_abort_never_replaces_first_or_skips_owned_task_settlement(
+    owned, monkeypatch, abort_kind, first_kind
+):
+    conn, _ = owned
+    owner = directory._ControlOwner(0.02 if first_kind == "deadline" else 10)
+    owner.conn = conn
+    errors = {
+        "ordinary": ValueError("first close failure"),
+        "cancel": asyncio.CancelledError("first close cancellation"),
+        "exit": SystemExit(17),
+        "keyboard": KeyboardInterrupt("first close interruption"),
+        "outer_cancel": asyncio.CancelledError("first outer cancellation"),
+    }
+    first = errors.get(first_kind)
+    secondary = {
+        "ordinary": RuntimeError("secondary abort failure"),
+        "cancel": asyncio.CancelledError("secondary abort cancellation"),
+        "exit": SystemExit(19),
+        "keyboard": KeyboardInterrupt("secondary abort interruption"),
+    }[abort_kind]
+    conn.terminate.side_effect = secondary
+    began = asyncio.Event()
+    cancelled = asyncio.Event()
+    real_wait = asyncio.wait
+    signals = 0
+
+    async def close(_conn, *, end):
+        began.set()
+        if first_kind == "deadline":
+            try:
+                await asyncio.Future()
+            finally:
+                cancelled.set()
+        raise ValueError("later close failure") if first_kind == "outer_cancel" else first
+
+    async def interrupted_wait(tasks, **kwargs):
+        nonlocal signals
+        signals += 1
+        if first_kind == "outer_cancel" and signals == 1:
+            raise first
+        return await real_wait(tasks, **kwargs)
+
+    async def observed():
+        try:
+            await owner.close()
+        except BaseException as error:  # noqa: BLE001 — test native failures must remain inert too.
+            return error.fatal.error if isinstance(error, directory._ControlInterrupted) else error
+        pytest.fail("failed required cleanup became success")
+
+    monkeypatch.setattr(directory.pg, "close_owned", close)
+    monkeypatch.setattr(asyncio, "wait", interrupted_wait)
+    result = await observed()
+    if first_kind == "deadline":
+        assert isinstance(result, TimeoutError)
+        await asyncio.wait_for(cancelled.wait(), 0.1)
+        assert owner.close_task.cancelled()
+    else:
+        assert result is first
+    assert began.is_set()
+    conn.terminate.assert_called_once_with()

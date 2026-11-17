@@ -1065,9 +1065,13 @@ class _ControlOwner:
             if isinstance(result, _ControlFatal):
                 raise _ControlInterrupted(result)
         except BaseException:
-            pg._terminate(self.conn)
-            if not self.close_task.done():
-                self.close_task.cancel()
+            try:
+                pg._terminate(self.conn)
+            except BaseException:  # noqa: BLE001 — abort must preserve the first cleanup failure.
+                pass
+            finally:
+                if not self.close_task.done():
+                    self.close_task.cancel()
             if interrupted is not None:
                 raise interrupted from None
             raise
