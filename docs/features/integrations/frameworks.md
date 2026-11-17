@@ -727,8 +727,8 @@ conflict up to three times. A missing resource is created with
 precondition. Older servers return `PRECONDITION_FAILED` instead of creating it, and the
 adapter never retries unconditionally. Concurrent partial resource patches preserve
 omitted working memory and merge metadata; whole-resource saves remain replacements.
-Records have no expiry; the adapter clears retention defaults on its writes. Explicit
-deletion, user erasure and server policy refusals still apply.
+Writes clear the default expiry. Server retention policies, explicit deletion, user
+erasure and server policy refusals still apply.
 
 Deletes use `memory.delete_version` with the exact identity and lossless version from
 the validated read. A missing row is a no-op; a concurrent rewrite is preserved and
