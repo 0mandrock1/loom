@@ -916,21 +916,6 @@ async def _control_result[T](work: Callable[[], Awaitable[T]]) -> T | _ControlFa
         return error.fatal
 
 
-@dataclass(frozen=True)
-class _ControlConnection:
-    conn: Any
-
-    async def close(self, **kwargs: Any) -> None:
-        try:
-            await self.conn.close(**kwargs)
-        except (SystemExit, KeyboardInterrupt) as error:
-            # pg.close_owned creates its own public-close child.
-            raise _ControlInterrupted(_ControlFatal(error)) from None
-
-    def terminate(self) -> None:
-        pg._terminate(self.conn)
-
-
 class _ControlOwner:
     """Own only this operator attempt's proxy, through close and pool release."""
 
@@ -963,9 +948,7 @@ class _ControlOwner:
         if self.conn is None:
             return
         if self.close_task is None:
-            self.close_task = self.start(
-                lambda: pg.close_owned(_ControlConnection(self.conn), end=self.end)
-            )
+            self.close_task = self.start(lambda: pg.close_owned(self.conn, end=self.end))
         try:
             await self.wait(self.close_task, self.end)
         except BaseException:
