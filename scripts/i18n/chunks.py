@@ -265,6 +265,14 @@ def _github_tables(text: str) -> list[object]:
             inside = True
         if inside and token.nesting:
             tables.append((token.type, attributes))
+        elif inside and token.type == "inline":
+            # Ignore translated words while retaining whether a cell contains text.
+            content = "".join(
+                child.content
+                for child in token.children or []
+                if child.type in {"text", "code_inline"}
+            )
+            tables.append(("cell_text", bool(content.strip())))
         if token.type == "table_close":
             inside = False
         if token.nesting == 1:

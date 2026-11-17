@@ -216,16 +216,35 @@ def test_assembled_tables_inside_site_containers_reject_row_loss(monkeypatch, tm
     assert not (tmp_path / "i18n").exists()
 
 
-@pytest.mark.parametrize("container", ["plain", "quote", "list", "admonition"])
+@pytest.mark.parametrize("cell", ["header", "body"])
+@pytest.mark.parametrize("markup", [False, True])
+def test_commonmark_only_table_rejects_emptying_a_cell(monkeypatch, tmp_path, cell, markup):
+    value, empty = ("<em>Loom</em>", "<em></em>") if markup else ("Loom", "")
+    row = f"      | Loom | {value} |\n"
+    source = "1. Loom\n\n" + row + "      | --- | --- |\n" + row
+    lines = source.splitlines(keepends=True)
+    index = 2 if cell == "header" else 4
+    lines[index] = lines[index].replace(f"| {value} |\n", f"| {empty} |\n")
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
+    monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
+    monkeypatch.setattr(t, "translate_text", lambda *args: "".join(lines))
+    with pytest.raises(t.TranslationDiffers, match="table"):
+        t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
+    assert not (tmp_path / "i18n").exists()
+
+
+@pytest.mark.parametrize("container", ["plain", "quote", "list", "admonition", "commonmark-list"])
 def test_valid_table_reflow_is_written_in_each_supported_container(
     monkeypatch, tmp_path, container
 ):
-    table = "| Loom | Loom |\n| --- | --- |\n| Loom | Loom |\n"
+    table = "| Memory | Memory |\n| --- | --- |\n| Memory | Memory |\n"
     prefix, indent = {
         "plain": ("", ""),
         "quote": ("", "> "),
         "list": ("- Loom\n\n", "  "),
         "admonition": ("!!! note\n\n", "    "),
+        "commonmark-list": ("1. Loom\n\n", "      "),
     }[container]
     source = prefix + "".join(indent + line for line in table.splitlines(keepends=True))
     monkeypatch.setattr(t, "ROOT", tmp_path)
@@ -234,12 +253,12 @@ def test_valid_table_reflow_is_written_in_each_supported_container(
     monkeypatch.setattr(
         t,
         "translate_text",
-        lambda part, *args: part.replace("| Loom | Loom |", "Loom | Loom").replace(
+        lambda part, *args: part.replace("| Memory | Memory |", "记忆 | 记忆").replace(
             "| --- | --- |", "--- | ---"
         ),
     )
     t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert (
-        "Loom | Loom"
+        "记忆 | 记忆"
         in (tmp_path / t.target_path(t.LANGUAGES[0].code, "docs/example.md")).read_text()
     )
