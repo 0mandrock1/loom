@@ -25,7 +25,7 @@ async def test_list_pages_never_repeat_old_copies_or_replace_ordinary_families(m
 
     org, namespace = unique_org("list-pages"), "team"
     mirror = new_mirror_name()
-    copies = [(mirror, str(uuid4())) for _ in range(2)]
+    copies = [(mirror, sid) for sid in sorted((str(uuid4()) for _ in range(2)), reverse=True)]
     owner = mint_token(
         "source-owner",
         org,
@@ -150,6 +150,18 @@ async def test_list_pages_never_repeat_old_copies_or_replace_ordinary_families(m
             assert [
                 item["source_uri"] for item in (await listing(owner, tags=["wanted"]))["rows"]
             ] == ["gdrive:b", "gdrive:c"]
+            selected = await client.post(
+                "/v1/knowledge.get",
+                json={"org": org, "namespace": namespace, "source_uri": "gdrive:a"},
+                headers={"Authorization": "Bearer " + owner},
+            )
+            assert selected.status_code == 200 and selected.json()["content"] == "New"
+            downloaded = await client.get(
+                "/v1/knowledge.download",
+                params={"org": org, "namespace": namespace, "source_uri": "gdrive:a"},
+                headers={"Authorization": "Bearer " + owner},
+            )
+            assert downloaded.status_code == 200 and downloaded.content == b"New"
     finally:
         await ch.disconnect()
         await pg.close_pool()

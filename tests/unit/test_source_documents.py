@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -40,7 +41,14 @@ def world(monkeypatch):
     async def check(candidates, *, chunks=False):
         phases.append("check")
         assert not chunks
-        return [Admitted("team", c, {"version": 10, "revision": 0}) for c in candidates]
+        return [
+            Admitted(
+                "team",
+                c,
+                {"version": 10, "revision": 0, "ingested_at": datetime(2025, 1, 1, tzinfo=UTC)},
+            )
+            for c in candidates
+        ]
 
     async def contents(*args):
         phases.append(("contents", args))
@@ -194,6 +202,9 @@ async def test_another_admitted_source_survives_a_missing_or_revoked_copy(world,
         nonlocal calls
         calls += 1
         out = await original_check(candidates, chunks=chunks)
+        for item in out:
+            if item.candidate["source_uri"] == row.source_uri:
+                item.document["ingested_at"] += timedelta(seconds=1)
         if calls == 2 and first == "denied":
             return []
         if calls == 2 and first == "changed":
@@ -227,3 +238,45 @@ async def test_prior_conditional_failure_cannot_hide_a_selected_discovery_failur
     plan.check.assert_not_awaited()
     app.store.contents.assert_not_awaited()
     assert plan.failed and plan.unread
+
+
+@pytest.mark.parametrize("newer", ["first", "second"])
+async def test_newest_admitted_copy_wins_independently_of_storage_address(world, newer):
+    from copy import copy
+
+    app, plan, row, _phases = world
+    second_source = "22222222-2222-4222-8222-222222222222"
+    plan.discovery_sources[(MIRROR, second_source)] = "team"
+    second = copy(row)
+    second.source_uri = "gdrive:file#native#" + second_source
+    original_check = plan.check.side_effect
+
+    async def dated(candidates, *, chunks=False):
+        out = await original_check(candidates, chunks=chunks)
+        for item in out:
+            is_first = item.candidate["source_uri"] == row.source_uri
+            if is_first == (newer == "first"):
+                item.document["ingested_at"] += timedelta(seconds=1)
+        return out
+
+    plan.check.side_effect = dated
+    app.store.contents.side_effect = lambda _org, _ns, uri, *_args: (
+        row if uri == row.source_uri else second
+    )
+    result = await app.get(plan, "team", "gdrive:file#native")
+    assert result.row is (row if newer == "first" else second)
+    assert app.store.contents.await_count == 1
+
+
+async def test_equal_age_copy_tie_is_stable_and_matches_checked_listing(world):
+    from copy import copy
+
+    app, plan, row, _phases = world
+    second_source = "22222222-2222-4222-8222-222222222222"
+    plan.discovery_sources[(MIRROR, second_source)] = "team"
+    second = copy(row)
+    second.source_uri = "gdrive:file#native#" + second_source
+    app.store.contents.return_value = second
+    app.store.contents.side_effect = None
+    assert (await app.get(plan, "team", "gdrive:file#native")).row is second
+    assert app.store.contents.await_count == 1

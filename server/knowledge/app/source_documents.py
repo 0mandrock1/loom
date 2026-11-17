@@ -7,6 +7,7 @@ from typing import Any
 
 from server.core import pg, request_work
 from server.core.ch import sequential_reads, set_query_tag
+from server.core.datetimes import to_naive_utc_second
 from server.core.diagnostics import private_work
 from server.knowledge.app import source_search
 from server.knowledge.app.source_access import Admitted, ReadPlan
@@ -92,7 +93,13 @@ async def get(plan: ReadPlan, namespace: str, source_uri: str) -> CheckedDocumen
             if plan.failed or plan.unread:
                 return None
             for item in sorted(
-                admitted, key=lambda i: (i.candidate["namespace"], i.candidate["source_uri"])
+                admitted,
+                key=lambda i: (
+                    to_naive_utc_second(i.document["ingested_at"]),
+                    i.candidate["namespace"],
+                    i.candidate["source_uri"],
+                ),
+                reverse=True,
             ):
                 row = await store.contents(
                     plan.org,
