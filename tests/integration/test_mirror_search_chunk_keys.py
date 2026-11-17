@@ -69,9 +69,9 @@ async def chunks():
     )
     proof = SearchProofs(plan, embedder.model_name, (item,))
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.mirror.search_chunk_keys")
     try:
+        await ch.connect()
         await ch.insert(
             "loom.chunks",
             [

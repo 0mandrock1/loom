@@ -25,7 +25,6 @@ async def test_content_identity_and_pending_head_are_exact() -> None:
         "gdrive:file#" + str(uuid4()),
     )
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.checked_document_content")
     row = documents.build_document_row(
         org=org,
@@ -48,6 +47,7 @@ async def test_content_identity_and_pending_head_are_exact() -> None:
         access_json=to_json(AccessList(owner="owner")),
     )
     try:
+        await ch.connect()
         await ch.insert("loom.documents", [row])
         if pg.enabled():
             assert await source_documents.contents(org, mirror, uri, 10, 0) is None
@@ -83,8 +83,10 @@ async def test_content_identity_and_pending_head_are_exact() -> None:
         assert await source_documents.contents(org, mirror, uri, 11, 0) is None
         assert await source_documents.contents(org, mirror, uri, 12, 0) is None
     finally:
-        await ch.disconnect()
-        await pg.close_pool()
+        try:
+            await ch.disconnect()
+        finally:
+            await pg.close_pool()
 
 
 async def test_document_chunk_reads_include_stubs_without_widening_search() -> None:
@@ -100,7 +102,6 @@ async def test_document_chunk_reads_include_stubs_without_widening_search() -> N
     )
     model = "fixture"
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.checked_document_stubs")
     rows = [
         {
@@ -119,6 +120,7 @@ async def test_document_chunk_reads_include_stubs_without_widening_search() -> N
     ]
     keys = [(mirror, uri, idx, 10, 0) for idx in range(2)]
     try:
+        await ch.connect()
         await ch.insert("loom.chunks", rows)
         async with source_documents.chunk_candidates(org, mirror, uri, model) as stream:
             discovered = [row async for row in stream]
@@ -151,7 +153,6 @@ async def test_list_projection_and_count_stay_in_one_live_copy(content: str) -> 
 
     org, mirror, uri = unique_org("checked-list"), new_mirror_name(), "gdrive:file#" + str(uuid4())
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.checked_list_projection")
     row = documents.build_document_row(
         org=org,
@@ -191,6 +192,7 @@ async def test_list_projection_and_count_stay_in_one_live_copy(content: str) -> 
         for i in (0, 1, 1)
     ]
     try:
+        await ch.connect()
         await ch.insert("loom.documents", [row])
         await ch.insert(
             "loom.chunks",
@@ -252,8 +254,10 @@ async def test_list_projection_and_count_stay_in_one_live_copy(content: str) -> 
             await source_documents.list_projection(org, mirror, uri, deleted["version"], 0) is None
         )
     finally:
-        await ch.disconnect()
-        await pg.close_pool()
+        try:
+            await ch.disconnect()
+        finally:
+            await pg.close_pool()
 
 
 async def test_list_discovery_pages_all_families_and_shadows_ordinary_rows(monkeypatch) -> None:
@@ -274,7 +278,6 @@ async def test_list_discovery_pages_all_families_and_shadows_ordinary_rows(monke
     sid, other_sid = str(uuid4()), str(uuid4())
     sources = {(first, sid): "team", (second, other_sid): "team"}
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.checked_list_discovery")
     at = datetime.now(UTC).replace(microsecond=0, tzinfo=None)
 
@@ -300,6 +303,7 @@ async def test_list_discovery_pages_all_families_and_shadows_ordinary_rows(monke
     rows.append(document(first, "gdrive:K#native#" + sid, ["source-id:" + sid]))
     other = document(second, "gdrive:0000#" + other_sid, ["source-id:" + other_sid])
     try:
+        await ch.connect()
         if pg.enabled():
             await pg_documents.commit(rows, over={}, targets={r["source_uri"]: 1 for r in rows})
             await pg_documents.commit([other], over={}, targets={other["source_uri"]: 1})
@@ -354,5 +358,7 @@ async def test_list_discovery_pages_all_families_and_shadows_ordinary_rows(monke
             == set()
         )
     finally:
-        await ch.disconnect()
-        await pg.close_pool()
+        try:
+            await ch.disconnect()
+        finally:
+            await pg.close_pool()

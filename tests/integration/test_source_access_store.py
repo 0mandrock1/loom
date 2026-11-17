@@ -19,7 +19,6 @@ async def test_group_snapshot_readback_and_erasure_are_scoped() -> None:
     from server.knowledge.store import source_access as store
 
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.source_access_group_store")
     org, other_org = unique_org("access-groups"), unique_org("other-access-groups")
     mirror, other_mirror, sid = new_mirror_name(), new_mirror_name(), str(uuid4())
@@ -36,6 +35,7 @@ async def test_group_snapshot_readback_and_erasure_are_scoped() -> None:
         "version": 1,
     }
     try:
+        await ch.connect()
         await ch.insert(
             "loom.knowledge_group_members",
             [row, {**row, "org": other_org}, {**row, "namespace": other_mirror}],
@@ -72,7 +72,6 @@ async def test_chunk_hydration_reads_only_its_exact_live_admitted_key() -> None:
     from server.knowledge.store import source_candidates as store
 
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.source_chunk_hydration")
     org, mirror, uri = (
         unique_org("access-hydrate"),
@@ -106,6 +105,7 @@ async def test_chunk_hydration_reads_only_its_exact_live_admitted_key() -> None:
     ]
     # The same exact row with a superseded marker is also excluded.
     try:
+        await ch.connect()
         await ch.insert(
             "loom.chunks",
             [row, *[{**row, "content": "not admitted", **change} for change in alternatives]],
@@ -151,7 +151,6 @@ async def test_pg_head_metadata_has_current_acl_and_recorded_chunks() -> None:
     from server.knowledge.store import source_access as store
 
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.source_access_head_store")
     org, mirror, sid = unique_org("access-head"), new_mirror_name(), str(uuid4())
     uri = "gdrive:file#" + sid
@@ -172,6 +171,7 @@ async def test_pg_head_metadata_has_current_acl_and_recorded_chunks() -> None:
         "access_json": to_json(AccessList(emails=("lee@example.com",))),
     }
     try:
+        await ch.connect()
         await pg_documents.commit([row], over={}, targets={uri: 1}, chunked={uri})
         narrowed = {**row, "version": 11, "access_json": to_json(AccessList())}
         await pg_documents.commit([narrowed], over={uri: 10}, targets={uri: 1})
@@ -184,8 +184,10 @@ async def test_pg_head_metadata_has_current_acl_and_recorded_chunks() -> None:
         assert await store.heads(unique_org("other-access-head"), [(mirror, uri)]) == {}
         assert await store.heads(org, [(mirror, uri + "missing")]) == {}
     finally:
-        await ch.disconnect()
-        await pg.close_pool()
+        try:
+            await ch.disconnect()
+        finally:
+            await pg.close_pool()
 
 
 async def test_coarse_access_keys_do_not_drop_strictly_admitted_permissions() -> None:
@@ -197,7 +199,6 @@ async def test_coarse_access_keys_do_not_drop_strictly_admitted_permissions() ->
     from server.knowledge.domain.access_list import allows, candidate_keys, from_json
 
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.source_access_candidate_keys")
     org, mirror = unique_org("access-key"), new_mirror_name()
     permissions = [
@@ -239,6 +240,7 @@ async def test_coarse_access_keys_do_not_drop_strictly_admitted_permissions() ->
         for row in rows
     )
     try:
+        await ch.connect()
         await ch.insert("loom.documents", rows)
         admitted = await ch.query_all(
             "SELECT source_uri FROM loom.documents FINAL WHERE org = {org:String} "
@@ -263,7 +265,6 @@ async def test_both_chunk_frequency_views_exclude_private_namespaces() -> None:
     from server.core.naming import new_mirror_name
 
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.source_access_term_frequency")
     org, mirror = unique_org("access-freq"), new_mirror_name()
     row = {
@@ -279,6 +280,7 @@ async def test_both_chunk_frequency_views_exclude_private_namespaces() -> None:
         "embedding_dim": 3072,
     }
     try:
+        await ch.connect()
         await ch.insert("loom.chunks", [row, {**row, "namespace": "docs"}])
         found = await ch.query_all(
             "SELECT namespace, term, uniqExactMerge(df_state) AS df "
@@ -324,7 +326,6 @@ async def test_discovery_stream_projects_metadata_and_only_ch_uses_acl_keys(leg)
     from server.knowledge.store import source_candidates as store
 
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.source_candidate_stream")
     org, mirror, sid = unique_org("access-stream"), new_mirror_name(), str(uuid4())
     uris = ["gdrive:allowed#" + sid, "gdrive:denied#" + sid]
@@ -359,6 +360,7 @@ async def test_discovery_stream_projects_metadata_and_only_ch_uses_acl_keys(leg)
         for uri in uris
     ]
     try:
+        await ch.connect()
         await ch.insert("loom.documents", docs)
         await ch.insert("loom.chunks", chunks)
         where, params = _common_where(

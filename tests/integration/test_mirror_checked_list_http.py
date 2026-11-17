@@ -22,6 +22,9 @@ async def test_list_pages_never_repeat_old_copies_or_replace_ordinary_families(m
     from server.knowledge.domain.access_list import AccessList, to_json
     from server.knowledge.domain.sources import KnowledgeSource
     from server.knowledge.store import documents, mirrors, pg_documents, sources
+    from server.settings import settings
+
+    assert settings.auth_actually_required(), "Run signed mirror HTTP cases in the auth-on profile"
 
     org, namespace = unique_org("list-pages"), "team"
     mirror = new_mirror_name()
@@ -38,7 +41,6 @@ async def test_list_pages_never_repeat_old_copies_or_replace_ordinary_families(m
     outsider = mint_test_token(org=org, namespaces=[namespace], subject="outsider")
     owner_bot = mint_test_token(org=org, namespaces=[namespace], subject="source-owner")
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.checked_list_pages")
     now = datetime.now(UTC).replace(microsecond=0)
 
@@ -93,6 +95,7 @@ async def test_list_pages_never_repeat_old_copies_or_replace_ordinary_families(m
         ]
     )
     try:
+        await ch.connect()
         await mirrors.add_mirror(org, namespace, mirror)
         for index, (mirror, sid) in enumerate(copies):
             await sources.insert_source(
@@ -163,5 +166,7 @@ async def test_list_pages_never_repeat_old_copies_or_replace_ordinary_families(m
             )
             assert downloaded.status_code == 200 and downloaded.content == b"New"
     finally:
-        await ch.disconnect()
-        await pg.close_pool()
+        try:
+            await ch.disconnect()
+        finally:
+            await pg.close_pool()

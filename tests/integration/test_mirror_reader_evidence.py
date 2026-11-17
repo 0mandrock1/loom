@@ -17,12 +17,12 @@ async def test_reader_evidence_follows_account_and_link_lifecycle(monkeypatch) -
     from server.settings import settings
 
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.mirror_reader_evidence")
     org = unique_org("reader-evidence")
     monkeypatch.setattr(settings, "oidc_issuer", "https://idp.example/")
     monkeypatch.setattr(settings, "oauth_login_provider", "oidc")
     try:
+        await ch.connect()
         # The password signup path hashes even a claimed address before writing it.
         await self_signup._claim_account(
             self_signup.SelfSignupInput(
@@ -163,13 +163,13 @@ async def test_missing_domain_clears_every_account_before_reader_count_shrinks(m
     from server.settings import settings
 
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.mirror_reader_many_accounts")
     org = unique_org("reader-many")
     owner, email = "many-reader", "many@example.com"
     monkeypatch.setattr(settings, "oidc_issuer", "https://idp.example")
     monkeypatch.setattr(settings, "oauth_login_provider", "oidc")
     try:
+        await ch.connect()
         now = datetime.now(UTC)
         rows = [
             {

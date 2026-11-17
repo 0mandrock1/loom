@@ -30,6 +30,8 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
     from server.llm.client import get_llm_client_for_model
     from server.settings import settings
 
+    assert settings.auth_actually_required(), "Run signed mirror HTTP cases in the auth-on profile"
+
     embedder = get_embedder()
     assert embedder.model_name.startswith("fake-"), "This fixture uses only fake embeddings"
     assert not settings.llm_fallback_model.strip(), "This fixture uses no fallback provider"
@@ -55,7 +57,6 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
     owner_bot = mint_test_token(org=org, namespaces=[namespace], subject="source-owner")
     foreign = mint_test_token(org=unique_org("foreign-search"), namespaces=[namespace])
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.checked_search_http")
     now = datetime.now(UTC).replace(microsecond=0)
 
@@ -203,6 +204,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             return response.status_code, response.content, headers
 
         try:
+            await ch.connect()
             anonymous = await client.post(
                 "/v1/knowledge.search",
                 json={
@@ -431,5 +433,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert await outline(owner) == missing_outline
             assert await download(owner) == missing_download
         finally:
-            await ch.disconnect()
-            await pg.close_pool()
+            try:
+                await ch.disconnect()
+            finally:
+                await pg.close_pool()

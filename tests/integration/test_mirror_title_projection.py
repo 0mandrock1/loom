@@ -43,17 +43,19 @@ async def document(**fields):
         **fields,
     }
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.mirror.title_projection")
     try:
+        await ch.connect()
         if pg.enabled():
             await pg_documents.commit([row], over={}, targets={row["source_uri"]: 1})
         else:
             await ch.insert("loom.documents", [row])
         yield source_documents, row
     finally:
-        await ch.disconnect()
-        await pg.close_pool()
+        try:
+            await ch.disconnect()
+        finally:
+            await pg.close_pool()
 
 
 @pytest.mark.parametrize(
