@@ -443,6 +443,12 @@ after content is fetched. Listing evidence and any group membership relied on mu
 still be fresh before the content leaves the checked leg. Independent email, owner, domain or public grants
 can admit a document whose group evidence expired.
 
+A marked private-first search gathers both possible passes from its authorized
+namespace list and visibility settings before choosing which to return. It refreshes
+all retained mirror permissions and reranks before applying the first-pass similarity
+threshold. A provisional private hit that loses permission therefore cannot suppress
+the public fallback. No reranking provider receives the provisional pools.
+
 - **Legs with the check:** `knowledge.search`, `get`, `outline`, `list`, `download`,
   `synthesize`, `knowledge.inspect` (titles), `knowledge.source.inspect` (a mirrored
   source's documents), the `search.query` knowledge and repository-docs legs,
