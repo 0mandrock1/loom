@@ -376,6 +376,15 @@ async def test_restore_owns_raw_backend_before_initialization(
     )
     try:
         await asyncio.wait_for(started.wait(), 1)
+        async with asyncio.timeout(0.2):
+            for _ in range(200):
+                if await observer.fetchval(
+                    "SELECT wait_event='PgSleep' FROM pg_stat_activity WHERE pid=$1", owned["pid"]
+                ):
+                    break
+                await asyncio.sleep(0.001)
+            else:
+                pytest.fail("raw initialization never reached its actual sleeping query")
         before = time.monotonic()
         if ending != "deadline":
             task.cancel("first initialization cancellation")
