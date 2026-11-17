@@ -13,6 +13,7 @@ on:
   workflow_run:
     workflows: [ci]
     types: [completed]
+    branches: [i18n/update]
   schedule:
     - cron: "37 */6 * * *"
   workflow_dispatch:
@@ -88,7 +89,7 @@ jobs:
 
   finalize:
     name: merge validated translations
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'i18n/update' && github.event.workflow_run.event == 'workflow_dispatch'))
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'workflow_dispatch'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
