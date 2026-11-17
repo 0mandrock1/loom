@@ -2251,9 +2251,9 @@ class KnowledgeSettings(BaseModel):
     knowledge_query_history_window_days: Annotated[int, LIVE] = Field(default=7, ge=1, le=30)
     # Seconds allowed for one query-history source read.
     knowledge_query_history_read_timeout_s: Annotated[float, LIVE] = Field(default=30, gt=0, le=120)
-    # Seconds between query-history passes.
     # Deadline of one query-history pass; it starts no new group after half this budget.
     knowledge_query_history_max_pass_seconds: float = Field(default=120.0, ge=30.0, le=600.0)
+    # Seconds between query-history passes.
     knowledge_query_history_interval_seconds: int = Field(default=3600, ge=300)
     # Sources one pass reads, at most; each turn is separately time bounded.
     knowledge_query_history_max_sources: Annotated[int, LIVE] = Field(default=100, ge=1, le=1000)

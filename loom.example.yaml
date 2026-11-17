@@ -2742,11 +2742,11 @@ settings:
   # Seconds allowed for one query-history source read. [live]
   # knowledge_query_history_read_timeout_s: 30
 
-  # Seconds between query-history passes. Deadline of one query-history pass; it starts
-  # no new group after half this budget. [restart]
+  # Deadline of one query-history pass; it starts no new group after half this budget.
+  # [restart]
   # knowledge_query_history_max_pass_seconds: 120.0
 
-  # [restart]
+  # Seconds between query-history passes. [restart]
   # knowledge_query_history_interval_seconds: 3600
 
   # Sources one pass reads, at most; each turn is separately time bounded. [live]

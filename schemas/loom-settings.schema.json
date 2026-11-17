@@ -3138,7 +3138,8 @@
         "knowledge_query_history_interval_seconds": {
           "default": 3600,
           "minimum": 300,
-          "type": "integer"
+          "type": "integer",
+          "description": "Seconds between query-history passes."
         },
         "knowledge_query_history_max_drafts": {
           "default": 20,
@@ -3159,7 +3160,7 @@
           "maximum": 600.0,
           "minimum": 30.0,
           "type": "number",
-          "description": "Seconds between query-history passes. Deadline of one query-history pass; it starts no new group after half this budget."
+          "description": "Deadline of one query-history pass; it starts no new group after half this budget."
         },
         "knowledge_query_history_max_sources": {
           "default": 100,
