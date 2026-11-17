@@ -42,7 +42,7 @@ export function processIdentity(pid, { platform = process.platform, run = execFi
       return match ? { pid, parent: Number(match[1]), born: match[2], name: match[3] } : null;
     }
     if (platform === "win32") {
-      const command = `$p=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if($p){[PSCustomObject]@{name=$p.Name;parent=$p.ParentProcessId;born=$p.CreationDate.ToUniversalTime().Ticks.ToString()}|ConvertTo-Json -Compress}`;
+      const command = `$ErrorActionPreference='Stop'; $s=[wmisearcher]'SELECT Name,ParentProcessId,CreationDate FROM Win32_Process WHERE ProcessId=${pid}'; foreach($p in $s.Get()){[PSCustomObject]@{name=$p.Name;parent=$p.ParentProcessId;born=[System.Management.ManagementDateTimeConverter]::ToDateTime($p.CreationDate).ToUniversalTime().Ticks.ToString()}|ConvertTo-Json -Compress}`;
       const p = JSON.parse(
         run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], opts).replace(/^\uFEFF/, ""),
       );

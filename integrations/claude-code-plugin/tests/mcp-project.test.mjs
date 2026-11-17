@@ -1,5 +1,6 @@
 import "./temp-home.mjs";
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -7,8 +8,18 @@ import path from "node:path";
 import { processIdentity, publishProject, sessionProject } from "../lib/mcp-project.mjs";
 
 test("the native platform supplies this live process's creation identity", () => {
-  const identity = processIdentity(process.pid);
-  assert.equal(identity?.pid, process.pid);
+  const failures = [];
+  const run = (...args) => {
+    const started = Date.now();
+    try {
+      return execFileSync(...args);
+    } catch (error) {
+      failures.push({ code: error.code, signal: error.signal, status: error.status, elapsedMs: Date.now() - started });
+      throw error;
+    }
+  };
+  const identity = processIdentity(process.pid, { run });
+  assert.equal(identity?.pid, process.pid, JSON.stringify(failures));
   assert.equal(identity?.parent, process.ppid);
   assert.ok(identity?.born);
   assert.ok(identity?.name);
@@ -38,6 +49,14 @@ test("macOS and Windows process queries parse creation identities without shell 
       else {
         assert.deepEqual(args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
         assert.match(args[3], /ProcessId=30/);
+        assert.match(
+          args[3],
+          /\[wmisearcher\]'SELECT Name,ParentProcessId,CreationDate FROM Win32_Process WHERE ProcessId=30'/,
+        );
+        assert.match(
+          args[3],
+          /\[System\.Management\.ManagementDateTimeConverter\]::ToDateTime\(\$p\.CreationDate\)\.ToUniversalTime\(\)\.Ticks\.ToString\(\)/,
+        );
         assert.doesNotMatch(args[3], /CommandLine|Environment/);
       }
       return output;

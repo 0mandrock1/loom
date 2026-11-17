@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { hostEnv } from "./host-env.mjs";
 
 // The real hook runs against in-process replies: no listener or network access.
@@ -82,25 +82,29 @@ for (const [name, plugin, client, overrides, accepts] of [
       const requests = path.join(dir, "requests.log");
       fs.writeFileSync(bootstrap, replies);
       const hook = fileURLToPath(new URL(`../../${plugin}/hooks/loom-session-start.mjs`, import.meta.url));
-      const result = spawnSync(process.execPath, ["--import", bootstrap, hook, "SessionStart", client], {
-        input: JSON.stringify({ cwd: dir, session_id: "fixture-session" }),
-        encoding: "utf8",
-        timeout: 5000,
-        env: hostEnv({
-          PATH: process.env.PATH,
-          HOME: dir,
-          TMPDIR: dir,
-          LOOM_API_KEY: "fixture-token",
-          LOOM_AUTO_SIGNUP: "false",
-          LOOM_CODE_MAP: "false",
-          LOOM_TASK_INBOX_LINE: "false",
-          LOOM_COLLECTIONS_LINE: "true",
-          LOOM_SESSION_BRIEF_PRIMER: "false",
-          LOOM_HOOK_EXIT_MS: "100",
-          FIXTURE_REQUESTS: requests,
-          ...overrides,
-        }),
-      });
+      const result = spawnSync(
+        process.execPath,
+        ["--import", pathToFileURL(bootstrap).href, hook, "SessionStart", client],
+        {
+          input: JSON.stringify({ cwd: dir, session_id: "fixture-session" }),
+          encoding: "utf8",
+          timeout: 5000,
+          env: hostEnv({
+            PATH: process.env.PATH,
+            HOME: dir,
+            TMPDIR: dir,
+            LOOM_API_KEY: "fixture-token",
+            LOOM_AUTO_SIGNUP: "false",
+            LOOM_CODE_MAP: "false",
+            LOOM_TASK_INBOX_LINE: "false",
+            LOOM_COLLECTIONS_LINE: "true",
+            LOOM_SESSION_BRIEF_PRIMER: "false",
+            LOOM_HOOK_EXIT_MS: "100",
+            FIXTURE_REQUESTS: requests,
+            ...overrides,
+          }),
+        },
+      );
       assert.equal(result.error, undefined, String(result.error));
       assert.equal(result.status, 0, result.stderr);
       const calls = fs.existsSync(requests) ? fs.readFileSync(requests, "utf8").trim().split("\n") : [];

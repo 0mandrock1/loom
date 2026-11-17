@@ -117,7 +117,7 @@ On Windows it runs `powershell.exe -NoProfile -NonInteractive -Command` with thi
 script, substituting a validated integer for `<pid>`:
 
 ```powershell
-$p=Get-CimInstance Win32_Process -Filter 'ProcessId=<pid>'; if($p){[PSCustomObject]@{name=$p.Name;parent=$p.ParentProcessId;born=$p.CreationDate.ToUniversalTime().Ticks.ToString()}|ConvertTo-Json -Compress}
+$ErrorActionPreference='Stop'; $s=[wmisearcher]'SELECT Name,ParentProcessId,CreationDate FROM Win32_Process WHERE ProcessId=<pid>'; foreach($p in $s.Get()){[PSCustomObject]@{name=$p.Name;parent=$p.ParentProcessId;born=[System.Management.ManagementDateTimeConverter]::ToDateTime($p.CreationDate).ToUniversalTime().Ticks.ToString()}|ConvertTo-Json -Compress}
 ```
 
 Each subprocess has a one-second timeout and a 16 KiB output limit. These queries

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { hostEnv } from "./host-env.mjs";
 
@@ -53,19 +53,24 @@ for (const [name, invalid] of [
         FIXTURE_REQUESTS: requests,
       });
       const run = (entry, extra = {}, args = []) => {
-        const result = spawnSync(process.execPath, ["--import", bootstrap, path.join(plugin, entry), ...args], {
-          input: JSON.stringify({ cwd: dir, session_id: "fixture-session" }),
-          encoding: "utf8",
-          timeout: 5000,
-          env: { ...env, ...extra },
-        });
+        const result = spawnSync(
+          process.execPath,
+          ["--import", pathToFileURL(bootstrap).href, path.join(plugin, entry), ...args],
+          {
+            input: JSON.stringify({ cwd: dir, session_id: "fixture-session" }),
+            encoding: "utf8",
+            timeout: 5000,
+            env: { ...env, ...extra },
+          },
+        );
         assert.equal(result.error, undefined, String(result.error));
         return result;
       };
       const start = (url) =>
         run("hooks/loom-session-start.mjs", { CLAUDE_PLUGIN_OPTION_SERVER_URL: url }, ["SessionStart", "claude-code"]);
 
-      assert.equal(start("https://loom.example/old/mcp?toolset=coding").status, 0);
+      const initial = start("https://loom.example/old/mcp?toolset=coding");
+      assert.equal(initial.status, 0, initial.stdout + initial.stderr);
       const before = run("bin/loom-client-status.mjs");
       assert.equal(before.status, 0, before.stdout + before.stderr);
       assert.equal(JSON.parse(before.stdout).ok, true);
