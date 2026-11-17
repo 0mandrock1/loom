@@ -13,6 +13,7 @@ import anyio
 from server.core.ch import class_timeout_s, current_query_tag, query_tag, statement_timeout
 
 log = logging.getLogger("loom.request_tail")
+# not a setting: one required publication attempt has a fixed cleanup safety ceiling.
 REQUIRED_STEP_TIMEOUT_S = 60.0
 
 

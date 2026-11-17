@@ -23,11 +23,12 @@ pytestmark = pytest.mark.usefixtures("ch_target_required")
 async def reader() -> AsyncIterator[Any]:
     client = CHClient()
     database = "export_marked_" + uuid4().hex
-    created = False
+    database_uuid = str(uuid4())
+    attempted = False
     try:
         await client.connect()
-        await client.execute(f"CREATE DATABASE {database}")
-        created = True
+        attempted = True
+        await client.execute(f"CREATE DATABASE {database} UUID '{database_uuid}' ENGINE = Atomic")
         await client.execute(f"CREATE TABLE {database}.agent_events AS loom.agent_events")
 
         async def query(sql: str, params: Any) -> Any:
@@ -38,8 +39,14 @@ async def reader() -> AsyncIterator[Any]:
         yield SimpleNamespace(client=client, table=f"{database}.agent_events", query=query)
     finally:
         try:
-            if created:
-                await client.execute(f"DROP DATABASE {database} SYNC")
+            if attempted:
+                owned = await client.query_one(
+                    "SELECT toString(uuid) AS uuid FROM system.databases WHERE name = {name:String}",
+                    params={"name": database},
+                )
+                if owned:
+                    assert owned["uuid"] == database_uuid, "Private database identity changed"
+                    await client.execute(f"DROP DATABASE {database} SYNC")
         finally:
             await client.disconnect()
 

@@ -136,7 +136,8 @@ class CostWorld:
 async def world(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[CostWorld]:
     client = CHClient()
     database = "marked_cost_" + uuid4().hex
-    created = False
+    database_uuid = str(uuid4())
+    attempted = False
     try:
         await client.connect()
         columns = await client.query_all("DESCRIBE TABLE loom.agent_events")
@@ -148,8 +149,8 @@ async def world(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[CostWorld]:
             "marked_embed_tokens_state",
             "marked_ops_state",
         } <= {r["name"] for r in columns}, "marked rollup schema prerequisite"
-        await client.execute(f"CREATE DATABASE {database}")
-        created = True
+        attempted = True
+        await client.execute(f"CREATE DATABASE {database} UUID '{database_uuid}' ENGINE = Atomic")
         await client.execute(f"CREATE TABLE {database}.agent_events AS loom.agent_events")
         await client.execute(
             f"CREATE TABLE {database}.agent_cost_rollup_daily AS loom.agent_cost_rollup_daily"
@@ -158,8 +159,14 @@ async def world(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[CostWorld]:
         yield CostWorld(client, database)
     finally:
         try:
-            if created:
-                await client.execute(f"DROP DATABASE {database} SYNC")
+            if attempted:
+                owned = await client.query_one(
+                    "SELECT toString(uuid) AS uuid FROM system.databases WHERE name = {name:String}",
+                    params={"name": database},
+                )
+                if owned:
+                    assert owned["uuid"] == database_uuid, "Private database identity changed"
+                    await client.execute(f"DROP DATABASE {database} SYNC")
         finally:
             await client.disconnect()
 
