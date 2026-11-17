@@ -436,9 +436,11 @@ inside `memory.ask` and `context.pack`, and in `loom_search`'s memory section.
   `retrieval_confidence` and `retrieval_risk` describe the other hits.
 - **When it is off.** A page handle, and a field that asks for other rows: `memory_type`,
   `tags` or `category` (not with `tags_soft` or `category_soft`), `as_of`, `min_body_chars`,
-  `recent_first` or `anchor_first` above 0, `legs` without `memory`, or a query that is not
-  valid Unicode. A field that says whose rows to read (`agent`, `user_id`, `session_id`,
-  `session_ids`, `run_id`, `scope`) keeps it on, and `exclude_keys` drops its keys.
+  `recent_first` or `anchor_first` above 0, or `legs` without `memory`. An invalid Unicode
+  query turns it off when the bounded Unicode check reads it; a query beyond that check's
+  work bound reports `timed_out` before validation. A field that says whose rows to read
+  (`agent`, `user_id`, `session_id`, `session_ids`, `run_id`, `scope`) keeps it on, and
+  `exclude_keys` drops its keys.
 - **`term_leg`** on the response says what it did: `complete`, `empty` (no definitions),
   `capped`, `timed_out`, `failed` (a read failed, so nothing was served) or `off`.
 - **Scope.** It serves governed definitions under any read scope and under `scope`
