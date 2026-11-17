@@ -392,11 +392,13 @@ async def _operator_change(
     change: Callable[[Any, Cell], Awaitable[dict[str, Any]]],
     expected: Control,
 ) -> Cell:
-    async with _attach_change(cell_name, expected) as (conn, found):
+    async def change_locked(conn: Any, found: Attaching) -> Cell:
         detail = await change(conn, found.row)
         await _audit(conn, action, {"cell": cell_name, **detail})
         row = await conn.fetchrow(f"{_CELL} WHERE cell = $1", cell_name)
-    return _cell(row)
+        return _cell(row)
+
+    return await _attach_change(cell_name, expected, change_locked)
 
 
 @dataclass(frozen=True)
@@ -1018,34 +1020,159 @@ def control_refusal(found: Attaching, expected: Control, *, claim: bool = False)
     return ""
 
 
-@asynccontextmanager
-async def _control_transaction() -> AsyncIterator[Any]:
-    """Bound acquisition, statements, COMMIT and release; never await rollback on cancel."""
-    async with _reading(), asyncio.timeout(CONTROL_MAX_S), _connection() as conn:
-        settled = False
-        tx = conn.transaction()
+@dataclass(frozen=True)
+class _ControlFatal:
+    error: SystemExit | KeyboardInterrupt
+
+
+async def _control_result[T](work: Callable[[], Awaitable[T]]) -> T | _ControlFatal:
+    try:
+        return await work()
+    except (SystemExit, KeyboardInterrupt) as error:
+        return _ControlFatal(error)
+    except _ControlInterrupted as error:
+        return error.fatal
+
+
+@dataclass(frozen=True)
+class _ControlConnection:
+    conn: Any
+
+    async def close(self, **kwargs: Any) -> None:
         try:
-            await tx.start()
+            await self.conn.close(**kwargs)
+        except (SystemExit, KeyboardInterrupt) as error:
+            # pg.close_owned creates its own public-close child.
+            raise _ControlInterrupted(_ControlFatal(error)) from None
+
+    def terminate(self) -> None:
+        pg._terminate(self.conn)
+
+
+class _ControlOwner:
+    """Own only this operator attempt's proxy, through close and pool release."""
+
+    def __init__(self) -> None:
+        self.end = time.monotonic() + CONTROL_MAX_S
+        self.work_end = self.end - min(1.0, CONTROL_MAX_S / 4)
+        self.context = _connection()
+        self.conn: Any = None
+        self.entered = False
+        self.closing = False
+        self.close_task: asyncio.Task[Any] | None = None
+        self.exit_task: asyncio.Task[Any] | None = None
+
+    def start[T](self, work: Callable[[], Awaitable[T]]) -> asyncio.Task[T | _ControlFatal]:
+        task = asyncio.create_task(_control_result(work))
+        task.add_done_callback(pg._retrieve_task)
+        return task
+
+    async def wait[T](self, task: asyncio.Task[T | _ControlFatal], end: float) -> T:
+        done, _ = await asyncio.wait({task}, timeout=max(0, end - time.monotonic()))
+        if not done:
+            raise TimeoutError("directory control deadline expired; outcome unknown")
+        result = task.result()
+        if isinstance(result, _ControlFatal):
+            # Keep fatal exceptions inert in nested acquisition/cleanup children.
+            raise _ControlInterrupted(result)
+        return result
+
+    async def close(self) -> None:
+        if self.conn is None:
+            return
+        if self.close_task is None:
+            self.close_task = self.start(
+                lambda: pg.close_owned(_ControlConnection(self.conn), end=self.end)
+            )
+        try:
+            await self.wait(self.close_task, self.end)
+        except BaseException:
+            pg._terminate(self.conn)
+            self.close_task.cancel()
+            raise
+
+    async def release(self) -> None:
+        if self.entered:
+            if self.exit_task is None:
+                self.exit_task = self.start(lambda: self.context.__aexit__(None, None, None))
             try:
-                yield conn
-            except Exception:
-                await tx.rollback()
-                settled = True
+                await self.wait(self.exit_task, self.end)
+            except BaseException:
+                self.exit_task.cancel()
                 raise
-            else:
-                await tx.commit()
-                settled = True
-        finally:
-            if not settled:
-                # A cancelled/unknown COMMIT cannot return this backend to the pool.
-                conn.terminate()
+
+    async def work[T](self, change: Callable[[Any], Awaitable[T]]) -> T:
+        self.conn = await self.context.__aenter__()
+        self.entered = True
+        if self.closing:
+            # A cancellation-resistant acquire cannot hand a late proxy to a mutation.
+            try:
+                await self.close()
+            finally:
+                await self.release()
+            raise TimeoutError("directory connection arrived after its attempt ended")
+        tx = self.conn.transaction()
+        await tx.start()
+        result = await change(self.conn)
+        await tx.commit()
+        return result
+
+    async def finish(self, task: asyncio.Task[Any]) -> None:
+        self.closing = True
+        failure: BaseException | None = None
+        try:
+            await self.close()
+        except BaseException as error:  # noqa: BLE001 — release must preserve the first failure.
+            failure = error
+        if not task.done():
+            task.cancel()
+        try:
+            await asyncio.wait({task}, timeout=max(0, self.end - time.monotonic()))
+        except BaseException as error:  # noqa: BLE001 — cleanup keeps the first failure.
+            failure = failure or error
+        try:
+            await self.release()
+        except BaseException as error:  # noqa: BLE001 — cleanup keeps the first failure.
+            failure = failure or error
+        if failure is not None:
+            raise failure
 
 
-@asynccontextmanager
-async def _attach_change(
-    cell_name: str, expected: Control, *, claim: bool = False
-) -> AsyncIterator[tuple[Any, Attaching]]:
-    async with _control_transaction() as conn:
+class _ControlInterrupted(BaseException):
+    def __init__(self, fatal: _ControlFatal) -> None:
+        self.fatal = fatal
+
+
+async def _control_transaction[T](change: Callable[[Any], Awaitable[T]]) -> T:
+    """Bound the whole callback, close first, then settle work and pool ownership."""
+    async with _reading():
+        owner = _ControlOwner()
+        task = owner.start(lambda: owner.work(change))
+        try:
+            result = await owner.wait(task, owner.work_end)
+        except BaseException as original:
+            try:
+                await owner.finish(task)
+            except BaseException:  # noqa: BLE001 — preserve the original failure/cancellation.
+                pass
+            if isinstance(original, _ControlInterrupted):
+                raise original.fatal.error from None
+            raise
+        try:
+            await owner.finish(task)
+        except _ControlInterrupted as interrupted:
+            raise interrupted.fatal.error from None
+        return result
+
+
+async def _attach_change[T](
+    cell_name: str,
+    expected: Control,
+    change: Callable[[Any, Attaching], Awaitable[T]],
+    *,
+    claim: bool = False,
+) -> T:
+    async def locked(conn: Any) -> T:
         await conn.execute("SELECT pg_advisory_xact_lock($1)", _DIRECTORY_LOCK)
         found = await conn.fetchrow(f"{_CELL_ATTACH} WHERE cell = $1 FOR UPDATE", cell_name)
         if found is None:
@@ -1054,22 +1181,26 @@ async def _attach_change(
         attaching = _attaching(found, other)
         if reason := control_refusal(attaching, expected, claim=claim):
             raise OperatorRefused(reason)
-        # A no-op still has a synchronous WAL commit: a primary-visible earlier write
-        # whose acknowledgement was lost is not yet a durability proof.
+        # Even a no-op needs synchronous WAL acknowledgement.
         await conn.execute("SELECT pg_logical_emit_message(true, 'loom.control', '')")
-        yield conn, attaching
+        return await change(conn, attaching)
+
+    return await _control_transaction(locked)
 
 
 async def claim(cell_name: str, expected: Control) -> Attaching:
     """Rotate on EVERY execution, including an identical HTTP replay."""
-    async with _attach_change(cell_name, expected, claim=True) as (conn, _found):
+
+    async def change_locked(conn: Any, _found: Attaching) -> Attaching:
         await conn.execute(
             "UPDATE loom_router.cells SET mutation_generation = gen_random_uuid() WHERE cell = $1",
             cell_name,
         )
         await _audit(conn, "control_claim", {"cell": cell_name})
         written = await conn.fetchrow(f"{_CELL_ATTACH} WHERE cell = $1", cell_name)
-    return _attaching(written, _found.other)
+        return _attaching(written, _found.other)
+
+    return await _attach_change(cell_name, expected, change_locked, claim=True)
 
 
 async def _audit(conn: Any, action: str, detail: dict[str, Any]) -> None:
@@ -1084,7 +1215,8 @@ async def attach_begin(cell_name: str, begin: Begin, *, expected: Control) -> At
     """`attach/begin`: write `attach_started_at` once, the fingerprints while the row has
     none, and the root-secret fingerprint on every call, audited with the allow lists.
     Idempotent: a rerun posting the same fingerprints writes only `keys_fp`."""
-    async with _attach_change(cell_name, expected) as (conn, found):
+
+    async def change_locked(conn: Any, found: Attaching) -> Attaching:
         if reason := begin_refusal(found, begin):
             raise OperatorRefused(reason)
         await conn.execute(
@@ -1107,7 +1239,9 @@ async def attach_begin(cell_name: str, begin: Begin, *, expected: Control) -> At
             },
         )
         written = await conn.fetchrow(f"{_CELL_ATTACH} WHERE cell = $1", cell_name)
-    return _attaching(written, None)
+        return _attaching(written, None)
+
+    return await _attach_change(cell_name, expected, change_locked)
 
 
 async def attach_place(
@@ -1122,7 +1256,8 @@ async def attach_place(
     reads `enforced`, judges that."""
     _refuse_long(orgs)
     batch = sorted(set(orgs))
-    async with _attach_change(cell_name, expected) as (conn, found):
+
+    async def change_locked(conn: Any, found: Attaching) -> tuple[int, int]:
         if reason := attach_refusal(found, deployment_id, enforced=True):
             raise OperatorRefused(reason)
         new = await conn.fetch(
@@ -1161,13 +1296,16 @@ async def attach_place(
             len(batch),
             len(new),
         )
-    return len(new), int(placed)
+        return len(new), int(placed)
+
+    return await _attach_change(cell_name, expected, change_locked)
 
 
 async def attach_enforced(cell_name: str, deployment_id: str, *, expected: Control) -> Attaching:
     """`attach/enforced`: record directory mode `enforced` (registration wrote `recording`),
     after which the cell places new orgs live; idempotent."""
-    async with _attach_change(cell_name, expected) as (conn, found):
+
+    async def change_locked(conn: Any, found: Attaching) -> Attaching:
         if reason := attach_refusal(found, deployment_id):
             raise OperatorRefused(reason)
         await conn.execute(
@@ -1181,7 +1319,9 @@ async def attach_enforced(cell_name: str, deployment_id: str, *, expected: Contr
             {"cell": cell_name, "changed": found.row.mode != "enforced"},
         )
         written = await conn.fetchrow(f"{_CELL_ATTACH} WHERE cell = $1", cell_name)
-    return _attaching(written, None)
+        return _attaching(written, None)
+
+    return await _attach_change(cell_name, expected, change_locked)
 
 
 def issuers(row: Cell) -> list[str]:
@@ -1199,7 +1339,8 @@ def issuers(row: Cell) -> list[str]:
 async def attach_serving(cell_name: str, deployment_id: str, *, expected: Control) -> Attaching:
     """`attach/serving`: mark the first cell `serving`, with the issuers its fingerprints
     accept computed from the row as locked. A `serving` row is answered as it is."""
-    async with _attach_change(cell_name, expected) as (conn, found):
+
+    async def change_locked(conn: Any, found: Attaching) -> Attaching:
         row = found.row
         if found.served(deployment_id):
             await _audit(conn, "attach_serving", {"cell": cell_name, "serving_already": True})
@@ -1215,7 +1356,9 @@ async def attach_serving(cell_name: str, deployment_id: str, *, expected: Contro
         )
         await _audit(conn, "attach_serving", {"cell": cell_name, "issuers": accepted})
         written = await conn.fetchrow(f"{_CELL_ATTACH} WHERE cell = $1", cell_name)
-    return _attaching(written, None)
+        return _attaching(written, None)
+
+    return await _attach_change(cell_name, expected, change_locked)
 
 
 def remove_refusal(cell_name: str, state: str, placed: int) -> str:
@@ -1238,7 +1381,8 @@ async def remove(cell_name: str, *, expected: Control) -> Cell:
     first cell's Postgres reads `open` first, and a direct call skips that check, leaving a
     first cell still prepared answering its new orgs 503 and unable to register again until
     the full back-out has run."""
-    async with _attach_change(cell_name, expected) as (conn, found):
+
+    async def change_locked(conn: Any, found: Attaching) -> Cell:
         row = found.row
         if reason := remove_refusal(cell_name, row.state, row.placed):
             raise OperatorRefused(reason)
@@ -1255,7 +1399,9 @@ async def remove(cell_name: str, *, expected: Control) -> Cell:
                 "mode": row.mode,
             },
         )
-    return row
+        return row
+
+    return await _attach_change(cell_name, expected, change_locked)
 
 
 async def lookup(org: str) -> tuple[str, str] | None:

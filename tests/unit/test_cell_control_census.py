@@ -121,15 +121,15 @@ GUARDED_WRITERS = {
     "server/router/directory.py": {
         ("set_limit.change", "UPDATE", "loom_router.cells"): 1,
         ("rotate_credential.change", "UPDATE", "loom_router.cells"): 1,
-        ("claim", "UPDATE", "loom_router.cells"): 1,
-        ("attach_begin", "UPDATE", "loom_router.cells"): 1,
-        ("attach_place", "INSERT INTO", "loom_router.placements"): 1,
-        ("attach_place", "UPDATE", "loom_router.cells"): 1,
-        ("attach_place", "INSERT INTO", "loom_router.audit"): 1,
-        ("attach_enforced", "UPDATE", "loom_router.cells"): 1,
-        ("attach_serving", "UPDATE", "loom_router.cells"): 1,
-        ("remove", "DELETE FROM", "loom_router.hosts"): 1,
-        ("remove", "DELETE FROM", "loom_router.cells"): 1,
+        ("claim.change_locked", "UPDATE", "loom_router.cells"): 1,
+        ("attach_begin.change_locked", "UPDATE", "loom_router.cells"): 1,
+        ("attach_place.change_locked", "INSERT INTO", "loom_router.placements"): 1,
+        ("attach_place.change_locked", "UPDATE", "loom_router.cells"): 1,
+        ("attach_place.change_locked", "INSERT INTO", "loom_router.audit"): 1,
+        ("attach_enforced.change_locked", "UPDATE", "loom_router.cells"): 1,
+        ("attach_serving.change_locked", "UPDATE", "loom_router.cells"): 1,
+        ("remove.change_locked", "DELETE FROM", "loom_router.hosts"): 1,
+        ("remove.change_locked", "DELETE FROM", "loom_router.cells"): 1,
     },
 }
 
@@ -448,13 +448,37 @@ def function(path: str, name: str) -> ast.AST:
         ),
         (
             "server/router/directory.py",
+            "_control_transaction",
+            [
+                "owner.start(lambda: owner.work(change))",
+                "owner.wait(task, owner.work_end)",
+                "owner.finish(task)",
+            ],
+        ),
+        (
+            "server/router/directory.py",
+            "_ControlOwner.work",
+            [
+                "self.context.__aenter__()",
+                "self.conn.transaction()",
+                "tx.start()",
+                "change(self.conn)",
+                "tx.commit()",
+            ],
+        ),
+        (
+            "server/router/directory.py",
             "_attach_change",
-            ["_control_transaction()", "control_refusal(attaching, expected, claim=claim)"],
+            [
+                "_control_transaction(locked)",
+                "control_refusal(attaching, expected, claim=claim)",
+                "change(conn, attaching)",
+            ],
         ),
         (
             "server/router/directory.py",
             "_operator_change",
-            ["_attach_change(cell_name, expected)", "change(conn, found.row)"],
+            ["_attach_change(cell_name, expected, change_locked)", "change(conn, found.row)"],
         ),
         (
             "server/router/directory.py",
@@ -469,10 +493,14 @@ def function(path: str, name: str) -> ast.AST:
         (
             "server/router/directory.py",
             "claim",
-            ["_attach_change(cell_name, expected, claim=True)"],
+            ["_attach_change(cell_name, expected, change_locked, claim=True)"],
         ),
         *[
-            ("server/router/directory.py", name, ["_attach_change(cell_name, expected)"])
+            (
+                "server/router/directory.py",
+                name,
+                ["_attach_change(cell_name, expected, change_locked)"],
+            )
             for name in (
                 "attach_begin",
                 "attach_place",

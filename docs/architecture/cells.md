@@ -1001,10 +1001,12 @@ advisory lock, `cell.ATTACH_LOCK_KEY`, on a session of its own for its life (pre
 takes the same lock), after checking that the session is one direct
 backend that keeps the tenancy marker: a lock left on a pooler's server connection would
 refuse every later run, and attach's tenancy rows would be refused as an unchecked
-writer's. A lock found lost between steps is taken again (refusing when another run holds
-it), and the cell's state is read again. The lock does not make a run safe, since every
-step is idempotent and the mode only rises; it keeps a second run's scans from holding the
-snapshot horizon that step 4 waits on.
+writer's. A lost or unreadable lock session ends the run: it never reconnects or
+reacquires the lock. Rerun attach to obtain a fresh directory claim and recompute the
+remaining work. Every local acceptance write uses this exact backend, so losing the
+lock also ends its authority to change acceptance. The lock serializes prepare, attach
+and update, and keeps concurrent scans from holding the snapshot horizon that step 4
+waits on.
 
 It refuses, before any write, naming each:
 
@@ -1278,6 +1280,15 @@ Mode-lock contention retries only after an acknowledged pre-COMMIT rollback and 
 that the same backend still holds ATTACH. A COMMIT, rollback or ownership-check failure
 never becomes a busy retry. After attempting the mode update, the diagnostic stays
 unknown until rollback plus ownership or COMMIT is acknowledged.
+
+Directory control mutations supervise the complete callback transaction independently,
+including acquisition and COMMIT. One 131-second bound includes public close, child
+settlement and pool-context exit, with cleanup time reserved inside it. Both a failed
+attempt and an acknowledged successful transaction close only their own acquired
+connection before releasing the pool context. Unexpected errors never wait for rollback
+on that discarded session. A late acquisition cannot start mutation work or obtain a
+fresh cleanup allowance; acquisition without a known proxy remains an unknown outcome.
+Ordinary live placement retains its separate transaction and connection handling.
 
 The source census for acceptance and operator directory writes is checked by
 `tests/unit/test_cell_control_census.py`, including dynamic cleanup tables, guarded

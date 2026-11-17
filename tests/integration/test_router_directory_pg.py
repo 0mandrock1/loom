@@ -7,7 +7,6 @@ Needs LOOM_ROUTER_PG_DSN: a database of its own, never a cell's."""
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import os
@@ -835,12 +834,14 @@ async def test_a_live_placement_racing_a_batch_of_the_same_org_answers_it_placed
     written, release = asyncio.Event(), asyncio.Event()
     real = directory._attach_change
 
-    @contextlib.asynccontextmanager
-    async def _held(cell_name: str, expected: directory.Control) -> Any:
-        async with real(cell_name, expected) as locked:
-            yield locked
+    async def _held(cell_name: str, expected: directory.Control, change) -> Any:
+        async def hold(conn, found):
+            result = await change(conn, found)
             written.set()
             await release.wait()  # the batch's writes are done, its commit held
+            return result
+
+        return await real(cell_name, expected, hold)
 
     monkeypatch.setattr(directory, "_attach_change", _held)
     conn = await asyncpg.connect(own_dsn)
