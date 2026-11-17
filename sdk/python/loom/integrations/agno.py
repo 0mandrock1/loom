@@ -161,6 +161,8 @@ class LoomMemoryDb(BaseDb):
     ) -> list[UserMemory] | tuple[list[dict[str, Any]], int]:
         self._user(user_id)
         validate_pagination(limit, page)
+        if limit is not None and limit < 0:
+            raise ValueError("limit must be non-negative")
         rows = [
             r
             for r in self._rows()
@@ -180,8 +182,6 @@ class LoomMemoryDb(BaseDb):
         )
         total = len(rows)
         if limit is not None:
-            if limit < 0 or (page is not None and page < 1):
-                raise ValueError("limit must be non-negative and page must be positive")
             start = ((page or 1) - 1) * limit
             rows = rows[start : start + limit]
         return [UserMemory.from_dict(row) for row in rows] if deserialize else (rows, total)
@@ -208,8 +208,8 @@ class LoomMemoryDb(BaseDb):
     ) -> tuple[list[dict[str, Any]], int]:
         self._user(user_id)
         validate_pagination(limit, page)
-        if (limit is not None and limit < 0) or (page is not None and page < 1):
-            raise ValueError("limit must be non-negative and page must be positive")
+        if limit is not None and limit < 0:
+            raise ValueError("limit must be non-negative")
         rows = self._rows()
         if not rows:
             return [], 0
@@ -231,6 +231,8 @@ class LoomMemoryDb(BaseDb):
     delete_eval_runs = _unsupported
     delete_knowledge_content = _unsupported
     delete_learning = _unsupported
+    delete_run = _unsupported
+    delete_runs = _unsupported
     delete_session = _unsupported
     delete_sessions = _unsupported
     get_eval_run = _unsupported
@@ -241,6 +243,8 @@ class LoomMemoryDb(BaseDb):
     get_learning = _unsupported
     get_learnings = _unsupported
     get_metrics = _unsupported
+    get_run = _unsupported
+    get_runs = _unsupported
     get_session = _unsupported
     get_sessions = _unsupported
     get_span = _unsupported
