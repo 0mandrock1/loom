@@ -435,8 +435,8 @@ def is_computed_row(hit: Any) -> bool:
 
 
 def governed_after_computed(rows: list[Any]) -> list[Any]:
-    """`rows` reordered so the governed definitions follow the computed rows and lead the
-    rest, each group in its order: for search hits or wire hit dicts alike."""
+    """Governed definitions replace other rows of their namespace/key and follow computed
+    rows, each group in its order: for search hits or wire hit dicts alike."""
 
     def governed(h: Any) -> bool:
         return bool(h.get("governed") if isinstance(h, dict) else getattr(h, "governed", None))
@@ -445,5 +445,10 @@ def governed_after_computed(rows: list[Any]) -> list[Any]:
         return list(rows)
     computed = [h for h in rows if is_computed_row(h)]
     lead = [h for h in rows if governed(h) and not is_computed_row(h)]
-    rest = [h for h in rows if not governed(h) and not is_computed_row(h)]
+    governed_keys = {hit_row(h) for h in lead}
+    rest = [
+        h
+        for h in rows
+        if not governed(h) and not is_computed_row(h) and hit_row(h) not in governed_keys
+    ]
     return computed + lead + rest
