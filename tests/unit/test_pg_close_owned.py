@@ -314,3 +314,92 @@ async def test_second_cancellation_during_migration_context_exit_keeps_first_fai
     )
     assert len(conn.timeouts) == 1
     assert conn.aborted
+
+
+@pytest.mark.parametrize("seam", ["reap", "exit"])
+@pytest.mark.parametrize("original_kind", ["ordinary", "cancel", "exit", "keyboard"])
+@pytest.mark.parametrize("abort_kind", ["ordinary", "cancel", "exit", "keyboard"])
+async def test_failed_migration_abort_preserves_first_and_finishes_context(
+    monkeypatch, tmp_path, seam, original_kind, abort_kind
+):
+    from server.core.schema import pg_migrate
+
+    def error(kind, message):
+        return {
+            "ordinary": ValueError(message),
+            "cancel": asyncio.CancelledError(message),
+            "exit": SystemExit(message),
+            "keyboard": KeyboardInterrupt(message),
+        }[kind]
+
+    original, secondary = (
+        error(original_kind, "migration failed"),
+        error(abort_kind, "abort failed"),
+    )
+    events, first, exits, ends, retrieved, triples = [], [], [], [], [], []
+    conn = Connection()
+    real_wait, real_failed, real_retrieve = (
+        asyncio.wait,
+        pg_migrate._failed_migration,
+        pg._retrieve_task,
+    )
+
+    class Context:
+        async def __aenter__(self):
+            return conn
+
+        async def __aexit__(self, kind, value, traceback):
+            exits.append((kind, value, traceback))
+            events.append("exit")
+            if seam == "exit":
+                raise OSError("context exit failed")
+
+    async def migrate(*args):
+        raise original
+
+    async def close(_conn, *, end):
+        assert _conn is conn
+        ends.append(end)
+        events.append("close")
+
+    async def failed(cm, actual_conn, task, observed, end):
+        first.append(observed)
+        triples.append((type(observed), observed, observed.__traceback__))
+        return await real_failed(cm, actual_conn, task, observed, end)
+
+    async def wait(tasks, *, timeout):  # noqa: ASYNC109 — asyncio.wait test seam.
+        assert 0 <= timeout <= max(0, ends[0] - time.monotonic()) + 0.01
+        if seam == "reap" and "reap" not in events:
+            events.append("reap")
+            raise asyncio.CancelledError("second signal during reap")
+        return await real_wait(tasks, timeout=timeout)
+
+    def abort():
+        events.append("abort")
+        raise secondary
+
+    def retrieve(task):
+        retrieved.append(task)
+        real_retrieve(task)
+
+    monkeypatch.setattr(pg_migrate, "_migrate", migrate)
+    monkeypatch.setattr(pg_migrate, "_failed_migration", failed)
+    monkeypatch.setattr(pg, "close_owned", close)
+    monkeypatch.setattr(conn, "terminate", abort)
+    monkeypatch.setattr(asyncio, "wait", wait)
+    monkeypatch.setattr(pg, "_retrieve_task", retrieve)
+    try:
+        await pg_migrate.migrate(tmp_path, connect=Context, schema="test")
+    except BaseException as observed:  # noqa: BLE001 — native test failures must remain inert.
+        result = observed
+    else:
+        pytest.fail("failed migration returned success")
+    assert len(first) == 1 and result is first[0]
+    if original_kind != "cancel":
+        assert result is original
+    assert exits == triples
+    assert len(ends) == 1 and events.count("close") == events.count("abort") == 1
+    assert events[-1] == ("exit" if seam == "reap" else "abort")
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert len(retrieved) == 2 and all(task.done() for task in retrieved)
