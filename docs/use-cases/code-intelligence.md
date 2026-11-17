@@ -9,8 +9,8 @@ what it gives in each language is in [code index by language](code-intelligence-
 ## What you get
 
 - **Definitions, callers and impact.** `code.symbol`, `code.callers` and `code.impact`
-  locate code with file and line references. `code.index_status` reports the indexed
-  commit. [Code operations](../features/code-index/operations.md)
+  locate code with file and line references. `code.index_status` reports each tier's
+  indexed commit. [Code operations](../features/code-index/operations.md)
 - **Search by meaning and by exact string.** `code.search` finds where a mechanism lives;
   `code.grep` finds an exact message or identifier.
 - **History and pull requests.** Merged-PR history with review comments, a pre-PR
@@ -22,8 +22,9 @@ what it gives in each language is in [code index by language](code-intelligence-
   `code.search`, `code.callers`, `code.callees`, `code.impact`, `code.outline` and a task's
   `code.context_pack` attach the lessons for the files they return, each with whether its
   code moved, changed or is gone. [Memory linked to code](memory-linked-to-code.md)
-- **Freshness you can see.** The index trails the branch by merged commits, and a stale
-  answer says so. [Freshness](../features/code-index/freshness.md)
+- **Freshness you can check.** Each tier can trail the branch. Inspect `as_of` when
+  returned, or use `code.index_status` for the relevant tier's watermark. Missing
+  freshness metadata is unknown. [Freshness](../features/code-index/freshness.md)
 - **Plugins and MCP clients.** The Claude Code plugin connects on the `coding` toolset and
   the Codex plugin on `core,coding,tracker,tasks`; both list the code tools. Cursor, GitHub
   Copilot, Gemini CLI, Cline, Kilo Code, OpenCode and other MCP clients list them with
@@ -54,16 +55,20 @@ Claude Code or Codex with its plugin and start a session inside that repository'
 
 1. Ask the agent to call `loom_op` with `op: "code.index_status"` and
    `arguments: {"namespace": "<indexed namespace>", "brief": true}`. Record `git_head`,
-   the indexed commit; an empty value means the first index has not finished.
+   the fast tier's indexed commit; an empty value means that tier has no watermark.
 2. Pick a function whose definition you know. Ask the agent to call `loom_code_symbol`
    in that namespace with the function's name and `include_body: true`. Check the
    returned `path`, `start_line`, `end_line`, `body` and `tier`.
-3. Compare the definition with the source at `git_head` before relying on it. A missing
-   or ambiguous definition needs a narrower name or a local read.
+3. Continue this check only for one unambiguous definition with `tier: "treesitter"`
+   and a complete, non-elided body. Compare its path, span and body with the source at
+   the recorded `git_head` before relying on it. Use a local read if the watermark or
+   body is missing, the definition differs, or another tier is returned. Compiler tiers
+   advance independently; their watermarks need a separate revision check
+   ([freshness](../features/code-index/freshness.md#the-mirrors-own-age)).
 4. Start a fresh session in the same checkout and repeat both calls. The index supplies
    the definition again; the agent need not load the previous chat or the whole file.
 
-This checks one indexed definition. Uncommitted edits still need local reads, and a
+This checks one fast-tier definition. Uncommitted edits still need local reads, and a
 successful lookup is not a measurement of task accuracy or cost savings. See
 [code operations](../features/code-index/operations.md) for search, callers and impact.
 
