@@ -8,11 +8,12 @@ Every statement the router runs against it is here. Three things serialize place
   (`attach_place`) both take before they insert, so a cell's count and quota are judged one
   placement at a time; a live placement reads the winner again once it holds the lock, so an
   org a batch placed meanwhile is answered as placed;
-- a transaction-scoped lock on the org (`_PLACE_LOCK`) between live placements, so two cells
-  placing one org at once agree on the winner, and a retry of the same call answers the
-  same; a batch takes none, since no other cell exists while it runs;
-- the placements' primary key, as a backstop: every insert is `ON CONFLICT DO NOTHING`, and
-  only a row it returns is counted and audited.
+- transaction-scoped org locks (`_PLACE_LOCK`) before cell locks for live placements and
+  configuration updates. Configuration takes distinct numeric hash keys in order; the
+  first attach batch needs none while no other cell exists;
+- the placements' primary key, as a backstop. Live placement and first attach use
+  `ON CONFLICT DO NOTHING`; configuration inserts after its locked winner read. Only
+  inserted rows are counted and audited.
 """
 
 from __future__ import annotations
