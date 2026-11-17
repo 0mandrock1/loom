@@ -54,6 +54,25 @@ def _hit(uri: str, score: float, ns: str = "", chunk: int = 0) -> _SearchHit:
 
 
 @pytest.fixture(autouse=True)
+def _resolved_searches(monkeypatch):
+    from server.knowledge.app import knowledge_search, source_access
+
+    async def resolve(inp):
+        return knowledge_search.SearchRequest(inp.model_copy(deep=True), (inp.namespace,), ())
+
+    async def prepare(org, namespaces):
+        return source_access.ReadPlan(org)
+
+    async def run(request, plan):
+        out = await knowledge_search.handle_knowledge_search(request.input)
+        return knowledge_search.CheckedSearch(out, None, SimpleNamespace(marked=False), [], 0)
+
+    monkeypatch.setattr(knowledge_search, "resolve_search", resolve)
+    monkeypatch.setattr(knowledge_search, "run_checked_search", run)
+    monkeypatch.setattr(source_access, "prepare", prepare)
+
+
+@pytest.fixture(autouse=True)
 def _repos(monkeypatch):
     monkeypatch.setattr(repos, "configured_repos", lambda: list(ENTRIES))
     rd.reset_cache_for_tests()
@@ -198,7 +217,9 @@ async def test_a_slow_repository_search_answers_nothing(monkeypatch) -> None:
         "server.knowledge.app.knowledge_search.handle_knowledge_search",
         _search(base_only, delay=0.05),
     )
-    assert await rd.search_repo_docs(ORG, "code-kj", "q", 3, timeout_s=0.01) == []
+    monkeypatch.setattr(rd.settings, "knowledge_repo_docs_timeout_s", 0.01)
+    out = await rd.knowledge_with_repo_docs(BASE, repo_namespace="code-kj")
+    assert out.results == []
 
 
 def test_a_hit_both_legs_return_is_listed_once() -> None:

@@ -698,8 +698,10 @@ def test_the_repository_docs_merge_keeps_noise_after_the_close_hits() -> None:
 def test_a_reranked_page_keeps_noise_below_an_admitted_repository_hit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from types import SimpleNamespace
+
     from server.knowledge.api.models_knowledge import KnowledgeSearchInput, KnowledgeSearchOutput
-    from server.knowledge.app import repo_docs
+    from server.knowledge.app import knowledge_search, repo_docs, source_access
 
     async def _search(inp: KnowledgeSearchInput) -> KnowledgeSearchOutput:
         if inp.namespace == "code-kj":
@@ -707,7 +709,20 @@ def test_a_reranked_page_keeps_noise_below_an_admitted_repository_hit(
         hits = [_hit("kb://sync", 0.95, noise=True), _hit("kb://design", 0.6)]
         return KnowledgeSearchOutput(results=hits, embedding_model="m", reranked_by="builtin:x")
 
-    monkeypatch.setattr("server.knowledge.app.knowledge_search.handle_knowledge_search", _search)
+    async def resolve(inp):
+        return knowledge_search.SearchRequest(inp, (inp.namespace,), ())
+
+    async def run(request, plan):
+        return knowledge_search.CheckedSearch(
+            await _search(request.input), None, SimpleNamespace(marked=False), [], 0
+        )
+
+    async def prepare(org, namespaces):
+        return source_access.ReadPlan(org)
+
+    monkeypatch.setattr(knowledge_search, "resolve_search", resolve)
+    monkeypatch.setattr(knowledge_search, "run_checked_search", run)
+    monkeypatch.setattr(source_access, "prepare", prepare)
     page = KnowledgeSearchInput(org="o", namespace="ns", query="the cache", top_k=3)
     out = asyncio.run(repo_docs.knowledge_with_repo_docs(page, repo_namespace="code-kj"))
     assert [h.source_uri for h in out.results] == ["kb://design", "doc://adr", "kb://sync"]
