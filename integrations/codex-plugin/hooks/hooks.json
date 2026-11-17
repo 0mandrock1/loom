@@ -144,7 +144,7 @@
           },
           {
             "type": "command",
-            "statusMessage": "Loom: Check task validation",
+            "statusMessage": "Loom: Validate session memories",
             "command": "sh \"${PLUGIN_ROOT}/bin/loom-node\" \"${PLUGIN_ROOT}/hooks/loom-validate-gate.mjs\" Stop codex",
             "commandWindows": "node \"${PLUGIN_ROOT}/hooks/loom-validate-gate.mjs\" Stop codex"
           },
