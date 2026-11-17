@@ -264,3 +264,72 @@ async def test_pg_head_metadata_must_match_requested_pair_and_serving_revision(
         }
         plan = await app.prepare("acme", ["docs"])
         assert await plan.check([candidate()], chunks=chunks) == []
+
+
+async def test_listing_freshness_is_checked_when_each_batch_is_admitted(world, monkeypatch):
+    plan = await app.prepare("acme", ["docs"])
+    assert await plan.check([candidate()], chunks=True)
+    monkeypatch.setattr(app, "now", lambda: NOW + timedelta(seconds=3601))
+    assert await plan.check([candidate()], chunks=True) == []
+    assert not plan.unread
+
+
+async def test_ch_content_revision_must_match_current_metadata_without_requiring_metadata_version(
+    world,
+):
+    world["doc"]["revision"] = 1
+    plan = await app.prepare("acme", ["docs"])
+    assert await plan.check([candidate(revision=0)], chunks=True) == []
+    assert await plan.check([candidate(revision=2)], chunks=True) == []
+    world["doc"]["version"] = 11
+    assert len(await plan.check([candidate(revision=1, doc_version=10)], chunks=True)) == 1
+
+
+@pytest.mark.parametrize("count", [65, 129])
+@pytest.mark.parametrize("independent", ["none", "email", "owner", "domain", "anyone"])
+async def test_final_pool_rechecks_group_expiry_without_removing_independent_grants(
+    world, monkeypatch, count, independent
+):
+    from server.knowledge.app import source_search
+
+    access = {"groups": ("team@example.com",)}
+    if independent == "email":
+        access["emails"] = ("lee@example.com",)
+    elif independent == "owner":
+        access["owner"] = "owner-alias"
+    elif independent == "domain":
+        access["domains"] = ("example.com",)
+    elif independent == "anyone":
+        access["anyone"] = True
+    world["doc"]["access_json"] = to_json(AccessList(**access))
+    world["reader"].return_value = ReaderIdentity(
+        "lee", frozenset({"lee@example.com"}), frozenset({"example.com"})
+    )
+    calls = 0
+
+    async def metadata(_org, pairs):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            monkeypatch.setattr(app, "now", lambda: NOW + timedelta(seconds=10))
+        return [{**world["doc"], "source_uri": uri} for _namespace, uri in pairs]
+
+    world["metadata"].side_effect = metadata
+    world["groups"].return_value = [
+        {
+            "namespace": MIRROR,
+            "source_id": SID,
+            "group": "team@example.com",
+            "members": ["lee@example.com"],
+            "read_at": NOW - timedelta(seconds=3599),
+            "deleted": False,
+        }
+    ]
+    plan = await app.prepare("acme", ["docs"])
+    retained = [
+        app.Admitted("docs", candidate(source_uri=f"gdrive:file-{i}#" + SID, chunk_idx=0), {})
+        for i in range(count)
+    ]
+    out = await source_search.recheck(plan, {"semantic": retained})
+    assert len(out["semantic"]) == (0 if independent == "none" else count)
+    assert not plan.failed and not plan.unread

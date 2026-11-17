@@ -234,3 +234,82 @@ async def test_both_chunk_frequency_views_exclude_private_namespaces() -> None:
         assert rebuilt == []
     finally:
         await ch.disconnect()
+
+
+@pytest.mark.parametrize("leg", ["semantic", "lexical", "keys"])
+async def test_discovery_stream_projects_metadata_and_only_ch_uses_acl_keys(leg) -> None:
+    os.environ.get("LOOM_CH_HOST") or pytest.skip("LOOM_CH_HOST not set")
+    import json
+
+    from server.core import pg
+    from server.core.ch import get_client, set_query_tag
+    from server.core.naming import new_mirror_name
+    from server.knowledge.app.search import HybridSearchQuery, _common_where
+    from server.knowledge.domain.access_list import AccessList, to_json
+    from server.knowledge.store import source_candidates as store
+
+    ch = get_client()
+    await ch.connect()
+    set_query_tag("test.source_candidate_stream")
+    org, mirror, sid = unique_org("access-stream"), new_mirror_name(), str(uuid4())
+    uris = ["gdrive:allowed#" + sid, "gdrive:denied#" + sid]
+    vector = [1.0] + [0.0] * 3071
+    docs = [
+        {
+            "org": org,
+            "namespace": mirror,
+            "source_uri": uri,
+            "doc_id": str(uuid4()),
+            "version": 1,
+            "access_json": to_json(AccessList(anyone=(i == 0))),
+        }
+        for i, uri in enumerate(uris)
+    ]
+    chunks = [
+        {
+            "org": org,
+            "namespace": mirror,
+            "source_uri": uri,
+            "chunk_idx": 0,
+            "content": "candidateonlytoken",
+            "context": "private content context",
+            "doc_version": 1,
+            "chunk_metadata": json.dumps({"revision": 0}),
+            "tags": ["source-id:" + sid],
+            "embedding": vector,
+            "embedding_model": "synthetic-3072",
+            "embedding_dim": 3072,
+            "keys": ["object"],
+        }
+        for uri in uris
+    ]
+    try:
+        await ch.insert("loom.documents", docs)
+        await ch.insert("loom.chunks", chunks)
+        where, params = _common_where(
+            HybridSearchQuery(org, (mirror,), "synthetic-3072", vector, 1)
+        )
+        params.update(toks=["candidateonlytoken"], keys=["object"])
+        sql, params = store.statement(
+            where, params, leg=leg, access_keys=None if pg.enabled() else ["anyone"]
+        )
+        async with store.candidates(sql, params) as stream:
+            rows = [row async for row in stream]
+        assert {r["source_uri"] for r in rows} == set(uris if pg.enabled() else uris[:1])
+        assert all(
+            set(r)
+            == {
+                "namespace",
+                "source_uri",
+                "chunk_idx",
+                "doc_version",
+                "revision",
+                "distance",
+                "lexical",
+                "matched",
+            }
+            for r in rows
+        )
+        assert all(int(r["doc_version"]) == 1 and int(r["revision"]) == 0 for r in rows)
+    finally:
+        await ch.disconnect()

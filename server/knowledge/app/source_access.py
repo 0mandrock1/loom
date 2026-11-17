@@ -14,7 +14,7 @@ from server.core import pg, request_work
 from server.core.ch import sequential_reads, set_query_tag
 from server.core.diagnostics import private_work
 from server.core.naming import is_mirror_name
-from server.knowledge.domain.access_list import AccessList, allows, from_json
+from server.knowledge.domain.access_list import UNREAD, AccessList, allows, from_json
 from server.knowledge.domain.document_access import fresh, source_id
 from server.knowledge.store import mirrors as mirrors_repo
 from server.knowledge.store import source_access as store
@@ -31,16 +31,49 @@ class Admitted:
     namespace: str
     candidate: dict[str, Any]
     document: dict[str, Any]
+    access: AccessList = UNREAD
+    canonical_owner: str = ""
+    groups: tuple[tuple[str, datetime], ...] = ()
 
 
 @dataclass
 class ReadPlan:
     org: str
     sources: dict[tuple[str, str], str] = field(default_factory=dict)
+    listing_starts: dict[tuple[str, str], datetime] = field(default_factory=dict)
     reader: ReaderIdentity | None = None
     marked: bool = False
     unread: bool = False
     failed: bool = False
+
+    def listing_current(self, namespace: str, source: str, *, at: datetime | None = None) -> bool:
+        return fresh(
+            self.listing_starts.get((namespace, source)),
+            at or now(),
+            settings.knowledge_source_acl_stale_seconds,
+        )
+
+    def current(self, item: Admitted) -> bool:
+        """Recheck retained time bounds without discarding independent permission arms."""
+        at = now()
+        doc = item.document
+        if not self.listing_current(
+            doc["namespace"], source_id(doc["source_uri"], doc["tags"]), at=at
+        ):
+            return False
+        reader = self.reader
+        return allows(
+            item.access,
+            subject=reader.subject if reader else "",
+            canonical_owner=item.canonical_owner,
+            emails=reader.emails if reader else frozenset(),
+            domains=reader.domains if reader else frozenset(),
+            groups=frozenset(
+                name
+                for name, read_at in item.groups
+                if fresh(read_at, at, settings.knowledge_source_acl_stale_seconds)
+            ),
+        )
 
     async def check(
         self, candidates: list[dict[str, Any]], *, chunks: bool = False
@@ -78,8 +111,13 @@ class ReadPlan:
             if doc is None or doc.get("superseded_at") is not None:
                 continue
             sid = source_id(doc["source_uri"], doc["tags"])
-            original = self.sources.get((doc["namespace"], sid))
+            key = (doc["namespace"], sid)
+            original = self.sources.get(key)
+            if not self.listing_current(*key):
+                continue
             if not original or (pg.enabled() and not _head_serves(heads[pair], candidate, chunks)):
+                continue
+            if chunks and not pg.enabled() and int(candidate["revision"]) != doc["revision"]:
                 continue
             access = permissions[pair]
             owner = (
@@ -87,23 +125,18 @@ class ReadPlan:
                 if access.owner and self.reader
                 else ""
             )
-            reader = self.reader
-            if allows(
-                access,
-                subject=reader.subject if reader else "",
-                canonical_owner=owner,
-                emails=reader.emails if reader else frozenset(),
-                domains=reader.domains if reader else frozenset(),
-                groups=groups.get((doc["namespace"], sid), frozenset()),
-            ):
-                out.append(Admitted(original, candidate, doc))
+            item = Admitted(
+                original, candidate, doc, access, owner, tuple(groups.get(key, {}).items())
+            )
+            if self.current(item):
+                out.append(item)
         return out
 
     async def _groups(
         self,
         docs: dict[tuple[str, str], dict[str, Any]],
         permissions: dict[tuple[str, str], AccessList],
-    ) -> dict[tuple[str, str], frozenset[str]]:
+    ) -> dict[tuple[str, str], dict[str, datetime]]:
         if self.reader is None or not self.reader.emails:
             return {}
         wanted = [
@@ -113,7 +146,7 @@ class ReadPlan:
             if (ns, source_id(uri, docs[(ns, uri)]["tags"])) in self.sources
         ]
         rows = await store.group_members(self.org, wanted) if wanted else []
-        found: dict[tuple[str, str], set[str]] = {}
+        found: dict[tuple[str, str], dict[str, datetime]] = {}
         requested = set(wanted)
         for row in rows:
             key = (row["namespace"], row["source_id"], row["group"])
@@ -125,8 +158,8 @@ class ReadPlan:
                 continue
             members = {email.strip().lower() for email in row["members"]}
             if self.reader.emails.intersection(members):
-                found.setdefault(key[:2], set()).add(row["group"])
-        return {key: frozenset(groups) for key, groups in found.items()}
+                found.setdefault(key[:2], {})[row["group"]] = row["read_at"]
+        return found
 
 
 def _head_serves(head: store.ReadHead, candidate: dict[str, Any], chunks: bool) -> bool:
@@ -188,9 +221,10 @@ async def _prepare(plan: ReadPlan, sources: list[dict[str, Any]], subject: str) 
     }
     rows = await store.listings(plan.org, list(pairs))
     plan.reader = await resolve_reader(plan.org, subject) if subject else None
-    plan.sources = {
-        (r["namespace"], r["source_id"]): pairs[(r["namespace"], r["source_id"])]
+    plan.listing_starts = {
+        (r["namespace"], r["source_id"]): r["started_at"]
         for r in rows
         if (r["namespace"], r["source_id"]) in pairs
         and fresh(r["started_at"], now(), settings.knowledge_source_acl_stale_seconds)
     }
+    plan.sources = {key: pairs[key] for key in plan.listing_starts}
