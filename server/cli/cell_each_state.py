@@ -19,8 +19,8 @@ from urllib.parse import urlsplit
 if TYPE_CHECKING:
     from server.cli.cell_each import Command
 
-MAX_STATE_BYTES = 32 * 1024 * 1024
-MAX_TARGETS = 4096
+MAX_STATE_BYTES = 32 * 1024 * 1024  # not a setting: private state has one fixed custody bound
+MAX_TARGETS = 4096  # not a setting: persisted target lists share the directory's protocol ceiling
 _STATES = {"pending", "known-no-action", "dispatching", "completed", "UNSETTLED"}
 _READS = {"settings_list", "settings_history", "signing_keys_list", "blacklist_global_list"}
 _ACTIONS = _READS | {

@@ -284,6 +284,7 @@ _ADMINISTRATION = (
     "cell, left(deployment_id, 257) AS deployment_id, "
     "left(break_glass::text, 1025) AS administration"
 )
+_ADMINISTRATION_READ_S = 2.0  # not a setting: fresh identity reads fit the fixed action envelope
 _ADMIN_TARGET = (
     f"{_ADMINISTRATION}, left(host, 513) AS host, state, mode, mutation_generation, "
     "CASE WHEN octet_length(current_fp::text) <= 65536 "
@@ -307,7 +308,7 @@ def _administration_projection(selection: str) -> str:
 @asynccontextmanager
 async def _administration_read() -> AsyncIterator[Any]:
     """One fresh bounded read, with no fleet credential or successful-state cache."""
-    async with _reading(), asyncio.timeout(2), _connection() as conn:
+    async with _reading(), asyncio.timeout(_ADMINISTRATION_READ_S), _connection() as conn:
         async with conn.transaction(readonly=True):
             await conn.execute("SET LOCAL statement_timeout = '2s'")
             yield conn
@@ -320,7 +321,7 @@ async def administration_identity(name: str, presented: str) -> dict[str, Any] |
             f"SELECT {_ADMINISTRATION}, credential_sha256, credential_next_sha256 "
             "FROM loom_router.cells WHERE cell = $1 LIMIT 1",
             name,
-            timeout=2,
+            timeout=_ADMINISTRATION_READ_S,
         )
         if row is None or not holds(
             presented,
@@ -337,7 +338,7 @@ async def administration_cells(name: str | None = None) -> dict[str, Any]:
             row = await conn.fetchrow(
                 _administration_projection("WHERE cell = $1 LIMIT 1"),
                 name,
-                timeout=2,
+                timeout=_ADMINISTRATION_READ_S,
             )
             if row is None:
                 raise cell_admin.InvalidAdministration("No such administration cell")
@@ -348,7 +349,7 @@ async def administration_cells(name: str | None = None) -> dict[str, Any]:
         cells: list[dict[str, Any]] = []
         size = len(b'{"version":1,"cells":[]}')
         query = _administration_projection("ORDER BY cell LIMIT 4097")
-        async for row in conn.cursor(query, prefetch=1, timeout=2):
+        async for row in conn.cursor(query, prefetch=1, timeout=_ADMINISTRATION_READ_S):
             target = cell_admin.target(cell_admin.selected_record(row["payload"]))
             size += len(
                 json.dumps(target, ensure_ascii=True, separators=(",", ":")).encode()

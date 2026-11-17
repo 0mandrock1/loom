@@ -44,6 +44,11 @@ and refuses a mismatch before signing. It never tries a recovery key.
 Use the router's exact HTTPS origin for `--router`. Redirects and ambient HTTP proxies
 are disabled. The operator token goes only to the router; assertions and cell tokens
 go only to the cell's exact public origin. Normal CA and hostname verification applies.
+For private PKI, configure the cell server's operating-system CA trust for its router
+connection. The server uses the normal TLS trust store, including `SSL_CERT_FILE`
+when the operator supplies it, while ignoring ambient HTTP proxies. The manifest's
+`ca_file` controls the command's router and cell connections; it does not change the
+server's trust store. Neither side disables certificate or hostname verification.
 
 ## Run a supported command
 

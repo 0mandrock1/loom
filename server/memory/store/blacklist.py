@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from server.core import ch_names
 from server.core.ch import set_query_tag, statement_timeout
 from server.core.ch_bounded import BoundedReadError, read_rows
 from server.core.repo_base import _CHClient, _default_client
@@ -233,8 +234,8 @@ async def check_bounded_storage(*, ch: Any, deadline: float) -> None:
 
     tables = await read_rows(
         "SELECT engine, engine_full, sorting_key FROM system.tables "
-        "WHERE database = 'loom' AND name = 'blacklist' LIMIT 2 FORMAT JSONEachRow",
-        {},
+        "WHERE database = {database:String} AND name = 'blacklist' LIMIT 2 FORMAT JSONEachRow",
+        {"database": ch_names.database()},
         ch=ch,
         deadline=deadline,
         row_bytes=16384,
@@ -245,20 +246,27 @@ async def check_bounded_storage(*, ch: Any, deadline: float) -> None:
     if len(tables) != 1 or set(tables[0]) != {"engine", "engine_full", "sorting_key"}:
         raise BoundedReadError("Unsupported blacklist storage")
     table = tables[0]
+    # Engine arguments end before ORDER BY/SETTINGS; quoted Keeper paths can hold parentheses.
+    definition = re.match(
+        rf"{re.escape(str(table['engine']))}\(((?:[^'()]|'(?:[^'\\]|\\.|'')*')*)\)(?=\s|$)",
+        table["engine_full"] if type(table["engine_full"]) is str else "",
+    )
     if (
         table["engine"]
         not in {"ReplacingMergeTree", "ReplicatedReplacingMergeTree", "SharedReplacingMergeTree"}
         or type(table["engine_full"]) is not str
         or type(table["sorting_key"]) is not str
         or not table["engine_full"].startswith(table["engine"] + "(")
-        or re.search(r"(?:\(|,)\s*created_at\s*\)$", table["engine_full"]) is None
+        or definition is None
+        or re.search(r"(?:^|,)\s*created_at\s*$", definition[1]) is None
         or table["sorting_key"].replace(" ", "").strip("()") != "org,namespace,pattern_id"
     ):
         raise BoundedReadError("Unsupported blacklist storage")
     columns = await read_rows(
-        "SELECT name, type FROM system.columns WHERE database = 'loom' AND table = 'blacklist' "
+        "SELECT name, type FROM system.columns "
+        "WHERE database = {database:String} AND table = 'blacklist' "
         "ORDER BY position LIMIT 13 FORMAT JSONEachRow",
-        {},
+        {"database": ch_names.database()},
         ch=ch,
         deadline=deadline,
         row_bytes=1024,

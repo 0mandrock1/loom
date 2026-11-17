@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
-MAX_MULTIPLIER_BYTES = 32
+MAX_MULTIPLIER_BYTES = 32  # not a setting: canonical multiplier width is part of the wire grammar
 
 
 def _refuse() -> ValueError:

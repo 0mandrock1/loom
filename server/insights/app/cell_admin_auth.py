@@ -6,6 +6,7 @@ import asyncio
 import json
 import math
 import re
+import ssl
 import time
 from dataclasses import dataclass
 from typing import Annotated, Any, cast
@@ -206,7 +207,10 @@ async def _authority(context: CellTargetContext, deadline: float) -> AutomationB
     url = f"{origin}/cells/v1/cells/{quote(settings.cell, safe='')}/administration"
     async with asyncio.timeout(remaining):
         async with httpx.AsyncClient(
-            trust_env=False, follow_redirects=False, timeout=remaining
+            verify=ssl.create_default_context(),
+            trust_env=False,
+            follow_redirects=False,
+            timeout=remaining,
         ) as client:
             async with client.stream("GET", url, headers=headers) as response:
                 if (
@@ -314,6 +318,7 @@ async def verify_registered_bot(
 
 async def registered_bot_identity(auth: AuthInfo | None) -> dict[str, Any]:
     """The caller's bounded public proof; it grants no automation or recovery purpose."""
+    # not a setting: bot proof shares the fixed thirty-second cell action envelope
     async with asyncio.timeout(30):
         bot = await verify_registered_bot(auth, deadline=time.monotonic() + 30)
         answer = {

@@ -9,8 +9,8 @@ from uuid import UUID
 
 from server.core.cell import normalise_host
 
-MAX_CELLS = 4096
-MAX_CENSUS_BYTES = 4 * 1024 * 1024
+MAX_CELLS = 4096  # not a setting: coordinator and directory share one finite fleet protocol
+MAX_CENSUS_BYTES = 4 * 1024 * 1024  # not a setting: the client refuses larger census documents
 
 
 class InvalidAdministration(ValueError):
