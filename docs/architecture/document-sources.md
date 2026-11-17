@@ -530,6 +530,22 @@ content. In a mirror, ownership and every per-source document read go by the
 `source-id:<id>` tag, not by name. The retention overrides give each mirror its
 namespace's `retention_days` and `warm_days`.
 
+Stopped-source deletion has a durable source-id queue in `code_index_state` under the
+mirror, with keys `knowledge_source_retire:<source id>`. A queue row contains only the
+original namespace, source name, kind and registration id. The request writes it under
+the sources lease before inactivating the source. A replacement registration can reuse
+the name while the old queue row and copies remain; cleanup uses the row's mirror and
+source-id ownership, independently of the current mirror registry.
+
+The `knowledge_source_retire` worker runs even with authentication or syncing off. It
+shares the sync cadence, with its own deadline, cursor and
+`LOOM_KNOWLEDGE_SOURCE_RETIRE_DOCUMENTS_PER_PASS` bound. Its cursor contains registration
+metadata only. A queued source still active under the same id is left alone, so a crash
+between enqueue and inactivation deletes nothing. Completion requires both no live owned
+documents and no pending or parked publication while holding the source's turn lease.
+Clearing the queue writes an empty version row; erasure removes it with the mirror's
+other state. Cleanup exports no document counts or cut flags.
+
 A namespace source and a mirrored source that reach the same file own two documents, one
 in the namespace and one in its mirror. The namespace copy is readable by every reader,
 because an admin registered a source that makes it so; every leg answers the address

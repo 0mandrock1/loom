@@ -172,6 +172,11 @@ schema. These rules keep that safe. The operator procedure is in
     N-1's `knowledge.list` rows carry no `namespace`, on any list; one naming `namespaces`
     lists `namespace` alone there, and each build refuses the cursor the other wrote for
     such a list, so a client paging it starts again.
+    `memory.set`'s `if_match_sha256='absent'` uses an existing, nonempty precondition
+    field. A build without this meaning refuses it as a hash mismatch, including on a
+    missing key, instead of storing an unconditional write. First creation may therefore
+    answer 409 while such a build serves; clients must not retry without the condition.
+    Ordinary content hashes still work across builds, and rollback needs no data change.
 13. **A name N spells differently is a different node.** N keeps combining marks and
     NFKC-normalises an entity's name (`दिल्ली`, `İstanbul` as `istanbul`); N-1 split them
     into fragments (`द ल ल`, `i stanbul`). ASCII names spell the same in both, and so do
@@ -843,7 +848,17 @@ schema. These rules keep that safe. The operator procedure is in
     marked receipts and audit counts while preserving their mark and version priority;
     a schema downgrade alone provides no privacy protection.
 
-57. **User cost caps and private budget warnings** (migration
+57. **Stopped mirrored sources retain their retirement requests**: N writes a
+    `knowledge_source_retire:<source id>` key under the mirror in `code_index_state`
+    before inactivating the registration. Its always-on `knowledge_source_retire`
+    worker deletes that source id's owned copies under its own cursor, deadline and
+    document bound, even after the name is reused. N-1 ignores those queue keys and
+    cannot serve the mirrored registration; its ordinary cleanup skips it. Queue rows
+    remain until N finishes, and namespace erasure removes them with the mirror.
+    Mirrored registration remains unavailable. `tests/unit/test_knowledge_source_retirements.py`
+    checks name replacement, bounded progress and cursor persistence.
+
+58. **User cost caps and private budget warnings** (migration
     `103_user_cost_budgets.sql`): activate the global and namespace user caps and alert
     inboxes only after every serving build supports the migration; keep them disabled
     and do not rely on user caps while any build is older or unknown. N-1 cannot enforce

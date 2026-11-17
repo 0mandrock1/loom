@@ -75,8 +75,8 @@ def store(monkeypatch):
 
     calls: dict[str, list[Any]] = {"writes": [], "usage": []}
 
-    async def get_by_key(identity, key, *, scope, **kw):
-        ok = key == _V_ROW.memory_key and row_in_read_scope(
+    async def get_by_key(identity, memory_key, *, scope, **kw):
+        ok = memory_key == _V_ROW.memory_key and row_in_read_scope(
             scope, _V_ROW.user_id, _V_ROW.session_id
         )
         return _V_ROW if ok else None
@@ -175,10 +175,21 @@ def test_if_match_probe_does_not_disclose_another_users_hash(store) -> None:
     assert exc.value.detail["current_sha256"] == ""
 
 
-def test_if_absent_refuses_a_live_row_and_does_not_probe_another_user(store) -> None:
+def test_absence_precondition_refuses_a_live_row_without_probing_another_user(
+    store, monkeypatch
+) -> None:
     from server.memory.api.models_crud import MemorySetInput
-    from server.memory.app.write import _set_check_if_match
+    from server.memory.app import conflicts, write
+    from tests.unit.test_memory_key_write_lock import FakeKeeper, _locks
 
+    _locks(FakeKeeper(), monkeypatch)
+    monkeypatch.setattr(conflicts, "start_write_config", lambda *args: None)
+
+    async def checked(input):
+        _, head = await write._set_fetch_existing(input)
+        await write._set_check_if_match(SimpleNamespace(input=input, existing=head))
+
+    monkeypatch.setattr(write, "_memory_set_phases", checked)
     present = MemorySetInput(
         org="o",
         namespace="n",
@@ -186,34 +197,13 @@ def test_if_absent_refuses_a_live_row_and_does_not_probe_another_user(store) -> 
         user_id="V",
         memory_key="k",
         value="new",
-        if_absent=True,
+        if_match_sha256="absent",
     )
     with pytest.raises(HTTPException) as exc:
-        _run_as(None, lambda: _set_check_if_match(SimpleNamespace(input=present, existing=None)))
+        _run_as(None, lambda: write._handle_memory_set(present))
     assert exc.value.status_code == 409 and exc.value.detail["code"] == "PRECONDITION_FAILED"
-
     own = present.model_copy(update={"user_id": "U"})
-    _run_as(_pinned("U"), lambda: _set_check_if_match(SimpleNamespace(input=own, existing=None)))
-    assert store["writes"] == []
-
-
-def test_absence_and_hash_preconditions_are_mutually_exclusive(store) -> None:
-    from server.core.errors import ValidationError
-    from server.memory.api.models_crud import MemorySetInput
-    from server.memory.app.write import _set_check_if_match
-
-    value = MemorySetInput(
-        org="o",
-        namespace="n",
-        agent="bot",
-        user_id="U",
-        memory_key="k",
-        value="v",
-        if_absent=True,
-        if_match_sha256="a" * 64,
-    )
-    with pytest.raises(ValidationError, match="cannot be combined"):
-        _run_as(None, lambda: _set_check_if_match(SimpleNamespace(input=value, existing=None)))
+    _run_as(_pinned("U"), lambda: write._handle_memory_set(own))
     assert store["writes"] == []
 
 

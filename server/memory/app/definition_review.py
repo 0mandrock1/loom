@@ -93,8 +93,9 @@ async def promote_candidate(
                 source_class="derived",
                 source_trace=f"learning:{row['candidate_id']}",
                 source_resource_id=str(row.get("source_resource_id") or ""),
-                if_absent=head is None,
-                if_match_sha256=served_content_sha256(head.value) if head is not None else "",
+                if_match_sha256=(
+                    served_content_sha256(head.value) if head is not None else "absent"
+                ),
             )
         )
         uncertain(False)

@@ -119,6 +119,15 @@ id, content hash, actor, source class, verdict; never the value). See
 `memory.set`, `memory.get` and `memory.get_by_id` return `content_sha256`. Pass it back as
 `if_match_sha256` and the write succeeds only if the live row still has that content.
 
+For a missing key, `memory.set` also accepts `if_match_sha256="absent"`. The write
+requires no unexpired row under the full identity and key; `agent="*"` is refused.
+Two conditional creators cannot both replace the same absence: the loser gets 409
+`PRECONDITION_FAILED`, reads the winner, and retries with its hash. A deleted or expired
+row can be created again. Expiry does not bypass the row's lock, pin or retention policy.
+An omitted or empty precondition keeps unconditional set behavior. The absence value
+also reaches `memory.pin` and `profile.set` through their `memory.set` write path;
+`memory.update`, `memory.update_by_id` and `memory.move` require a content hash.
+
 ```python
 from loom import Agent
 from loom.errors import PreconditionFailed
@@ -145,13 +154,6 @@ coalesced.
 A `memory.set` or `memory.update` that carries the precondition holds a lock on its key
 from the check to the insert, so of two writers holding the same hash only one succeeds.
 The lock is a KeeperMap key when the server has a Keeper, and per process otherwise.
-
-`memory.set` also accepts `if_absent = true`, which refuses with
-`409 PRECONDITION_FAILED` when an untombstoned row holds the same identity and key.
-An expired row still holds its key; revise it with its hash instead. Absence and hash
-preconditions cannot be combined. A set with either precondition is never coalesced by
-the Python SDK. On ClickHouse, ordinary concurrent writes still resolve by version;
-the key lock serializes conditional callers with each other.
 
 ## Example
 

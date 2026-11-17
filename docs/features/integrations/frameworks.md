@@ -26,7 +26,7 @@ or needs another database, vector store or cache.
 | Google ADK                     | `LoomMemoryService`                             | Python, `loom.integrations.google_adk`                    | `google.adk.memory.BaseMemoryService`                                    |
 | Google ADK (TypeScript)        | `LoomMemoryService`                             | TypeScript, `@clickhouse/loom/integrations/google-adk`    | `BaseMemoryService` from `@google/adk`                                   |
 | Pydantic AI                    | `loom_toolset`                                  | Python, `loom.integrations.pydantic_ai`                   | `FunctionToolset`                                                        |
-| Mastra                         | `loomTools`                                     | TypeScript, `@clickhouse/loom/integrations/mastra`        | `createTool` from `@mastra/core`                                         |
+| Mastra                         | `loomTools`, `LoomMemoryStorage`                | TypeScript, `@clickhouse/loom/integrations/mastra`        | `createTool`, `MemoryStorage` from `@mastra/core`                        |
 | AI SDK                         | `loomTools`                                     | TypeScript, `@clickhouse/loom/integrations/ai-sdk`        | `tool()` from `ai`                                                       |
 | n8n                            | Loom Chat Memory, Loom                          | `@clickhouse/n8n-nodes-loom`                              | AI Memory sub-node and action/tool node                                  |
 | LangGraph                      | `LoomStore`                                     | Python, `loom.integrations.langgraph`                     | `BaseStore`                                                              |
@@ -726,7 +726,7 @@ refuses a `SyncAgent`. Message history stays with the caller, who passes it to e
 
 `loomTools(agent, scope)` returns Loom's agent verbs as Mastra tools built with
 `createTool`, keyed by name as a Mastra `Agent` takes them: the same `AgentTools` as the
-[OpenAI Agents SDK](#openai-agents-sdk) adapter. `@mastra/core` 1.83 or a later 1.x is an
+[OpenAI Agents SDK](#openai-agents-sdk) adapter. `@mastra/core` 1.83.x is an
 optional peer dependency, and needs Node 22.13 or later.
 
 ```ts
@@ -742,15 +742,72 @@ const assistant = new MastraAgent({
 });
 ```
 
-Mastra's own memory keeps threads and messages in a storage adapter that edits and deletes
-them; Loom's conversations are append-only, so the adapter offers Loom as tools rather
-than as that store. A Mastra `Memory` can keep its thread history in its own store while
-the model reads and writes long-term memory in Loom through these tools. Mastra checks
+`LoomMemoryStorage` implements the native `MemoryStorage` domain. It keeps mutable
+threads, complete message payloads and resource working memory in Loom through the SDK.
+Install `@mastra/core` 1.83.x and `@mastra/memory` alongside `@clickhouse/loom`:
+
+```ts
+import { MastraCompositeStore } from "@mastra/core/storage";
+import { Memory } from "@mastra/memory";
+import { LoomMemoryStorage } from "@clickhouse/loom/integrations/mastra";
+
+const memory = new Memory({
+  storage: new MastraCompositeStore({
+    id: "loom",
+    domains: {
+      memory: new LoomMemoryStorage(agent, { resourceId: "alice", storeId: "assistant" }),
+    },
+  }),
+  options: {
+    semanticRecall: false,
+    observationalMemory: false,
+    workingMemory: { enabled: true, scope: "resource" },
+  },
+});
+```
+
+Construct one storage and `Memory` instance per authenticated end-user. The canonical
+`resourceId` is the actual Loom `user_id` on every thread, message and resource row, so
+[user erasure](../memory/retention-and-erasure.md) covers them together. Reads without a
+resource argument remain scoped to that bound user. Cross-resource writes are refused;
+cross-resource reads return missing or empty results. Keep the same Loom agent and
+`storeId` across processes to resume the same data. A store must not be shared across
+users, and resource reassignment is unsupported.
+
+Native listing supports thread/resource filters, date and metadata filters, ordering,
+pagination and included message context across that user's threads. Lists scan the
+store's scoped rows and retrieve full values by key before filtering; large histories
+cost multiple HTTP calls. Partial updates use Loom's hash precondition and retry a
+conflict up to three times. A missing resource is created with
+`memory.set.if_match_sha256="absent"`; this requires a server that supports the absence
+precondition. Older servers return `PRECONDITION_FAILED` instead of creating it, and the
+adapter never retries unconditionally. Concurrent partial resource patches preserve
+omitted working memory and merge metadata; whole-resource saves remain replacements.
+Writes clear the default expiry. Server retention policies, explicit deletion, user
+erasure and server policy refusals still apply.
+
+Deletes use `memory.delete_version` with the exact identity and lossless version from
+the validated read. A missing row is a no-op; a concurrent rewrite is preserved and
+returns an error. Thread deletion captures the parent before deleting its observed
+messages and still removes own orphan messages when that parent is missing. Deletes are
+logical Loom tombstones; later explicit saves can recreate an entity. Batches, thread
+timestamp updates and cascading deletes are separate operations: a failure can leave
+partial work and is returned to the caller. A cascade cannot prevent a new message
+after enumeration. The adapter provides no transaction, local fallback or additional
+storage.
+
+Semantic recall, observational memory, run fencing, atomic working-memory merges and
+thread cloning are unsupported. Other storage domains are absent. The existing tools
+remain available alongside native history and working memory. Mastra checks
 each call against Loom's schema first and answers one outside it (a missing argument, an
 extra key, a `top_k` above 20, a quoted number) with its own validation message; a call
 within the schema that Loom refuses, or a server error, reaches the model as Mastra's
 failed tool result with Loom's message. Either way the model reads the message and the run
 goes on.
+
+`make test-sdk-mastra-memory` runs the native tests with a fake Loom SDK transport.
+`make test-sdk-mastra-memory-live` uses `LOOM_BASE_URL` and `LOOM_API_KEY`, with optional
+`LOOM_ORG` and `LOOM_NAMESPACE`, to run the native memory lifecycle on a test deployment.
 
 ## AI SDK
 

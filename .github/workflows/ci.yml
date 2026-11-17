@@ -641,7 +641,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: sdk/typescript/package-lock.json
-      - name: Install native Google ADK clients
+      - name: Install native framework clients
         if: matrix.part == '1'
         run: |
           uv pip install --python "$PWD/.venv/bin/python" --target "$RUNNER_TEMP/loom-adk-client" './sdk/python[google-adk]'
@@ -702,6 +702,12 @@ jobs:
           echo "control plane never became healthy"
           tail -100 server.log
           exit 1
+      - name: Mastra native memory against the control plane
+        if: matrix.part == '1'
+        run: |
+          token="$(python -c 'from server.auth import keyring; keyring.sign_with_root_only(); from server.auth.jwt import mint_token; print(mint_token(subject="ci-mastra-memory", org="mastra-memory-ci", namespaces=["native"], roles=["writer"], ttl_seconds=600, is_service_account=True))')"
+          echo "::add-mask::$token"
+          LOOM_API_KEY="$token" LOOM_ORG=mastra-memory-ci LOOM_NAMESPACE=native make test-sdk-mastra-memory-live
       # A local S3-compatible store for the document object-store tests
       # (tests/integration/test_document_object_store_live.py).
       - name: Start a local S3-compatible store

@@ -23,7 +23,8 @@ learn and hand over.
   dead ends and what is done. One agent saves it with `session.brief_save` and the next
   loads it with `session.brief_get`. [Session briefs](../features/conversations-and-sessions.md#session-briefs)
 - **Framework adapters.** The SDKs present Loom through agent frameworks' own memory
-  interfaces. [Agent frameworks](../features/integrations/frameworks.md)
+  interfaces, including [Mastra threads, messages and resource working memory](../features/integrations/frameworks.md#mastra).
+  [Agent frameworks](../features/integrations/frameworks.md)
 
 ## Two agents sharing a research note
 
