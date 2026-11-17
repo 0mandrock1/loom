@@ -85,40 +85,46 @@ try {
   );
 
   // A fresh install takes the endpoint default from the environment's base.
-  const defaults = scratch();
-  try {
-    const defaultEnv = {
-      ...baseEnv(defaults.home),
-      ANTHROPIC_API_KEY: "dummy-endpoint-model-key",
-      ANTHROPIC_BASE_URL: fake.url,
-      LOOM_BASE_URL: fake.url + prefix,
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-      DISABLE_AUTOUPDATER: "1",
-    };
-    for (const args of [
-      ["plugin", "marketplace", "add", root],
-      ["plugin", "install", "loom@loom"],
-    ])
-      await invoke(args, defaults.work, defaultEnv);
-    const before = fake.seen.length;
-    const defaultResult = await invoke(
-      ["-p", "Reply briefly.", "--tools", "", "--output-format", "stream-json", "--verbose"],
-      defaults.work,
-      defaultEnv,
-    );
-    assert.ok(!defaultResult.stdout.includes("configure server_url as the full MCP URL"));
-    assert.ok(
-      fake.seen.slice(before).some((call) => call.path === prefix + "/v1/context.pack"),
-      "default hooks missed the proxy base",
-    );
-    assert.ok(
-      fake.seen
-        .slice(before)
-        .some((call) => call.url === prefix + "/mcp?toolset=coding" && call.auth === "Bearer loom-e2e-token"),
-      "environment default missed its MCP endpoint",
-    );
-  } finally {
-    fs.rmSync(defaults.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  for (const defaultPrefix of [prefix, prefix + "/"]) {
+    const defaults = scratch();
+    let defaultFake;
+    try {
+      defaultFake = await startFake(0, { prefix: defaultPrefix });
+      const defaultEnv = {
+        ...baseEnv(defaults.home),
+        ANTHROPIC_API_KEY: "dummy-endpoint-model-key",
+        ANTHROPIC_BASE_URL: defaultFake.url,
+        LOOM_BASE_URL: defaultFake.url + defaultPrefix,
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        DISABLE_AUTOUPDATER: "1",
+      };
+      for (const args of [
+        ["plugin", "marketplace", "add", root],
+        ["plugin", "install", "loom@loom"],
+      ])
+        await invoke(args, defaults.work, defaultEnv);
+      const before = defaultFake.seen.length;
+      const defaultResult = await invoke(
+        ["-p", "Reply briefly.", "--tools", "", "--output-format", "stream-json", "--verbose"],
+        defaults.work,
+        defaultEnv,
+      );
+      assert.ok(!defaultResult.stdout.includes("configure server_url as the full MCP URL"));
+      const calls = defaultFake.seen.slice(before);
+      assert.ok(
+        calls.some((call) => call.path === defaultPrefix + "/v1/context.pack" && call.auth === "Bearer loom-e2e-token"),
+        "default hooks missed the proxy base or bearer",
+      );
+      assert.ok(
+        calls.some(
+          (call) => call.url === defaultPrefix + "/mcp?toolset=coding" && call.auth === "Bearer loom-e2e-token",
+        ),
+        "environment default missed its MCP endpoint",
+      );
+    } finally {
+      if (defaultFake) await defaultFake.close();
+      fs.rmSync(defaults.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    }
   }
 
   // The old dashboard's exact origin-only option is a visible migration error.
