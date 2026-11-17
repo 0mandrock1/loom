@@ -844,7 +844,7 @@ schema. These rules keep that safe. The operator procedure is in
     a schema downgrade alone provides no privacy protection.
 
 55. **User cost caps and private budget warnings** (migration
-    `102_user_cost_budgets.sql`): activate the global and namespace user caps and alert
+    `103_user_cost_budgets.sql`): activate the global and namespace user caps and alert
     inboxes only after every serving build supports the migration; keep them disabled
     and do not rely on user caps while any build is older or unknown. N-1 cannot enforce
     user caps, filters no private warning events, and has no user-erasure step for those
