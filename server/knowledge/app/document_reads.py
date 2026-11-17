@@ -14,6 +14,7 @@ from server.core.cursors import (
     encode_bound_cursor,
     encode_cursor,
 )
+from server.core.datetimes import to_naive_utc_second
 from server.core.tag_sql import list_tag_filter
 from server.embedding import get_embedder
 from server.knowledge.api.models_knowledge import (
@@ -70,10 +71,12 @@ async def handle_knowledge_list(
     sources. Keyset pagination on (ingested_at, namespace, source_uri) DESC keeps the
     cursor stable across inserts."""
     from server.core.ch import own_write_reads
+    from server.knowledge.app import source_access, source_listing
     from server.knowledge.store import documents as documents_repo
 
     namespaces = await readable_namespaces(input.org, input.namespace, input.namespaces)
     cursor = _list_position(input.cursor, input.org, namespaces) if input.cursor else None
+    plan = await source_access.prepare(input.org, namespaces)
     with own_write_reads():  # a document added a call ago
         raw_rows = await documents_repo.list_with_chunk_counts(
             input.org,
@@ -84,6 +87,23 @@ async def handle_knowledge_list(
             cursor=cursor,
             limit=input.limit + 1,
         )
+    if plan.marked:
+        checked = await source_listing.collect(plan, input, cursor=cursor)
+        if checked:
+            ordinary = {(row["namespace"], row["source_uri"]) for row in raw_rows}
+            raw_rows = [
+                *raw_rows,
+                *(row for row in checked if (row["namespace"], row["source_uri"]) not in ordinary),
+            ]
+            raw_rows.sort(
+                key=lambda row: (
+                    to_naive_utc_second(row["ingested_at"]),
+                    row["namespace"],
+                    row["source_uri"],
+                ),
+                reverse=True,
+            )
+            raw_rows = raw_rows[: input.limit + 1]
     has_more = len(raw_rows) > input.limit
     page = raw_rows[: input.limit]
 

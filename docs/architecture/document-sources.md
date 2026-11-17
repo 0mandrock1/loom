@@ -724,8 +724,9 @@ A request keeps a monotonic mirror mark in its existing work bag, shared with ch
 legs. An unbound direct helper serves no mirrored content. Active registrations, mirror
 bindings and listing starts are read in sequence before candidate permissions. A failed
 unconditional read marks `mirror_unread`; a failed candidate read invalidates the whole
-mirror plan without that marker. The checked planner is internal; public read wiring,
-marked-request sinks and session protections remain prerequisites to serving mirrors.
+mirror plan without that marker. Checked adapters cover search, get, outline, download
+and listing. Other readers, marked-request sinks and session protections remain
+prerequisites to enabling mirrored sources.
 
 `documents.access_keys` and its bloom index select coarse candidates under the
 ClickHouse authority. Owner and group buckets retain candidates needing identity
@@ -752,6 +753,14 @@ checks read bounded batches independently of public filters and cursors. They co
 the ordinary listing's published rows and its unpublished Postgres heads; requesting
 superseded rows also lets an ordinary tombstone shadow a mirrored copy. Mirrored
 candidates remain live-only.
+Listing chooses the newest admitted complete copy of a public address, with a stable
+storage-identity tie break, before applying public tags, URI prefixes or the cursor.
+An ordinary copy wins its entire family before these filters. Selection retains only
+one current family, bounded shadow batches and the requested page plus one lookahead.
+After selected projections and counts are read, ordinary shadows, permissions, identity,
+document versions and recorded chunk serving state are checked again for every retained
+copy, including the lookahead. A lost proof drops the whole mirrored leg, so it cannot
+leave a stale cursor or reveal a removed row through the page's continuation.
 
 A token reads as one person, for both the `owner` entry and the emails, or as nobody:
 

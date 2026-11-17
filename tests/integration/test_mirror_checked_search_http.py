@@ -123,6 +123,15 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert response.status_code == 200, response.text
             return response.json()
 
+        async def listing(token, **fields):
+            response = await client.post(
+                "/v1/knowledge.list",
+                json={"org": org, "namespace": namespace, **fields},
+                headers={"Authorization": "Bearer " + token},
+            )
+            assert response.status_code == 200, response.text
+            return response.json()
+
         async def outline(token):
             response = await client.post(
                 "/v1/knowledge.outline",
@@ -182,6 +191,8 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             await write_document(namespace, "ordinary:visible", query + " ordinary")
             baseline = await search(outsider)
             assert [r["source_uri"] for r in baseline["results"]] == ["ordinary:visible"]
+            ordinary_list = await listing(outsider)
+            assert [r["source_uri"] for r in ordinary_list["rows"]] == ["ordinary:visible"]
             missing_get = await get(outsider)
             assert not missing_get["found"]
             missing_outline = await outline(outsider)
@@ -222,6 +233,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             )
             assert await search(outsider) == baseline
             assert await search(owner_bot) == baseline
+            assert await listing(outsider) == await listing(owner_bot) == ordinary_list
             assert await get(outsider) == await get(owner_bot) == missing_get
             assert await outline(outsider) == await outline(owner_bot) == missing_outline
             assert await download(outsider) == await download(owner_bot) == missing_download
@@ -235,6 +247,25 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert document["source_uri"] == public_uri
             assert not any(tag.startswith("source-id:") for tag in document["tags"])
             assert "access_json" not in document
+            listed = await listing(owner)
+            assert len(listed["rows"]) == 2 and listed["next_cursor"] is None
+            [listed_copy] = [item for item in listed["rows"] if item["source_uri"] == public_uri]
+            assert listed_copy["namespace"] == namespace and listed_copy["chunk_count"] == 2
+            assert listed_copy["content_preview"] == private_content
+            assert listed_copy["tags"] == [] and not listed_copy["has_blob"]
+            assert len((await listing(owner, uri_prefix=["", "gdrive:"]))["rows"]) == 1
+            projected = await listing(owner, fields=["title"], uri_prefix=["gdrive:"])
+            assert projected["rows"] == [
+                {"namespace": namespace, "source_uri": public_uri, "title": "Checked search"}
+            ]
+            first_page = await listing(owner, limit=1)
+            assert len(first_page["rows"]) == 1 and first_page["next_cursor"]
+            second_page = await listing(owner, limit=1, cursor=first_page["next_cursor"])
+            assert len(second_page["rows"]) == 1 and second_page["next_cursor"] is None
+            assert {first_page["rows"][0]["source_uri"], second_page["rows"][0]["source_uri"]} == {
+                "ordinary:visible",
+                public_uri,
+            }
             sections = await outline(owner)
             assert sections["found"] and sections["source_uri"] == public_uri
             assert sections["chunk_count"] == 2 and sections["structured"]
@@ -261,6 +292,11 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert original_download[0] == 200 and original_download[1] == original
             assert original_download[2]["x-loom-download-source"] == "blob"
             assert source not in original_download[2]["content-disposition"]
+            blob_list = await listing(owner, uri_prefix=["gdrive:"])
+            assert blob_list["rows"][0]["has_blob"] and blob_list["rows"][0]["blob_size"] == len(
+                original
+            )
+            assert await listing(outsider) == await listing(owner_bot) == ordinary_list
             assert await download(outsider) == await download(owner_bot) == missing_download
             denied = await client.post(
                 "/v1/knowledge.search",
@@ -278,6 +314,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             else:
                 await ch.insert("loom.documents", [narrowed])
             assert await search(owner) == baseline
+            assert await listing(owner) == ordinary_list
             assert await get(owner) == missing_get
             assert await outline(owner) == missing_outline
             assert await download(owner) == missing_download
@@ -290,7 +327,9 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert (await get(owner_bot))["found"]
             assert (await download(owner_bot))[:2] == (200, original)
             assert (await outline(owner_bot))["section_content"] == "Unembedded section."
+            assert len((await listing(owner_bot))["rows"]) == 2
             await sources.insert_source(replace(registration, active=False))
+            assert await listing(owner) == ordinary_list
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
             assert await outline(owner) == missing_outline
@@ -299,6 +338,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert (await get(owner))["found"]
             stale = now - timedelta(seconds=settings.knowledge_source_acl_stale_seconds + 1)
             await mirrors.record_listing(org, mirror, source, "checked", stale)
+            assert await listing(owner) == ordinary_list
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
             assert await outline(owner) == missing_outline
