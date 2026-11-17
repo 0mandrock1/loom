@@ -126,6 +126,9 @@ async def _serve(fd: int, alive_fd: int) -> None:
         log.info("workers child %s stopping", os.getpid())
         retirement.get_gate().close()
         embedder_calibration.stop_refresh_loop()
+        for task in services:
+            task.cancel()
+        await asyncio.gather(*services, return_exceptions=True)
         await supervisor.stop_all(drain_timeout_s=leader.drain_timeout_s())
         await _drain()
         retirement.get_gate().stopped()
