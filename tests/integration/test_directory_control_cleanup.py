@@ -55,7 +55,9 @@ async def test_directory_interrupt_releases_exact_backend_and_global_locks(
         seen.set()
         await conn.execute("SELECT pg_sleep(10)")
 
-    task = asyncio.create_task(directory._control_transaction(work))
+    task = asyncio.create_task(
+        directory._control_transaction(work, seconds=directory.CONTROL_MAX_S)
+    )
     try:
         await asyncio.wait_for(seen.wait(), 2)
         await sleeping(directory_database, backend["pid"])
@@ -97,7 +99,7 @@ async def test_directory_original_failure_never_waits_for_rollback(directory_dat
         raise original
 
     with pytest.raises(ValueError) as caught:
-        await directory._control_transaction(work)
+        await directory._control_transaction(work, seconds=directory.CONTROL_MAX_S)
     assert caught.value is original and "rollback" not in backend
     assert time.monotonic() - began < 0.4
     await released(directory_database, backend["pid"])
@@ -112,7 +114,10 @@ async def test_directory_normal_commit_closes_before_return(directory_database):
         await conn.execute("UPDATE probe SET id=2")
         return "acknowledged"
 
-    assert await directory._control_transaction(work) == "acknowledged"
+    assert (
+        await directory._control_transaction(work, seconds=directory.CONTROL_MAX_S)
+        == "acknowledged"
+    )
     assert await directory_database.fetchval("SELECT id FROM probe") == 2
     await released(directory_database, backend["pid"])
 
@@ -146,7 +151,9 @@ async def test_directory_second_cancel_keeps_first_and_close_precedes_worker_can
             await real_close(self, **kwargs)
 
     monkeypatch.setattr(asyncpg.Connection, "close", close)
-    task = asyncio.create_task(directory._control_transaction(work))
+    task = asyncio.create_task(
+        directory._control_transaction(work, seconds=directory.CONTROL_MAX_S)
+    )
     try:
         await asyncio.wait_for(seen.wait(), 2)
         await sleeping(directory_database, backend["pid"])
@@ -187,7 +194,7 @@ async def test_directory_commit_acknowledgement_loss_is_not_success(
 
     monkeypatch.setattr(asyncpg.Connection, "execute", execute)
     with pytest.raises(directory.DirectoryUnavailable) as caught:
-        await directory._control_transaction(work)
+        await directory._control_transaction(work, seconds=directory.CONTROL_MAX_S)
     assert caught.value.__cause__ is original
     assert await directory_database.fetchval("SELECT id FROM probe") == 2
     await released(directory_database, backend["pid"])
@@ -215,7 +222,7 @@ async def test_directory_required_close_failure_refuses_committed_success(
 
     monkeypatch.setattr(asyncpg.Connection, "close", close)
     with pytest.raises(ValueError) as caught:
-        await directory._control_transaction(work)
+        await directory._control_transaction(work, seconds=directory.CONTROL_MAX_S)
     assert caught.value is original
     assert await directory_database.fetchval("SELECT id FROM probe") == 2
     await released(directory_database, backend["pid"])
@@ -267,7 +274,7 @@ async def main():
  asyncpg.Connection.execute = execute
  directory._connection = connection
  try:
-  try: await directory._control_transaction(work)
+  try: await directory._control_transaction(work, seconds=directory.CONTROL_MAX_S)
   except (SystemExit, KeyboardInterrupt) as caught: assert caught is original
   else: raise AssertionError('fatal guard returned success')
   if stage == 'acquire':

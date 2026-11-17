@@ -887,8 +887,7 @@ async def attach_read(cell_name: str, *, audited: bool = False) -> Attaching:
 
 
 async def _restore_page(
-    cm: Any,
-    owned: dict[str, Any],
+    conn: Any,
     cell_name: str,
     deployment_id: str,
     after: str | None,
@@ -896,10 +895,6 @@ async def _restore_page(
 ) -> dict[str, Any]:
     from server.router import restore
 
-    conn = await cm.__aenter__()
-    owned["conn"] = conn
-    tx = conn.transaction()
-    await tx.start()
     if not await conn.fetchval(
         "SELECT indisvalid AND indisready FROM pg_index "
         "WHERE indexrelid=to_regclass('loom_router.placements_by_cell_org')"
@@ -927,67 +922,24 @@ async def _restore_page(
         )
         answer = restore.page(descriptor, [r["org"] for r in rows])
     await _audit(conn, "restore_read", {"cell": cell_name, "after": after})
-    await tx.commit()
     return answer
-
-
-async def _restore_wait(task: asyncio.Task[Any], end: float) -> Any:
-    done, _ = await asyncio.wait({task}, timeout=max(0, end - time.monotonic()))
-    if not done:
-        raise DirectoryUnavailable("restore-read reached its directory deadline")
-    return task.result()
-
-
-async def _restore_cleanup(
-    cm: Any,
-    owned: dict[str, Any],
-    work: asyncio.Task[Any],
-    end: float,
-) -> None:
-    try:
-        if (conn := owned.get("conn")) is not None:
-            await pg.close_owned(conn, end=end)
-    finally:
-        if not work.done():
-            work.cancel()
-        work.add_done_callback(pg._retrieve_task)
-        done, _ = await asyncio.wait({work}, timeout=max(0, end - time.monotonic()))
-        if not done:
-            raise TimeoutError("directory restore work did not stop before cleanup deadline")
-        release = asyncio.create_task(cm.__aexit__(None, None, None))
-        try:
-            await _restore_wait(release, end)
-        finally:
-            if not release.done():
-                release.cancel()
-            release.add_done_callback(pg._retrieve_task)
 
 
 async def restore_read(
     cell_name: str, deployment_id: str, after: str | None, expected_sha256: str | None
 ) -> dict[str, Any]:
     """One audited page; one supervisor closes its session before pool release."""
-    end = time.monotonic() + RESTORE_READ_MAX_S
-    work_end = end - min(1.0, RESTORE_READ_MAX_S / 4)
-    cm = _connection()
-    owned: dict[str, Any] = {}
-    work = asyncio.create_task(
-        _restore_page(cm, owned, cell_name, deployment_id, after, expected_sha256)
-    )
     try:
-        async with _reading():
-            try:
-                answer = await _restore_wait(work, work_end)
-            except BaseException:
-                try:
-                    await _restore_cleanup(cm, owned, work, end)
-                except BaseException:  # noqa: BLE001 — preserve the original failure/cancellation.
-                    pass
-                raise
-            await _restore_cleanup(cm, owned, work, end)
-            return dict(answer)
-    except TimeoutError as error:
-        raise DirectoryUnavailable("restore-read reached its directory deadline") from error
+        return await _control_transaction(
+            lambda conn: _restore_page(conn, cell_name, deployment_id, after, expected_sha256),
+            seconds=RESTORE_READ_MAX_S,
+        )
+    except DirectoryUnavailable as error:
+        if isinstance(error.__cause__, TimeoutError):
+            raise DirectoryUnavailable(
+                "restore-read reached its directory deadline"
+            ) from error.__cause__
+        raise
     except ValueError as error:
         raise OperatorRefused("the directory restore metadata is invalid") from error
 
@@ -1037,9 +989,9 @@ async def _control_result[T](work: Callable[[], Awaitable[T]]) -> T | _ControlFa
 class _ControlOwner:
     """Own only this operator attempt's proxy, through close and pool release."""
 
-    def __init__(self) -> None:
-        self.end = time.monotonic() + CONTROL_MAX_S
-        self.work_end = self.end - min(1.0, CONTROL_MAX_S / 4)
+    def __init__(self, seconds: float) -> None:
+        self.end = time.monotonic() + seconds
+        self.work_end = self.end - min(1.0, seconds / 4)
         self.context = _connection()
         self.conn: Any = None
         self.entered = False
@@ -1126,10 +1078,10 @@ class _ControlInterrupted(BaseException):
         self.fatal = fatal
 
 
-async def _control_transaction[T](change: Callable[[Any], Awaitable[T]]) -> T:
+async def _control_transaction[T](change: Callable[[Any], Awaitable[T]], *, seconds: float) -> T:
     """Bound the whole callback, close first, then settle work and pool ownership."""
     async with _reading():
-        owner = _ControlOwner()
+        owner = _ControlOwner(seconds)
         task = owner.start(lambda: owner.work(change))
         try:
             result = await owner.wait(task, owner.work_end)
@@ -1168,7 +1120,7 @@ async def _attach_change[T](
         await conn.execute("SELECT pg_logical_emit_message(true, 'loom.control', '')")
         return await change(conn, attaching)
 
-    return await _control_transaction(locked)
+    return await _control_transaction(locked, seconds=CONTROL_MAX_S)
 
 
 async def claim(cell_name: str, expected: Control) -> Attaching:

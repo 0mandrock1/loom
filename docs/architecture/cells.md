@@ -1354,6 +1354,11 @@ a second signal does not cancel that close early or extend the original deadline
 A late connection cannot become usable after the attempt ends. A transport abort
 leaves an unknown outcome rather than proving that the backend released its locks.
 
+Each directory page uses the shared callback session owner with its own seven-statement
+budget. The owner begins and commits one audited transaction, closes that proxy before
+pool release and reserves cleanup inside the same deadline. A page locks its named cell
+row; it does not take the directory-wide control lock.
+
 Pages have fixed row and byte bounds and use the directory's `(cell, org)` index. A
 placement added during the scan restarts it; a configuration change refuses the run.
 There is no maximum number of orgs. Select a longer `--wait` for a larger cell. Every

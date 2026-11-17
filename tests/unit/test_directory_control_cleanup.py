@@ -29,7 +29,12 @@ async def test_success_closes_once_before_pool_exit(owned):
     events = []
     conn.close.side_effect = lambda **_: events.append("close")
     context.__aexit__.side_effect = lambda *_: events.append("exit")
-    assert await directory._control_transaction(AsyncMock(return_value=19)) == 19
+    assert (
+        await directory._control_transaction(
+            AsyncMock(return_value=19), seconds=directory.CONTROL_MAX_S
+        )
+        == 19
+    )
     assert events == ["close", "exit"]
     conn.close.assert_awaited_once()
     conn.transaction.return_value.commit.assert_awaited_once()
@@ -41,7 +46,9 @@ async def test_original_error_survives_close_and_exit_failure(owned):
     conn.close.side_effect = RuntimeError("close failure")
     context.__aexit__.side_effect = LookupError("exit failure")
     with pytest.raises(ValueError) as caught:
-        await directory._control_transaction(AsyncMock(side_effect=original))
+        await directory._control_transaction(
+            AsyncMock(side_effect=original), seconds=directory.CONTROL_MAX_S
+        )
     assert caught.value is original
     conn.close.assert_awaited_once()
     context.__aexit__.assert_awaited_once()
@@ -54,7 +61,7 @@ async def test_close_failure_survives_exit_failure_after_acknowledged_commit(own
     conn.close.side_effect = original
     context.__aexit__.side_effect = RuntimeError("exit failure")
     with pytest.raises(ValueError) as caught:
-        await directory._control_transaction(AsyncMock())
+        await directory._control_transaction(AsyncMock(), seconds=directory.CONTROL_MAX_S)
     assert caught.value is original
     conn.transaction.return_value.commit.assert_awaited_once()
 
@@ -70,7 +77,7 @@ async def test_exit_cannot_open_an_extra_cleanup_allowance(owned):
     context.__aexit__.side_effect = stalled
     began = time.monotonic()
     with pytest.raises(directory.DirectoryUnavailable):
-        await directory._control_transaction(AsyncMock())
+        await directory._control_transaction(AsyncMock(), seconds=directory.CONTROL_MAX_S)
     assert entered.is_set() and time.monotonic() - began < 0.2
     conn.close.assert_awaited_once()
 
@@ -80,7 +87,7 @@ async def test_acquisition_failure_does_not_close_an_unowned_proxy(owned):
     original = ValueError("acquisition failure")
     context.__aenter__.side_effect = original
     with pytest.raises(ValueError) as caught:
-        await directory._control_transaction(AsyncMock())
+        await directory._control_transaction(AsyncMock(), seconds=directory.CONTROL_MAX_S)
     assert caught.value is original
     conn.close.assert_not_awaited()
     conn.terminate.assert_not_called()
@@ -96,7 +103,9 @@ async def test_no_known_proxy_cancellation_does_not_close_another_attempt(owned)
         await asyncio.Future()
 
     context.__aenter__.side_effect = acquire
-    task = asyncio.create_task(directory._control_transaction(AsyncMock()))
+    task = asyncio.create_task(
+        directory._control_transaction(AsyncMock(), seconds=directory.CONTROL_MAX_S)
+    )
     await entered.wait()
     task.cancel("first acquisition cancellation")
     with pytest.raises(asyncio.CancelledError, match="first acquisition cancellation"):
@@ -105,7 +114,12 @@ async def test_no_known_proxy_cancellation_does_not_close_another_attempt(owned)
     conn.terminate.assert_not_called()
     context.__aexit__.assert_not_awaited()
     context.__aenter__.side_effect = None
-    assert await directory._control_transaction(AsyncMock(return_value=2)) == 2
+    assert (
+        await directory._control_transaction(
+            AsyncMock(return_value=2), seconds=directory.CONTROL_MAX_S
+        )
+        == 2
+    )
     conn.close.assert_awaited_once()
 
 
@@ -122,7 +136,9 @@ async def test_late_acquired_proxy_is_discarded_without_running_callback(owned):
 
     context.__aenter__.side_effect = acquire
     work = AsyncMock()
-    task = asyncio.create_task(directory._control_transaction(work))
+    task = asyncio.create_task(
+        directory._control_transaction(work, seconds=directory.CONTROL_MAX_S)
+    )
     await entered.wait()
     task.cancel("acquisition cancelled")
     with pytest.raises(asyncio.CancelledError, match="acquisition cancelled"):
@@ -134,3 +150,19 @@ async def test_late_acquired_proxy_is_discarded_without_running_callback(owned):
     conn.transaction.assert_not_called()
     conn.terminate.assert_called()
     conn.close.assert_not_awaited()  # Expired original end cannot create a fresh close budget.
+
+
+async def test_restore_uses_its_separate_runtime_budget(owned, monkeypatch):
+    conn, _ = owned
+    seen = []
+    answer = {"page": "audited"}
+
+    async def transaction(change, *, seconds):
+        seen.append(seconds)
+        return await change(conn)
+
+    monkeypatch.setattr(directory, "_control_transaction", transaction)
+    monkeypatch.setattr(directory, "_restore_page", AsyncMock(return_value=answer))
+    monkeypatch.setattr(directory, "RESTORE_READ_MAX_S", 0.037)
+    assert await directory.restore_read("first", "dep-first", None, None) == answer
+    assert seen == [0.037]

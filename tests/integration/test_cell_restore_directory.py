@@ -725,3 +725,281 @@ async def test_normal_restore_requires_owned_public_close_success(stores, monkey
         )
     finally:
         await observer.close(timeout=1)
+
+
+@pytest.mark.parametrize("stage", ["acquire", "initialize", "work", "commit", "close", "release"])
+@pytest.mark.parametrize("kind", ["exit", "keyboard"])
+async def test_restore_directory_native_fatal_reaches_owner_before_boundary(stores, stage, kind):
+    import asyncio
+    import os
+    import sys
+
+    from server.settings import settings
+
+    script = r"""
+import asyncio, contextlib, os, sys
+import asyncpg
+from server.router import directory
+from server.settings import settings
+stage, kind = sys.argv[1:]
+original = SystemExit(17) if kind == 'exit' else KeyboardInterrupt('restore directory guard')
+async def main():
+ settings.router_pg_dsn = os.environ['RESTORE_TEST_DSN']
+ observer = await asyncpg.connect(settings.router_pg_dsn)
+ backend = {}
+ real_close = asyncpg.Connection.close
+ real_execute = asyncpg.Connection.execute
+ real_connection, real_audit, real_init = directory._connection, directory._audit, directory._init
+ async def initialize(conn):
+  await real_init(conn)
+  if stage == 'initialize':
+   backend['pid'] = conn.get_server_pid()
+   raise original
+ async def execute(self, sql, *args, **kw):
+  if stage == 'commit' and sql.startswith('COMMIT') and self.get_server_pid() == backend.get('pid'): raise original
+  return await real_execute(self, sql, *args, **kw)
+ async def close(self, **kw):
+  ours = self.get_server_pid() == backend.get('pid')
+  await real_close(self, **kw)
+  if ours and stage == 'close': raise original
+ @contextlib.asynccontextmanager
+ async def connection():
+  if stage == 'acquire': raise original
+  async with real_connection() as conn:
+   backend['pid'] = conn.get_server_pid()
+   yield conn
+  if stage == 'release': raise original
+ async def audit(conn, action, detail):
+  assert not await observer.fetchval("SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND locktype='advisory')", backend['pid'])
+  if stage == 'work': raise original
+  await real_audit(conn, action, detail)
+ asyncpg.Connection.close = close
+ asyncpg.Connection.execute = execute
+ directory._connection, directory._audit, directory._init = connection, audit, initialize
+ try:
+  try: await directory.restore_read('first', 'dep-first', None, None)
+  except (SystemExit, KeyboardInterrupt) as caught: assert caught is original
+  else: raise AssertionError('fatal guard returned success')
+  print('LOOP_RUNNING_AFTER_IDENTICAL_FATAL', flush=True)
+  if stage == 'acquire':
+   assert not backend and directory._pool is None
+  else:
+   assert not await observer.fetchval('SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1)', backend['pid'])
+   assert not await observer.fetchval('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)', backend['pid'])
+ finally:
+  asyncpg.Connection.close = real_close
+  asyncpg.Connection.execute = real_execute
+  await directory.close()
+  await observer.close(timeout=1)
+asyncio.run(main())
+"""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        script,
+        stage,
+        kind,
+        env={**os.environ, "RESTORE_TEST_DSN": settings.router_pg_dsn},
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), 10)
+        assert process.returncode == 0, (stdout.decode(), stderr.decode())
+        assert b"LOOP_RUNNING_AFTER_IDENTICAL_FATAL" in stdout
+        assert b"never retrieved" not in stderr
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+
+
+@pytest.mark.parametrize("stage", ["work", "close", "release"])
+async def test_restore_directory_original_error_and_required_cleanup(stores, monkeypatch, stage):
+    import contextlib
+
+    import asyncpg
+
+    from server.settings import settings
+    from tests.integration.test_pg_owned_cleanup import released
+
+    observer = await asyncpg.connect(settings.router_pg_dsn)
+    connection, audit, close = directory._connection, directory._audit, asyncpg.Connection.close
+    original, later = (
+        RuntimeError("original restore directory failure"),
+        RuntimeError("cleanup failure"),
+    )
+    backend = {}
+
+    @contextlib.asynccontextmanager
+    async def owned():
+        async with connection() as conn:
+            backend["pid"] = conn.get_server_pid()
+            yield conn
+        raise original if stage == "release" else later
+
+    async def write_audit(conn, action, detail):
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1 AND locktype='advisory')",
+            backend["pid"],
+        )
+        if stage == "work":
+            raise original
+        await audit(conn, action, detail)
+
+    async def public_close(conn, **kwargs):
+        ours = conn.get_server_pid() == backend.get("pid")
+        await close(conn, **kwargs)
+        if ours and stage != "release":
+            raise original if stage == "close" else later
+
+    monkeypatch.setattr(directory, "_connection", owned)
+    monkeypatch.setattr(directory, "_audit", write_audit)
+    monkeypatch.setattr(asyncpg.Connection, "close", public_close)
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            await directory.restore_read("first", "dep-first", None, None)
+        assert caught.value is original
+        await released(observer, backend["pid"])
+        assert await observer.fetchval(
+            "SELECT count(*) FROM loom_router.audit WHERE action='restore_read'"
+        ) == (0 if stage == "work" else 1)
+    finally:
+        await observer.close(timeout=1)
+
+
+async def test_restore_pages_keep_seven_statements_and_acknowledge_empty_audit(stores, monkeypatch):
+    import contextlib
+
+    import asyncpg
+
+    from server.settings import settings
+
+    await seed(["placed-once"])
+    connection = directory._connection
+    statements, backend = [], {}
+
+    @contextlib.asynccontextmanager
+    async def owned():
+        async with connection() as conn:
+            backend["pid"] = conn.get_server_pid()
+            yield conn
+
+    monkeypatch.setattr(directory, "_connection", owned)
+    for name in ("execute", "fetch", "fetchrow", "fetchval"):
+        method = getattr(asyncpg.Connection, name)
+
+        async def observed(self, sql, *args, _method=method, **kwargs):
+            if self.get_server_pid() == backend.get("pid"):
+                statements.append(sql)
+            return await _method(self, sql, *args, **kwargs)
+
+        monkeypatch.setattr(asyncpg.Connection, name, observed)
+    first = await directory.restore_read("first", "dep-first", None, None)
+    assert len(statements) == directory.RESTORE_READ_STATEMENTS == 7
+    assert statements[0].startswith("BEGIN") and statements[-1].startswith("COMMIT")
+    assert not any("advisory" in sql for sql in statements)
+    statements.clear()
+    last = await directory.restore_read("first", "dep-first", "placed-once", first["sha256"])
+    assert last["done"] and last["orgs"] == [] and len(statements) == 7
+    assert any("org > $2" in sql for sql in statements)
+    assert statements[-1].startswith("COMMIT")
+    observer = await asyncpg.connect(settings.router_pg_dsn)
+    try:
+        assert (
+            await observer.fetchval(
+                "SELECT count(*) FROM loom_router.audit WHERE action='restore_read'"
+            )
+            == 2
+        )
+    finally:
+        await observer.close(timeout=1)
+
+
+@pytest.mark.parametrize("ending", ["cancel", "second_cancel"])
+async def test_restore_directory_cancel_releases_exact_sleeping_backend(
+    stores, monkeypatch, ending
+):
+    import asyncio
+    import time
+
+    import asyncpg
+
+    from server.settings import settings
+    from tests.integration.test_pg_owned_cleanup import released, sleeping
+
+    observer = await asyncpg.connect(settings.router_pg_dsn)
+    started, closing, release_close = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    original_close = asyncpg.Connection.close
+    backend, closes = {}, []
+    monkeypatch.setattr(directory, "RESTORE_READ_MAX_S", 0.5)
+
+    async def stalled(conn, action, detail):
+        backend["pid"] = conn.get_server_pid()
+        started.set()
+        await conn.execute("SELECT pg_sleep(10)")
+
+    async def close(conn, **kwargs):
+        ours = conn.get_server_pid() == backend.get("pid")
+        if ours:
+            closes.append(conn.get_server_pid())
+        await original_close(conn, **kwargs)
+        if ours and ending == "second_cancel":
+            closing.set()
+            await release_close.wait()
+
+    monkeypatch.setattr(directory, "_audit", stalled)
+    monkeypatch.setattr(asyncpg.Connection, "close", close)
+    began = time.monotonic()
+    task = asyncio.create_task(directory.restore_read("first", "dep-first", None, None))
+    try:
+        await asyncio.wait_for(started.wait(), 0.3)
+        await sleeping(observer, backend["pid"])
+        task.cancel("first restore page cancellation")
+        if ending == "second_cancel":
+            await asyncio.wait_for(closing.wait(), 0.3)
+            task.cancel("second restore page cancellation")
+        with pytest.raises(asyncio.CancelledError, match="first restore page cancellation"):
+            await asyncio.wait_for(task, 0.5)
+        assert time.monotonic() - began < 0.6 and closes == [backend["pid"]]
+        await released(observer, backend["pid"])
+    finally:
+        release_close.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await observer.close(timeout=1)
+
+
+async def test_restore_directory_exit_stall_keeps_original_page_deadline(stores, monkeypatch):
+    import asyncio
+    import contextlib
+    import time
+
+    import asyncpg
+
+    from server.settings import settings
+    from tests.integration.test_pg_owned_cleanup import released
+
+    connection = directory._connection
+    observer = await asyncpg.connect(settings.router_pg_dsn)
+    backend = {}
+    monkeypatch.setattr(directory, "RESTORE_READ_MAX_S", 0.12)
+
+    @contextlib.asynccontextmanager
+    async def owned():
+        async with connection() as conn:
+            backend["pid"] = conn.get_server_pid()
+            yield conn
+        await asyncio.Future()
+
+    monkeypatch.setattr(directory, "_connection", owned)
+    try:
+        began = time.monotonic()
+        with pytest.raises(directory.DirectoryUnavailable, match="deadline") as caught:
+            await directory.restore_read("first", "dep-first", None, None)
+        assert isinstance(caught.value.__cause__, TimeoutError)
+        assert time.monotonic() - began < 0.25
+        await released(observer, backend["pid"])
+    finally:
+        await observer.close(timeout=1)

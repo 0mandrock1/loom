@@ -450,6 +450,7 @@ def function(path: str, name: str) -> ast.AST:
             "server/router/directory.py",
             "_control_transaction",
             [
+                "_ControlOwner(seconds)",
                 "owner.start(lambda: owner.work(change))",
                 "owner.wait(task, owner.work_end)",
                 "owner.finish(task)",
@@ -470,7 +471,7 @@ def function(path: str, name: str) -> ast.AST:
             "server/router/directory.py",
             "_attach_change",
             [
-                "_control_transaction(locked)",
+                "_control_transaction(locked, seconds=CONTROL_MAX_S)",
                 "control_refusal(attaching, expected, claim=claim)",
                 "change(conn, attaching)",
             ],
@@ -650,3 +651,17 @@ async def unclassified(conn):
             ("unclassified", "UPDATE", "loom_router.cells"): 1,
         }
     )
+
+
+def test_restore_page_reuses_bounded_directory_owner_without_global_lock():
+    assert (
+        "_control_transaction(lambda conn: _restore_page(conn, cell_name, deployment_id, after, expected_sha256), seconds=RESTORE_READ_MAX_S)"
+        in calls(function("server/router/directory.py", "restore_read"))
+    )
+    page = calls(function("server/router/directory.py", "_restore_page"))
+    assert not any(
+        "advisory" in call or "transaction(" in call or "__aenter__" in call for call in page
+    )
+    source = (ROOT / "server/router/directory.py").read_text()
+    assert "async def _restore_wait(" not in source
+    assert "async def _restore_cleanup(" not in source
