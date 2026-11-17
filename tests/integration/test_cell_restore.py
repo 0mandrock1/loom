@@ -290,3 +290,41 @@ async def test_trigger_ddl_failure_leaves_public_close_to_restore_owner(cell_db)
         )
     finally:
         await observer.close(timeout=1)
+
+
+async def test_failed_trigger_repair_keeps_original_error_until_owner_close(cell_db, monkeypatch):
+    import asyncpg
+
+    from server.cli import cell_restore, cell_restore_triggers
+
+    conn = cell_db
+    pid = conn.get_server_pid()
+    budget = cell_restore.Budget(1)
+    budget.conn = conn
+    observer = await asyncpg.connect(settings.pg_dsn)
+    original = None
+
+    async def failing_tables(conn, descriptor):
+        nonlocal original
+        assert await observer.fetchval(
+            "SELECT count(*) >= 2 FROM pg_locks WHERE pid=$1 AND locktype='advisory'", pid
+        )
+        try:
+            await cell_triggers._run_ddl(conn, "tenancy", ["SELECT 1 / 0"], attempts=1)
+        except asyncpg.DivisionByZeroError as error:
+            original = error
+            raise
+
+    monkeypatch.setattr(cell_restore_triggers, "_tables", failing_tables)
+    try:
+        with pytest.raises(asyncpg.DivisionByZeroError) as caught:
+            await budget.call(cell_restore_triggers.repair(conn, desc()))
+        assert caught.value is original
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1)", pid
+        )
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", pid
+        )
+    finally:
+        await observer.close(timeout=1)

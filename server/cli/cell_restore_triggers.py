@@ -18,20 +18,15 @@ async def repair(conn: Any, descriptor: dict[str, Any]) -> None:
         if await conn.fetchval("SELECT pg_try_advisory_lock($1)", pg_migrate._LOCK_KEY):
             break
         await asyncio.sleep(0.1)
-    try:
-        rows = await conn.fetch("SELECT filename, checksum FROM loom.pg_migrations")
-        if pg_migrate.plan(
-            {r["filename"]: r["checksum"] for r in rows}, pg_migrate.migration_files()
-        ):
-            raise ValueError("Postgres schema is still pending before trigger repair")
-        await _tables(conn, descriptor)
-        defects = await cell_triggers.missing(conn) + await cell_triggers.first_missing(conn)
-        if defects:
-            raise ValueError("; ".join(d.text for d in defects))
-        await local.transaction(conn, lambda: _nothing())
-    finally:
-        if not conn.is_closed():
-            await conn.execute("SELECT pg_advisory_unlock($1)", pg_migrate._LOCK_KEY)
+    rows = await conn.fetch("SELECT filename, checksum FROM loom.pg_migrations")
+    if pg_migrate.plan({r["filename"]: r["checksum"] for r in rows}, pg_migrate.migration_files()):
+        raise ValueError("Postgres schema is still pending before trigger repair")
+    await _tables(conn, descriptor)
+    defects = await cell_triggers.missing(conn) + await cell_triggers.first_missing(conn)
+    if defects:
+        raise ValueError("; ".join(d.text for d in defects))
+    await local.transaction(conn, lambda: _nothing())
+    await conn.execute("SELECT pg_advisory_unlock($1)", pg_migrate._LOCK_KEY)
 
 
 async def _nothing() -> None:
