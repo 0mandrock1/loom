@@ -140,4 +140,8 @@ routing table indefinitely. The command cannot certify all-router agreement.
 
 Configuration actions, finish, revert and probe refresh are mutually exclusive.
 Probe readiness retries use `--wait`; invalid proofs refuse immediately. Nonce
-cleanup compares this run's values, leaving another run's nonce untouched.
+cleanup uses a value-qualified Postgres delete and a Keeper compare-and-delete.
+Bucket cleanup reads and compares this run's value before an unconditional delete.
+If the ATTACH backend is lost, a successor can replace the object between that read
+and delete and lose its nonce. Rerun the affected proof; bucket cleanup does not
+guarantee preservation of a successor's nonce.

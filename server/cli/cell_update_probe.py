@@ -1,4 +1,4 @@
-"""Fresh store proof using the existing bounded probe retries and exact nonce cleanup."""
+"""Fresh store proof with bounded retries and prepare's store-specific nonce cleanup."""
 
 from __future__ import annotations
 

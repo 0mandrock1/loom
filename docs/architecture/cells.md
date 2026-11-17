@@ -1379,20 +1379,26 @@ The source census for acceptance and operator directory writes is checked by
 `tests/unit/test_cell_control_census.py`, including dynamic cleanup tables, guarded
 entry points and the named exceptions:
 
-| Writer                                                                                  | Fence                                                                                              |
-| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `cell_prepare._write_rows`                                                              | Fresh claim, observed local rows, exact lock backend                                               |
-| `cell_attach_pg._mode_transaction`                                                      | Attach's claim, supervised mode try, recording/first/fingerprint comparison, exact lock backend    |
-| `cell_control.backout`                                                                  | Fresh claim, fenced close and zero-placement read, observed local rows, exact lock backend         |
-| `directory.attach_begin`, `attach_place`, `attach_enforced`, `attach_serving`, `remove` | Claimed generation, full registration and exact pair, including retries/no-ops                     |
-| `directory.set_limit`, `rotate_credential`                                              | Read and compare the current generation/registration/pair; do not claim or rotate                  |
-| `directory.register`                                                                    | Bootstrap default or immutable rerun lookup; never replaces existing acceptance or generation      |
-| `directory.place`                                                                       | Immutable placement only; keeps its org/cell locks and quota checks; never writes local acceptance |
+| Writer                                                                                  | Fence                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cell_prepare._write_rows`                                                              | Fresh claim, observed local rows, exact lock backend                                                                                                                                                           |
+| `cell_attach_pg._mode_transaction`                                                      | Attach's claim, supervised mode try, recording/first/fingerprint comparison, exact lock backend                                                                                                                |
+| `cell_control.backout`                                                                  | Fresh claim, fenced close and zero-placement read, observed local rows, exact lock backend                                                                                                                     |
+| `cell_update_pg.write.change`                                                           | Fresh directory claim; owner's bounded transaction on the exact ATTACH backend, paired registration and exact observed local identity/pair before tenancy repair and acceptance write                          |
+| `directory.attach_begin`, `attach_place`, `attach_enforced`, `attach_serving`, `remove` | Claimed generation, full registration and exact pair, including retries/no-ops                                                                                                                                 |
+| `directory.update_addresses`                                                            | Claimed generation, full registration and exact pair under directory/row locks; commit-time address check, audit and synchronous WAL acknowledgement in one bounded transaction                                |
+| `directory.update_configuration`, `_configuration_commit`                               | Claimed generation, full registration and exact pair under ordered org/directory/row locks; root-secret and reservation checks, placements, audit and acceptance commit in one bounded synchronous transaction |
+| `directory.configuration_placements`                                                    | Claimed generation, full registration and exact pair under directory/row locks; root-secret and actual winner checks with audit and synchronous WAL acknowledgement in one bounded transaction                 |
+| `directory.set_limit`, `rotate_credential`                                              | Read and compare the current generation/registration/pair; do not claim or rotate                                                                                                                              |
+| `directory.register`                                                                    | Bootstrap default or immutable rerun lookup; never replaces existing acceptance or generation                                                                                                                  |
+| `directory.place`                                                                       | Immutable placement only; keeps its org/cell locks and quota checks; never writes local acceptance                                                                                                             |
 
-Read-only routes are exempt. Router migrations and an offline directory restore are
-maintenance operations. Future restore/update acceptance writers must use the same
-claim and lock-session helpers; a new directory mutation must use the common comparison
-before its no-op branch as well. Direct privileged SQL is not an online control writer.
+Ordinary read-only routes are exempt; `configuration_placements` is an audited,
+WAL-fenced proof before local tenancy repair. Router migrations and an offline
+directory restore are maintenance operations. Update acceptance writers use the
+same claim and lock-session helpers; any additional acceptance writer must do so
+as well. A directory mutation uses the common comparison before its no-op branch.
+Direct privileged SQL is not an online control writer.
 The [control upgrade and recovery procedure](../operations/cell-control.md) defines the
 required fleet turnover and offline restore of generations. N-1 data-plane builds can
 read and insert on the additive schema; old control clients and router handlers cannot
