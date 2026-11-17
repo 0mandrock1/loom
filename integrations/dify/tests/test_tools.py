@@ -166,13 +166,13 @@ def test_native_tools_against_live_loom():
         output(RecallTool, {"user_id": "bob", "query": "aisle seats"}, credentials)["results"] == []
     )
 
-    from client import client
+    from client import request
 
-    with client(credentials) as agent:
-        agent.call(
-            "knowledge.upsert",
-            {"source_uri": "guide", "content": "Aisle seats are in the travel guide."},
-        )
+    request(
+        credentials,
+        "knowledge.upsert",
+        {"source_uri": "guide", "content": "Aisle seats are in the travel guide."},
+    )
     for _ in range(30):
         documents = output(
             SearchKnowledgeTool, {"user_id": "bob", "query": "aisle seats"}, credentials

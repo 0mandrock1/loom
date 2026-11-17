@@ -26,7 +26,8 @@ user memories. Give mutually untrusted apps separate namespaces and token grants
 
 Searches stay in the configured namespace. A request failure fails the tool; the plugin
 does not replace it with an empty result. Requests use 15-second HTTP timeouts and
-one attempt; an invocation has a 30-second client deadline. Credential validation
+one attempt, with a 30-second SDK call wait. Native pool admission and client setup
+and close have separate waits; this is not a whole-invocation deadline. Credential validation
 reads at most one memory row and discards it. The plugin makes no model calls.
 
 ## Build and check
@@ -38,8 +39,9 @@ uv pip install --python .venv/bin/python -r requirements.txt pytest
 dify plugin package . -o loom-0.1.0.difypkg
 ```
 
-Tests use the actual SDK against a fake HTTP transport and a local Loom server when
-configured. No local Dify application or Dify Cloud runtime has been tested.
+Tests use the actual SDK against a fake HTTP transport, concurrent native tool calls
+against a loopback HTTP server, and a local Loom server when configured.
+No local Dify application or Dify Cloud runtime has been tested.
 
 Source: [ClickHouse/loom](https://github.com/ClickHouse/loom/tree/main/integrations/dify).
 See [privacy](PRIVACY.md).

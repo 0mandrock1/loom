@@ -1,12 +1,15 @@
-"""One bounded SDK client per tool invocation; credentials stay in Dify's provider settings."""
+"""Scoped SDK requests run in native threads; credentials stay in provider settings."""
 
 from typing import Any
 from urllib.parse import urlsplit
 
+from gevent import get_hub
 from loom import SyncAgent
 
 
-def client(credentials: dict[str, Any]) -> SyncAgent:
+def request(
+    credentials: dict[str, Any], op: str, body: dict[str, Any], **identity: Any
+) -> dict[str, Any]:
     fields = {}
     for name in ("base_url", "api_key", "org", "namespace", "agent"):
         value = credentials.get(name)
@@ -25,14 +28,19 @@ def client(credentials: dict[str, Any]) -> SyncAgent:
         raise ValueError(
             "Loom URL must be an HTTP(S) endpoint without embedded credentials or query"
         )
-    return SyncAgent(
-        **fields,
-        timeout_s=15,
-        call_timeout_s=30,
-        retry={"max_attempts": 1},
-        pacing=False,
-        consumer="dify-plugin",
-    )
+
+    def call() -> dict[str, Any]:
+        with SyncAgent(
+            **fields,
+            timeout_s=15,
+            call_timeout_s=30,
+            retry={"max_attempts": 1},
+            pacing=False,
+            consumer="dify-plugin",
+        ) as agent:
+            return agent.call(op, body, **identity)
+
+    return get_hub().threadpool.apply(call)
 
 
 def user(parameters: dict[str, Any]) -> str:
