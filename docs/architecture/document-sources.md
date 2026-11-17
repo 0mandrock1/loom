@@ -736,6 +736,16 @@ widen permission. Both chunk-frequency views exclude mirrors, and a lexical-stat
 rebuild refuses their names before reading or writing statistics. Mirrored lexical
 scores use fixed corpus constants.
 
+The checked list projection reads title, description, tags, blob metadata and the
+stored preview only at an admitted live document version and revision. Under Postgres,
+the current head supplies these fields and computes only the first 220 content bytes
+in the database, including for encoded text; no full body crosses into the list reader.
+Chunk counts belong to that same storage copy and revision. They count distinct
+embedding-model and section-index pairs, including sections awaiting embeddings. A
+Postgres count also requires the head's recorded chunk version; a current revision
+without recorded chunks counts zero. Permission and serving-state proofs must remain
+current through the list's final read before any count or lookahead is returned.
+
 A token reads as one person, for both the `owner` entry and the emails, or as nobody:
 
 - a person's own session token (a primary token whose own `sid` claim names a sign-in

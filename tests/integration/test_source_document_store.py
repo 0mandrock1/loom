@@ -134,3 +134,123 @@ async def test_document_chunk_reads_include_stubs_without_widening_search() -> N
             assert [row async for row in stream] == []
     finally:
         await ch.disconnect()
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["é" * 110 + "large body" * 10000, "a\x00b" + "body" * 10000],
+    ids=["unicode-preview", "encoded-text"],
+)
+async def test_list_projection_and_count_stay_in_one_live_copy(content: str) -> None:
+    os.environ.get("LOOM_CH_HOST") or pytest.skip("LOOM_CH_HOST not set")
+    from server.core import pg
+    from server.core.ch import get_client, set_query_tag
+    from server.core.naming import new_mirror_name
+    from server.knowledge.domain.serving import Serving
+    from server.knowledge.store import documents, pg_documents, source_documents
+
+    org, mirror, uri = unique_org("checked-list"), new_mirror_name(), "gdrive:file#" + str(uuid4())
+    ch = get_client()
+    await ch.connect()
+    set_query_tag("test.checked_list_projection")
+    row = documents.build_document_row(
+        org=org,
+        namespace=mirror,
+        source_uri=uri,
+        doc_id=str(uuid4()),
+        title="List title",
+        description="List description",
+        content=content,
+        tags=["kind:notes"],
+        version=10,
+        revision=0,
+        ingested_at=datetime.now(UTC).replace(microsecond=0, tzinfo=None),
+        agent="fixture",
+        actor="process:fixture",
+        source_class="external",
+        user_id="fixture-user",
+        session_id="fixture-session",
+        blob_path="a" * 64,
+        blob_size=123,
+        blob_content_type="application/pdf",
+        original_filename="notes.pdf",
+    )
+    chunks = [
+        {
+            "org": org,
+            "namespace": mirror,
+            "source_uri": uri,
+            "embedding_model": "fixture",
+            "chunk_idx": i,
+            "doc_version": 10,
+            "chunk_metadata": '{"revision":0}',
+            "content": "section",
+            "embedding_dim": 0,
+            "embedding": [0.0] * 3072,
+        }
+        for i in (0, 1, 1)
+    ]
+    try:
+        await ch.insert("loom.documents", [row])
+        await ch.insert(
+            "loom.chunks",
+            [*chunks, {**chunks[0], "chunk_idx": 99, "chunk_metadata": '{"revision":1}'}],
+        )
+        serving = None
+        if pg.enabled():
+            assert await source_documents.list_projection(org, mirror, uri, 10, 0) is None
+            await pg_documents.commit([row], over={}, targets={uri: 1}, chunked={uri})
+            # A metadata-only commit keeps the recorded chunks at version 10.
+            row = {**row, "version": 11, "title": "Current head title"}
+            await pg_documents.commit([row], over={uri: 10}, targets={uri: 1})
+            await ch.insert("loom.chunks", [{**chunks[0], "chunk_idx": 98, "doc_version": 11}])
+            serving = Serving(False, 0, 0, 10)
+        got = await source_documents.list_projection(org, mirror, uri, row["version"], 0)
+        assert got == {
+            key: row[key]
+            for key in (
+                "org",
+                "namespace",
+                "source_uri",
+                "version",
+                "revision",
+                "title",
+                "description",
+                "tags",
+                "ingested_at",
+                "superseded_at",
+                "blob_path",
+                "blob_size",
+                "blob_content_type",
+                "original_filename",
+            )
+        } | {"content_preview": content.encode("utf-8")[:220].decode("utf-8", "replace")}
+        assert await source_documents.list_chunk_count(org, mirror, uri, 0, serving) == 2
+        assert (
+            await source_documents.list_projection(org + "-other", mirror, uri, row["version"], 0)
+            is None
+        )
+        assert (
+            await source_documents.list_projection(org, new_mirror_name(), uri, row["version"], 0)
+            is None
+        )
+        assert (
+            await source_documents.list_projection(org, mirror, uri + "other", row["version"], 0)
+            is None
+        )
+        assert (
+            await source_documents.list_projection(org, mirror, uri, row["version"] + 1, 0) is None
+        )
+        assert await source_documents.list_projection(org, mirror, uri, row["version"], 1) is None
+        deleted = {**row, "version": row["version"] + 1, "superseded_at": row["ingested_at"]}
+        if pg.enabled():
+            await pg_documents.commit([deleted], over={uri: row["version"]}, targets={uri: 1})
+        else:
+            await ch.insert("loom.documents", [deleted])
+        assert await source_documents.list_projection(org, mirror, uri, row["version"], 0) is None
+        assert (
+            await source_documents.list_projection(org, mirror, uri, deleted["version"], 0) is None
+        )
+    finally:
+        await ch.disconnect()
+        await pg.close_pool()

@@ -17,6 +17,7 @@ from server.core.diagnostics import private_work
 from server.core.naming import is_mirror_name
 from server.knowledge.domain.access_list import UNREAD, AccessList, allows, from_json
 from server.knowledge.domain.document_access import fresh, source_id
+from server.knowledge.domain.serving import Serving
 from server.knowledge.store import mirrors as mirrors_repo
 from server.knowledge.store import source_access as store
 from server.operations.base import Role
@@ -36,6 +37,7 @@ class Admitted:
     canonical_owner: str = ""
     groups: tuple[tuple[str, datetime], ...] = ()
     reader_emails: frozenset[str] = frozenset()
+    serving: Serving | None = None
 
 
 @dataclass
@@ -169,6 +171,7 @@ class ReadPlan:
                 owner,
                 tuple(groups.get(key, {}).items()),
                 reader.emails if reader else frozenset(),
+                heads[pair].serving if pg.enabled() else None,
             )
             if self.current(item):
                 out.append(item)

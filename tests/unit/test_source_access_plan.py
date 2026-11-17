@@ -207,6 +207,15 @@ async def test_pg_metadata_only_acl_uses_recorded_chunks_and_current_permission(
     assert await plan.check([candidate()], chunks=True) == []
 
 
+async def test_pg_document_admission_retains_serving_state_for_checked_counts(world, monkeypatch):
+    monkeypatch.setattr(app.pg, "enabled", lambda: True)
+    serving = Serving(False, 0, 0, 9)
+    world["heads"].return_value = {(MIRROR, URI): app.store.ReadHead(dict(world["doc"]), serving)}
+    plan = await app.prepare("acme", ["docs"])
+    [admitted] = await plan.check([candidate()])
+    assert admitted.serving == serving
+
+
 async def test_group_membership_is_current_and_bound_to_owning_source(world):
     world["doc"]["access_json"] = to_json(AccessList(groups=("team@example.com",)))
     row = {
