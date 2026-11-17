@@ -57,6 +57,22 @@ def _same(row: DocumentRow, plan: ReadPlan, item: Admitted) -> bool:
     )
 
 
+async def refresh(plan: ReadPlan, document: CheckedDocument) -> CheckedDocument | None:
+    """Renew an open copy's permission proof without fetching its text again."""
+    if plan.failed or plan.unread:
+        return None
+    try:
+        admitted = await plan.check([document.admitted.candidate])
+        if plan.failed or plan.unread or len(admitted) != 1:
+            return None
+        item = admitted[0]
+        if _same(document.row, plan, item) and plan.current(item):
+            return CheckedDocument(item, document.row)
+    except Exception:  # noqa: BLE001 — conditional revalidation cannot authorize an open copy
+        plan.failed = True
+    return None
+
+
 async def get(plan: ReadPlan, namespace: str, source_uri: str) -> CheckedDocument | None:
     """Admit metadata before text, then retain only an unchanged, freshly admitted copy."""
     pairs = sorted(
@@ -89,11 +105,11 @@ async def get(plan: ReadPlan, namespace: str, source_uri: str) -> CheckedDocumen
                     continue
                 if not _same(row, plan, item):
                     raise ValueError("unexpected document content identity")
-                refreshed = await plan.check([item.candidate])
+                refreshed = await refresh(plan, CheckedDocument(item, row))
                 if plan.failed or plan.unread:
                     return None
-                if refreshed and _same(row, plan, refreshed[0]) and plan.current(refreshed[0]):
-                    return CheckedDocument(refreshed[0], row)
+                if refreshed is not None:
+                    return refreshed
         except Exception:  # noqa: BLE001 — conditional content or permission failure invalidates all copies
             plan.failed = True
     return None
@@ -138,10 +154,7 @@ async def chunks(plan: ReadPlan, document: CheckedDocument, *, model: str) -> li
                 plan, {"semantic": [item.admitted for item in retained.values()]}
             )
             proof = {_chunk_key(item.candidate): item for item in refreshed.get("semantic", [])}
-            documents = await plan.check([document.admitted.candidate])
-            if plan.failed or plan.unread or not documents or not _same(row, plan, documents[0]):
-                return None
-            if not plan.current(documents[0]):
+            if await refresh(plan, document) is None:
                 return None
             return [
                 Hydrated(proof[_chunk_key(item.admitted.candidate)], item.row)

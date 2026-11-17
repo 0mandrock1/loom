@@ -26,7 +26,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
     from server.embedding import get_embedder
     from server.knowledge.domain.access_list import AccessList, to_json
     from server.knowledge.domain.sources import KnowledgeSource
-    from server.knowledge.store import mirrors, pg_documents, sources
+    from server.knowledge.store import blobs, mirrors, pg_documents, sources
     from server.settings import settings
 
     embedder = get_embedder()
@@ -137,6 +137,24 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert response.status_code == 200, response.text
             return response.json()
 
+        async def download(token):
+            response = await client.get(
+                "/v1/knowledge.download",
+                params={"org": org, "namespace": namespace, "source_uri": public_uri},
+                headers={"Authorization": "Bearer " + token},
+            )
+            headers = {
+                key: response.headers.get(key)
+                for key in (
+                    "content-type",
+                    "content-length",
+                    "content-disposition",
+                    "cache-control",
+                    "x-loom-download-source",
+                )
+            }
+            return response.status_code, response.content, headers
+
         try:
             anonymous = await client.post(
                 "/v1/knowledge.search",
@@ -168,6 +186,8 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert not missing_get["found"]
             missing_outline = await outline(outsider)
             assert not missing_outline["found"]
+            missing_download = await download(outsider)
+            assert missing_download[0] == 404
             row = await write_document(
                 mirror,
                 uri,
@@ -204,6 +224,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert await search(owner_bot) == baseline
             assert await get(outsider) == await get(owner_bot) == missing_get
             assert await outline(outsider) == await outline(owner_bot) == missing_outline
+            assert await download(outsider) == await download(owner_bot) == missing_download
             allowed = await search(owner)
             private = [r for r in allowed["results"] if r["source_uri"] == public_uri]
             assert len(private) == 1 and private[0]["content"] == private_content
@@ -219,6 +240,28 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert sections["chunk_count"] == 2 and sections["structured"]
             assert sections["section_content"] == "Unembedded section."
             assert sections["section_chunk_idxs"] == [1]
+            text_download = await download(owner)
+            assert text_download[0] == 200 and text_download[1] == private_content.encode()
+            assert text_download[2]["x-loom-download-source"] == "text"
+            original = b"Private original file bytes."
+            sha = await blobs.put(org, mirror, original)
+            row = {
+                **row,
+                "version": 11,
+                "blob_path": sha,
+                "blob_size": len(original),
+                "blob_content_type": "text/plain",
+                "original_filename": "checked.txt",
+            }
+            if pg.enabled():
+                await pg_documents.commit([row], over={uri: 10}, targets={uri: 1})
+            else:
+                await ch.insert("loom.documents", [row])
+            original_download = await download(owner)
+            assert original_download[0] == 200 and original_download[1] == original
+            assert original_download[2]["x-loom-download-source"] == "blob"
+            assert source not in original_download[2]["content-disposition"]
+            assert await download(outsider) == await download(owner_bot) == missing_download
             denied = await client.post(
                 "/v1/knowledge.search",
                 json={
@@ -229,26 +272,29 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
                 headers={"Authorization": "Bearer " + foreign},
             )
             assert denied.status_code == 403
-            narrowed = {**row, "version": 11, "access_json": to_json(AccessList())}
+            narrowed = {**row, "version": 12, "access_json": to_json(AccessList())}
             if pg.enabled():
-                await pg_documents.commit([narrowed], over={uri: 10}, targets={uri: 1})
+                await pg_documents.commit([narrowed], over={uri: 11}, targets={uri: 1})
             else:
                 await ch.insert("loom.documents", [narrowed])
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
             assert await outline(owner) == missing_outline
-            widened = {**row, "version": 12, "access_json": to_json(AccessList(anyone=True))}
+            assert await download(owner) == missing_download
+            widened = {**row, "version": 13, "access_json": to_json(AccessList(anyone=True))}
             if pg.enabled():
-                await pg_documents.commit([widened], over={uri: 11}, targets={uri: 1})
+                await pg_documents.commit([widened], over={uri: 12}, targets={uri: 1})
             else:
                 await ch.insert("loom.documents", [widened])
             assert public_uri in [r["source_uri"] for r in (await search(owner_bot))["results"]]
             assert (await get(owner_bot))["found"]
+            assert (await download(owner_bot))[:2] == (200, original)
             assert (await outline(owner_bot))["section_content"] == "Unembedded section."
             await sources.insert_source(replace(registration, active=False))
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
             assert await outline(owner) == missing_outline
+            assert await download(owner) == missing_download
             await sources.insert_source(registration)
             assert (await get(owner))["found"]
             stale = now - timedelta(seconds=settings.knowledge_source_acl_stale_seconds + 1)
@@ -256,6 +302,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
             assert await outline(owner) == missing_outline
+            assert await download(owner) == missing_download
         finally:
             await ch.disconnect()
             await pg.close_pool()
