@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
@@ -34,12 +35,63 @@ async def _adopt_overrides(*, failing: bool = False) -> bool:
 
 async def _keep_overrides(
     loaded: bool, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
-) -> None:
+) -> SystemExit | KeyboardInterrupt | None:
     """A long command (a rechunk, a re-embed) follows an override set while it runs."""
     set_query_tag("cli.settings_overrides")
-    while True:
-        await sleep(max(1.0, float(settings.runtime_overrides_refresh_seconds)))
-        loaded = await _adopt_overrides(failing=not loaded)
+    try:
+        while True:
+            await sleep(max(1.0, float(settings.runtime_overrides_refresh_seconds)))
+            loaded = await _adopt_overrides(failing=not loaded)
+    except (SystemExit, KeyboardInterrupt) as error:
+        # A task's fatal exception must reach its owner before the loop stops.
+        return error
+
+
+async def _finish_participant() -> None:
+    gate = retirement.get_gate()
+    gate.close()
+    from server.memory.app import embedder_calibration
+
+    first: BaseException | None = None
+    stopped = False
+    try:
+        embedder_calibration.stop_refresh_loop()
+        stopped = True
+    except BaseException as error:  # noqa: BLE001 — finish safe cleanup, then raise the first failure
+        first = error
+    producers = tuple(gate.producers)
+    for producer in producers:
+        producer.cancel()
+    try:
+        if producers:
+            _, pending = await asyncio.wait(producers, timeout=COMMAND_DRAIN_S)
+            if pending:
+                raise RuntimeError("Native command producers did not stop")
+    except BaseException as error:  # noqa: BLE001 — finish safe cleanup, then raise the first failure
+        if first is None:
+            first = error
+        stopped = False
+    for producer in producers:
+        if producer.done() and not producer.cancelled():
+            try:
+                producer.result()
+            except BaseException as error:  # noqa: BLE001 — finish safe cleanup, then raise the first failure
+                if first is None:
+                    first = error
+    if stopped:
+        gate.stopped()
+        try:
+            if not await drain_task_sets(timeout_s=COMMAND_DRAIN_S):
+                raise RuntimeError("Native command deferred writes did not drain")
+            if not await flush_registered_buffers():
+                raise RuntimeError("Native command buffers did not flush")
+            if await retire_process() is not True:
+                raise RuntimeError("Native command retirement was not certified")
+        except BaseException as error:  # noqa: BLE001 — finish safe cleanup, then raise the first failure
+            if first is None:
+                first = error
+    if first is not None:
+        raise first
 
 
 @asynccontextmanager
@@ -50,27 +102,19 @@ async def participant_command() -> AsyncIterator[None]:
     try:
         async with retirement.get_gate().admit():
             yield
-    finally:
-        gate = retirement.get_gate()
-        gate.close()
-        from server.memory.app import embedder_calibration
-
-        embedder_calibration.stop_refresh_loop()
-        producers = tuple(gate.producers)
-        for producer in producers:
-            producer.cancel()
-        if producers:
-            await asyncio.wait(producers, timeout=COMMAND_DRAIN_S)
-        gate.stopped()
-        if await drain_task_sets(timeout_s=COMMAND_DRAIN_S) and await flush_registered_buffers():
-            await retire_process()
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            await _finish_participant()
+        raise
+    else:
+        await _finish_participant()
 
 
 @asynccontextmanager
 async def model_command() -> AsyncIterator[None]:
     """The permanent lifecycle also holds the reversible model-work admission."""
     async with participant_command():
-        keeper: asyncio.Task[None] | None = None
+        keeper: asyncio.Task[SystemExit | KeyboardInterrupt | None] | None = None
         try:
             await load_active_configuration()
             loaded = await _adopt_overrides()
@@ -80,7 +124,21 @@ async def model_command() -> AsyncIterator[None]:
             async with get_model_work_gate().admit():
                 yield
         finally:
+            first = sys.exception()
             if keeper is not None:
-                keeper.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await keeper
+                owner = asyncio.current_task()
+                assert owner is not None
+                cancelling = owner.cancelling()
+                requested = keeper.cancel()
+                try:
+                    try:
+                        fatal = await keeper
+                    except asyncio.CancelledError:
+                        if not requested or owner.cancelling() != cancelling:
+                            raise
+                    else:
+                        if fatal is not None:
+                            raise fatal
+                except BaseException:
+                    if first is None:
+                        raise

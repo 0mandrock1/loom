@@ -16,7 +16,7 @@ def setup(monkeypatch):
     gate = ModelWorkGate()
     monkeypatch.setattr(command, "get_model_work_gate", lambda: gate)
     monkeypatch.setattr(command, "register_process", AsyncMock())
-    monkeypatch.setattr(command, "retire_process", AsyncMock())
+    monkeypatch.setattr(command, "retire_process", AsyncMock(return_value=True))
     monkeypatch.setattr(command, "load_active_configuration", AsyncMock())
     monkeypatch.setattr(command, "drain_task_sets", AsyncMock(return_value=True))
     monkeypatch.setattr(command, "flush_registered_buffers", AsyncMock(return_value=True))
@@ -46,8 +46,9 @@ async def test_pending_transition_never_runs_command(setup):
 @pytest.mark.asyncio
 async def test_undrained_descendants_keep_participant_registered(setup, monkeypatch):
     monkeypatch.setattr(command, "drain_task_sets", AsyncMock(return_value=False))
-    async with command.model_command():
-        pass
+    with pytest.raises(RuntimeError, match="deferred writes did not drain"):
+        async with command.model_command():
+            pass
     command.retire_process.assert_not_awaited()
     command.flush_registered_buffers.assert_not_awaited()
 

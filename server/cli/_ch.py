@@ -23,6 +23,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -299,7 +300,8 @@ async def connect_declared(
             await check_configured(ch)
         await check_acceptance(orgs=named, org_free=org_free)
     except BaseException:
-        await disconnect(ch)
+        with suppress(BaseException):
+            await disconnect(ch)
         raise
 
 
@@ -338,7 +340,8 @@ async def connect_verified(ch: CHClient) -> None:
     try:
         await check_configured(ch)
     except BaseException:
-        await disconnect(ch)
+        with suppress(BaseException):
+            await disconnect(ch)
         raise
     from server import boot
     from server.core.background import register_buffer_drainer
@@ -362,7 +365,11 @@ async def disconnect(ch: CHClient) -> None:
     pg.expect_deployment(None)
     try:
         await pg.close_pool()
-    finally:
+    except BaseException:
+        with suppress(BaseException):
+            await ch.disconnect()
+        raise
+    else:
         await ch.disconnect()
 
 
@@ -389,8 +396,13 @@ def run_connected[T](
         try:
             async with model_command():
                 await check_acceptance(orgs=named, org_free=org_free)
-                return await run(ch)
-        finally:
+                result = await run(ch)
+        except BaseException:
+            with suppress(BaseException):
+                await disconnect(ch)
+            raise
+        else:
             await disconnect(ch)
+            return result
 
     return asyncio.run(_go())
