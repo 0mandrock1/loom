@@ -320,7 +320,26 @@ def language_line(current: str, *, available: set[str] | None = None) -> str:
         else f'<a href="{posixpath.relpath(path, here) if here else "./" + path}">{name}</a>'
         for path, name in items
     ]
-    return "<!-- languages -->\n  " + " · ".join(links) + "\n  <!-- /languages -->"
+    docs = readme_documentation(current)
+    return "<!-- languages -->\n  " + " · ".join(links) + docs + "\n  <!-- /languages -->"
+
+
+def readme_documentation(current: str) -> str:
+    """Link a translated README to an existing documentation landing in its language."""
+    from scripts.docs_site import indexnow
+    from scripts.docs_site.messages import COPY
+
+    language = next((lg for lg in LANGUAGES if current == target_path(lg.code, "README.md")), None)
+    if language is None:
+        return ""
+    for source in ("docs/index.md", "docs/use-cases/index.md"):
+        target = target_path(language.code, source)
+        if lifecycle.regular(target) and source in sources():
+            text = (ROOT / target).read_text()
+            if lifecycle.owner(target, text) is not None:
+                url = indexnow.SITE + language.code + "/" + indexnow.page_path(source)
+                return f'\n  <br>\n  <a href="{url}">{COPY[language.code]["documentation"]}</a>'
+    return ""
 
 
 # ---- verification ---------------------------------------------------------------------

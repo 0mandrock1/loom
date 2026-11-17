@@ -469,6 +469,47 @@ def test_a_new_language_is_linked_from_every_readme_without_translating(
     assert "Xx" in text and "../xx/README.md" not in text
 
 
+def test_translated_readme_links_to_its_existing_site_landing(tmp_path, monkeypatch) -> None:
+    from scripts.docs_site import indexnow
+
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    monkeypatch.setattr(indexnow, "SITE", "https://example.com/docs/")
+    for source in ("README.md", "docs/index.md", "docs/use-cases/index.md"):
+        path = tmp_path / source
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Source\n")
+    monkeypatch.setattr(
+        t, "sources", lambda: ("README.md", "docs/index.md", "docs/use-cases/index.md")
+    )
+    spanish = next(lang for lang in t.LANGUAGES if lang.code == "es")
+    for source in ("README.md", "docs/use-cases/index.md"):
+        path = tmp_path / t.target_path("es", source)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(t.header(source, spanish, t.DEFAULT_MODEL, "a" * 40) + "# Página\n")
+    assert '<a href="https://example.com/docs/es/use-cases/">Documentación</a>' in t.language_line(
+        "i18n/es/README.md"
+    )
+    assert "https://example.com" not in t.language_line("README.md")
+    path = tmp_path / "i18n/es/docs/index.md"
+    path.write_text(t.header("docs/index.md", spanish, t.DEFAULT_MODEL, "a" * 40) + "# Inicio\n")
+    assert '<a href="https://example.com/docs/es/">Documentación</a>' in t.language_line(
+        "i18n/es/README.md"
+    )
+    path.unlink()
+    (tmp_path / "i18n/es/docs/use-cases/index.md").unlink()
+    assert "https://example.com" not in t.language_line("i18n/es/README.md")
+
+
+def test_generated_readme_uses_the_same_site_base_as_mkdocs() -> None:
+    import yaml
+
+    from scripts.docs_site import indexnow
+
+    config = yaml.compose((ROOT / "mkdocs.yml").read_text())
+    site_url = next(value.value for key, value in config.value if key.value == "site_url")
+    assert site_url == indexnow.SITE
+
+
 def _translations() -> list[tuple[str, t.Language]]:
     return [
         (s, lang)
