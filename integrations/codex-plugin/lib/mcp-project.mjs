@@ -12,7 +12,10 @@ const MAX_ANCESTORS = 3;
 const LOOKUP_MS = 1500;
 
 /** One bounded OS query. An unavailable identity supplies no implicit scope. */
-export function processIdentity(pid, { platform = process.platform, run = execFileSync, read = fs.readFileSync } = {}) {
+export function processIdentity(
+  pid,
+  { platform = process.platform, run = execFileSync, read = fs.readFileSync, env = process.env } = {},
+) {
   if (!Number.isSafeInteger(pid) || pid < 2) return null;
   try {
     if (platform === "linux") {
@@ -35,7 +38,7 @@ export function processIdentity(pid, { platform = process.platform, run = execFi
       timeout: 1000,
       windowsHide: true,
       maxBuffer: 16384,
-      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+      env: { ...env, LC_ALL: "C", TZ: "UTC" },
     };
     if (platform === "darwin") {
       const output = run("ps", ["-p", String(pid), "-o", "ppid=", "-o", "lstart=", "-o", "ucomm="], opts).trim();
@@ -44,8 +47,11 @@ export function processIdentity(pid, { platform = process.platform, run = execFi
     }
     if (platform === "win32") {
       if (pid > 4294967295) return null;
+      const root = env.SystemRoot;
+      if (typeof root !== "string" || !/^[A-Za-z]:[\\/]/.test(root)) return null;
+      const host = path.win32.join(root, "System32", "cscript.exe");
       const helper = fileURLToPath(new URL("../assets/mcp-project-win32.js", import.meta.url));
-      const output = run("cscript.exe", ["//nologo", "//E:JScript", "//B", helper, String(pid)], opts);
+      const output = run(host, ["//nologo", "//E:JScript", "//B", helper, String(pid)], opts);
       const match = /^((?:[A-Za-z0-9_.!~*'()-]|%[0-9A-F]{2})+)\t(0|[1-9][0-9]{0,9})\t([1-9][0-9]{0,19})\r?\n?$/.exec(
         output,
       );

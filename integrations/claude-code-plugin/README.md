@@ -124,8 +124,11 @@ To match that native client identity, Claude Code reads `/proc/<pid>/stat` and
 ps -p <pid> -o ppid= -o lstart= -o ucomm=
 ```
 
-On Windows it runs `cscript.exe //nologo //E:JScript //B` with the plugin's
-`assets/mcp-project-win32.js` file and the validated PID as separate arguments.
+On Windows it resolves `System32\cscript.exe` under the absolute, drive-qualified
+`SystemRoot` from the parent OS environment. It runs that host with
+`//nologo //E:JScript //B`, the plugin's `assets/mcp-project-win32.js` file and the
+validated PID as separate arguments. Missing or malformed `SystemRoot` supplies
+no scope; the executable is never searched for in the checkout.
 That static helper queries local WMI for `Name`, `ParentProcessId` and `CreationDate`.
 It requires exactly one result and returns the name, parent PID and an exact UTC
 FILETIME creation marker. A blocked script host or WMI query supplies no checkout

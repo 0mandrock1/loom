@@ -38,7 +38,7 @@ test("macOS and Windows process queries parse creation identities without shell 
     ],
     [
       "win32",
-      "cscript.exe",
+      "C:\\Windows\\System32\\cscript.exe",
       "claude.exe\t20\t134129772620000000\r\n",
       { pid: 30, parent: 20, born: "134129772620000000", name: "claude.exe" },
     ],
@@ -60,7 +60,7 @@ test("macOS and Windows process queries parse creation identities without shell 
       }
       return output;
     };
-    assert.deepEqual(processIdentity(30, { platform, run }), expected);
+    assert.deepEqual(processIdentity(30, { platform, run, env: { SystemRoot: "C:\\Windows" } }), expected);
     assert.equal(processIdentity(30, { platform, run: () => "invalid" }), null);
     assert.equal(
       processIdentity(30, {
@@ -120,12 +120,15 @@ test("the Windows helper projects identity metadata and preserves its UTC creati
   };
   vm.runInNewContext(source, context);
   assert.deepEqual(output, ["%E5%AE%A2%E6%88%B7%E7%AB%AF.exe\t20\t134129772621234560"]);
-  assert.deepEqual(processIdentity(30, { platform: "win32", run: () => output[0] + "\r\n" }), {
-    pid: 30,
-    parent: 20,
-    born: "134129772621234560",
-    name: "客户端.exe",
-  });
+  assert.deepEqual(
+    processIdentity(30, { platform: "win32", env: { SystemRoot: "C:\\Windows" }, run: () => output[0] + "\r\n" }),
+    {
+      pid: 30,
+      parent: 20,
+      born: "134129772621234560",
+      name: "客户端.exe",
+    },
+  );
   for (const rows of [[], [processRow, processRow]]) {
     candidates = rows;
     output.length = 0;
@@ -149,7 +152,10 @@ test("Windows identity rejects malformed or multiple records and out-of-range PI
     "%ZZ.exe\t20\t123",
     "node.exe\t20\t123\textra",
   ])
-    assert.equal(processIdentity(30, { platform: "win32", run: () => output }), null);
+    assert.equal(
+      processIdentity(30, { platform: "win32", env: { SystemRoot: "C:\\Windows" }, run: () => output }),
+      null,
+    );
   let ran = false;
   assert.equal(
     processIdentity(4294967296, {
@@ -161,6 +167,35 @@ test("Windows identity rejects malformed or multiple records and out-of-range PI
     null,
   );
   assert.equal(ran, false);
+});
+
+test("Windows identity runs only the absolute system host from the parent OS environment", () => {
+  for (const SystemRoot of [undefined, "", "Windows", "C:Windows", "\\\\server\\share\\Windows", "/Windows"]) {
+    let ran = false;
+    assert.equal(
+      processIdentity(30, {
+        platform: "win32",
+        env: { SystemRoot },
+        run: () => {
+          ran = true;
+          return "node.exe\t20\t123";
+        },
+      }),
+      null,
+    );
+    assert.equal(ran, false);
+  }
+  for (const SystemRoot of ["C:\\Windows", "D:\\OS Location"]) {
+    const identity = processIdentity(30, {
+      platform: "win32",
+      env: { SystemRoot },
+      run: (host) => {
+        assert.equal(host, path.win32.join(SystemRoot, "System32", "cscript.exe"));
+        return "node.exe\t20\t123";
+      },
+    });
+    assert.equal(identity?.pid, 30);
+  }
 });
 
 test("concurrent clients retain exact quote/dollar paths and separate sessions", async () => {
