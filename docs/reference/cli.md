@@ -38,7 +38,10 @@ Commands fall into two kinds:
   whatever `--token` says, `loom init` refuses before it signs anything up, and `loom call`
   exchanges the workload token itself.
 
-`loom mint-token` needs only `LOOM_JWT_SECRET`: it signs a token locally.
+`loom mint-token` signs locally with `LOOM_JWT_SECRET` after verifying its paired
+stores and enrolling as a participant. It refuses when those stores cannot be verified
+or enrollment fails, including offline and before the deployment is migrated. Run it
+against the deployment's migrated stores.
 
 **Session commands** (`login`, `logout`, `whoami`, `call`, `token`) are the Python SDK's
 own (`loom.cli`; `python -m loom …` with only the SDK installed), so `loom`
@@ -266,7 +269,7 @@ python scripts/codegen/docs_reference.py
 | `loom down` | Stop the local stack while preserving data; --delete-data performs a confirmed reset. | `--root`, `--file`, `--env-file`, `--delete-data`, `-y` |
 | `loom ch-setup` | Prepare a self-managed ClickHouse or a ClickHouse Cloud service for Loom: create the loom database and the read-only reader user, or print the SQL for an admin. | `--print-sql`, `--print-analyst-sql` |
 | `loom participant` | The Loom processes a provider change waits for. |  |
-| `loom participant retire` | Retire the provider participant of a process that died without shutting down (its id is `participant_id` in that process's /v1/health). | `--participant`, `--yes` |
+| `loom participant retire` | Verify exact physical death on this trusted host and retire its participant after all queries settle (the id is participant_id in /v1/health). | `--participant` |
 | `loom deployment` | The configuration every replica checks itself against. |  |
 | `loom deployment publish` | Publish this env's configuration as the deployment's, replacing its root secret or LOOM_EMBEDDING_MODEL/DIM on purpose. | `--yes`, `--check` |
 | `loom settings` | Every setting's value in force, and overrides of the live ones. |  |
@@ -304,7 +307,7 @@ python scripts/codegen/docs_reference.py
 | `loom import-recall` | Import an external vector-recall agent-memory SQLite export into Loom. | `--sqlite`, `--org`, `--namespace`, `--agent`, `--base-url`, `--token`, `--dry-run` |
 | `loom import-brain` | Import a markdown agent 'brain' directory into Loom: MEMORY.md (always-injected HOT layer) → profile.set sections; memory/contexts/*.md (read-on-demand WARM layer) → knowledge.add docs. | `--dir`, `--org`, `--namespace`, `--agent`, `--base-url`, `--token`, `--dry-run` |
 | `loom claim-release` | Release a self-signup claim: revoke its grants, clear the owner, deactivate it. | `--org`, `--namespace`, `-y` |
-| `loom mint-token` | Mint a JWT locally (requires LOOM_JWT_SECRET). | `--subject`, `--org`, `--namespaces`, `--roles`, `--platform-admin`, `--namespace-role`, `--ttl-days`, `--save`, `--read-scope`, `--read-user-id`, `--traffic-class`, `--consumer`, `--service-account`, `--user-token`, `--json` |
+| `loom mint-token` | Mint a JWT locally (requires LOOM_JWT_SECRET and verified stores). | `--subject`, `--org`, `--namespaces`, `--roles`, `--platform-admin`, `--namespace-role`, `--ttl-days`, `--save`, `--read-scope`, `--read-user-id`, `--traffic-class`, `--consumer`, `--service-account`, `--user-token`, `--json` |
 | `loom revoke-token` | Revoke one token by jti or subject (writes loom.revoked_tokens through the revocation module; needs the configured ClickHouse). | `--jti`, `--subject`, `--list`, `--issued-before`, `--scim`, `--reason`, `--expires-at`, `--json` |
 | `loom sso` | Carry password accounts over to single sign-on. |  |
 | `loom sso adopt` | Let SSO sign-ins reach the password accounts whose email is at --domain: each person then signs in with the identity provider to their own account, its namespaces and data. | `--domain`, `--org`, `--skip`, `--keep-tokens`, `--apply`, `--dry-run` |

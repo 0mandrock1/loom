@@ -5682,8 +5682,7 @@
            "description": null,
            "dests": [
             "help",
-            "participant",
-            "yes"
+            "participant"
            ]
           }
          ],
@@ -5719,21 +5718,6 @@
            "required": true,
            "help": "The participant id to retire",
            "metavar": null
-          },
-          {
-           "option_strings": [
-            "--yes"
-           ],
-           "dest": "yes",
-           "action": "_StoreTrueAction",
-           "default": false,
-           "const": true,
-           "choices": null,
-           "nargs": 0,
-           "type": null,
-           "required": false,
-           "help": "Its process is confirmed stopped",
-           "metavar": null
           }
          ]
         }
@@ -5744,7 +5728,7 @@
        "choices_help": [
         {
          "dest": "retire",
-         "help": "Retire the provider participant of a process that died without shutting down (its id is `participant_id` in that process's /v1/health).",
+         "help": "Verify exact physical death on this trusted host and retire its participant after all queries settle (the id is participant_id in /v1/health).",
          "metavar": "retire"
         }
        ]
@@ -15623,7 +15607,7 @@
     },
     {
      "dest": "mint-token",
-     "help": "Mint a JWT locally (requires LOOM_JWT_SECRET).",
+     "help": "Mint a JWT locally (requires LOOM_JWT_SECRET and verified stores).",
      "metavar": "mint-token"
     },
     {

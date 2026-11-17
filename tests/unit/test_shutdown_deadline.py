@@ -125,7 +125,7 @@ barrier.record_participant = AsyncMock()
 # The parent measures from here to the process's exit, imports left out
 # (CLOCK_MONOTONIC is one clock for every process on the host).
 print("retiring", time.monotonic(), flush=True)
-assert asyncio.run(barrier.retire_process())
+assert not asyncio.run(barrier.retire_process())
 """
 
 

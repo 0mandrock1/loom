@@ -193,7 +193,9 @@ async def check_setup_stores() -> None:
     gated connect (`loom ch-setup`), the gate a gated connect would run, before it writes:
     its ClickHouse, where it already records a deployment, must record its Postgres's, and
     the Postgres `first` row must not name another cell. A ClickHouse with no Loom
-    database or record yet (a service set up before the first boot) passes."""
+    database or record yet (a service set up before the first boot) passes. This
+    diagnostic discards the mode result and never installs an accepting view;
+    subsequent Loom row work must verify, enroll and check acceptance afresh."""
     from server.core import pg, pg_profile
     from server.core.ch import get_client
     from server.core.ch_errors import error_code, error_line
@@ -295,10 +297,7 @@ async def connect_declared(
             from server.core.pg_profile import check_configured
 
             await check_configured(ch)
-        if org_free is not None and not named:
-            await check_org_free(org_free)
-        else:
-            await check_orgs(named)
+        await check_acceptance(orgs=named, org_free=org_free)
     except BaseException:
         await disconnect(ch)
         raise
@@ -313,6 +312,38 @@ async def connect_code_plane(ch: CHClient, args: argparse.Namespace) -> None:
 
     org, _ns = _identity(args)
     await connect_declared(ch, orgs=() if getattr(args, "dry_run", False) else (org,))
+
+
+async def check_acceptance(
+    *, orgs: Iterable[str | None] | None = None, org_free: OrgFree | None = None
+) -> None:
+    """Fresh post-enrollment gate check on already verified, open paired stores."""
+    named = _declared(orgs, org_free)
+    if org_free is not None and not named:
+        await check_org_free(org_free)
+    else:
+        await check_orgs(named)
+
+
+async def connect_verified(ch: CHClient) -> None:
+    """Verify paired stores without obtaining an acceptance view or admitting work.
+
+    Native commands enroll next, then repeat their accepting org/cell checks.
+    Operator-only commands may keep using the org-free checked composition.
+    """
+    from server.core.pg_profile import check_configured
+
+    if not ch.connected:
+        await ch.connect()
+    try:
+        await check_configured(ch)
+    except BaseException:
+        await disconnect(ch)
+        raise
+    from server import boot
+    from server.core.background import register_buffer_drainer
+
+    register_buffer_drainer("boot-writes", boot.drain_writes)
 
 
 async def connect_checked(
@@ -354,9 +385,10 @@ def run_connected[T](
 
     async def _go() -> T:
         ch = get_client()
-        await connect_checked(ch, orgs=named, org_free=org_free)
+        await connect_verified(ch)
         try:
             async with model_command():
+                await check_acceptance(orgs=named, org_free=org_free)
                 return await run(ch)
         finally:
             await disconnect(ch)

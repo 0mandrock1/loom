@@ -18,6 +18,53 @@ that every transport enforces (`auth_actually_required()`, and `LOOM_MCP_AUTH_MO
 refuses to boot without them. [Storage authority](storage-authority.md) describes what a
 cell holds and how its two stores agree.
 
+## Participant lifecycle baseline
+
+A participant advertising the ninth `host_proof` field `cell-retirement-v1`
+enrolls before its first fresh primary acceptance read and uses permanent guarded
+retirement. A serving cell heartbeat includes its `participant_id` beside the
+fingerprint, allowing a replacement to be joined to the participant registry.
+Workers children enroll independently and do not publish serving instance rows.
+Native commands hold one admission scope through their complete org or principal
+work and drain: claim lookup and release share that scope; token readiness, keyring
+read, signing and audit share another. Connections and helper calls do not retire
+a command that still has principal work to perform. Store pairing is verified
+before enrollment and fresh acceptance. Org-free diagnostics do not install an
+accepting view. The pre-schema `ch-setup` ownership probe discards its diagnostic
+mode result and checks only store/cell identity before raw database user/profile
+setup; its optional analyst-row work opens a separate verified, enrolled scope
+and obtains fresh acceptance. That bootstrap exception admits no tenant or token
+work.
+
+The capability identifies installed code; it does not prove that every older
+process or unsafe retirement client has disappeared.
+
+Before online configuration finalization is supported, stop every unsafe manual
+retirement and pruning writer and prevent its binary/image from restarting.
+Inventory and positively terminate every accepting server, workers child,
+standalone worker and native command that overlapped those writers. Include paused
+boots, already retired/pruned identities and lifecycle-capable processes started
+during the overlap: old maintenance code could have hidden their rows too. Only
+then start replacement accepting and maintenance processes with this lifecycle.
+A shared image tag, pod deletion, readiness or heartbeat expiry is insufficient.
+Keep exact PID/boot/namespace/start or trusted runtime termination evidence with
+the deployment's upgrade record. No CLI flag or stored acknowledgement substitutes
+for that evidence, and the runtime census does not verify the external inventory.
+
+Census retained legacy rows while unsafe writers are stopped. Recertify a retained
+identity only after exact verifiable physical death and known-zero cross-replica
+queries. Keep empty or unknown proofs quarantined. If the legacy inventory is
+incomplete, stop all accepting/native-command and retirement/pruning processes,
+positively terminate or fence every runtime that could execute an old binary, and
+prevent old restarts. Only after that physical quiescence may the operator request
+an exact audited cleanup of selected unknown legacy participant identities. There
+is no automatic age-based cleanup or affirmation bypass. Restart only guarded
+lifecycle processes afterward. Unknown or partitioned runtimes remain blockers.
+
+This baseline is an operational prerequisite, not a release-cut requirement.
+Configuration finalization also needs the directory's controller-fencing protocol;
+the lifecycle certificate alone cannot authorize reservation release.
+
 ## Why whole deployments
 
 A cell shares no store, key, lease or worker with another. Every guarantee a single
@@ -485,11 +532,13 @@ with the same configuration, or `--finish`, first writes `next` wherever it is m
 It reruns attach's overlap refusals against every other cell's directory row, counting
 both values of each, writes the new fingerprint as `next` to the directory and then to
 `loom.cell_self`, so old and new processes both serve while the new configuration rolls
-out. `loom cell update --finish` waits, at most `--wait` (default 10 minutes), until
-every live process reports `next` and the longest request deadline has passed; when the
-change turns SCIM on or changes the cell's OIDC client it then runs attach's SCIM
-precondition (refusing, or `--revoke-unprovisioned`); only then does it make `next` the
-only value, in `loom.cell_self` first and the directory last. A widened issuer or
+out. Finalization first narrows the cell's accepted value durably while the directory
+keeps both reservations. It then requires a complete post-cutoff participant census,
+permanent guarded retirement or verified exact death for every captured identity,
+and a serving target replacement outside that captured set. Heartbeat expiry and
+request deadlines do not prove this. Only afterward may the directory release its
+old reservation. Online finalization needs the [lifecycle baseline](#participant-lifecycle-baseline)
+and controller fencing; SCIM-on changes remain gated on actual per-cell SCIM support. A widened issuer or
 pattern is reserved in the directory before any process accepts it, and a narrowed one
 is released only after none does. A refusal or a wait that runs out keeps both values
 and prints the processes not yet reporting `next`; rerunning resumes, and
@@ -514,6 +563,8 @@ version and fields, and beside them keys that no fingerprint compares: they are 
 needs no column for them (`server.core.instances.cell_row`). Their presence proves the build
 that reports them; there is no generation key.
 
+- `participant_id`: this server's provider participant UUID, for joining its actual
+  process lifecycle to the serving instance row. A workers child publishes no instance row.
 - `serves`: `LOOM_SERVES_TRAFFIC`.
 - `marked`: whether this process's pooled Postgres sessions keep the tenancy marker
   (`loom.tenancy_checked`). The cell refresh reads it with the state rows, after `RESET ALL`

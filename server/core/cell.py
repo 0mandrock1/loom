@@ -277,6 +277,12 @@ _deployment_id = ""
 _awaiting_first_read = False
 
 
+def discard_inherited_view() -> None:
+    """A child enrolls and reads primary state before using acceptance state."""
+    global _view, _memo, _awaiting_first_read
+    _view, _memo, _awaiting_first_read = _View(), None, True
+
+
 def expect_first_read() -> None:
     global _awaiting_first_read
     _awaiting_first_read = True
