@@ -82,6 +82,19 @@ def registration_refusal(value: Any, registered: Mapping[str, Any], name: str = 
     return ""
 
 
+def registration_pair_refusal(
+    registered: Mapping[str, Any], current: dict[str, Any], pending: dict[str, Any] | None
+) -> str:
+    """Both reserved values must name the registered stores and fit live placement."""
+    for name, value in (("current_fp", current), ("next_fp", pending)):
+        if value is not None:
+            if reason := registration_refusal(value, registered, name):
+                return reason
+            if reason := placement_refusal(registered["cell"], name, value):
+                return reason
+    return ""
+
+
 def _pair_refusal(a: dict[str, Any], b: dict[str, Any]) -> str:
     if set(a.get("bearer_issuers", [])) & set(b.get("bearer_issuers", [])):
         return "shared bearer issuer reservation"
@@ -115,6 +128,38 @@ def reservation_refusal(accepted: Sequence[dict[str, Any]], other: Sequence[dict
             if reason := _pair_refusal(a["fields"], b["fields"]):
                 return reason
     return ""
+
+
+def configuration_pair(
+    current: dict[str, Any] | None,
+    pending: dict[str, Any] | None,
+    target: dict[str, Any],
+    action: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Select the reserved pair without guessing the direction of an interrupted update."""
+    if any(not readable(value) for value in (current, target)) or (
+        pending is not None and not readable(pending)
+    ):
+        raise ValueError("configuration update needs readable fingerprints")
+    assert current is not None
+    if action not in ("config", "finish", "revert"):
+        raise ValueError("configuration action must be config, finish or revert")
+    if target["fields"].get("scim", cell.DEFAULTS["scim"]):
+        raise ValueError("configuration update requires per-cell SCIM before enabling SCIM")
+
+    def same(a: dict[str, Any], b: dict[str, Any]) -> bool:
+        return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+    if action == "config":
+        if pending is not None and not same(pending, target):
+            raise ValueError("another configuration is pending; finish or revert it first")
+        if pending is not None:
+            return current, pending
+        return current, None if same(current, target) else target
+    selected = pending if action == "finish" and pending is not None else current
+    if not same(selected, target):
+        raise ValueError("configuration target differs from the selected reserved fingerprint")
+    return target, None
 
 
 # An org as a placement body carries it at most: ORG_MAX_BYTES bytes, each escaped in JSON

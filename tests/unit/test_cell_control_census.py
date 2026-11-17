@@ -117,6 +117,9 @@ GUARDED_WRITERS = {
         ("set_limit.change", "UPDATE", "loom_router.cells"): 1,
         ("rotate_credential.change", "UPDATE", "loom_router.cells"): 1,
         ("claim.change_locked", "UPDATE", "loom_router.cells"): 1,
+        ("_configuration_commit", "INSERT INTO", "loom_router.placements"): 1,
+        ("_configuration_commit", "INSERT INTO", "loom_router.audit"): 2,
+        ("_configuration_commit", "UPDATE", "loom_router.cells"): 1,
         ("attach_begin.change_locked", "UPDATE", "loom_router.cells"): 1,
         ("attach_place.change_locked", "INSERT INTO", "loom_router.placements"): 1,
         ("attach_place.change_locked", "UPDATE", "loom_router.cells"): 1,
@@ -435,6 +438,15 @@ def function(path: str, name: str) -> ast.AST:
             "server/router/directory.py",
             "claim",
             ["_attach_change(cell_name, expected, change_locked, claim=True)"],
+        ),
+        (
+            "server/router/directory.py",
+            "update_configuration",
+            [
+                "_control_transaction(locked)",
+                "control_refusal(found, expected)",
+                "_configuration_commit(conn, found, current, pending, new, action)",
+            ],
         ),
         *[
             (

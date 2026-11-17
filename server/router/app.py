@@ -21,6 +21,8 @@
 - `GET /cells/v1/operator/cells/<cell>`: the cell's row as attach reads it;
 - `POST /cells/v1/operator/cells/<cell>/attach/begin`, `.../attach/place`,
   `.../attach/enforced` and `.../attach/serving`: the first cell's attach, in that order;
+- `POST /cells/v1/operator/cells/<cell>/configuration`: reserve or narrow the cell's
+  configuration after store proof, with the claimed generation and exact observed pair;
 - `DELETE /cells/v1/operator/cells/<cell>`: `loom cell remove` removes the row of a cell
   that is `attaching` with no placement;
 - `GET /livez` and `GET /readyz` (the directory answers, read at most once a second).
@@ -62,7 +64,7 @@ from starlette.routing import Route
 
 from server.core import cell as cell_state
 from server.core.cell_probe import PATH as PROBE_PATH
-from server.router import directory, routing
+from server.router import directory, fingerprints, routing
 from server.router.limits import (
     ATTACH_BATCH,
     ATTACH_BEGIN_MAX_BYTES,
@@ -685,6 +687,40 @@ class Router:
         return await _answered(
             lambda: directory.claim(request.path_params["cell"], expected), _attach_answer
         )
+
+    async def configuration(self, request: Request) -> JSONResponse:
+        body = await self._operator_body(request, ATTACH_BEGIN_MAX_BYTES)
+        if isinstance(body, JSONResponse):
+            return body
+        expected = _control(body)
+        if isinstance(expected, JSONResponse):
+            return expected
+        if set(body) != {"action", "target_fp", "keys_fp", "nonces"}:
+            return _refused(400, "configuration requires action, target_fp, keys_fp and nonces")
+        action, target, keys_fp = body["action"], body["target_fp"], body["keys_fp"]
+        if action not in ("config", "finish", "revert") or not fingerprints.readable(target):
+            return _refused(400, "configuration requires a supported action and readable target_fp")
+        if not isinstance(keys_fp, str) or not cell_state.SHA256.fullmatch(keys_fp):
+            return _refused(400, "keys_fp is a SHA-256 fingerprint")
+        if not _nonces_shaped(body["nonces"]):
+            return _refused(400, _NONCES_REFUSAL)
+        name = request.path_params["cell"]
+        found = await _read_attaching(name)
+        if isinstance(found, JSONResponse):
+            return found
+        if reason := directory.control_refusal(found, expected):
+            return _refused(409, reason)
+        if refused := await self._stores_check(found, body["nonces"]):
+            return refused
+        response = await _answered(
+            lambda: directory.update_configuration(
+                name, target, action, keys_fp=keys_fp, refusal=placement_refusal, expected=expected
+            ),
+            _attach_answer,
+        )
+        if response.status_code in (200, 503):
+            self._table_at = None
+        return response
 
     async def attach_begin(self, request: Request) -> JSONResponse:
         """`attach/begin`: once the probe listener echoes attach's nonces from the stores
@@ -1470,6 +1506,11 @@ def build_app(router: Router | None = None) -> Starlette:
             ),
             Route("/cells/v1/operator/cells/{cell}", router.operator_cell, methods=["GET"]),
             Route("/cells/v1/operator/cells/{cell}/claim", router.claim, methods=["POST"]),
+            Route(
+                "/cells/v1/operator/cells/{cell}/configuration",
+                router.configuration,
+                methods=["POST"],
+            ),
             Route("/cells/v1/operator/cells/{cell}", router.remove, methods=["DELETE"]),
             Route(
                 "/cells/v1/operator/cells/{cell}/attach/begin",
