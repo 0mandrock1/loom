@@ -252,7 +252,16 @@ async def _live_rows_for_key(input: MemoryUpdateInput, ch: Any) -> list[dict[str
         "session_id": named(input.session_id),
     }
     if pg.enabled():
-        return await _pg_live_rows_for_key(input, narrowing)
+        # A new key can be committed before its ClickHouse projection is published.
+        return await pg_memory.update_key_candidates(
+            input.org,
+            input.namespace,
+            input.memory_key,
+            scope=request_scope(),
+            agent=narrowing["agent"],
+            user_id=narrowing["user_id"],
+            session_id=narrowing["session_id"],
+        )
     where = [
         "org = {org:String}",
         "namespace = {ns:String}",
@@ -285,22 +294,6 @@ async def _live_rows_for_key(input: MemoryUpdateInput, ch: Any) -> list[dict[str
         if read_your_writes_enabled():
             rows = await ch.query_all(sql.rstrip() + "\n        " + _SEQUENTIAL, params=params)
     return list(rows or [])
-
-
-async def _pg_live_rows_for_key(
-    input: MemoryUpdateInput, narrowing: dict[str, str | None]
-) -> list[dict[str, Any]]:
-    # A new key can be committed before its ClickHouse projection is published.
-    heads = await pg_memory.live_key_heads(
-        input.org, input.namespace, [input.memory_key], scope=request_scope()
-    )
-    candidates = [
-        row
-        for row in heads
-        if row.get("status") in {"active", "duplicate", "conflicted"}
-        and all(value is None or row.get(column) == value for column, value in narrowing.items())
-    ]
-    return sorted(candidates, key=lambda row: int(row["version"]), reverse=True)[:10]
 
 
 def _update_embedding_row(

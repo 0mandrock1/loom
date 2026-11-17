@@ -108,8 +108,9 @@ async def test_key_resolution_sees_a_postgres_commit_before_publication(monkeypa
         "status": "active",
     }
 
-    async def heads(org, namespace, keys, *, scope):
-        assert (org, namespace, keys, scope) == ("test", "personal", ["k"], WHOLE_NAMESPACE)
+    async def heads(org, namespace, key, *, scope, agent, user_id, session_id):
+        assert (org, namespace, key, scope) == ("test", "personal", "k", WHOLE_NAMESPACE)
+        assert (agent, user_id, session_id) == ("cursor", None, None)
         return [committed]
 
     class UnpublishedCH:
@@ -117,76 +118,91 @@ async def test_key_resolution_sees_a_postgres_commit_before_publication(monkeypa
             raise AssertionError("the committed head is not published to ClickHouse")
 
     monkeypatch.setattr(update_mod.pg, "enabled", lambda: True)
-    monkeypatch.setattr(update_mod.pg_memory, "live_key_heads", heads)
+    monkeypatch.setattr(update_mod.pg_memory, "update_key_candidates", heads)
     rows = await update_mod._live_rows_for_key(
         MemoryUpdateInput(**_ID, memory_key="k", value="v"), UnpublishedCH()
     )
     assert rows == [committed]
 
 
+async def test_postgres_key_candidates_are_bounded_metadata_in_the_store(monkeypatch):
+    from decimal import Decimal
+    from uuid import UUID
+
+    from server.auth.context import current_auth
+    from server.identity.domain.read_scope import ReadFilters, read_filters_bound
+
+    memory_id = UUID("00000000-0000-0000-0000-000000000001")
+
+    async def fetch(sql, *args):
+        projection = sql.split("FROM", 1)[0]
+        assert "SELECT row" not in projection, "candidate lookup must not load full memory values"
+        assert projection.count(",") == 6  # Six fields; coalesce has one comma.
+        assert "memory_id, agent, user_id, session_id, version," in projection
+        assert "coalesce(row->>'status', 'active') AS status" in projection
+        assert "org = $1 AND namespace = $2 AND memory_key = $3" in sql
+        assert "row->>'tombstoned_at' IS NULL" in sql
+        assert "coalesce(row->>'status', 'active') IN ('active', 'duplicate', 'conflicted')" in sql
+        assert "agent = $4 AND user_id = $5 AND session_id = $6" in sql
+        assert "user_id = $7 AND session_id = $8" in sql
+        assert sql.endswith("ORDER BY version DESC LIMIT 10")
+        assert "expires_at" not in sql
+        assert args == ("test", "personal", "k", "cursor", "u", "s", "u", "s")
+        return [
+            dict(
+                memory_id=memory_id,
+                agent="cursor",
+                user_id="u",
+                session_id="s",
+                version=Decimal(2),
+                status="active",
+            )
+        ]
+
+    monkeypatch.setattr(update_mod.pg, "enabled", lambda: True)
+    monkeypatch.setattr(update_mod.pg_memory.pg, "fetch", fetch)
+    scope = ReadFilters(scope="own_session", user_id="u", session_id="s")
+    with read_filters_bound(current_auth(), scope):
+        rows = await update_mod._live_rows_for_key(
+            MemoryUpdateInput(**_ID, memory_key="k", value="v", user_id="u", session_id="s"),
+            None,
+        )
+    assert rows == [
+        dict(
+            memory_id=str(memory_id),
+            agent="cursor",
+            user_id="u",
+            session_id="s",
+            version=2,
+            status="active",
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     "identity, expected",
     [
-        ({}, ["star", "three", "two", "one"]),
-        ({"agent": "*", "user_id": "-", "session_id": "-"}, ["star", "three", "two", "one"]),
-        ({"agent": "-"}, ["star", "three", "two", "one"]),
-        ({"agent": "writer"}, ["three", "two"]),
-        ({"user_id": "u"}, ["two", "one"]),
-        ({"session_id": "s1"}, ["three", "one"]),
-        ({"agent": "writer", "user_id": "u", "session_id": "s2"}, ["two"]),
-        ({"user_id": "*", "session_id": "*"}, ["star"]),
+        ({}, (None, None, None)),
+        ({"agent": "*", "user_id": "-", "session_id": "-"}, (None, None, None)),
+        ({"agent": "-"}, (None, None, None)),
+        ({"agent": "writer"}, ("writer", None, None)),
+        ({"user_id": "u"}, (None, "u", None)),
+        ({"session_id": "s1"}, (None, None, "s1")),
+        ({"agent": "writer", "user_id": "u", "session_id": "s2"}, ("writer", "u", "s2")),
+        ({"user_id": "*", "session_id": "*"}, (None, "*", "*")),
     ],
 )
-async def test_postgres_key_resolution_keeps_identity_and_status_filters(
+async def test_postgres_key_resolution_passes_named_identity_filters_to_the_store(
     monkeypatch, identity, expected
 ):
-    from datetime import datetime
-
-    heads = [
-        dict(
-            memory_id="one",
-            agent="other",
-            user_id="u",
-            session_id="s1",
-            version=1,
-            status="active",
-            expires_at=datetime.min,
-        ),
-        dict(
-            memory_id="two",
-            agent="writer",
-            user_id="u",
-            session_id="s2",
-            version=2,
-            status="duplicate",
-        ),
-        dict(
-            memory_id="three",
-            agent="writer",
-            user_id="v",
-            session_id="s1",
-            version=3,
-            status="conflicted",
-        ),
-        dict(memory_id="star", agent="*", user_id="*", session_id="*", version=4, status="active"),
-        dict(
-            memory_id="superseded",
-            agent="writer",
-            user_id="u",
-            session_id="s2",
-            version=5,
-            status="superseded",
-        ),
-    ]
-
-    async def committed(*args, **kwargs):
-        return heads
+    async def committed(*args, agent, user_id, session_id, **kwargs):
+        assert (agent, user_id, session_id) == expected
+        return []
 
     monkeypatch.setattr(update_mod.pg, "enabled", lambda: True)
-    monkeypatch.setattr(update_mod.pg_memory, "live_key_heads", committed)
+    monkeypatch.setattr(update_mod.pg_memory, "update_key_candidates", committed)
     inp = MemoryUpdateInput(org="test", namespace="personal", memory_key="k", value="v", **identity)
-    rows = await update_mod._live_rows_for_key(inp, None)
-    assert [r["memory_id"] for r in rows] == expected
+    assert await update_mod._live_rows_for_key(inp, None) == []
 
 
 async def test_postgres_key_resolution_uses_the_token_scope(monkeypatch):
@@ -195,12 +211,12 @@ async def test_postgres_key_resolution_uses_the_token_scope(monkeypatch):
 
     scope = ReadFilters(scope="own_session", user_id="u", session_id="s")
 
-    async def committed(org, namespace, keys, *, scope):
+    async def committed(org, namespace, key, *, scope, **identity):
         assert scope == ReadFilters(scope="own_session", user_id="u", session_id="s")
         return []
 
     monkeypatch.setattr(update_mod.pg, "enabled", lambda: True)
-    monkeypatch.setattr(update_mod.pg_memory, "live_key_heads", committed)
+    monkeypatch.setattr(update_mod.pg_memory, "update_key_candidates", committed)
     with read_filters_bound(current_auth(), scope):
         assert (
             await update_mod._live_rows_for_key(
@@ -215,23 +231,11 @@ async def test_postgres_key_resolution_does_not_fall_back_after_a_store_failure(
         raise RuntimeError("authority unavailable")
 
     monkeypatch.setattr(update_mod.pg, "enabled", lambda: True)
-    monkeypatch.setattr(update_mod.pg_memory, "live_key_heads", failed)
+    monkeypatch.setattr(update_mod.pg_memory, "update_key_candidates", failed)
     with pytest.raises(RuntimeError, match="authority unavailable"):
         await update_mod._live_rows_for_key(
             MemoryUpdateInput(**_ID, memory_key="k", value="v"), None
         )
-
-
-async def test_postgres_key_resolution_returns_the_ten_newest_candidates(monkeypatch):
-    async def committed(*args, **kwargs):
-        return [{"memory_id": str(v), "version": v, "status": "active"} for v in range(20)]
-
-    monkeypatch.setattr(update_mod.pg, "enabled", lambda: True)
-    monkeypatch.setattr(update_mod.pg_memory, "live_key_heads", committed)
-    rows = await update_mod._live_rows_for_key(
-        MemoryUpdateInput(org="test", namespace="personal", memory_key="k", value="v"), None
-    )
-    assert [r["memory_id"] for r in rows] == [str(v) for v in range(19, 9, -1)]
 
 
 async def test_postgres_key_resolution_keeps_multiple_identities_ambiguous(monkeypatch):
@@ -244,7 +248,7 @@ async def test_postgres_key_resolution_keeps_multiple_identities_ambiguous(monke
         ]
 
     monkeypatch.setattr(update_mod.pg, "enabled", lambda: True)
-    monkeypatch.setattr(update_mod.pg_memory, "live_key_heads", committed)
+    monkeypatch.setattr(update_mod.pg_memory, "update_key_candidates", committed)
     monkeypatch.setattr(update_mod, "get_client", lambda: None)
     with pytest.raises(HTTPException) as caught:
         await update_mod.handle_memory_update(
