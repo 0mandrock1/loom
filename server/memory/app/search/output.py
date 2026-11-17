@@ -168,6 +168,16 @@ async def _stale_flags(
     return await pg_validation.stale_flags(input.org, input.namespace, hits)
 
 
+async def _parked_shared_flags(
+    org: str, namespace: str, hits: list[_MemorySearchHit]
+) -> list[bool]:
+    # Governed hits require the stronger bounded refresh, including source labels.
+    ordinary = [(i, hit) for i, hit in enumerate(hits) if not hit.governed]
+    checked = await withheld_definition_flags(org, namespace, [hit for _, hit in ordinary])
+    flags = {i: flag for (i, _), flag in zip(ordinary, checked, strict=True)}
+    return [flags.get(i, False) for i in range(len(hits))]
+
+
 async def _parked_slice(
     input: MemorySearchInput, payload: dict[str, Any], offset: int, readable: set[str]
 ) -> tuple[list[_MemorySearchHit], int, int]:
@@ -197,7 +207,7 @@ async def _parked_slice(
         # A source relabelled or gone since page one withholds its definition here too.
         stale, definitions_withheld, refreshed = await asyncio.gather(
             _stale_flags(input, payload, window_hits),
-            withheld_definition_flags(input.org, input.namespace, window_hits),
+            _parked_shared_flags(input.org, input.namespace, window_hits),
             term_leg.refresh_parked(
                 input.org,
                 input.namespace,

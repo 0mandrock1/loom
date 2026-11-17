@@ -878,6 +878,79 @@ async def test_changed_source_budget_exhaustion_withholds_the_entire_leg(
     assert await _keys("what is ARR") == ("timed_out", [])
 
 
+@pytest.mark.parametrize("ordinary_level", ["low", "medium"])
+@pytest.mark.parametrize("governed_first", [False, True])
+async def test_parked_oversized_source_is_not_hydrated_by_the_shared_label_check(
+    store: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    ordinary_level: str,
+    governed_first: bool,
+) -> None:
+    from server.memory.app import definitions, search_pages
+    from server.memory.app.search import output
+    from server.memory.store import reads
+
+    store["rows"] = [_row("definition/arr", "ARR")]
+    leg = await term_leg._read("o", "n", "what is ARR", set(), None, "m")
+    ordinary = _hit("definition/ordinary", 0.5)
+    ordinary.namespace = "n"
+    ordinary._row_identity = ("_shared", "-", "-")
+    tail = [leg.hits[0], ordinary] if governed_first else [ordinary, leg.hits[0]]
+    page = json.loads(
+        search_pages.encode_page(
+            query="what is ARR",
+            top_k=2,
+            candidates_total=2,
+            tail=tail,
+            namespaces_searched=["n"],
+            namespaces_skipped=[],
+        )
+    )
+    hydrated: list[str] = []
+    original = reads._hydrate
+
+    def hydrate(row: dict[str, Any]) -> Any:
+        hydrated.append(row["memory_key"])
+        return original(row)
+
+    async def heads(identity: Any, keys: list[str], **kwargs: Any) -> dict[str, Any]:
+        return {
+            key: {
+                "memory_id": "00000000-0000-0000-0000-000000000001",
+                "org": "o",
+                "namespace": "n",
+                "agent": "-",
+                "user_id": "-",
+                "session_id": "-",
+                "memory_key": key,
+                "memory_type": "definition",
+                "value": json.dumps({"body": "x" * 500000 if key.endswith("/arr") else "x"}),
+                "confidence": 1.0,
+                "version": 1,
+                "pinned": False,
+                "created_at": NOW,
+                "sensitivity": ordinary_level if key.endswith("/ordinary") else "low",
+            }
+            for key in keys
+        }
+
+    async def fresh(*args: Any) -> list[bool]:
+        return [False] * len(args[-1])
+
+    monkeypatch.setattr(reads.pg, "enabled", lambda: True)
+    monkeypatch.setattr(reads.pg_memory, "heads_for_identity", heads)
+    monkeypatch.setattr(reads, "_hydrate", hydrate)
+    monkeypatch.setattr(term_leg, "source_reasons", definitions.source_reasons)
+    monkeypatch.setattr(output, "_stale_flags", fresh)
+    hits, next_offset, dropped = await output._parked_slice(_input(top_k=2), page, 0, {"n"})
+    assert "definition/arr" not in hydrated
+    assert "definition/ordinary" in hydrated
+    assert [hit.memory_key for hit in hits] == (
+        ["definition/ordinary"] if ordinary_level == "low" else []
+    )
+    assert next_offset == -1 and dropped == 0
+
+
 @pytest.mark.parametrize(
     "query, expected",
     [
