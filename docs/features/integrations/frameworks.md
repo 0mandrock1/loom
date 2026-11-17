@@ -35,7 +35,7 @@ or needs another database, vector store or cache.
 | Pipecat                        | `LoomMemoryService`                             | Python, `loom.integrations.pipecat`                       | recall and capture `FrameProcessor`s                                     |
 | Dify                           | Remember, Recall, Search knowledge              | `integrations/dify` standalone plugin                     | Native Dify tools                                                        |
 | Haystack                       | `LoomDocumentStore`, `LoomRetriever`            | Python, `loom.integrations.haystack`                      | `DocumentStore` protocol, retrieval component                            |
-| Agno                           | `LoomMemoryDb`                                  | Python, `loom.integrations.agno`                          | `BaseDb` user-memory methods                             |
+| Agno                           | `LoomMemoryDb`                                  | Python, `loom.integrations.agno`                          | `BaseDb` user-memory methods                                             |
 
 Any other framework that can call an HTTP endpoint or an MCP server uses Loom directly:
 see [agent integration](../../guides/agent-integration.md) and
