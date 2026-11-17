@@ -21,6 +21,7 @@ from server.memory.domain.extraction_prompts import AGENT_LEARNINGS_ANCHOR
 from server.memory.domain.provenance import pipeline_actor
 from server.memory.store import learnings as learnings_repo
 from server.settings import settings
+from tests.unit.checked_repo_search_fakes import install_repo_search
 from tests.unit.clickhouse_local import CLICKHOUSE, ddl, run
 from tests.unit.llm_fake import ScriptedLLM
 
@@ -1517,7 +1518,7 @@ async def test_a_pinned_tokens_loom_search_serves_its_signed_bots_rules(
     async def namespaces(_org: str, namespace: str, _scope: Any) -> tuple[list[str], list[str]]:
         return [namespace], []
 
-    monkeypatch.setattr(fanout, "knowledge_with_repo_docs", knowledge)
+    install_repo_search(monkeypatch, knowledge)
     monkeypatch.setattr(memory_search, "handle_memory_search", leg_down)
     monkeypatch.setattr(fanout, "search_profile", leg_down)
     monkeypatch.setattr(fanout, "_conversation_leg", leg_down)

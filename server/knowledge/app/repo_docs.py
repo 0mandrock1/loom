@@ -50,6 +50,20 @@ class RepoSearchRequest:
             dict.fromkeys((*self.base.namespaces, *(self.extra.namespaces if self.extra else ())))
         )
 
+    def wider(self, top_k: int) -> RepoSearchRequest:
+
+        def resize(request: SearchRequest, size: int) -> SearchRequest:
+            return dataclasses.replace(
+                request, input=request.input.model_copy(update={"top_k": size}, deep=True)
+            )
+
+        return RepoSearchRequest(
+            resize(self.base, top_k),
+            resize(self.extra, max(1, min(top_k, 20))) if self.extra is not None else None,
+            self.repo_namespace,
+            asyncio.get_running_loop().time() + settings.knowledge_repo_docs_timeout_s,
+        )
+
 
 @dataclasses.dataclass
 class RepoSearch:
@@ -65,6 +79,18 @@ class RepoSearch:
     @property
     def lost(self) -> bool:
         return self._lost or any(child.lost for child in self.children)
+
+    def fresh(self) -> bool:
+        """Check retained permissions and additive timing without another await."""
+        if self.lost:
+            return False
+        if (
+            self.extra is not None
+            and self.extra.proofs is not None
+            and asyncio.get_running_loop().time() >= self.request.extra_deadline
+        ):
+            return False
+        return all(child.proofs is None or child.proofs.fresh() for child in self.children)
 
     async def _renew_extra(self, *, ordinary: bool = False) -> None:
         extra = self.extra
