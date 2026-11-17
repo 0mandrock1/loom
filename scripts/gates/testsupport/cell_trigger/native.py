@@ -909,14 +909,6 @@ async def stores(context: dict, role: str, output: Path, *, drop: bool = False) 
                 == [{"n": 0}],
                 "new CH database",
             )
-            prefix = await rows(
-                ch, "SELECT value FROM system.server_settings WHERE name='keeper_map_path_prefix'"
-            )
-            need(
-                len(prefix) == 1
-                and prefix[0]["value"].rstrip("/") == spec["ch"]["keeper_prefix"].rstrip("/"),
-                "actual Keeper prefix",
-            )
             existing = await rows(
                 ch,
                 "SELECT name FROM system.zookeeper WHERE path={path:String}",
@@ -1857,6 +1849,26 @@ class Fixture:
                 == expected["boot_id"],
                 "store process identity",
             )
+        prefix = self.o.command(
+            "keeper-prefix",
+            [
+                "docker",
+                "exec",
+                self.s["stores"]["clickhouse"]["container_id"],
+                "clickhouse",
+                "extract-from-config",
+                "--config-file",
+                "/etc/clickhouse-server/config.xml",
+                "--key",
+                "keeper_map_path_prefix",
+            ],
+            self.env({}),
+            cleanup=cleanup,
+        )
+        need(
+            prefix["log"].read_text().strip() == self.s["ch"]["keeper_prefix"],
+            "actual Keeper prefix",
+        )
 
     def certificate(self) -> None:
         def openssl(*args):

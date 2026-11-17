@@ -376,3 +376,171 @@ def test_diagnostic_failure_preserves_primary_result_and_runs_cleanup(
     assert (
         published["error_type"] == "ValueError" and published["diagnostic_error_type"] == "OSError"
     )
+
+
+@pytest.fixture
+def keeper_config_case(tmp_path, monkeypatch):
+    import json
+    import sys
+    from types import SimpleNamespace
+
+    from scripts.gates.testsupport.cell_trigger import fixture
+
+    monkeypatch.setitem(sys.modules, "fixture", fixture)
+    from scripts.gates.testsupport.cell_trigger import capture
+
+    monkeypatch.setitem(sys.modules, "capture", capture)
+    from scripts.gates.testsupport.cell_trigger import native
+
+    expected = {
+        "container_id": "owned-ch",
+        "created_at": "birth",
+        "host_pid": 123,
+        "memory_limit_bytes": 5 * fixture.GIB,
+        "server_limit_bytes": 9 * fixture.GIB // 2,
+        "shared_buffers_bytes": 128 * 1024**2,
+        "ports": [],
+        "disk_path": str(tmp_path),
+        "start_ticks": "start",
+        "uid": 1000,
+        "boot_id": "boot",
+    }
+    actual = {
+        "Id": "owned-ch",
+        "Created": "birth",
+        "State": {"Running": True, "Pid": 123},
+        "HostConfig": {"Memory": 5 * fixture.GIB},
+        "NetworkSettings": {"Ports": {}},
+        "Mounts": [{"Source": str(tmp_path)}],
+    }
+    calls = []
+    owner = SimpleNamespace(owned=SimpleNamespace(identity=lambda _: (1, "start")))
+    owner.prefix = "/keeper_map_tables\n"
+
+    def command(role, argv, env, *, seconds=120, cleanup=False):
+        calls.append((argv, cleanup))
+        log = tmp_path / (role + ".log")
+        if argv == ["docker", "inspect", "owned-ch"]:
+            log.write_text(json.dumps([actual]))
+        else:
+            assert argv == [
+                "docker",
+                "exec",
+                "owned-ch",
+                "clickhouse",
+                "extract-from-config",
+                "--config-file",
+                "/etc/clickhouse-server/config.xml",
+                "--key",
+                "keeper_map_path_prefix",
+            ]
+            log.write_text(owner.prefix)
+        return {"log": log}
+
+    owner.command = command
+    original_stat, original_read = native.os.stat, Path.read_text
+
+    def stat(path, *args, **kwargs):
+        if str(path) == "/proc/123":
+            return SimpleNamespace(st_uid=1000)
+        return original_stat(path, *args, **kwargs)
+
+    def read_text(path, *args, **kwargs):
+        if str(path) == "/proc/sys/kernel/random/boot_id":
+            return "boot\n"
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(native.os, "stat", stat)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    spec = {
+        "workdir": str(tmp_path),
+        "fixture_id": "fixture",
+        "stores": {"clickhouse": expected},
+        "ch": {"keeper_prefix": "/keeper_map_tables"},
+        "databases": {"ch_schema": "bench_schema"},
+        "pg_standby_dsn": "fake",
+    }
+    instance = native.Fixture(spec, owner)
+    monkeypatch.setattr(instance, "env", lambda _: {})
+    return native, instance, owner, actual, calls
+
+
+@pytest.mark.asyncio
+async def test_keeper_config_allows_creation_without_sql_server_setting(
+    keeper_config_case, monkeypatch
+):
+    from contextlib import asynccontextmanager
+
+    import asyncpg
+
+    native, instance, _, _, calls = keeper_config_case
+    instance.inspect_stores()
+    commands = []
+    queries = []
+
+    class Postgres:
+        async def fetchval(self, query, *args):
+            return {
+                "SELECT NOT pg_is_in_recovery()": True,
+                "SELECT pg_is_in_recovery()": True,
+                "SHOW server_version_num": "160000",
+                "SHOW max_prepared_transactions": "0",
+                "SHOW synchronous_standby_names": "FIRST 1 (loom_standby)",
+                "SELECT pg_size_bytes(current_setting('shared_buffers'))": 128 * 1024**2,
+                "SELECT EXISTS(SELECT FROM pg_stat_replication WHERE state='streaming' "
+                "AND sync_state='sync' AND flush_lsn IS NOT NULL)": True,
+            }[query]
+
+        async def close(self, **kwargs):
+            assert kwargs["timeout"] > 0
+
+    class ClickHouse:
+        async def command(self, query):
+            commands.append(query)
+
+    async def connect(*args, **kwargs):
+        return Postgres()
+
+    @asynccontextmanager
+    async def connections(*args, **kwargs):
+        yield Postgres(), ClickHouse()
+
+    async def rows(ch, query, parameters=None):
+        queries.append(query)
+        if "keeper_map_path_prefix" in query:
+            return []  # The real config key is absent from declared ServerSettings.
+        if "max_server_memory_usage" in query:
+            return [{"value": str(9 * native.GIB // 2)}]
+        if "count()" in query:
+            return [{"n": 0}]
+        if "toString(uuid)" in query:
+            return [{"id": "database-uuid"}]
+        assert "system.zookeeper" in query
+        return []
+
+    monkeypatch.setattr(asyncpg, "connect", connect)
+    monkeypatch.setattr(native, "connections", connections)
+    monkeypatch.setattr(native, "rows", rows)
+    instance.s["stores"]["pg_primary"] = {"shared_buffers_bytes": 128 * 1024**2}
+    instance.s["stores"]["pg_standby"] = {"shared_buffers_bytes": 128 * 1024**2}
+    await native.stores(instance.s, "ch_schema", instance.w / "created.json")
+    assert commands == ["CREATE DATABASE `bench_schema` ENGINE=Atomic"]
+    assert len(calls) == 2 and calls[-1][0][-1] == "keeper_map_path_prefix"
+    assert not any("keeper_map_path_prefix" in query for query in queries)
+
+
+@pytest.mark.parametrize("cleanup", [False, True])
+def test_keeper_config_refuses_wrong_actual_prefix(keeper_config_case, cleanup):
+    native, instance, owner, _, calls = keeper_config_case
+    owner.prefix = "/different-prefix\n"
+    with pytest.raises(native.Refused, match="actual Keeper prefix"):
+        instance.inspect_stores(cleanup=cleanup)
+    assert calls[-1][1] is cleanup
+
+
+def test_keeper_config_probe_follows_store_ownership_validation(keeper_config_case):
+    native, instance, _, actual, calls = keeper_config_case
+    actual["Created"] = "foreign-birth"
+    with pytest.raises(native.Refused, match="current owned container"):
+        instance.inspect_stores()
+    assert [argv for argv, _ in calls] == [["docker", "inspect", "owned-ch"]]
