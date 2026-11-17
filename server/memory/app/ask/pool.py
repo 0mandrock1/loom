@@ -55,6 +55,7 @@ from server.memory.app.ask.supersession import (
     superseded_rows_for_pool,
 )
 from server.memory.app.ask.synthesis import _publish_window_keys
+from server.memory.domain.search_types import governed_after_computed
 
 logger = logging.getLogger(__name__)
 
@@ -693,6 +694,8 @@ async def _settle_window(run: _AskRun, *, token_budget: int | None) -> bool:
     superseded/stale pass over it. Returns whether the reader gets the record
     note (something superseded was dropped or masked)."""
     search_input, _settings = run.search_input, run.settings
+    # Grounding can prepend code records after retrieval restored this order.
+    run.synth_pool = governed_after_computed(run.synth_pool)
     run.memories = _publish_window_keys(run.synth_pool)  # The cache's key axis
 
     # Synthesis-window token budget (memory.domain.ask_budget): the caller fixes the

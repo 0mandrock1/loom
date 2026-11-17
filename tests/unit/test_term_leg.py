@@ -50,7 +50,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         return {r["memory_key"]: r["value"] for r in state["rows"] if r["memory_key"] in keys}
 
     async def source_reasons(
-        org: str, namespace: str, defs: list[Any], *, strong: bool
+        org: str, namespace: str, defs: list[Any], *, strong: bool, max_value_chars: int
     ) -> dict[str, Any]:
         assert strong is False  # the search path reads without sequential consistency
         state["checked"].append(sorted(d.memory_key for d in defs))
@@ -755,3 +755,113 @@ async def test_governed_pages_apply_the_requested_bodies_and_budget(
         else:
             assert len(hit.content_excerpt) <= 1200
         assert page["hits"][0]["content_excerpt"] == parked_text
+
+
+@pytest.mark.parametrize("oversized", ["aliases", "name", "query", "value"])
+async def test_excessive_term_work_withholds_the_leg_without_changing_definitions(
+    store: dict[str, Any], oversized: str
+) -> None:
+    from server.memory.api.models_crud import MemorySetInput
+    from server.memory.domain.definitions import definition_names
+
+    value = {"term": "ARR", "aliases": [], "body": "annual recurring revenue"}
+    query = "what is ARR"
+    if oversized == "aliases":
+        value["aliases"] = ["alias"] * 10000
+    elif oversized == "name":
+        value["aliases"] = ["x" * 100000]
+    elif oversized == "query":
+        query = "ARR " * 25000
+    else:
+        value["body"] = "x" * 1000000
+    MemorySetInput(org="o", namespace="n", agent="-", memory_key="definition/arr", value=value)
+    assert definition_names(value)
+    row = _row("definition/arr", "ARR")
+    row["value"] = json.dumps(value)
+    store["rows"] = [row]
+    before = row["value"]
+    assert await _keys(query) == ("timed_out", [])
+    assert row["value"] == before
+
+
+@pytest.mark.parametrize("computed", [False, True])
+async def test_actual_code_grounding_preserves_definition_priority_before_token_trimming(
+    monkeypatch: pytest.MonkeyPatch, computed: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from server.code.app import reads
+    from server.memory.app import code_grounding
+    from server.memory.app.ask import pool
+
+    async def target(*args: Any) -> tuple[str, str]:
+        return "o", "code-test"
+
+    async def facts(*args: Any) -> dict:
+        return {117428: {"author": "writer", "title": "ARR calculation", "merged_at": NOW}}
+
+    monkeypatch.setattr(code_grounding, "_authorized_code_target", target)
+    monkeypatch.setattr(reads, "code_index", lambda: SimpleNamespace(prs_by_number=facts))
+    monkeypatch.setattr(pool, "_drop_superseded", lambda _: False)
+    governed = _governed("definition/arr")
+    rows = [_hit("derived_aggregate", 1.0, source="computed"), governed] if computed else [governed]
+    run = pool._AskRun(
+        search_input=_input(),
+        question="ARR in PR 117428",
+        query_text="ARR in PR 117428",
+        settings=SimpleNamespace(
+            memory_ask_pr_temporal_gate=False,
+            memory_ask_code_enrichment=False,
+            memory_ask_pr_grounding=True,
+            memory_ask_code_staleness=False,
+        ),
+        target_k=len(rows),
+        window=len(rows),
+        recency_weight=0.0,
+        ranked=list(rows),
+        synth_pool=list(rows),
+    )
+    await pool._ground_and_cut(run, None)
+    assert any(h.source == "code_index" for h in run.synth_pool)
+    await pool._settle_window(run, token_budget=1)
+    assert run.memories == [rows[0]]
+
+
+async def test_repromotion_cannot_bypass_the_name_work_budget(store: dict[str, Any]) -> None:
+    store["listed"] = [_row("definition/arr", "ARR")]
+    store["rows"] = [_row("definition/arr", "ARR", [""] * 10000)]
+    assert await _keys("what is ARR") == ("timed_out", [])
+    assert store["checked"] == []
+
+
+async def test_changed_source_budget_exhaustion_withholds_the_entire_leg(
+    store: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.memory import store as memory_repo
+    from server.memory.app import definitions
+
+    store["rows"] = [_row("definition/arr", "ARR")]
+
+    async def oversized_source(*args: Any, **kwargs: Any) -> list[Any]:
+        assert 0 < kwargs["max_value_chars"] < 1000000
+        raise TimeoutError
+
+    monkeypatch.setattr(memory_repo, "get_many_by_keys", oversized_source)
+    monkeypatch.setattr(term_leg, "source_reasons", definitions.source_reasons)
+    assert await _keys("what is ARR") == ("timed_out", [])
+
+
+@pytest.mark.parametrize(
+    "query, expected",
+    [
+        ("what is Metric42X this quarter", ["definition/metric-42"]),
+        ("how did revenue grow this quarter", []),
+    ],
+)
+async def test_term_budget_serves_the_definition_ceiling_with_normal_aliases(
+    store: dict[str, Any], query: str, expected: list[str]
+) -> None:
+    store["rows"] = [
+        _row(f"definition/metric-{i}", f"Metric{i}X", [f"metric number {i}"]) for i in range(500)
+    ]
+    assert await _keys(query) == ("complete", expected)

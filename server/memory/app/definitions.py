@@ -54,16 +54,23 @@ async def handle_memory_definitions_list(
 
 
 async def source_reasons(
-    org: str, namespace: str, definitions: list[SharedDefinition], *, strong: bool = True
+    org: str,
+    namespace: str,
+    definitions: list[SharedDefinition],
+    *,
+    strong: bool = True,
+    max_value_chars: int | None = None,
 ) -> dict[str, LapseReason | None]:
     """Why each of `definitions` (copies `copy_lapse` passed) is not governed given its
     source, read from the memory authority, or None when it is governed. `strong` reads
-    ClickHouse with sequential consistency."""
+    ClickHouse with sequential consistency. An optional body's `max_value_chars` budget
+    raises TimeoutError before oversized sources are hydrated or hashed."""
     heads = await memory_repo.get_many_by_keys(
         memory_repo.Identity(org=org, namespace=namespace, agent="-"),
         [d.memory_key for d in definitions],
         scope=WHOLE_NAMESPACE,
         strong=strong,
+        max_value_chars=max_value_chars,
     )
     by_key = {h.memory_key: h for h in heads}
     now = naive_utc_now()

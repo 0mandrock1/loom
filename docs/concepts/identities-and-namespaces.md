@@ -405,7 +405,9 @@ inside `memory.ask` and `context.pack`, and in `loom_search`'s memory section.
   that share a name with one, and no others, without sequential consistency: a promotion on
   another replica a moment ago may miss a search. It runs beside the other legs, and once
   they are done the search waits at most `memory_term_leg_wait_ms` more for it (a re-entrant
-  pass no longer than its time left).
+  pass no longer than its time left). A fixed work budget also bounds normalization,
+  name comparisons and body decoding for validation. Excessive work withholds the
+  entire leg as `timed_out`; the stored definitions and promotion rules are unchanged.
 - **Matching.** The query and each name lose their format characters and go through NFKC
   with whitespace collapsed; a combining mark joins the letter or number before it. A name
   matches at whole characters with no neighbour that continues its edge: next to a Latin

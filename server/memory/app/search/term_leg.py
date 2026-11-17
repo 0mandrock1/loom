@@ -22,6 +22,7 @@ from server.memory.api.models_search import MemorySearchInput, TermLegStatus, _M
 from server.memory.app.definitions import source_reasons
 from server.memory.app.search.context import SearchContext
 from server.memory.app.search.evidence import EVIDENCE_LIFT_EPS
+from server.memory.app.sensitivity_level import ON_LOOP_CHARS
 from server.memory.app.spans import cosine
 from server.memory.domain.definition_check import SharedDefinition, copy_lapse, lost_names
 from server.memory.domain.definitions import (
@@ -60,7 +61,8 @@ def leg_on(input: MemorySearchInput) -> bool:
         return False
     if input.legs is not None and "memory" not in input.legs:
         return False
-    return valid_unicode(input.query)
+    # An excessive query is withheld by the work budget before normalization.
+    return len(input.query) > ON_LOOP_CHARS or valid_unicode(input.query)
 
 
 def launch(
@@ -150,6 +152,35 @@ class _Candidate:
     folds: set[str]
 
 
+@dataclass
+class _Work:
+    """Bound synchronous normalization and matching before calling domain helpers."""
+
+    left: int = 16 * ON_LOOP_CHARS
+
+    def charge(self, units: int) -> None:
+        if units > self.left:
+            raise TimeoutError
+        self.left -= units
+
+    async def names(self, term: str, aliases: list[str]) -> None:
+        # Count empty names too; check the count before walking an arbitrary list.
+        self.charge(32 * (1 + len(aliases)))
+        self.charge(4 * len(term))
+        read = 0
+        for name in aliases:
+            self.charge(4 * len(name))
+            read += len(name) + 32
+            if read >= ON_LOOP_CHARS:
+                await asyncio.sleep(0)
+                read = 0
+
+    def first_name(self, query: list[str], folded: str, names: list[Name]) -> _Match | None:
+        names = [n for n in names if n.folded in folded]
+        self.charge(sum(len(c) for c in query) * sum(len(n.folded) for n in names))
+        return _first_name(query, folded, names)
+
+
 async def _read(
     org: str,
     namespace: str,
@@ -160,6 +191,24 @@ async def _read(
     *,
     whole: bool = False,
 ) -> TermLeg:
+    try:
+        return await _read_bounded(org, namespace, query, excluded, query_vec, model, whole=whole)
+    except TimeoutError:
+        return TermLeg("timed_out")
+
+
+async def _read_bounded(
+    org: str,
+    namespace: str,
+    query: str,
+    excluded: set[str],
+    query_vec: list[float] | None,
+    model: str,
+    *,
+    whole: bool,
+) -> TermLeg:
+    work = _Work()
+    work.charge(32 * len(query))
     ceiling = settings.memory_shared_definitions_max
     rows = await shared_repo.shared_definitions(org, namespace, ceiling + 1, strong=False)
     if not rows:
@@ -169,10 +218,9 @@ async def _read(
     folded_query = "".join(query_chars).casefold()
     named: list[_Candidate] = []
     candidates: list[_Candidate] = []
-    for i, row in enumerate(rows[:ceiling]):
-        # Matching is CPU work no time bound can interrupt: yield every 50 definitions.
-        if i and i % 50 == 0:
-            await asyncio.sleep(0)
+    for row in rows[:ceiling]:
+        await asyncio.sleep(0)
+        await work.names(row["term"], row["aliases"])
         c = _candidate(row, org, namespace)
         if c is None:
             continue
@@ -181,7 +229,7 @@ async def _read(
             continue
         # Only a name whose folded text is in the folded query can match: prepare no other.
         prepared = [Name.of(n) for n in c.names if query_text(n).casefold() in folded_query]
-        if prepared and _first_name(query_chars, folded_query, prepared) is not None:
+        if prepared and work.first_name(query_chars, folded_query, prepared) is not None:
             named.append(c)
     if not named:
         return TermLeg(status)
@@ -192,7 +240,7 @@ async def _read(
     judged = named + [
         c for c in candidates if c.definition.memory_key not in named_keys and c.folds & named_folds
     ]
-    governed = await _governed(org, namespace, [c.definition for c in judged])
+    governed = await _governed(org, namespace, [c.definition for c in judged], work)
     lost = lost_names(list(governed.values()))
     matches: list[tuple[_Match, SharedDefinition]] = []
     for c in named:
@@ -203,7 +251,7 @@ async def _read(
         # The names the served value holds, which a re-promotion since the first read may
         # have changed.
         kept = [Name.of(n) for n in written_names(d.value) if fold_name(n) not in lost_folds]
-        if (m := _first_name(query_chars, folded_query, kept)) is not None:
+        if (m := work.first_name(query_chars, folded_query, kept)) is not None:
             matches.append((m, d))
     # Query order; at one start the longer name, then the latest promotion.
     matches.sort(key=lambda md: (md[1].promoted_at, md[1].promotion_event), reverse=True)
@@ -230,7 +278,7 @@ def _candidate(row: dict[str, Any], org: str, namespace: str) -> _Candidate | No
 
 
 async def _governed(
-    org: str, namespace: str, definitions: list[SharedDefinition]
+    org: str, namespace: str, definitions: list[SharedDefinition], work: _Work
 ) -> dict[str, SharedDefinition]:
     """The governed ones of `definitions`, by key, with their full values. Read
     without sequential consistency: a promotion another replica just made may miss a
@@ -238,13 +286,20 @@ async def _governed(
     values = await shared_repo.definition_values(
         org, namespace, [d.memory_key for d in definitions]
     )
-    full = [
-        replace(d, value=json.loads(values[d.memory_key]))
-        for d in definitions
-        if d.memory_key in values
-    ]
+    full = []
+    for d in definitions:
+        if d.memory_key not in values:
+            continue
+        await asyncio.sleep(0)
+        work.charge(len(values[d.memory_key]))
+        value = json.loads(values[d.memory_key])
+        if isinstance(value, dict) and isinstance(value.get("term"), str):
+            aliases = value.get("aliases") or []
+            if isinstance(aliases, list) and all(isinstance(a, str) for a in aliases):
+                await work.names(value["term"], aliases)
+        full.append(replace(d, value=value))
     full = [d for d in full if copy_lapse(d, org=org, namespace=namespace) is None]
-    reasons = await source_reasons(org, namespace, full, strong=False)
+    reasons = await source_reasons(org, namespace, full, strong=False, max_value_chars=work.left)
     return {d.memory_key: d for d in full if reasons[d.memory_key] is None}
 
 
