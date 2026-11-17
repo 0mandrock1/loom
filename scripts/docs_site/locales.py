@@ -178,6 +178,12 @@ def on_post_build(config):
         body = translated_markdown(
             Path(entry["path"]).read_text(encoding="utf-8"), entry, pages, config.site_url
         )
+        if entry["stale"]:
+            source_url = config.site_url + page_path(f"docs/{entry['source']}")
+            body = (
+                "> The English source has changed since this machine translation. "
+                f"Read the [English page]({source_url}) for the current instructions.\n\n{body}"
+            )
         text = _with_source(body, config.site_url, uri)
         places = [site / uri, site / page_path(f"docs/{uri}") / "index.html.md"]
         if uri.endswith("/index.md"):
