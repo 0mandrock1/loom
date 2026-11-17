@@ -464,8 +464,8 @@ class KnowledgeSourceRemoveInput(BaseModel):
 class KnowledgeSourceRemoveOutput(BaseModel):
     # The source retired.
     name: str
-    # Live documents the recorded delete request covers (none retired yet), 0 without
-    # `delete_documents`. Always zero for a mirrored source: its counts are withheld.
+    # Live documents queued for retirement; always zero for a mirrored source because its
+    # counts are withheld, or without `delete_documents` for a namespace source.
     documents_pending: int = 0
 
 

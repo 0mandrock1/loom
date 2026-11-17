@@ -654,7 +654,7 @@ Retire a registered document source: its registry row goes inactive and its cred
 | Output field | Type | Meaning |
 | --- | --- | --- |
 | `name` | `str` | The source retired. |
-| `documents_pending` | `int` | Live documents the recorded delete request covers (none retired yet), 0 without `delete_documents`. |
+| `documents_pending` | `int` | Live documents queued for retirement; always zero for a mirrored source because its counts are withheld, or without `delete_documents` for a namespace source. |
 
 ## `knowledge.source.rotate`
 
