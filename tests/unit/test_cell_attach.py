@@ -239,7 +239,6 @@ async def test_wait_is_wall_time_lock_tries_included_and_no_scan(clock: _Clock) 
     conn = FakeConn(
         [
             ("SET LOCAL lock_timeout", lambda *a: lock(conn.executed[-1])),
-            ("l.mode = 'ExclusiveLock'", []),
         ]
     )
 
@@ -487,6 +486,7 @@ class FakeConn:
         return self._answer(sql, args)
 
     async def execute(self, sql: str, *args: Any) -> str:
+        assert "pg_terminate_backend" not in sql and "pg_cancel_backend" not in sql
         self.executed.append(sql)
         for needle, answer in self.routes:
             if needle in sql:
@@ -697,16 +697,10 @@ async def test_the_mode_commit_retries_a_busy_lock_without_ending_other_backends
             raise answer
         return "LOCK TABLE"
 
-    holders = _seq(
-        [{"pid": 5, "application_name": "attach", "xact_start": "t", "rolsuper": False}], []
-    )
     conn = FakeConn(
         [
             ("LOCK TABLE", lock),
             ("UPDATE loom.tenancy_mode", "UPDATE 1"),
-            ("l.mode = 'ExclusiveLock'", holders),
-            ("rolsuper FROM pg_roles", False),
-            ("pg_terminate_backend", True),
         ]
     )
     confirmed: list[bool] = []
@@ -733,6 +727,11 @@ async def test_the_mode_commit_retries_a_busy_lock_without_ending_other_backends
     assert len(confirmed) == 2
     assert conn.executed.count("ROLLBACK") == 1
     assert "TERMINATE" not in conn.executed
+    assert not any(
+        "pg_terminate_backend" in sql or "pg_cancel_backend" in sql for sql in conn.executed
+    )
+    assert conn.executed.count("COMMIT") == 1
+    assert sum(sql.startswith("UPDATE loom.tenancy_mode") for sql in conn.executed) == 1
 
 
 @pytest.mark.asyncio
@@ -742,7 +741,7 @@ async def test_the_mode_commit_refuses_past_wait_and_skips_a_try_while_booting(
     monkeypatch: pytest.MonkeyPatch,
     wait_s: int,
 ) -> None:
-    conn = FakeConn([("l.mode = 'ExclusiveLock'", [])])
+    conn = FakeConn()
     run = cell_attach.Run(None, _args(), None, lambda _t: None)  # type: ignore[arg-type]
     run.owner = _owner(FakeConn())
     run.own_fp = (CURRENT, NEXT)
@@ -1219,7 +1218,6 @@ async def test_wait_0_runs_one_try_of_each_wait(
         [
             ("LOCK TABLE", "LOCK TABLE"),
             ("UPDATE loom.tenancy_mode", "UPDATE 1"),
-            ("l.mode = 'ExclusiveLock'", []),
         ]
     )
     marks: list[str] = []
@@ -1282,7 +1280,7 @@ async def test_a_mode_commit_refused_without_a_landed_try_says_recording(
     def lock(*_a: Any) -> str:
         raise _Timeout()
 
-    conn = FakeConn([("LOCK TABLE", lock), ("l.mode = 'ExclusiveLock'", [])])
+    conn = FakeConn([("LOCK TABLE", lock)])
 
     async def call(_self: Any, _path: str, _body: Any = None) -> dict[str, Any]:
         return {"cell": "first"}

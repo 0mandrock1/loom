@@ -399,8 +399,6 @@ _OWN_GRANTS = """
 SELECT need, held FROM (VALUES
   ('effective privileges of pg_read_all_stats',
    pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')),
-  ('effective privileges of pg_signal_backend',
-   pg_has_role(current_user, 'pg_signal_backend', 'USAGE')),
   ('USAGE on schema loom', has_schema_privilege('loom', 'USAGE')),
   ('SELECT on loom.cell_first', has_table_privilege('loom.cell_first', 'SELECT')),
   ('SELECT on loom.tenancy_mode', has_table_privilege('loom.tenancy_mode', 'SELECT')),
@@ -582,8 +580,7 @@ def _busy_refusal(table: str, holders: list[Any]) -> Refusal:
 
 # -- step 3: the mode commit ------------------------------------------------------------
 
-# The mode transaction in flight: the backend holding or waiting for the ExclusiveLock on
-# loom.tenancy_mode in this database, which only attach takes.
+# Only acknowledged pre-COMMIT contention permits another try on the same session.
 _TIMED_OUT = frozenset({"55P03", "57014"})
 
 

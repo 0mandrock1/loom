@@ -284,3 +284,24 @@ async def test_successful_body_cannot_hide_failed_required_close(monkeypatch):
     with pytest.raises(OSError, match="required close failed"):
         await cell_control.run("test", AsyncMock(return_value=7))
     assert "TERMINATE" in conn.executed
+
+
+@pytest.mark.asyncio
+async def test_late_connection_arriving_inside_reserve_is_closed_once(monkeypatch):
+    from server.core import pg
+
+    conn = FakeConn()
+
+    async def connect(**_):
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            return conn
+
+    monkeypatch.setattr(pg, "_connect_dedicated", connect)
+    monkeypatch.setattr(cell_control, "OPEN_S", 0.08)
+    work = AsyncMock()
+    with pytest.raises(TimeoutError):
+        await cell_control.run("late", work)
+    work.assert_not_awaited()
+    assert conn.executed == ["CLOSE"]

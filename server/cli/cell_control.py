@@ -138,7 +138,7 @@ class Owner:
         self.conn = await pg._connect_dedicated(statement_timeout_ms=60_000)
         if self.closed:
             # A connector returning after cancellation cannot publish a usable session.
-            await pg.close_owned(self.conn, end=self.close_end or 0)
+            await self.close()
             raise _refused("connection arrived after the control attempt ended")
         try:
             await pg._check_deployment(self.conn)

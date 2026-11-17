@@ -792,7 +792,10 @@ class Router:
         expected = _control(body)
         if isinstance(expected, JSONResponse):
             return expected
-        if len(json.dumps(body, ensure_ascii=True).encode()) > MAX_BODY_BYTES:
+        if (
+            len(json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode())
+            > MAX_BODY_BYTES
+        ):
             return _refused(
                 413,
                 f"a placement batch without its control envelope is at most {MAX_BODY_BYTES} bytes",
