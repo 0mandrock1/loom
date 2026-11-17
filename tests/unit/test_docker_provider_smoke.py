@@ -225,6 +225,9 @@ def test_crash_keeps_the_supervisor_and_verifies_retirement_before_reset(monkeyp
 
 
 def _process_fixture(monkeypatch):
+    from multiprocessing import spawn
+    from types import SimpleNamespace
+
     parent = {
         "pid": 1,
         "parent": 0,
@@ -241,10 +244,8 @@ def _process_fixture(monkeypatch):
             "namespace": 1,
             "executable": "/python",
             "command": [
-                "python",
-                "-c",
-                "from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=4, pipe_handle=8)",
-                "--multiprocessing-fork",
+                str(value, "utf-8") if isinstance(value, bytes) else value
+                for value in spawn.get_command_line(tracker_fd=4, pipe_handle=8)
             ],
         }
         for pid in (8, 9)
@@ -260,7 +261,75 @@ def _process_fixture(monkeypatch):
     ]
     monkeypatch.setattr(data.provider_process, "host_proof", lambda: "h|b|c|1|99|990||")
     monkeypatch.setattr(data, "_process", lambda pid: processes[pid])
+    monkeypatch.setattr(data, "Path", lambda _path: SimpleNamespace(read_text=lambda: "8 9"))
     return parent, processes, rows
+
+
+def test_worker_selection_joins_kernel_children_without_treating_other_participants_as_workers(
+    monkeypatch,
+):
+    parent, processes, rows = _process_fixture(monkeypatch)
+    processes[44] = {
+        **processes[8],
+        "pid": 44,
+        "parent": 0,
+        "start": "440",
+        "command": ["python", "-", "seed"],
+    }
+    mixed = [
+        {
+            **rows[0],
+            "participant_id": "native",
+            "host_proof": "h|b|c|1|44|440|||cell-retirement-v1",
+        },
+        {
+            **rows[0],
+            "participant_id": "reused-pid",
+            "host_proof": "h|b|c|1|8|79|||cell-retirement-v1",
+        },
+        {**rows[0], "participant_id": "gone", "host_proof": "h|b|c|1|66|660|||cell-retirement-v1"},
+        *rows,
+    ]
+    assert data._workers(mixed, parent) == [
+        {k: row[k] for k in ("participant_id", "host_proof", "version")} for row in rows
+    ]
+    assert [row["participant_id"] for row in mixed] == ["native", "reused-pid", "gone", "8", "9"]
+
+
+def test_worker_command_uses_exact_inherited_interpreter_flags(monkeypatch):
+    from multiprocessing import spawn, util
+
+    parent, processes, rows = _process_fixture(monkeypatch)
+    monkeypatch.setattr(util, "_args_from_interpreter_flags", lambda: ["-B"])
+    command = [
+        str(value, "utf-8") if isinstance(value, bytes) else value
+        for value in spawn.get_command_line(tracker_fd=4, pipe_handle=8)
+    ]
+    processes[8] = {**processes[8], "command": command}
+    assert data._worker_process(rows[0]["host_proof"], parent) == processes[8]
+    for flags in (["-E"], ["-B", "-X", "unknown"]):
+        processes[8] = {**processes[8], "command": [command[0], *flags, *command[-3:]]}
+        with pytest.raises(AssertionError, match="interpreter flags"):
+            data._worker_process(rows[0]["host_proof"], parent)
+
+
+def test_kernel_workers_never_ignore_missing_or_mismatched_current_proofs(monkeypatch):
+    parent, processes, rows = _process_fixture(monkeypatch)
+    for proof in (
+        None,
+        "h|b|c|1|8|79|||cell-retirement-v1",
+        "h|b|c|2|8|80|||cell-retirement-v1",
+        "h|b|c|1|8|80|||unknown",
+    ):
+        changed = rows[1:] if proof is None else [{**rows[0], "host_proof": proof}, rows[1]]
+        with pytest.raises(AssertionError, match="exact registrations|certificate invalid"):
+            data._workers(changed, parent)
+    for field, value in (("namespace", 2), ("executable", "/other-python")):
+        original = processes[8]
+        processes[8] = {**original, field: value}
+        with pytest.raises(AssertionError, match=f"{field} mismatch"):
+            data._workers(rows, parent)
+        processes[8] = original
 
 
 def test_worker_selection_requires_registered_supervised_processes(monkeypatch):

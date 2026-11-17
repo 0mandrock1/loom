@@ -3,9 +3,11 @@
 import asyncio
 import json
 import os
+import re
 import signal
 import sys
 import time
+from multiprocessing import spawn
 from pathlib import Path
 
 from server.core import provider_process
@@ -44,39 +46,87 @@ def _process(pid: int) -> dict:
 def _supervisor() -> dict:
     parent, me = _process(1), _process(os.getpid())
     assert parent["command"][1:] == SUPERVISOR, "Unexpected fixture supervisor"
-    assert parent["executable"] == me["executable"]
-    assert parent["namespace"] == me["namespace"]
+    assert parent["executable"] == me["executable"], "Fixture supervisor executable mismatch"
+    assert parent["namespace"] == me["namespace"], "Fixture supervisor PID namespace mismatch"
     return parent
 
 
 def _worker_process(raw: str, parent: dict) -> dict:
     proof = raw.split("|")
-    assert len(proof) == 9 and provider_process.has_certificate(raw)
-    assert proof[:4] == provider_process.host_proof().split("|")[:4]
+    assert len(proof) == 9 and provider_process.has_certificate(raw), "Worker certificate invalid"
+    assert proof[:4] == provider_process.host_proof().split("|")[:4], "Worker proof scope mismatch"
     process = _process(int(proof[4]))
-    assert process["pid"] > 1
-    assert process["parent"] == 1 and process["start"] == proof[5]
-    assert process["namespace"] == parent["namespace"]
-    assert process["executable"] == parent["executable"]
-    command = process["command"]
-    assert len(command) == 4 and command[1] == "-c"
-    assert command[2].startswith("from multiprocessing.spawn import spawn_main; spawn_main(")
-    assert command[3] == "--multiprocessing-fork"
+    pid = process["pid"]
+    assert pid > 1, "Worker identity names the supervisor"
+    assert process["parent"] == 1, f"Worker PID {pid} parent mismatch: {process['parent']} != 1"
+    assert process["start"] == proof[5], f"Worker PID {pid} process-start proof mismatch"
+    assert process["namespace"] == parent["namespace"], f"Worker PID {pid} namespace mismatch"
+    assert process["executable"] == parent["executable"], f"Worker PID {pid} executable mismatch"
+    _spawn_command(process["command"], pid)
     return process
+
+
+def _spawn_command(command: list[str], pid: int) -> None:
+    # The fixed supervisor and exec helper use the same executable and container
+    # startup flags. Let stdlib reproduce those flags, including inherited -B.
+    expected = spawn.get_command_line(tracker_fd=0, pipe_handle=0)
+    assert len(command) == len(expected) and command[1:-2] == expected[1:-2], (
+        f"Worker PID {pid} interpreter flags or -c mismatch"
+    )
+    assert command[-1] == "--multiprocessing-fork", f"Worker PID {pid} fork argument mismatch"
+    assert re.fullmatch(
+        r"from multiprocessing\.spawn import spawn_main; "
+        r"spawn_main\(tracker_fd=[0-9]+, pipe_handle=[0-9]+\)",
+        command[-2],
+    ), f"Worker PID {pid} spawn command mismatch"
+
+
+def _kernel_workers() -> dict[int, dict]:
+    """The supervisor's actual spawn children, before consulting participant history."""
+    found = {}
+    children = Path("/proc/1/task/1/children").read_text().split()
+    for value in children:
+        pid = int(value)
+        process = _process(pid)
+        command = process["command"]
+        if not any(
+            value.startswith("from multiprocessing.spawn import spawn_main;") for value in command
+        ):
+            continue  # The multiprocessing resource tracker is not an application worker.
+        _spawn_command(command, pid)
+        assert process["parent"] == 1, f"Kernel child PID {pid} parent changed during census"
+        assert pid > 1 and pid not in found, "Invalid supervisor child PID census"
+        found[pid] = process
+    assert len(found) == 2, f"Expected two live supervisor spawn children; found {len(found)}"
+    return found
 
 
 def _workers(rows: list[dict], parent: dict) -> list[dict]:
     here = provider_process.host_proof().split("|")
+    children = _kernel_workers()
     workers = []
-    for row in rows:
-        proof = str(row["host_proof"]).split("|")
-        if proof[:4] != here[:4] or row["state"] == "retired":
-            continue
-        _worker_process(row["host_proof"], parent)
+    for pid, process in children.items():
+        matches = []
+        for row in rows:
+            proof = str(row["host_proof"]).split("|")
+            if (
+                len(proof) >= 6
+                and row["state"] != "retired"
+                and proof[:4] == here[:4]
+                and proof[4] == str(pid)
+                and proof[5] == process["start"]
+            ):
+                matches.append(row)
+        assert len(matches) == 1, (
+            f"Worker PID {pid} exact registrations: {len(matches)}; expected 1"
+        )
+        row = matches[0]
+        assert _worker_process(row["host_proof"], parent) == process, (
+            f"Worker PID {pid} changed during proof join"
+        )
         workers.append({key: row[key] for key in ("participant_id", "host_proof", "version")})
-    assert len(workers) <= 2
-    assert len({row["participant_id"] for row in workers}) == len(workers)
-    assert len({row["host_proof"].split("|")[4] for row in workers}) == len(workers)
+    assert len({row["participant_id"] for row in workers}) == 2, "Worker participant IDs collide"
+    assert _kernel_workers() == children, "Supervisor worker identities changed during census"
     return sorted(workers, key=lambda row: row["host_proof"])
 
 
@@ -90,20 +140,21 @@ async def _worker_rows(client) -> list[dict]:
 async def workers(client) -> list[dict]:
     parent = _supervisor()
     result = _workers(await _worker_rows(client), parent)
-    assert len(result) == 2
-    assert _supervisor() == parent
+    assert len(result) == 2, "Worker registration census is incomplete"
+    assert _supervisor() == parent, "Fixture supervisor changed during registration census"
     return result
 
 
 def _kill_worker(worker: dict, parent: dict) -> None:
     proof = worker["host_proof"].split("|")
     pid = int(proof[4])
-    assert pid > 1
+    assert pid > 1, "Refusing to signal the supervisor"
     captured = _worker_process(worker["host_proof"], parent)
     fd = os.pidfd_open(pid)
     try:
         # A reused PID or changed supervisor refuses before the process-bound signal.
-        assert _process(pid) == captured and _supervisor() == parent
+        assert _process(pid) == captured, f"Worker PID {pid} changed after pidfd open"
+        assert _supervisor() == parent, "Fixture supervisor changed before worker signal"
         signal.pidfd_send_signal(fd, signal.SIGKILL)
     finally:
         os.close(fd)
