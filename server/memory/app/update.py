@@ -21,6 +21,7 @@ from server.core.hashing import sha256_value as _content_sha256
 from server.core.naming import named
 from server.core.vectors import codes_state
 from server.embedding import get_embedder
+from server.identity.app.request_scope import request_scope
 from server.identity.domain.read_scope import WHOLE_NAMESPACE
 from server.memory.api.models_crud import (
     MemoryUpdateByIdInput,
@@ -244,6 +245,14 @@ async def _live_rows_for_key(input: MemoryUpdateInput, ch: Any) -> list[dict[str
     under the namespace, newest version first, narrowed by whichever
     identity fields the caller supplied. Expired rows are included: the
     update path answers 409 EXPIRED with a revive hint for them."""
+    # "-" means unset, and "*" too for agent, as in memory.ask.
+    narrowing = {
+        "agent": named(input.agent, wildcard=True),
+        "user_id": named(input.user_id),
+        "session_id": named(input.session_id),
+    }
+    if pg.enabled():
+        return await _pg_live_rows_for_key(input, narrowing)
     where = [
         "org = {org:String}",
         "namespace = {ns:String}",
@@ -255,13 +264,6 @@ async def _live_rows_for_key(input: MemoryUpdateInput, ch: Any) -> list[dict[str
         "org": input.org,
         "ns": input.namespace,
         "key": input.memory_key,
-    }
-    # "-" (the identity sentinel the SDKs stamp) means unset, and "*" too for agent,
-    # as in memory.ask.
-    narrowing = {
-        "agent": named(input.agent, wildcard=True),
-        "user_id": named(input.user_id),
-        "session_id": named(input.session_id),
     }
     for col, val in narrowing.items():
         if val is not None:
@@ -283,6 +285,22 @@ async def _live_rows_for_key(input: MemoryUpdateInput, ch: Any) -> list[dict[str
         if read_your_writes_enabled():
             rows = await ch.query_all(sql.rstrip() + "\n        " + _SEQUENTIAL, params=params)
     return list(rows or [])
+
+
+async def _pg_live_rows_for_key(
+    input: MemoryUpdateInput, narrowing: dict[str, str | None]
+) -> list[dict[str, Any]]:
+    # A new key can be committed before its ClickHouse projection is published.
+    heads = await pg_memory.live_key_heads(
+        input.org, input.namespace, [input.memory_key], scope=request_scope()
+    )
+    candidates = [
+        row
+        for row in heads
+        if row.get("status") in {"active", "duplicate", "conflicted"}
+        and all(value is None or row.get(column) == value for column, value in narrowing.items())
+    ]
+    return sorted(candidates, key=lambda row: int(row["version"]), reverse=True)[:10]
 
 
 def _update_embedding_row(
