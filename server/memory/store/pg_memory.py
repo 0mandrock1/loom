@@ -2088,6 +2088,41 @@ async def live_key_heads(
     return [decode_row(r["row"]) for r in rows]
 
 
+async def update_key_candidates(
+    org: str,
+    namespace: str,
+    memory_key: str,
+    *,
+    scope: Any,
+    agent: str | None = None,
+    user_id: str | None = None,
+    session_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """At most ten live revision candidates, including expired heads, without values."""
+    if pg.unstorable((org, namespace, memory_key, agent or "", user_id or "", session_id or "")):
+        return []  # no head holds what Postgres cannot store
+    args: list[Any] = [org, namespace, memory_key]
+    where = (
+        "org = $1 AND namespace = $2 AND memory_key = $3 "
+        "AND row->>'tombstoned_at' IS NULL "
+        "AND coalesce(row->>'status', 'active') IN ('active', 'duplicate', 'conflicted')"
+    )
+    for column, value in (("agent", agent), ("user_id", user_id), ("session_id", session_id)):
+        if value is not None:
+            args.append(value)
+            where += f" AND {column} = ${len(args)}"
+    where += _scope_sql(scope, args)
+    rows = await pg.fetch(
+        "SELECT memory_id, agent, user_id, session_id, version, "
+        "coalesce(row->>'status', 'active') AS status FROM loom.memory_current "
+        f"WHERE {where} ORDER BY version DESC LIMIT 10",
+        *args,
+    )
+    return [
+        {**dict(r), "memory_id": str(r["memory_id"]), "version": int(r["version"])} for r in rows
+    ]
+
+
 async def live_heads_of(
     org: str, namespace: str, agent: str, user_id: str, memory_key: str
 ) -> list[dict[str, Any]]:
