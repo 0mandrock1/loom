@@ -19,6 +19,7 @@ from server.settings import settings
 ROOT = Path(__file__).resolve().parents[2]
 _CONNECTS = {
     "run_connected",
+    "run_control_connected",
     "connect_checked",
     "connect_declared",
     "check_acceptance",

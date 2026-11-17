@@ -418,8 +418,12 @@ replaces a later cell's under the directory lock after the same check and a fres
 echo. The first cell's probe and upstream addresses are copied from the router's
 configuration at registration, and `loom cell update` replaces them from it, once every
 router replica runs the new values, after the same probe and a check that the new
-upstream reports the cell's deployment id. A prepare rerun never moves an address: it
-refuses while the router replica it reaches is configured with others.
+upstream reports the cell's deployment id. The generation/address CAS does not prove
+all-router agreement: an old router can read fresh expected values and reverse the
+addresses. Keep old endpoints reachable until every router refreshes its routing table
+or restarts after the directory write; config rollout alone does not flush the cache,
+which can persist indefinitely during directory failure. A prepare rerun never moves
+an address: it refuses while the router replica it reaches is configured with others.
 
 **The `first` row.** Prepare writes an explicit, immutable `first` row into every cell's
 Postgres (`loom.cell_first`: a row trigger refuses its update and delete and a statement
@@ -526,27 +530,39 @@ directory, both values of `loom.cell_self`. A prepared cell's issuers and org pa
 are reserved nowhere: the router routes no issuer to it and takes no placement from it
 until attach has run its overlap refusals and written its directory row.
 
-A change to what a cell accepts goes through `loom cell update --config <file>`, under
-the same directory lock as attach; it computes `next` from that configuration with the
-same function the processes use, and refuses while a different `next` is pending; rerun
-with the same configuration, or `--finish`, first writes `next` wherever it is missing.
-It reruns attach's overlap refusals against every other cell's directory row, counting
-both values of each, writes the new fingerprint as `next` to the directory and then to
-`loom.cell_self`, so old and new processes both serve while the new configuration rolls
-out. Finalization first narrows the cell's accepted value durably while the directory
-keeps both reservations. It then requires a complete post-cutoff participant census,
+A change to what a cell accepts goes through `loom cell update --config <file>`
+([operator procedure](../operations/cell-update.md)). The nonsecret settings file
+overlays the CLI's effective settings without installing them. It computes `next`
+with the same function the processes use and refuses while a different `next` is
+pending. Under the directory lock, overlap checks count both values of every other
+cell. Configured placements, their counts, issuer routing and the directory pair
+commit together before local tenancy repair and acceptance of the pair.
+
+`--finish` selects next; `--revert` selects current. Each repairs local tenancy from
+actual same-cell immutable placement winners for both reserved values, using an
+operator read fenced by the generation, exact registration and pair, locked
+root-secret fingerprint, audit and synchronous WAL acknowledgement. First-cell
+lookup fallback is not evidence of a placement. The attaching first cell may still
+lack placements for its preexisting configured orgs; other missing placements
+require directory metadata recovery.
+
+Finalization durably narrows local acceptance while the directory keeps both
+reservations. It then takes a complete post-cutoff participant census and requires
 permanent guarded retirement or verified exact death for every captured identity,
-and a serving target replacement outside that captured set. Heartbeat expiry and
-request deadlines do not prove this. Only afterward may the directory release its
-old reservation. Online finalization needs the [lifecycle baseline](#participant-lifecycle-baseline)
-and controller fencing; SCIM-on changes remain gated on actual per-cell SCIM support. A widened issuer or
-pattern is reserved in the directory before any process accepts it, and a narrowed one
-is released only after none does. A refusal or a wait that runs out keeps both values
-and prints the processes not yet reporting `next`; rerunning resumes, and
-`loom cell update --revert` waits the same way until no live process matches only `next`
-(refusing when `--wait` runs out), then drops `next`, in `loom.cell_self` first, under
-the same lock; a configured org the update placed stays placed in the cell (a placement
-is never deleted).
+including target processes, and a serving target replacement outside that set.
+Only then may the directory release its old reservation. Heartbeat expiry,
+request deadlines, missing participant rows and workers-only replacements do not
+prove this. Online finalization needs the
+[lifecycle baseline](#participant-lifecycle-baseline) and controller fencing;
+SCIM-on candidates and finish remain refused until per-cell SCIM is implemented.
+Revert to SCIM-off current remains supported.
+
+A timeout after cutoff keeps local acceptance single and the directory dual; the
+command reports incomplete turnover. Repeating the selected action takes a fresh
+census. An identical `--config` repairs directory-first interruption and can widen
+local acceptance again; subsequent finalization takes another cutoff and census.
+A singleton no-op still proves local synchronous durability. Every configured org
+placed by an update stays placed and retains its tenancy row after revert.
 
 A new SCIM token changes no fingerprint and needs no `loom cell update`. A cell changes
 its identity provider application as a single deployment does ([SSO and
@@ -1883,10 +1899,10 @@ An integration test with two cells and a router in CI's Postgres job:
   value, a winner of this cell's name under another deployment id answers 503 and writes
   no tenancy row, and a process whose configuration differs from its cell's row places
   nothing;
-- a cell attached with SCIM off and switched on by `loom cell update` refuses while an
-  agent-signup token is live, one minted while the update rolls out included, and a
-  process configured with another cell's issuer answers 503 to every bearer request,
-  reached through the router or directly;
+- `loom cell update --config` and `--finish` refuse a SCIM-on target before an
+  acceptance write until per-cell SCIM support exists; reverting a SCIM-on pending
+  value to SCIM-off current remains supported; a process configured with another
+  cell's issuer answers 503 to every bearer request, through the router or directly;
 - during a `loom cell update`, processes on the old and the new configuration both
   serve, `--finish` releases a narrowed issuer only after no process accepts it, an
   update that dies after its directory write keeps the widened issuer reserved, and
@@ -1900,7 +1916,8 @@ An integration test with two cells and a router in CI's Postgres job:
   refused, and a cell that starts accepting another cell's issuer takes no placements;
 - a process matching neither value of its row answers 503 to sign-in, refresh, the OAuth
   token and device endpoints, the sign-in callback and signup, and its probe route still
-  echoes prepare's nonce; `--revert` waits for processes matching only `next`;
+  echoes prepare's nonce; `--revert` requires permanent retirement of every captured
+  participant, including ones already on current;
   `update --config` refuses while a different `next` is pending, and an update that died
   before its `loom.cell_self` write resumes forward; prepare refuses while a pre-N
   process is live; a configuration change while `attaching` goes through

@@ -902,6 +902,10 @@ jobs:
           tests/integration/test_cell_prepare.py
           tests/integration/test_cell_attach.py
           tests/integration/test_cell_place.py
+          tests/integration/test_cell_update_directory.py
+          tests/integration/test_cell_update_addresses.py
+          tests/integration/test_cell_update_run_pg.py
+          tests/integration/test_cell_update_participants_ch.py
           tests/integration/test_cell_place_cleanup.py
           tests/integration/test_cell_attach_cleanup.py
           tests/integration/test_cell_control_cleanup.py

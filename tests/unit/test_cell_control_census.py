@@ -102,6 +102,7 @@ def test_cell_control_migrations_are_classified():
 # Entries name every sink, including nested callbacks and dynamic table expressions.
 # A new sink, including another statement in an existing owner, requires classification.
 GUARDED_WRITERS = {
+    "server/cli/cell_update_pg.py": {("write.change", "UPDATE", "loom.cell_self"): 1},
     "server/cli/cell_attach_pg.py": {("_mode_transaction", "UPDATE", "loom.tenancy_mode"): 1},
     "server/cli/cell_control.py": {
         ("backout.clear_state", "ALTER TABLE", "loom.cell_first"): 3,
@@ -114,6 +115,7 @@ GUARDED_WRITERS = {
         ("_write_rows.write", "INSERT INTO", "loom.cell_self"): 1,
     },
     "server/router/directory.py": {
+        ("update_addresses.change", "UPDATE", "loom_router.cells"): 1,
         ("set_limit.change", "UPDATE", "loom_router.cells"): 1,
         ("rotate_credential.change", "UPDATE", "loom_router.cells"): 1,
         ("claim.change_locked", "UPDATE", "loom_router.cells"): 1,
@@ -310,6 +312,39 @@ def function(path: str, name: str) -> ast.AST:
 @pytest.mark.parametrize(
     ("path", "name", "required"),
     [
+        (
+            "server/cli/cell_update_run.py",
+            "update",
+            ['cell_control.run("update", run.start)'],
+        ),
+        (
+            "server/cli/cell_update_run.py",
+            "Run.start",
+            [
+                "cell_control.claim(owner.conn, self.call, self.row)",
+                "local.paired(self.state, self.row)",
+            ],
+        ),
+        (
+            "server/cli/cell_update_pg.py",
+            "write",
+            ["owner.transaction(change)"],
+        ),
+        (
+            "server/cli/cell_update_pg.py",
+            "write.change",
+            ["cell_control.paired(conn, registered)", "read(conn, expected.cell)"],
+        ),
+        (
+            "server/router/directory.py",
+            "update_addresses",
+            ["_attach_change(cell_name, expected, change)"],
+        ),
+        (
+            "server/router/directory.py",
+            "configuration_placements",
+            ["_attach_change(cell_name, expected, read)"],
+        ),
         (
             "server/cli/cell_prepare.py",
             "prepare",

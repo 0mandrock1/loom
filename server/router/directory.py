@@ -1044,6 +1044,86 @@ async def claim(cell_name: str, expected: Control) -> Attaching:
     return await _attach_change(cell_name, expected, change_locked, claim=True)
 
 
+async def update_addresses(
+    cell_name: str,
+    probe_url: str,
+    upstream_url: str,
+    *,
+    expected: Control,
+    configured: Callable[[], bool],
+) -> Attaching:
+    """Commit only the addresses whose stores were just proved outside this transaction."""
+
+    async def change(conn: Any, found: Attaching) -> Attaching:
+        if not configured():
+            raise OperatorRefused(
+                "the contacted router's configured addresses changed during proof"
+            )
+        if not found.row.is_first and upstream_url != found.upstream_url:
+            raise OperatorRefused("a later cell probe refresh cannot change its upstream address")
+        await conn.execute(
+            (
+                "UPDATE loom_router.cells SET probe_url=$2, upstream_url=$3, updated_at=now() "
+                "WHERE cell=$1"
+            ),
+            cell_name,
+            probe_url,
+            upstream_url,
+        )
+        await _audit(
+            conn,
+            "addresses",
+            {"cell": cell_name, "probe_url": probe_url, "upstream_url": upstream_url},
+        )
+        row = await conn.fetchrow(f"{_CELL_ATTACH} WHERE cell=$1", cell_name)
+        return _attaching(row, found.other)
+
+    return await _attach_change(cell_name, expected, change)
+
+
+async def configuration_placements(
+    cell_name: str, orgs: list[str], *, expected: Control, keys_fp: str
+) -> list[str]:
+    """Acknowledge actual immutable winners before the cell repairs local tenancy."""
+    _refuse_long(orgs)
+
+    async def read(conn: Any, found: Attaching) -> list[str]:
+        if (
+            await conn.fetchval("SELECT keys_fp FROM loom_router.cells WHERE cell=$1", cell_name)
+            != keys_fp
+        ):
+            raise OperatorRefused(
+                "cell root-secret fingerprint changed; configuration update refuses"
+            )
+        accepted = [
+            value for value in (found.row.current_fp, found.row.next_fp) if value is not None
+        ]
+        if not accepted or any(not fingerprints.readable(value) for value in accepted):
+            raise OperatorRefused(
+                "configured placement proof needs readable directory reservations"
+            )
+        configured = {
+            org for value in accepted for org in value["fields"].get("configured_orgs", [])
+        }
+        if not set(orgs) <= configured:
+            raise OperatorRefused("placement proof names an org outside the reserved configuration")
+        rows = await conn.fetch(
+            "SELECT org, cell FROM loom_router.placements WHERE org=ANY($1::text[]) ORDER BY org",
+            sorted(set(orgs)),
+        )
+        for row in rows:
+            if row["cell"] != cell_name:
+                raise OperatorRefused(f"org {row['org']!r} is placed in cell {row['cell']!r}")
+        await _audit(
+            conn,
+            "configuration_placements",
+            {"cell": cell_name, "named": len(set(orgs)), "held": len(rows)},
+        )
+        return [str(row["org"]) for row in rows]
+
+    return await _attach_change(cell_name, expected, read)
+
+
 async def update_configuration(
     cell_name: str,
     target: dict[str, Any],

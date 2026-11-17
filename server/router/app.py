@@ -53,6 +53,7 @@ import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Any, NamedTuple, Protocol
 from urllib.parse import parse_qs
 from uuid import UUID
@@ -725,6 +726,101 @@ class Router:
             lambda: directory.claim(request.path_params["cell"], expected), _attach_answer
         )
 
+    async def addresses(self, request: Request) -> JSONResponse:
+        if request.method == "GET":
+            if refused := self._operator(request) or _malformed_cell_refusal(request):
+                return refused
+            found = await _read_attaching(request.path_params["cell"])
+            if isinstance(found, JSONResponse):
+                return found
+            return JSONResponse(
+                {
+                    **_attach_answer(found),
+                    "router_upstream_url": _cell_address(settings.router_upstream_url) or "",
+                    "router_upstream_probe_url": _cell_address(settings.router_upstream_probe_url)
+                    or "",
+                }
+            )
+        body = await self._operator_body(request, ATTACH_BEGIN_MAX_BYTES)
+        if isinstance(body, JSONResponse):
+            return body
+        expected = _control(body)
+        if isinstance(expected, JSONResponse):
+            return expected
+        if set(body) != {"probe_url", "upstream_url", "nonces"} or not _nonces_shaped(
+            body.get("nonces")
+        ):
+            return _refused(
+                400, "address refresh requires probe_url, upstream_url and store nonces"
+            )
+        probe_text = _text(body, "probe_url", needed=True)
+        upstream_text = _text(body, "upstream_url")
+        probe_url = _cell_address(probe_text) if probe_text is not None else None
+        upstream_url = _cell_address(upstream_text) if upstream_text else ""
+        if not probe_url or upstream_text is None or upstream_url is None:
+            return _refused(400, "address refresh requires normalized HTTP(S) host-only addresses")
+        found = await _read_attaching(request.path_params["cell"])
+        if isinstance(found, JSONResponse):
+            return found
+        if reason := directory.control_refusal(found, expected):
+            return _refused(409, reason)
+        proposed = replace(found, probe_url=probe_url, upstream_url=upstream_url)
+
+        def configured() -> bool:
+            return not found.row.is_first or (probe_url, upstream_url) == (
+                _cell_address(settings.router_upstream_probe_url),
+                _cell_address(settings.router_upstream_url),
+            )
+
+        if not configured():
+            return _refused(
+                409, "proposed addresses differ from this router's configured upstreams"
+            )
+        if not found.row.is_first and upstream_url != found.upstream_url:
+            return _refused(409, "a later cell probe refresh cannot change its upstream address")
+        if refused := await _probe(
+            proposed, body["nonces"], self._probe_transport, writer="update"
+        ):
+            return refused
+        if found.row.is_first:
+            if refused := await _upstream_check(proposed, self._probe_transport):
+                return refused
+        response = await _answered(
+            lambda: directory.update_addresses(
+                found.row.cell, probe_url, upstream_url, expected=expected, configured=configured
+            ),
+            _attach_answer,
+        )
+        if response.status_code in (200, 503):
+            self._table_at = None
+        return response
+
+    async def configuration_placements(self, request: Request) -> JSONResponse:
+        body = await self._operator_body(request, ATTACH_BEGIN_MAX_BYTES)
+        if isinstance(body, JSONResponse):
+            return body
+        expected = _control(body)
+        if isinstance(expected, JSONResponse):
+            return expected
+        orgs = body.get("orgs")
+        if (
+            set(body) != {"orgs", "keys_fp"}
+            or _text(body, "keys_fp", needed=True) is None
+            or not isinstance(orgs, list)
+            or any(cell_state.named_org(org) is None for org in orgs)
+        ):
+            return _refused(
+                400, "placement proof requires keys_fp and an explicit list of configured org names"
+            )
+        if any(cell_state.org_name_refusal(org) for org in orgs):
+            return _refused(400, "a configured org name is too long", code="ORG_TOO_LONG")
+        return await _answered(
+            lambda: directory.configuration_placements(
+                request.path_params["cell"], orgs, expected=expected, keys_fp=body["keys_fp"]
+            ),
+            lambda held: {"cell": request.path_params["cell"], "orgs": held},
+        )
+
     async def configuration(self, request: Request) -> JSONResponse:
         body = await self._operator_body(request, ATTACH_BEGIN_MAX_BYTES)
         if isinstance(body, JSONResponse):
@@ -737,8 +833,8 @@ class Router:
         action, target, keys_fp = body["action"], body["target_fp"], body["keys_fp"]
         if action not in ("config", "finish", "revert") or not fingerprints.readable(target):
             return _refused(400, "configuration requires a supported action and readable target_fp")
-        if not isinstance(keys_fp, str) or not cell_state.SHA256.fullmatch(keys_fp):
-            return _refused(400, "keys_fp is a SHA-256 fingerprint")
+        if _text(body, "keys_fp", needed=True) is None:
+            return _refused(400, f"keys_fp is text of 1 to {_TEXT_MAX} characters, no NUL")
         if not _nonces_shaped(body["nonces"]):
             return _refused(400, _NONCES_REFUSAL)
         name = request.path_params["cell"]
@@ -1544,6 +1640,16 @@ def build_app(router: Router | None = None) -> Starlette:
             ),
             Route("/cells/v1/operator/cells/{cell}", router.operator_cell, methods=["GET"]),
             Route("/cells/v1/operator/cells/{cell}/claim", router.claim, methods=["POST"]),
+            Route(
+                "/cells/v1/operator/cells/{cell}/addresses",
+                router.addresses,
+                methods=["GET", "POST"],
+            ),
+            Route(
+                "/cells/v1/operator/cells/{cell}/configuration/placements",
+                router.configuration_placements,
+                methods=["POST"],
+            ),
             Route(
                 "/cells/v1/operator/cells/{cell}/configuration",
                 router.configuration,

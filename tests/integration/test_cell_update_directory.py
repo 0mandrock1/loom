@@ -367,3 +367,106 @@ async def test_configuration_http_requires_store_proof_before_any_change(
         )
     else:
         assert await stored(configured) == before
+
+
+@pytest.mark.asyncio
+async def test_configuration_accepts_the_actual_instance_key_fingerprint(configured, monkeypatch):
+    from server.core.deployment_config import fingerprints as instance_fingerprints
+
+    keys = instance_fingerprints(settings)["keys_fp"]
+    assert len(keys) == 32
+    await configured.execute("UPDATE loom_router.cells SET keys_fp=$1 WHERE cell='first'", keys)
+    token = "lco_configuration-real-keys"
+    monkeypatch.setattr(
+        settings, "router_operator_sha256", hashlib.sha256(token.encode()).hexdigest()
+    )
+
+    async def stores_check(*_):
+        return None
+
+    monkeypatch.setattr(app.Router, "_stores_check", stores_check)
+    compare = await observed("first")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app.build_app()), base_url="http://router"
+    ) as client:
+        response = await client.post(
+            "/cells/v1/operator/cells/first/configuration",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "action": "config",
+                "target_fp": fingerprint("first", "new"),
+                "keys_fp": keys,
+                "nonces": {"postgres": "pg", "clickhouse": "ch", "bucket": None},
+                "expected": compare.values | {"mutation_generation": str(compare.generation)},
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["next_fp"] == fingerprint("first", "new")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("winner", ["first", "other", None])
+async def test_configuration_placement_read_proves_actual_winners_without_mutation(
+    configured, winner
+):
+    target = fingerprint("first", "new", ("configured",))
+    await configured.execute(
+        "UPDATE loom_router.cells SET next_fp=$1::jsonb WHERE cell='first'", json.dumps(target)
+    )
+    if winner is not None:
+        await configured.execute(
+            "INSERT INTO loom_router.placements(org,cell) VALUES ('configured',$1)", winner
+        )
+        await configured.execute(
+            "UPDATE loom_router.cells SET placed=placed+1 WHERE cell=$1", winner
+        )
+    before = await stored(configured)
+    compare = await observed("first")
+    if winner == "other":
+        with pytest.raises(directory.OperatorRefused, match="other"):
+            await directory.configuration_placements(
+                "first", ["configured"], expected=compare, keys_fp="c" * 64
+            )
+    else:
+        assert await directory.configuration_placements(
+            "first", ["configured"], expected=compare, keys_fp="c" * 64
+        ) == (["configured"] if winner else [])
+    assert await stored(configured) == before
+
+
+@pytest.mark.asyncio
+async def test_placement_proof_refuses_root_secret_drift_before_local_repair(configured):
+    with pytest.raises(directory.OperatorRefused, match="root-secret"):
+        await directory.configuration_placements(
+            "first", [], expected=await observed("first"), keys_fp="changed"
+        )
+
+
+@pytest.mark.asyncio
+async def test_placement_proof_read_is_a_bounded_durable_noop(configured, monkeypatch):
+    expected = await observed("first")
+    original = directory._connection
+    statements = []
+    before = await stored(configured)
+    wal_before = await configured.fetchval("SELECT pg_current_wal_insert_lsn()")
+
+    @asynccontextmanager
+    async def counted():
+        async with original() as conn:
+            conn.add_query_logger(lambda record: statements.append(record.query))
+            yield conn
+
+    monkeypatch.setattr(directory, "_connection", counted)
+    assert (
+        await directory.configuration_placements("first", [], expected=expected, keys_fp="c" * 64)
+        == []
+    )
+    await asyncio.sleep(0)
+    assert len(statements) == 9, statements
+    assert directory._bound_s(len(statements)) == 120
+    assert directory.CONTROL_MAX_S == 131
+    assert directory._bound_s(len(statements)) <= directory.CONTROL_MAX_S
+    assert sum("pg_logical_emit_message" in sql for sql in statements) == 1
+    assert statements[0] == "BEGIN;" and statements[-1] == "COMMIT;"
+    assert await configured.fetchval("SELECT pg_current_wal_insert_lsn()") > wal_before
+    assert await stored(configured) == before
