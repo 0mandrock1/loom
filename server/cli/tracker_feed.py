@@ -85,10 +85,16 @@ async def _connection(args: argparse.Namespace, endpoint: Any) -> Any:
 
 async def _validate_writer(client: Any, database: str) -> None:
     from server.tracker.domain.github_feed import writer_grants
+    from server.tracker.store import github_feed as store
 
     for statement in ("SHOW GRANTS", "SHOW GRANTS FINAL"):
         rows = await client.query_all(statement)
         writer_grants([str(next(iter(row.values()))) for row in rows], database)
+    if any(
+        row["engine"] not in {"ReplacingMergeTree", "SharedReplacingMergeTree"}
+        for row in await store.table_engines(client)
+    ):
+        raise FeedInputError("unsupported feed record table engine; use a dedicated feed record")
 
 
 async def _run(args: argparse.Namespace) -> dict[str, Any]:

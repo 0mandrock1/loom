@@ -158,12 +158,22 @@ async def database_uuid(ch: _CHClient) -> str:
 
 
 async def owner(ch: _CHClient) -> dict[str, Any] | None:
-    return await ch.query_one("SELECT * FROM feed_owner FINAL LIMIT 1")
+    return await ch.query_one(
+        "SELECT * FROM feed_owner FINAL LIMIT 1 SETTINGS select_sequential_consistency = 1"
+    )
 
 
 async def objects(ch: _CHClient) -> list[dict[str, Any]]:
     return await ch.query_all(
         "SELECT name FROM system.tables WHERE database = currentDatabase() LIMIT 100"
+    )
+
+
+async def table_engines(ch: _CHClient) -> list[dict[str, Any]]:
+    return await ch.query_all(
+        "SELECT name, engine FROM system.tables WHERE database = currentDatabase() "
+        "AND name IN {tables:Array(String)} LIMIT 5 SETTINGS select_sequential_consistency = 1",
+        {"tables": list(TABLES)},
     )
 
 
@@ -174,7 +184,8 @@ async def put_repository(ch: _CHClient, row: dict[str, Any]) -> None:
 async def repository(ch: _CHClient, org: str, repo: str) -> dict[str, Any] | None:
     return await ch.query_one(
         "SELECT * FROM feed_repositories FINAL "
-        "WHERE org = {org:String} AND lower(repository) = lower({repo:String}) LIMIT 1",
+        "WHERE org = {org:String} AND lower(repository) = lower({repo:String}) LIMIT 1 "
+        "SETTINGS select_sequential_consistency = 1",
         {"org": org, "repo": repo},
     )
 
@@ -198,7 +209,7 @@ FROM (
     UNION ALL
     SELECT toUnixTimestamp64Milli(max(version)) AS published_ms
     FROM feed_comments WHERE org = {org:String}
-) LIMIT 1""",
+) LIMIT 1 SETTINGS select_sequential_consistency = 1""",
         {"org": identity["org"]},
     )
     if not clock_row:

@@ -52,6 +52,15 @@ Raw upstream timestamps remain separate and drive API cursors. No model or embed
 call is required. Repository identities retain the registered allowlist's spelling,
 including when the API returns different capitalization.
 
+Owner, repository revision and publication watermark reads request
+`select_sequential_consistency = 1`; the writer lease alone does not make a replica
+current. Feed writers require SharedMergeTree storage or a single self-hosted server,
+following the [read-your-writes guarantees](clickhouse.md#read-your-writes).
+The setting alone does not cover acknowledged writes on self-hosted replicated tables.
+Writer validation accepts only `ReplacingMergeTree` and `SharedReplacingMergeTree`
+for the five feed tables in the connected record database. Replicated, distributed
+and unrecognized table engines are refused before the job can publish.
+
 Each repository has independent item, issue-comment and review-comment cursors. The
 [issues endpoint](https://docs.github.com/en/rest/issues/issues#list-repository-issues)
 lists issues and pull requests together; pull requests are hydrated through their
@@ -102,3 +111,26 @@ views, replay and interrupted cursor publication. A read-only token, when availa
 checks a bounded public-repository slice; a write-capable CLI token is never substituted.
 The feed adds no Loom wire operation or automatic worker. Existing deployments and
 registered trackers are unchanged until an operator initializes and schedules a feed.
+
+## Source entry points
+
+- [CLI](../../server/cli/tracker_feed.py): `register_tracker_feed` and `_run` select the
+  owned record and its separate writer credential; `_validate_writer` checks grants
+  and supported table engines.
+- [Feed application](../../server/tracker/app/github_feed.py): `initialize`, `configure`
+  and `sync` enforce ownership, visibility and publication fencing.
+- [Record store](../../server/tracker/store/github_feed.py): `statements` defines the
+  contract views; `repository` and `put_items` read publication state consistently.
+- [API client](../../server/clients/github_feed.py): `pages` bounds upstream scans;
+  [domain rules](../../server/tracker/domain/github_feed.py) validate identities and
+  choose replay boundaries through `next_cursor`.
+
+## Invariants
+
+- Copied content stays in the team's registered record, with team-owned erasure.
+- Repository identity, visibility and revision checks precede content publication;
+  control reads include acknowledged record writes on the supported storage topology.
+- The record-wide writer lease covers publication and checkpoint writes. An uncertain
+  send retains its claim until it settles; a cursor advances only after acknowledged writes.
+- Whole-millisecond content versions increase across every repository in the record,
+  so combined item/comment bodies remain visible to existing tracker cursors.

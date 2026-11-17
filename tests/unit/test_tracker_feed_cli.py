@@ -92,3 +92,37 @@ async def test_init_refuses_unusable_org_before_connecting(monkeypatch):
     with pytest.raises(FeedInputError, match="configured tracker organization"):
         await cli._run(SimpleNamespace(feed_command="init", org="other"))
     connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "engine",
+    [
+        "",
+        "ReplacingMergeTree",
+        "SharedReplacingMergeTree",
+        "ReplicatedReplacingMergeTree",
+        "Distributed",
+        "UnknownEngine",
+    ],
+)
+async def test_writer_refuses_record_engines_without_acknowledged_read_consistency(engine):
+    from server.tracker.store import github_feed as store
+
+    async def query_all(sql, params=None):
+        if sql.startswith("SHOW GRANTS"):
+            return [
+                {
+                    "grant": "GRANT SELECT, INSERT, CREATE TABLE, CREATE VIEW ON team_record.* TO writer"
+                }
+            ]
+        assert params == {"tables": list(store.TABLES)}
+        assert "database = currentDatabase()" in sql
+        return [{"name": "feed_repositories", "engine": engine}] if engine else []
+
+    client = SimpleNamespace(query_all=query_all)
+    if engine in {"", "ReplacingMergeTree", "SharedReplacingMergeTree"}:
+        await cli._validate_writer(client, "team_record")
+    else:
+        with pytest.raises(FeedInputError, match="unsupported feed record table engine"):
+            await cli._validate_writer(client, "team_record")
