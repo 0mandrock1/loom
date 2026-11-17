@@ -27,7 +27,7 @@ from server.erasure.store.predicates import (
     UID,
 )
 from server.erasure.store.steps_pg import delete_pg_idempotency
-from server.knowledge.domain.source_push import writer_lease_name
+from server.knowledge.domain.source_push import writer_lease_name as push_writer_lease_name
 from server.observability import events_stream
 from server.observability.budget_notifications import writer_lease_name
 from server.settings import settings
@@ -41,7 +41,7 @@ async def delete_source_push_by_namespace(
     """Retirement fenced new setup; settle deletion of every sealed version."""
     total = 0
     for ns in namespaces_of(namespace):
-        async with fenced(writer_lease_name(org, ns), ch=ch) as uncertain:
+        async with fenced(push_writer_lease_name(org, ns), ch=ch) as uncertain:
             uncertain(True)
             total += await delete_scoped(
                 "loom.knowledge_source_push", org=org, scope_where=NS_EQ, params={"ns": ns}, ch=ch
