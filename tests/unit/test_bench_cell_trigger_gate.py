@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import dataclasses
 import json
+import socket
 import uuid
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -35,6 +36,7 @@ def args(**overrides):
             "token": "secret-token",
             "org": "org",
             "namespace": "ns",
+            "launch_manifest": "unused",
             **overrides,
         }
     )
@@ -51,11 +53,27 @@ def fixture_config():
         background_workers="off",
         storage_authority="postgres",
         embedding_provider="fake",
+        embedding_model="fake-ngram-16",
+        embedding_dim=16,
+        embedding_base_url="",
+        embedding_send_dimensions=False,
         llm_provider="fake",
+        llm_model="fake",
+        jwt_secret="test-only-root",
+        deployment=False,
+        instance_heartbeat_seconds=10,
         build_commit="a" * 40,
         pg_delivery_batch_rows=500,
     )
-    config.model_dump = lambda **_: {k: v for k, v in vars(config).items() if k != "model_dump"}
+
+    def dump(**kwargs):
+        return {
+            k: v
+            for k, v in vars(config).items()
+            if k != "model_dump" and ("include" not in kwargs or k in kwargs["include"])
+        }
+
+    config.model_dump = dump
     manifest = gate.Fixture(
         base_url=args().base_url,
         pg_host="127.0.0.1",
@@ -609,7 +627,16 @@ async def test_read_only_preflight_faults_refuse_before_native_setup(monkeypatch
         return (
             []
             if fault == "competing_worker"
-            else [{"instance_id": "instance", "build_commit": "a" * 40, "workers_lease": ""}]
+            else [
+                {
+                    "instance_id": "instance",
+                    "build_commit": "a" * 40,
+                    "workers_lease": "",
+                    "serving": 1,
+                    "host": socket.gethostname(),
+                    **fingerprints,
+                }
+            ]
         )
 
     async def health(*_args):
@@ -623,6 +650,10 @@ async def test_read_only_preflight_faults_refuse_before_native_setup(monkeypatch
     monkeypatch.setattr(gate, "_close_pg", close)
     monkeypatch.setattr(gate, "_health", health)
     monkeypatch.setattr(gate, "_source", lambda _: {"clean": True})
+    from server.core import deployment_config
+
+    fingerprints = deployment_config.fingerprints(config)
+    monkeypatch.setattr(gate, "_launch", lambda *_: {"fingerprints": fingerprints})
     monkeypatch.setattr(instances, "read_live", live)
     monkeypatch.setattr(cell, "mine", lambda: {})
     monkeypatch.setattr(cell, "matches", lambda mine, value: value is not None)
@@ -744,6 +775,7 @@ def test_final_verdict_follows_native_cleanup_and_artifact_close(
     monkeypatch.setattr(server.wiring, "wire", lambda: order.append("wire"))
     monkeypatch.setattr(gate, "_preflight", AsyncMock())
     monkeypatch.setattr(gate, "_source", lambda _: {"clean": True})
+    monkeypatch.setattr(gate, "_launch", lambda *_: {})
 
     def native(*_a, **_kw):
         order.append("native_cleanup")
@@ -969,3 +1001,458 @@ async def test_restoration_has_finite_deadline_and_closes_owned_connection(monke
     with pytest.raises(TimeoutError):
         await gate._cleanup(Stuck(), conn, artifact)
     assert conn.closed
+
+
+@pytest.mark.asyncio
+async def test_review_delivery_timestamps_pass_real_clickhouse_serialization(monkeypatch):
+    import logging
+
+    from clickhouse_connect.datatypes.registry import get_from_name
+    from clickhouse_connect.driver.insert import InsertContext
+
+    import server.embedding
+    from server.core.ch import _insert_data
+    from server.core.polled_copy import PolledCopy
+    from server.embedding.fake import FakeNGramEmbedder
+    from server.llm import customer
+
+    monkeypatch.setattr(
+        customer,
+        "_switch",
+        PolledCopy("switch", AsyncMock(return_value=frozenset()), logging.getLogger(__name__)),
+    )
+    monkeypatch.setattr(server.embedding, "get_embedder", lambda: FakeNGramEmbedder(dim=16))
+    block = await gate._build_block(args(), 1)
+    for col in ("created_at", "updated_at", "last_reinforced_at"):
+        actual_data = _insert_data(block.rows, [col], ["DateTime"])
+        kind = get_from_name("DateTime")
+        context = InsertContext("loom.memory", [col], [kind])
+        context.start_column(col)
+        serialized = bytearray()
+        kind.write_column([row[0] for row in actual_data], serialized, context)
+        assert len(serialized) == 4 * len(block.rows)
+    assert all(
+        row["created_at"] == row["updated_at"] == row["last_reinforced_at"] for row in block.rows
+    )
+
+
+@pytest.mark.asyncio
+async def test_review_trailing_slash_is_normalized_for_actual_health_and_api_routes(monkeypatch):
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route, Router
+
+    fixture, _ = fixture_config()
+    paths = []
+
+    async def health(request):
+        paths.append(request.url.path)
+        return JSONResponse({})
+
+    app = Router(
+        routes=[
+            Route("/v1/health", health),
+            Route("/v1/health/deployment", health),
+            Route("/v1/memory.set", health, methods=["POST"]),
+        ]
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async def send(self, request, **kwargs):
+        response = await transport.handle_async_request(request)
+        await response.aread()
+        return response
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    with pytest.raises(gate.Invalid):
+        await gate._health(args(base_url=fixture.base_url + "/"), fixture)
+    with pytest.raises(gate.Invalid):
+        await gate._memory_set(args(base_url=fixture.base_url + "/"))
+    assert paths == ["/v1/health", "/v1/health/deployment", "/v1/memory.set"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,code", [(302, ""), (503, "PUBLICATION_PENDING")])
+async def test_review_failed_request_keeps_raw_status_elapsed_and_classification(
+    monkeypatch, status, code
+):
+    async def send(self, request, **kwargs):
+        return httpx.Response(
+            status, json={"error": {"code": code, "message": "secret-token"}}, request=request
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    clock = iter([10_000_000, 17_000_000])
+    monkeypatch.setattr(gate.time, "perf_counter_ns", lambda: next(clock))
+    events = []
+    with pytest.raises(gate.Invalid):
+        await gate._memory_set(args(), emit=lambda kind, **record: events.append((kind, record)))
+    assert len(events) == 1 and events[0][0] == "request_error"
+    record = events[0][1]
+    assert record["status"] == status and record["code"] == code
+    assert record["elapsed_ms"] == 7 and record["measured"] is False
+    assert "secret-token" not in json.dumps(events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "",
+        "settings_fp",
+        "keys_fp",
+        "config_fp",
+        "llm_provider",
+        "llm_model",
+        "embedding_model",
+        "embedding_dim_configured",
+        "embedding_dim_probed",
+        "host",
+        "instance",
+        "uuid",
+    ],
+)
+async def test_review_composed_proof_matches_actual_server_fingerprints_and_health(
+    monkeypatch, tmp_path, fault
+):
+    import server.settings
+    from server.core import cell, deployment_config
+
+    fixture, config = fixture_config()
+    fixture, launch_path, _, launch, _ = launch_files(tmp_path, fixture, config)
+    monkeypatch.setattr(gate, "_owned_server", lambda _: None)
+    mine = cell.mine()
+    mine["deployment_id"] = fixture.deployment_id
+    fingerprints = deployment_config.fingerprints(config)
+
+    class PG(ProofPG):
+        async def fetchrow(self, sql, *params):
+            if "FROM loom.cell_self" in sql:
+                return {"current_fp": json.dumps(cell.as_value(mine)), "next_fp": None}
+            return await super().fetchrow(sql, *params)
+
+    class CH(ProofCH):
+        async def query_all(self, sql, params=None):
+            if "FROM loom.instances" in sql:
+                return [
+                    {
+                        "instance_id": fixture.instance_id,
+                        "build_commit": fixture.build_commit,
+                        "workers_lease": "",
+                        "serving": 1,
+                        "host": "other" if fault == "host" else socket.gethostname(),
+                        **fingerprints,
+                        **({fault: "wrong"} if fault.endswith("_fp") else {}),
+                    }
+                ]
+            if "FROM loom.cell_heartbeats" in sql:
+                return [
+                    {
+                        "cell": fixture.cell,
+                        "tenancy_mode": "enforced",
+                        "fingerprint": json.dumps(
+                            {**cell.as_value(mine), "serves": True, "marked": True}
+                        ),
+                    }
+                ]
+            return await super().query_all(sql, params)
+
+    async def send(self, request, **kwargs):
+        body = (
+            {"deployment_id": fixture.deployment_id}
+            if request.url.path.endswith("/deployment")
+            else {
+                "build_commit": fixture.build_commit,
+                "instance": "other:4242"
+                if fault == "instance"
+                else launch["server"]["health_instance"],
+                "deployment_config": {
+                    "instance_id": "other" if fault == "uuid" else fixture.instance_id
+                },
+                "ch_ok": True,
+                "pg_ok": True,
+                "status": "ok",
+                "fake_embedding": True,
+                "fake_llm": True,
+                "pending_migrations": [],
+                "storage_authority": "postgres",
+                "llm_provider": config.llm_provider,
+                "llm_model": config.llm_model,
+                "embedding_model": config.embedding_model,
+                "embedding_dim_configured": config.embedding_dim,
+                "embedding_dim_probed": config.embedding_dim,
+                **(
+                    {fault: 999 if "dim" in fault else "wrong"}
+                    if fault and not fault.endswith("_fp")
+                    else {}
+                ),
+            }
+        )
+        return httpx.Response(200, json=body, request=request)
+
+    monkeypatch.setattr(server.settings, "settings", config)
+    monkeypatch.setattr(gate, "_source", lambda _: {"clean": True})
+    monkeypatch.setattr(cell, "mine", lambda: dict(mine))
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    if fault:
+        with pytest.raises(gate.Invalid):
+            await gate._proof(PG(), CH(), args(launch_manifest=str(launch_path)), fixture)
+    else:
+        proof = await gate._proof(PG(), CH(), args(launch_manifest=str(launch_path)), fixture)
+        assert proof["configuration_sha256"] == fixture.configuration_sha256
+
+
+def launch_files(tmp_path, fixture, config):
+    import os
+    import socket
+
+    from server.core import deployment_config
+
+    public = {
+        k: v
+        for k, v in config.model_dump().items()
+        if k.startswith("pg_")
+        and k != "pg_dsn"
+        or k.startswith("memory_conflict")
+        or k
+        in {
+            "storage_authority",
+            "background_workers",
+            "embedding_provider",
+            "embedding_model",
+            "embedding_dim",
+            "embedding_send_dimensions",
+            "embedding_worker_enabled",
+            "embedding_cache_shared",
+            "embedding_cache_shared_max_chars",
+            "embedding_cache_size",
+            "embedding_cache_ttl_s",
+            "llm_provider",
+            "llm_model",
+        }
+    }
+    configuration = {
+        "schema": 1,
+        "configuration_sha256": fixture.configuration_sha256,
+        "workload": public,
+        "fingerprints": deployment_config.fingerprints(config),
+    }
+    artifact_path = tmp_path / "configuration.json"
+    artifact_bytes = json.dumps(configuration).encode()
+    artifact_path.write_bytes(artifact_bytes)
+    source_path = str(__import__("pathlib").Path(gate.__file__).resolve().parents[1])
+    launch = {
+        "schema": 1,
+        "server": {
+            "pid": 4242,
+            "start_ticks": "123",
+            "boot_id": "fake-boot-id",
+            "uid": os.geteuid(),
+            "cwd": source_path,
+            "health_instance": f"{socket.gethostname()}:4242",
+            "instance_id": fixture.instance_id,
+        },
+        "source": {"head": fixture.build_commit, "tree": fixture.source_tree},
+        "configuration_artifact": {
+            "path": str(artifact_path),
+            "sha256": gate.hashlib.sha256(artifact_bytes).hexdigest(),
+        },
+    }
+    launch_path = tmp_path / "launch.json"
+    launch_bytes = json.dumps(launch).encode()
+    launch_path.write_bytes(launch_bytes)
+    fixture = dataclasses.replace(
+        fixture, launch_manifest_sha256=gate.hashlib.sha256(launch_bytes).hexdigest()
+    )
+    return fixture, launch_path, artifact_path, launch, configuration
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "",
+        "launch_hash",
+        "artifact_hash",
+        "config",
+        "workload",
+        "workload_type",
+        "fingerprints",
+        "source",
+        "instance",
+        "symlink",
+    ],
+)
+def test_launch_receipt_binds_named_owned_process_settings_and_nonsecret_artifact(
+    monkeypatch, tmp_path, fault
+):
+    fixture, config = fixture_config()
+    fixture, path, artifact_path, launch, configuration = launch_files(tmp_path, fixture, config)
+    checked = []
+    monkeypatch.setattr(gate, "_owned_server", lambda server: checked.append(server), raising=False)
+    if fault in {"config", "workload", "workload_type", "fingerprints"}:
+        if fault == "config":
+            configuration["configuration_sha256"] = "0" * 64
+        if fault == "workload":
+            configuration["workload"]["pg_delivery_batch_rows"] = 501
+        if fault == "workload_type":
+            configuration["workload"]["pg_delivery_batch_rows"] = 500.0
+        if fault == "fingerprints":
+            configuration["fingerprints"]["keys_fp"] = "wrong"
+        blob = json.dumps(configuration).encode()
+        artifact_path.write_bytes(blob)
+        launch["configuration_artifact"]["sha256"] = gate.hashlib.sha256(blob).hexdigest()
+    if fault == "artifact_hash":
+        launch["configuration_artifact"]["sha256"] = "0" * 64
+    if fault == "source":
+        launch["source"]["tree"] = "0" * 40
+    if fault == "instance":
+        launch["server"]["instance_id"] = "other"
+    blob = json.dumps(launch).encode()
+    path.write_bytes(blob)
+    fixture = dataclasses.replace(
+        fixture,
+        launch_manifest_sha256="0" * 64
+        if fault == "launch_hash"
+        else gate.hashlib.sha256(blob).hexdigest(),
+    )
+    if fault == "symlink":
+        link = tmp_path / "link.json"
+        link.symlink_to(path)
+        path = link
+    if fault:
+        with pytest.raises((gate.Invalid, OSError)):
+            gate._launch(args(launch_manifest=str(path)), fixture, config)
+    else:
+        result = gate._launch(args(launch_manifest=str(path)), fixture, config)
+        assert result["health_instance"] == launch["server"]["health_instance"]
+        assert result["fingerprints"] == configuration["fingerprints"]
+        assert checked == [launch["server"]]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["", "uid", "actual_uid", "pid", "start", "reuse", "boot", "cwd", "stamp_pid", "stamp_host"],
+)
+def test_owned_server_reads_only_exact_named_birth_metadata(monkeypatch, tmp_path, fault):
+    import os
+    from pathlib import Path
+
+    from server.core import provider_process
+
+    fixture, config = fixture_config()
+    _, _, _, launch, _ = launch_files(tmp_path, fixture, config)
+    server = dict(launch["server"])
+    if fault == "uid":
+        server["uid"] += 1
+    if fault == "pid":
+        server["pid"] = True
+    if fault == "stamp_pid":
+        server["health_instance"] = f"{socket.gethostname()}:4243"
+    if fault == "stamp_host":
+        server["health_instance"] = "other:4242"
+    paths, births = [], []
+    real_stat = Path.stat
+
+    def metadata(path, **kwargs):
+        if str(path).startswith("/proc"):
+            assert str(path) == "/proc/4242"
+            paths.append(str(path))
+            return SimpleNamespace(st_uid=os.geteuid() + int(fault == "actual_uid"))
+        return real_stat(path, **kwargs)
+
+    def start(pid):
+        assert type(pid) is int and pid == 4242
+        births.append(pid)
+        return "wrong" if fault == "start" or fault == "reuse" and len(births) == 2 else "123"
+
+    real_read = Path.read_text
+
+    def read(path, **kwargs):
+        if str(path).startswith("/proc"):
+            assert str(path) == "/proc/sys/kernel/random/boot_id"
+            paths.append(str(path))
+            return "wrong" if fault == "boot" else "fake-boot-id"
+        return real_read(path, **kwargs)
+
+    real_link = os.readlink
+
+    def link(path, **kwargs):
+        if str(path).startswith("/proc"):
+            assert str(path) == "/proc/4242/cwd"
+            paths.append(str(path))
+            return "other" if fault == "cwd" else server["cwd"]
+        return real_link(path, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", metadata)
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(provider_process, "_start_ticks", start)
+    monkeypatch.setattr(os, "readlink", link)
+    if fault:
+        with pytest.raises(gate.Invalid):
+            gate._owned_server(server)
+    else:
+        gate._owned_server(server)
+        assert births == [4242, 4242]
+        assert paths == ["/proc/4242", "/proc/sys/kernel/random/boot_id", "/proc/4242/cwd"]
+
+
+@pytest.mark.asyncio
+async def test_failed_network_request_retains_elapsed_with_no_invented_status(monkeypatch):
+    async def send(self, request, **kwargs):
+        raise httpx.ConnectError("secret-token", request=request)
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+    clock = iter([1_000_000, 3_000_000])
+    monkeypatch.setattr(gate.time, "perf_counter_ns", lambda: next(clock))
+    records = []
+    with pytest.raises(httpx.ConnectError):
+        await gate._memory_set(args(), emit=lambda kind, **record: records.append(record))
+    assert len(records) == 1 and records[0]["elapsed_ms"] == 2
+    assert records[0]["status"] is None and records[0]["code"] == ""
+    assert "secret-token" not in json.dumps(records)
+
+
+def test_nonregular_receipt_open_is_nonblocking_before_type_check(monkeypatch):
+    import os
+
+    def open_receipt(path, flags):
+        assert flags & os.O_NONBLOCK
+        assert flags & os.O_NOFOLLOW
+        raise gate.Invalid("nonregular receipt")
+
+    monkeypatch.setattr(gate.os, "open", open_receipt)
+    with pytest.raises(gate.Invalid, match="nonregular"):
+        gate._receipt("named-owned-receipt")
+
+
+def test_launch_refusal_precedes_any_native_or_store_setup(monkeypatch, tmp_path, capsys):
+    import sys
+
+    import server.settings
+    import server.wiring
+    from server.cli import _ch
+
+    fixture, config = fixture_config()
+    fixture, launch_path, _, _, _ = launch_files(tmp_path, fixture, config)
+    fixture = dataclasses.replace(fixture, launch_manifest_sha256="0" * 64)
+    manifest = tmp_path / "fixture.json"
+    manifest.write_text(json.dumps(dataclasses.asdict(fixture)))
+    arguments = vars(args(launch_manifest=str(launch_path)))
+    arguments.update(fixture_manifest=str(manifest), output=str(tmp_path / "output.jsonl"))
+    argv = ["driver"]
+    for name, value in arguments.items():
+        argv += ["--" + name.replace("_", "-"), str(value)]
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("launch refusal must precede native/process setup")
+
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(server.settings, "settings", config)
+    monkeypatch.setattr(gate, "_source", lambda _: {"clean": True})
+    monkeypatch.setattr(gate, "_owned_server", forbidden)
+    monkeypatch.setattr(gate, "_preflight", forbidden)
+    monkeypatch.setattr(server.wiring, "wire", forbidden)
+    monkeypatch.setattr(_ch, "run_connected", forbidden)
+    assert gate.main() == 1
+    verdict = json.loads(capsys.readouterr().out)
+    assert verdict["verdict"] == "INVALID" and verdict["reason"] == "launch receipt hash"
+    assert not (tmp_path / "output.jsonl").exists()

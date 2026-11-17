@@ -15,6 +15,8 @@ import json
 import math
 import os
 import re
+import socket
+import stat
 import statistics
 import subprocess
 import sys
@@ -241,6 +243,145 @@ def _source(fixture: Fixture) -> dict[str, Any]:
     return {"head": head, "tree": tree, "clean": True}
 
 
+_PUBLIC_WORKLOAD = frozenset(
+    {
+        "storage_authority",
+        "background_workers",
+        "embedding_provider",
+        "embedding_model",
+        "embedding_dim",
+        "embedding_send_dimensions",
+        "embedding_worker_enabled",
+        "embedding_cache_shared",
+        "embedding_cache_shared_max_chars",
+        "embedding_cache_size",
+        "embedding_cache_ttl_s",
+        "llm_provider",
+        "llm_model",
+    }
+)
+
+
+def _workload(config: Any) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in _configuration(config).items()
+        if (key.startswith("pg_") and key != "pg_dsn")
+        or key.startswith("memory_conflict")
+        or key in _PUBLIC_WORKLOAD
+    }
+
+
+def _receipt(path: str) -> tuple[dict[str, Any], str]:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as source:
+        metadata = os.fstat(source.fileno())
+        _require(
+            stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.geteuid(),
+            "owned regular receipt",
+        )
+        raw = source.read(65_537)
+    _require(len(raw) <= 65_536, "receipt size")
+    value = json.loads(raw)
+    _require(isinstance(value, dict), "receipt object")
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def _owned_server(server: dict[str, Any]) -> None:
+    from server.core.provider_process import _start_ticks
+
+    _require(
+        set(server)
+        == {"pid", "start_ticks", "boot_id", "uid", "cwd", "health_instance", "instance_id"},
+        "launch server fields",
+    )
+    pid = server["pid"]
+    _require(
+        type(pid) is int
+        and pid > 1
+        and type(server["uid"]) is int
+        and server["uid"] == os.geteuid(),
+        "launch process ownership",
+    )
+    _require(
+        isinstance(server["start_ticks"], str) and server["start_ticks"].isdigit(),
+        "launch process birth",
+    )
+    root = Path(__file__).resolve().parents[1]
+    _require(
+        server["cwd"] == str(root) and server["health_instance"] == f"{socket.gethostname()}:{pid}",
+        "launch process source/hostname/PID",
+    )
+    proc = Path("/proc") / str(pid)
+    _require(proc.stat().st_uid == os.geteuid(), "actual process ownership")
+    birth = _start_ticks(pid)
+    _require(birth == server["start_ticks"], "actual process birth")
+    boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    _require(
+        boot == server["boot_id"] and os.readlink(proc / "cwd") == str(root),
+        "actual process boot/source",
+    )
+    _require(_start_ticks(pid) == birth, "stable process birth")
+
+
+def _launch(args: argparse.Namespace, fixture: Fixture, config: Any) -> dict[str, Any]:
+    from server.core import deployment_config
+
+    receipt, digest = _receipt(args.launch_manifest)
+    _require(digest == fixture.launch_manifest_sha256, "launch receipt hash")
+    _require(
+        set(receipt) == {"schema", "server", "source", "configuration_artifact"}
+        and type(receipt["schema"]) is int
+        and receipt["schema"] == 1,
+        "launch receipt schema",
+    )
+    server, source, artifact = (
+        receipt[key] for key in ("server", "source", "configuration_artifact")
+    )
+    _require(
+        isinstance(server, dict) and isinstance(source, dict) and isinstance(artifact, dict),
+        "launch receipt objects",
+    )
+    _require(
+        source == {"head": fixture.build_commit, "tree": fixture.source_tree},
+        "launch source identity",
+    )
+    _require(server.get("instance_id") == fixture.instance_id, "launch server UUID")
+    _require(
+        set(artifact) == {"path", "sha256"}
+        and isinstance(artifact["path"], str)
+        and Path(artifact["path"]).is_absolute(),
+        "configuration artifact path",
+    )
+    configuration, artifact_digest = _receipt(artifact["path"])
+    _require(artifact_digest == artifact["sha256"], "configuration artifact hash")
+    _require(
+        set(configuration) == {"schema", "configuration_sha256", "workload", "fingerprints"}
+        and type(configuration["schema"]) is int
+        and configuration["schema"] == 1,
+        "configuration artifact schema",
+    )
+    _require(
+        configuration["configuration_sha256"]
+        == fixture.configuration_sha256
+        == _digest(_configuration(config)),
+        "launch effective configuration",
+    )
+    _require(
+        _digest(configuration["workload"]) == _digest(_workload(config)), "launch workload settings"
+    )
+    fingerprints = deployment_config.fingerprints(config)
+    _require(configuration["fingerprints"] == fingerprints, "launch configuration fingerprints")
+    _owned_server(server)
+    return {
+        "health_instance": server["health_instance"],
+        "fingerprints": fingerprints,
+        "launch_sha256": digest,
+        "configuration_artifact_sha256": artifact_digest,
+        "birth_sha256": _digest(server),
+    }
+
+
 class Artifact:
     def __init__(self, path: str):
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -302,10 +443,14 @@ class ReadOnlyCH:
             await self.client.close()
 
 
-async def _health(args: argparse.Namespace, fixture: Fixture) -> None:
+async def _health(
+    args: argparse.Namespace, fixture: Fixture, launch: Mapping[str, Any] | None = None
+) -> None:
+    from server.settings import settings
+
     async with httpx.AsyncClient(timeout=IO_S, follow_redirects=False, trust_env=False) as client:
-        health = await client.get(f"{args.base_url}/v1/health")
-        deployment = await client.get(f"{args.base_url}/v1/health/deployment")
+        health = await client.get(f"{args.base_url.rstrip('/')}/v1/health")
+        deployment = await client.get(f"{args.base_url.rstrip('/')}/v1/health/deployment")
         _require(health.status_code == deployment.status_code == 200, "health HTTP status")
         h, d = health.json(), deployment.json()
         _require(
@@ -328,6 +473,18 @@ async def _health(args: argparse.Namespace, fixture: Fixture) -> None:
             "serving provider/schema",
         )
         _require(h.get("storage_authority") == "postgres", "serving authority")
+        for field in ("llm_provider", "llm_model", "embedding_model"):
+            _require(h.get(field) == getattr(settings, field), "serving " + field)
+        _require(
+            h.get("llm_provider") == "fake"
+            and type(h.get("embedding_dim_configured")) is int
+            and h["embedding_dim_configured"] == settings.embedding_dim
+            and type(h.get("embedding_dim_probed")) is int
+            and h["embedding_dim_probed"] == settings.embedding_dim,
+            "serving embedding dimensions/fake provider",
+        )
+        launch = launch if launch is not None else _launch(args, fixture, settings)
+        _require(h.get("instance") == launch["health_instance"], "serving owned process")
 
 
 def _object(value: Any) -> dict[str, Any]:
@@ -345,6 +502,7 @@ async def _proof(
 
     fixture.validate(args, settings)
     source = _source(fixture)
+    launch = _launch(args, fixture, settings)
     actual = await conn.fetchrow(
         "SELECT current_database() AS db, inet_server_port() AS port, "
         "pg_is_in_recovery() AS recovery"
@@ -391,8 +549,14 @@ async def _proof(
         len(live) == 1
         and live[0]["instance_id"] == fixture.instance_id
         and live[0]["build_commit"] == fixture.build_commit
+        and live[0].get("serving") == 1
+        and live[0].get("host") == socket.gethostname()
         and not live[0]["workers_lease"],
         "exclusive serving source",
+    )
+    _require(
+        all(live[0].get(key) == value for key, value in launch["fingerprints"].items()),
+        "serving configuration fingerprints",
     )
     beats = await ch.query_all(
         "SELECT instance_id, cell, tenancy_mode, fingerprint FROM "
@@ -414,7 +578,7 @@ async def _proof(
         "serving fingerprint",
     )
     await _debt(conn, 0)
-    await _health(args, fixture)
+    await _health(args, fixture, launch)
     if native:
         await cell.refresh()
         _require(not cell.cli_gate_reason(), "native fresh cell acceptance")
@@ -425,6 +589,7 @@ async def _proof(
         "fingerprint_sha256": _digest(current),
         "configuration_sha256": fixture.configuration_sha256,
         "source": source,
+        "launch": launch,
     }
 
 
@@ -610,9 +775,10 @@ async def _memory_set(
             key = f"{prefix}-{i}"
             value = _payload(key)
             started = time.perf_counter_ns()
+            response = None
             try:
                 response = await client.post(
-                    f"{args.base_url}/v1/memory.set",
+                    f"{args.base_url.rstrip('/')}/v1/memory.set",
                     json={
                         "org": args.org,
                         "namespace": args.namespace,
@@ -658,7 +824,29 @@ async def _memory_set(
                 rows.append(row)
                 emit("request", arm=arm, index=i, status=200, **asdict(row))
             except BaseException as error:
-                emit("request_error", arm=arm, index=i, key=key, error_type=type(error).__name__)
+                elapsed = (time.perf_counter_ns() - started) / 1_000_000
+                code = ""
+                if response is not None:
+                    try:
+                        envelope = response.json()
+                        candidate = envelope.get("error", {}).get("code", "")
+                        if isinstance(candidate, str) and re.fullmatch(
+                            r"[A-Z][A-Z0-9_]{0,63}", candidate
+                        ):
+                            code = candidate
+                    except (ValueError, TypeError, AttributeError):
+                        pass
+                emit(
+                    "request_error",
+                    arm=arm,
+                    index=i,
+                    key=key,
+                    measured=i >= WARMUP,
+                    elapsed_ms=elapsed,
+                    status=response.status_code if response is not None else None,
+                    code=code,
+                    error_type=type(error).__name__,
+                )
                 raise
     return rows
 
@@ -676,8 +864,10 @@ async def _build_block(args: argparse.Namespace, batch: int) -> Block:
     from server.memory.store import pg_memory, pg_publish
     from server.memory.store.rows import (
         MemoryRow,
+        build_first_version_row,
         build_memory_version_row,
         next_version,
+        written_now,
     )
 
     _planned_keys(batch)
@@ -690,18 +880,21 @@ async def _build_block(args: argparse.Namespace, batch: int) -> Block:
             stored = json.dumps(value, sort_keys=True, separators=(",", ":"))
             row = build_memory_version_row(
                 MemoryRow.from_snapshot(
-                    {
-                        "org": args.org,
-                        "namespace": args.namespace,
-                        "agent": "bench",
-                        "memory_key": key,
-                        "memory_type": "semantic",
-                        "value": stored,
-                        "version": next_version(),
-                        "content_sha256": sha256_value(value),
-                        "actor": SUBJECT,
-                        "source_class": "asserted",
-                    }
+                    build_first_version_row(
+                        {
+                            "org": args.org,
+                            "namespace": args.namespace,
+                            "agent": "bench",
+                            "memory_key": key,
+                            "memory_type": "semantic",
+                            "value": stored,
+                            "version": next_version(),
+                            "content_sha256": sha256_value(value),
+                            "actor": SUBJECT,
+                            "source_class": "asserted",
+                        },
+                        now=written_now(),
+                    )
                 )
             )
             row = pg_memory.decode_row(pg_memory.encode_row(row))
@@ -1166,7 +1359,16 @@ def main() -> int:
     from server.wiring import wire
 
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("base-url", "pg-dsn", "token", "org", "namespace", "fixture-manifest", "output"):
+    for name in (
+        "base-url",
+        "pg-dsn",
+        "token",
+        "org",
+        "namespace",
+        "fixture-manifest",
+        "launch-manifest",
+        "output",
+    ):
         parser.add_argument("--" + name, required=True)
     args = parser.parse_args()
     artifact = None
@@ -1176,11 +1378,13 @@ def main() -> int:
         fixture = Fixture.read(args.fixture_manifest)
         total = fixture.validate(args, settings)
         source = _source(fixture)
+        launch = _launch(args, fixture, settings)
         artifact = Artifact(args.output)
         artifact.emit(
             "configuration",
             manifest=asdict(fixture),
             source=source,
+            launch=launch,
             manifest_sha256=_digest(asdict(fixture)),
             calls=CALLS,
             warmup=WARMUP,
