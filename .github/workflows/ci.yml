@@ -905,6 +905,9 @@ jobs:
           tests/integration/test_cell_restore.py
           tests/integration/test_cell_restore_directory.py
           tests/integration/test_cell_restore_reconcile.py
+          tests/integration/test_cell_attach_cleanup.py
+          tests/integration/test_cell_control_cleanup.py
+          tests/integration/test_cell_control_fence.py
           tests/integration/test_cell_org_triggers_pg.py
       - name: pytest placement durability on a private physical standby
         timeout-minutes: 8

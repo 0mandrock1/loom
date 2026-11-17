@@ -11,14 +11,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from server.cli.cell_ch import Refusal, Refused
 from server.core import cell, cell_triggers, pg
 from server.core.cell import ATTACH_LOCK_KEY
+
+if TYPE_CHECKING:
+    from server.cli.cell_control import Owner
 
 _sleep = asyncio.sleep  # the seam the wait tests replace
 
@@ -124,16 +128,11 @@ async def direct_refusals(conn: Any, what: str) -> list[Refusal]:
     outlive the CLI on the pooler's server connection, and attach's tenancy rows would be
     refused as an unchecked writer's."""
     identities = []
-    try:
-        for _ in range(2):
-            tx = conn.transaction()
-            await tx.start()
-            identities.append(await conn.fetchrow(_IDENTITY))
-            await tx.commit()
-    except BaseException:
-        # A cancelled read must not wait for a transaction context's rollback.
-        conn.terminate()
-        raise
+    for _ in range(2):
+        tx = conn.transaction()
+        await tx.start()
+        identities.append(await conn.fetchrow(_IDENTITY))
+        await tx.commit()
     first, second = identities
     out = []
     if first is None or second is None or tuple(first) != tuple(second):
@@ -231,6 +230,7 @@ _SYSTEM_SCHEMA = (
 
 # Every right a login role may hold that lets it make an org held, lower the mode, or run
 # its own SQL as the servers on their marked sessions: each row a role and why.
+# Membership can supply a right through SET ROLE or an ADMIN regrant without INHERIT.
 _RIGHTS = f"""
 WITH owned AS (
     SELECT c.relowner AS owner, 'owns loom.' || c.relname AS why
@@ -248,7 +248,8 @@ WITH owned AS (
     SELECT n.nspowner, 'owns schema ' || n.nspname FROM pg_namespace n WHERE {_SYSTEM_SCHEMA}
 ),
 login AS (SELECT oid, rolname FROM pg_roles WHERE rolcanlogin)
-SELECT r.rolname AS role, w.why FROM login r, LATERAL (
+SELECT DISTINCT l.rolname AS role, w.why FROM login l
+JOIN pg_roles r ON pg_has_role(l.oid, r.oid, 'MEMBER'), LATERAL (
     SELECT 'may insert into loom.tenancy'
     WHERE has_any_column_privilege(r.oid, 'loom.tenancy', 'INSERT')
     UNION ALL SELECT 'may update loom.tenancy (org)'
@@ -273,10 +274,10 @@ SELECT r.rolname AS role, w.why FROM login r, LATERAL (
     UNION ALL SELECT 'is a member of ' || g.rolname FROM pg_roles g
     WHERE g.rolname IN ('pg_write_server_files', 'pg_execute_server_program')
       AND pg_has_role(r.oid, g.oid, 'MEMBER')
-    UNION ALL SELECT o.why || CASE WHEN o.owner = r.oid THEN ''
+    UNION ALL SELECT o.why || CASE WHEN o.owner = l.oid THEN ''
                                    ELSE ' (as a member of ' || pg_get_userbyid(o.owner) || ')'
                               END
-    FROM owned o WHERE pg_has_role(r.oid, o.owner, 'MEMBER')
+    FROM owned o WHERE pg_has_role(l.oid, o.owner, 'MEMBER')
 ) w(why)
 ORDER BY 1, 2
 """
@@ -396,8 +397,10 @@ async def session_passes() -> bool:
 
 _OWN_GRANTS = """
 SELECT need, held FROM (VALUES
-  ('membership in pg_read_all_stats', pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER')),
-  ('membership in pg_signal_backend', pg_has_role(current_user, 'pg_signal_backend', 'MEMBER')),
+  ('effective privileges of pg_read_all_stats',
+   pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')),
+  ('effective privileges of pg_signal_backend',
+   pg_has_role(current_user, 'pg_signal_backend', 'USAGE')),
   ('USAGE on schema loom', has_schema_privilege('loom', 'USAGE')),
   ('SELECT on loom.cell_first', has_table_privilege('loom.cell_first', 'SELECT')),
   ('SELECT on loom.tenancy_mode', has_table_privilege('loom.tenancy_mode', 'SELECT')),
@@ -418,8 +421,8 @@ WHERE NOT held
 
 async def own_role_refusals(conn: Any, tables: list[Any]) -> list[Refusal]:
     """What attach's own role lacks, `tables` being the rows `cell_triggers.ORG_TABLES`
-    read: its grants, `SELECT` on every org table, and membership in the owner role of every
-    table it gives triggers (or the trigger pass could not alter it); and a server that
+    read: its grants, `SELECT` on every org table, and effective owner-role privileges for
+    every table it gives triggers (or the trigger pass could not alter it); and a server that
     allows prepared transactions."""
     role = await conn.fetchval("SELECT current_user")
     lacks = [str(r["need"]) for r in await conn.fetch(_OWN_GRANTS)]
@@ -431,7 +434,7 @@ async def own_role_refusals(conn: Any, tables: list[Any]) -> list[Refusal]:
     planned = set(cell_triggers.planned_names(tables))
     for r in tables:
         if r["relname"] in planned and not r["owned"]:
-            lacks.append(f"membership in the owner role of loom.{r['relname']}")
+            lacks.append(f"effective privileges of the owner role of loom.{r['relname']}")
     out = [Refusal(f"postgres role {role}", f"attach's role lacks {n}") for n in lacks]
     out += await prepared_refusals(conn)
     return out
@@ -456,12 +459,13 @@ _MIGRATION_LOCK = "SELECT pg_advisory_lock($1)"
 _MIGRATION_UNLOCK = "SELECT pg_advisory_unlock($1)"
 
 
-async def ensure_triggers(conn: Any, wait: Wait, log: Callable[[str], None]) -> list[Refusal]:
+async def ensure_triggers(owner: Owner, wait: Wait, log: Callable[[str], None]) -> list[Refusal]:
     """Give every planned table its triggers (`cell_triggers.ensure_table` with
     `recording_first`), one try at a time under the migration lock, retrying a table whose
     lock is busy a second apart within `wait`; one autovacuum holding it is asked to yield
     by one try just past `deadlock_timeout`. A table this role cannot alter refuses at once.
     Then `missing`: any defect refuses."""
+    conn = owner.conn
     deadlock_ms = int(
         await conn.fetchval(
             "SELECT setting::int * CASE unit WHEN 's' THEN 1000 ELSE 1 END "
@@ -470,14 +474,15 @@ async def ensure_triggers(conn: Any, wait: Wait, log: Callable[[str], None]) -> 
     )
     with wait.counting():
         for table in await cell_triggers.planned_tables(conn):
-            if refusal := await _ensure_table(conn, table, deadlock_ms, wait, log):
+            if refusal := await _ensure_table(owner, table, deadlock_ms, wait, log):
                 return [refusal]
     return [Refusal("postgres triggers", d.text) for d in await cell_triggers.missing(conn)]
 
 
 async def _ensure_table(
-    conn: Any, table: str, deadlock_ms: int, wait: Wait, log: Callable[[str], None]
+    owner: Owner, table: str, deadlock_ms: int, wait: Wait, log: Callable[[str], None]
 ) -> Refusal | None:
+    conn = owner.conn
     yielded = False
     said = ""
     while True:
@@ -485,13 +490,14 @@ async def _ensure_table(
         holders = await cell_triggers.holders(conn, table)
         if not yielded and any(h["backend_type"] == "autovacuum worker" for h in holders):
             most_ms, yielded = deadlock_ms + 500, True
-        outcome = await _ensure_one(conn, table, most_ms, wait)
+        outcome = await _ensure_one(owner, table, most_ms, wait)
         if outcome.answer == "applied":
             return None
         if outcome.answer == "denied":
             return Refusal(
                 f"postgres loom.{table}",
-                "attach's role cannot alter it: make the role a member of its owner role",
+                "attach's role cannot alter it: grant inherited privileges of its owner role "
+                "without SET ROLE",
             )
         if not await wait.pause():
             if outcome.holders.startswith(_MIGRATION_HELD):
@@ -522,7 +528,7 @@ async def _migration_holder(conn: Any, key: int) -> str:
     return f"{_MIGRATION_HELD} (held by {held or 'a session that just ended'})"
 
 
-async def _ensure_one(conn: Any, table: str, most_ms: int, wait: Wait) -> cell_triggers.Outcome:
+async def _ensure_one(owner: Owner, table: str, most_ms: int, wait: Wait) -> cell_triggers.Outcome:
     """One try under the migration lock: the migration lock's wait, and then the DDL's lock
     wait (at most `most_ms`), each bounded by what `wait` has left when it starts, with the
     try floor. One client deadline covers the lock, DDL and cleanup, including COMMIT or
@@ -532,30 +538,32 @@ async def _ensure_one(conn: Any, table: str, most_ms: int, wait: Wait) -> cell_t
     bound_s = (
         wait.bound_ms(_MIGRATION_LOCK_MS) + wait.bound_ms(most_ms)
     ) / 1000 + _TRIGGER_TRY_MARGIN_S
+    return await owner.call(
+        lambda: _trigger_try(owner.conn, table, most_ms, wait, _LOCK_KEY), total_s=bound_s
+    )
+
+
+async def _trigger_try(
+    conn: Any, table: str, most_ms: int, wait: Wait, key: int
+) -> cell_triggers.Outcome:
+    await conn.execute(f"SET lock_timeout = '{wait.bound_ms(_MIGRATION_LOCK_MS)}ms'")
     try:
-        async with asyncio.timeout(bound_s):
-            await conn.execute(f"SET lock_timeout = '{wait.bound_ms(_MIGRATION_LOCK_MS)}ms'")
-            try:
-                await conn.execute(_MIGRATION_LOCK, _LOCK_KEY)
-            except Exception as e:
-                if getattr(e, "sqlstate", None) != "55P03":
-                    raise
-                await conn.execute("RESET lock_timeout")
-                return cell_triggers.Outcome("busy", await _migration_holder(conn, _LOCK_KEY))
-            await conn.execute("RESET lock_timeout")
-            outcome = await cell_triggers.ensure_table(
-                conn,
-                table,
-                recording_first=True,
-                lock_timeout=f"{wait.bound_ms(most_ms)}ms",
-                attempts=1,
-            )
-            await conn.execute(_MIGRATION_UNLOCK, _LOCK_KEY)
-            return outcome
-    except BaseException:
-        # Closing the session releases its locks without asynchronous error cleanup.
-        conn.terminate()
-        raise
+        await conn.execute(_MIGRATION_LOCK, key)
+    except Exception as e:
+        if getattr(e, "sqlstate", None) != "55P03":
+            raise
+        await conn.execute("RESET lock_timeout")
+        return cell_triggers.Outcome("busy", await _migration_holder(conn, key))
+    await conn.execute("RESET lock_timeout")
+    outcome = await cell_triggers.ensure_table(
+        conn,
+        table,
+        recording_first=True,
+        lock_timeout=f"{wait.bound_ms(most_ms)}ms",
+        attempts=1,
+    )
+    await conn.execute(_MIGRATION_UNLOCK, key)
+    return outcome
 
 
 def _busy_refusal(table: str, holders: list[Any]) -> Refusal:
@@ -576,54 +584,32 @@ def _busy_refusal(table: str, holders: list[Any]) -> Refusal:
 
 # The mode transaction in flight: the backend holding or waiting for the ExclusiveLock on
 # loom.tenancy_mode in this database, which only attach takes.
-_MODE_HOLDERS = """
-SELECT l.pid, a.application_name, a.xact_start, r.rolsuper, l.granted
-FROM pg_locks l
-JOIN pg_stat_activity a ON a.pid = l.pid
-LEFT JOIN pg_roles r ON r.oid = a.usesysid
-WHERE l.locktype = 'relation' AND l.relation = 'loom.tenancy_mode'::regclass
-  AND l.mode = 'ExclusiveLock'
-  AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
-  AND l.pid <> pg_backend_pid()
-"""
-
 _TIMED_OUT = frozenset({"55P03", "57014"})
-# How long attach waits for an ended mode transaction's lock to clear.
-_END_ROUNDS = 30  # not a setting: checks of the lock
-_END_PAUSE_S = 0.1  # not a setting: the pause between them
 
 
 async def commit_enforced(
-    conn: Any,
+    owner: Owner,
     confirm_lock: Callable[[], Any],
     ready: Callable[[], Awaitable[list[str]]],
     wait: Wait,
     log: Callable[[str], None],
     mark: Callable[[str], None],
+    *,
+    expected_cell: str,
+    expected_fp: tuple[dict[str, Any] | None, dict[str, Any] | None],
 ) -> None:
-    """Raise the mode to `enforced` on `conn` (a session of its own, never the lock
-    session): an EXCLUSIVE lock on loom.tenancy_mode a try, `_MODE_LOCK_MS` each (less
-    when `wait` has less left), within `wait`; `confirm_lock` before each try and each
-    termination (it refuses when another run holds the attach lock), and `ready` before
-    each try (the booting process ids skip the try). After a failed try the in-flight
-    mode transaction, found by its lock, is ended. `mark` hears `unknown` just before a try
-    sends its UPDATE and `recording` when that try rolled back. Raises Refused when `wait`
-    runs out; whether the commit landed is the durable read's to say."""
+    """Raise mode on the exact ATTACH-lock backend; an unknown COMMIT ends this run."""
     with wait.counting():
         while True:
             await confirm_lock()
             booting = await ready()
             if not booting:
-                try:
-                    done = await _mode_try(conn, wait.bound_ms(_MODE_LOCK_MS), mark)
-                except Refused:
-                    mark("recording")  # the UPDATE's transaction rolled back
-                    raise
+                done = await _mode_try(
+                    owner, wait.bound_ms(_MODE_LOCK_MS), mark, expected_cell, expected_fp
+                )
                 if done:
                     return
-                mark("recording")
                 log("the mode's lock is busy; retrying")
-                await end_mode_transactions(conn, confirm_lock)
             if not await wait.pause():
                 if booting:
                     raise Refused(
@@ -643,88 +629,70 @@ async def commit_enforced(
                 )
 
 
-async def _mode_try(conn: Any, lock_ms: int, mark: Callable[[str], None]) -> bool:
-    """One try including rollback or COMMIT, bounded by its lock and statement waits plus
-    the standby allowance; False after a statement timeout rolls back, TimeoutError at
-    the try's deadline."""
+async def _mode_try(
+    owner: Owner,
+    lock_ms: int,
+    mark: Callable[[str], None],
+    expected_cell: str,
+    expected_fp: tuple[dict[str, Any] | None, dict[str, Any] | None],
+) -> bool:
+    """Keep work, acknowledged contention rollback and cleanup in one try budget."""
     bound_s = (lock_ms + _MODE_STATEMENT_MARGIN_MS) / 1000 + _MODE_STANDBY_S
-    try:
-        async with asyncio.timeout(bound_s):
-            tx = conn.transaction()
-            await tx.start()
-            try:
-                await conn.execute(f"SET LOCAL lock_timeout = '{lock_ms}ms'")
-                await conn.execute(
-                    f"SET LOCAL statement_timeout = '{lock_ms + _MODE_STATEMENT_MARGIN_MS}ms'"
-                )
-                await conn.execute("LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE")
-                mark("unknown")
-                status = await conn.execute(
-                    "UPDATE loom.tenancy_mode SET mode = 'enforced', since = now()"
-                )
-                if status != "UPDATE 1":
-                    raise Refused(
-                        [Refusal("postgres loom.tenancy_mode", f"the mode update read {status}")]
-                    )
-            except Exception as e:
-                await tx.rollback()
-                if getattr(e, "sqlstate", None) in _TIMED_OUT:
-                    return False
-                raise
-            await tx.commit()
-        return True
-    except BaseException:
-        # Termination is synchronous: cancellation never starts an unbounded rollback.
-        conn.terminate()
-        raise
-
-
-async def end_mode_transactions(conn: Any, confirm_lock: Callable[[], Any]) -> None:
-    """End an earlier run's mode transaction still in flight and wait, for up to
-    `_END_ROUNDS` checks `_END_PAUSE_S` apart, until its lock clears; Refused when its role
-    is a superuser and attach's is not, or when a backend still holds the lock after the
-    last check, naming it."""
-    rows: list[Any] = []
-    for _ in range(_END_ROUNDS):
-        rows = list(await conn.fetch(_MODE_HOLDERS))
-        if not rows:
-            return
-        superuser = bool(
-            await conn.fetchval("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
-        )
-        for r in rows:
-            if r["rolsuper"] and not superuser:
-                raise Refused(
-                    [
-                        Refusal(
-                            f"postgres backend {r['pid']}",
-                            f"an earlier mode transaction ({r['application_name'] or 'no name'}, "
-                            f"since {r['xact_start']}) runs as a superuser: a superuser must "
-                            "end it (pg_terminate_backend)",
-                        )
-                    ]
-                )
-            await confirm_lock()
-            await conn.fetchval("SELECT pg_terminate_backend($1)", r["pid"])
-        await _sleep(_END_PAUSE_S)
-    if not (rows := list(await conn.fetch(_MODE_HOLDERS))):
-        return
-    raise Refused(
-        [
-            Refusal(
-                f"postgres backend {r['pid']}",
-                f"still holds loom.tenancy_mode's lock after it was ended "
-                f"({r['application_name'] or 'no name'}, since {r['xact_start']}): rerun attach "
-                "once it has gone",
-            )
-            for r in rows
-        ]
+    return await owner.call(
+        lambda: _mode_transaction(owner.conn, lock_ms, mark, expected_cell, expected_fp),
+        total_s=bound_s,
     )
+
+
+async def _mode_transaction(
+    conn: Any,
+    lock_ms: int,
+    mark: Callable[[str], None],
+    expected_cell: str,
+    expected_fp: tuple[dict[str, Any] | None, dict[str, Any] | None],
+) -> bool:
+    from server.cli import cell_control
+
+    tx = conn.transaction()
+    await tx.start()
+    updated = False
+    try:
+        await conn.execute(f"SET LOCAL lock_timeout = '{lock_ms}ms'")
+        await conn.execute(
+            f"SET LOCAL statement_timeout = '{lock_ms + _MODE_STATEMENT_MARGIN_MS}ms'"
+        )
+        await cell_control.check_lock(conn)
+        await conn.execute("LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE")
+        state, first = await read_mode(conn)
+        own = await conn.fetchrow("SELECT current_fp, next_fp FROM loom.cell_self")
+        observed = None if own is None else (own["current_fp"], own["next_fp"])
+        if (
+            state != "recording"
+            or first != (True, expected_cell)
+            or json.dumps(observed, sort_keys=True) != json.dumps(expected_fp, sort_keys=True)
+        ):
+            raise Refused([Refusal("postgres acceptance rows", "changed: stop and rerun attach")])
+        mark("unknown")
+        updated = True
+        status = await conn.execute("UPDATE loom.tenancy_mode SET mode = 'enforced', since = now()")
+        if status != "UPDATE 1":
+            raise Refused([Refusal("postgres loom.tenancy_mode", f"the mode update read {status}")])
+    except Exception as error:
+        if getattr(error, "sqlstate", None) not in _TIMED_OUT:
+            raise
+        await tx.rollback()
+        await cell_control.check_lock(conn)
+        if updated:
+            mark("recording")
+        return False
+    await tx.commit()
+    mark("enforced")
+    return True
 
 
 # -- the durable read -------------------------------------------------------------------
 
-_DURABLE_TRY_S = 10.0  # not a setting: one try's bound; a cancelled one is retried
+_DURABLE_TRY_S = 10.0  # not a setting: the state/WAL/COMMIT phase includes its cleanup
 
 
 @dataclass(frozen=True)
@@ -737,22 +705,26 @@ class Durable:
     xid: int
 
 
-async def durable_read() -> Durable:
-    """The mode and the `first` row read in a transaction that emits a transactional
-    logical message, whose commit waits for the synchronous standbys: once it returns, the
-    mode read is on them. Refused when the message took no xid."""
-    async with asyncio.timeout(_DURABLE_TRY_S), pg.durable_transaction() as conn:
+async def durable_read(owner: Owner) -> Durable:
+    """Read and synchronously fence state on the owner's exact ATTACH backend."""
+    from server.cli import cell_control
+
+    conn = owner.conn
+
+    async def read() -> Durable:
         await conn.execute("SELECT pg_logical_emit_message(true, 'loom.attach', '')")
         xid = await conn.fetchval("SELECT pg_current_xact_id_if_assigned()::text")
         mode = await conn.fetchval("SELECT mode FROM loom.tenancy_mode")
         first = await conn.fetchrow("SELECT is_first, cell FROM loom.cell_first")
-    if xid is None:
-        raise Refused([Refusal("postgres durable read", "its logical message took no xid")])
-    return Durable(
-        mode=str(mode or ""),
-        first=None if first is None else (bool(first["is_first"]), str(first["cell"])),
-        xid=int(xid),
-    )
+        if xid is None:
+            raise Refused([Refusal("postgres durable read", "its logical message took no xid")])
+        return Durable(
+            mode=str(mode or ""),
+            first=None if first is None else (bool(first["is_first"]), str(first["cell"])),
+            xid=int(xid),
+        )
+
+    return await owner.call(lambda: cell_control.transaction(conn, read), total_s=_DURABLE_TRY_S)
 
 
 async def snapshot_xmax(conn: Any) -> int:

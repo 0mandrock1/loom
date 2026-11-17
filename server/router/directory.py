@@ -27,6 +27,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from server.core import cell as cell_state
 from server.core import pg
@@ -66,9 +67,9 @@ def _bound_s(statements: int) -> int:
 # audit, COMMIT. The audit also gives duplicate winners a synchronous durability fence.
 PLACE_STATEMENTS = 10
 PLACE_MAX_S = _bound_s(PLACE_STATEMENTS)  # not a setting: derived
-# The longest a limit or credential change can take: eight statements (begin, lock, row,
-# check, update, audit, read-back, commit). Registration has its own bound, below.
-OPERATOR_CHANGE_MAX_S = _bound_s(8)  # not a setting: derived from the bound above
+# The longest limit/credential change has ten statements: begin, directory lock, row,
+# other row, WAL, credential check, update, audit, read-back and commit.
+OPERATOR_CHANGE_MAX_S = _bound_s(10)  # not a setting: derived from the bound above
 # The longest a registration's directory write can take: thirteen statements (begin, lock,
 # row, five refusal reads, three inserts, read-back, commit); and its read before the probe:
 # six statements (the row, the first cell, then the credential, deployment id, host and
@@ -79,11 +80,11 @@ REFUSAL_READ_MAX_S = _bound_s(REFUSAL_READ_STATEMENTS)
 # The attach calls' statements, which tests/unit/test_router_attach.py counts against the
 # code: the operator's read of a cell's row (the row, any other row, audit); the read before
 # `begin`'s and `serving`'s probe (the row, any other row); `begin`, `enforced` and
-# `serving` (begin, lock, row, other row, update, audit, read-back, commit); a batch (begin,
-# lock, row, other row, insert, placements elsewhere, count, audit, commit); and the removal
-# of an unattached cell (begin, lock, row, delete hosts, delete row, audit, commit).
+# `serving` (begin, lock, row, other row, WAL, update, audit, read-back, commit); a batch
+# (begin, lock, row, other row, WAL, insert, placements elsewhere, count, audit, commit);
+# removal adds other-row and WAL reads before deleting hosts/row and auditing.
 OPERATOR_READ_STATEMENTS, ATTACH_READ_STATEMENTS = 3, 2
-ATTACH_CHANGE_STATEMENTS, ATTACH_PLACE_STATEMENTS, REMOVE_STATEMENTS = 8, 9, 7
+ATTACH_CHANGE_STATEMENTS, ATTACH_PLACE_STATEMENTS, REMOVE_STATEMENTS = 9, 10, 9
 OPERATOR_READ_MAX_S = _bound_s(OPERATOR_READ_STATEMENTS)  # not a setting: derived
 RESTORE_READ_STATEMENTS = 7  # begin, index, cell lock, other, placements, audit, commit
 RESTORE_READ_MAX_S = _bound_s(RESTORE_READ_STATEMENTS)  # not a setting: derived
@@ -116,6 +117,7 @@ class Cell:
     next_fp: dict[str, Any] | None
     # The new credential's hash during a rotation (`loom cell credential --next`).
     credential_next_sha256: str | None
+    mutation_generation: UUID
 
     def holds(self, presented: str) -> bool:
         """Whether `presented` (a credential's SHA-256) is this cell's, current or next."""
@@ -240,7 +242,7 @@ async def migrate() -> list[str]:
 # The columns a Cell holds (read by name: `_cell`).
 _CELL_COLUMNS = (
     "cell, is_first, host, state, mode, closed, placements_max, placed, credential_sha256, "
-    "credential_next_sha256, deployment_id, current_fp, next_fp"
+    "credential_next_sha256, deployment_id, current_fp, next_fp, mutation_generation"
 )
 _CELL = f"SELECT {_CELL_COLUMNS} FROM loom_router.cells"
 
@@ -311,6 +313,7 @@ async def set_limit(
     *,
     closed: bool | _Unset = UNSET,
     placements_max: int | None | _Unset = UNSET,
+    expected: Control,
 ) -> Cell:
     """`loom cell limit`: close or reopen a cell to new orgs and set or clear its
     placement quota, on its row alone, audited; the cell's stores are not touched. A
@@ -320,6 +323,10 @@ async def set_limit(
         raise ValueError("set_limit sets closed, placements_max or both")
 
     async def change(conn: Any, row: Cell) -> dict[str, Any]:
+        if closed is False and row.state == "attaching":
+            raise OperatorRefused(
+                f"cell {cell_name!r} is attaching: it can reopen after attach reaches serving"
+            )
         detail: dict[str, Any] = {}
         if closed is not UNSET:
             detail["closed"] = closed
@@ -333,10 +340,12 @@ async def set_limit(
         )
         return detail
 
-    return await _operator_change(cell_name, "limit", change)
+    return await _operator_change(cell_name, "limit", change, expected)
 
 
-async def rotate_credential(cell_name: str, step: str, sha256: str = "") -> Cell:
+async def rotate_credential(
+    cell_name: str, step: str, sha256: str = "", *, expected: Control
+) -> Cell:
     """`loom cell credential`: `next` records a new credential's hash beside the
     current one, refused when any cell holds it as current or next and while one is
     pending; `finish` makes `next` current and drops the old; `revert` drops `next`.
@@ -374,23 +383,18 @@ async def rotate_credential(cell_name: str, step: str, sha256: str = "") -> Cell
         )
         return {"step": step, **({"sha256": sha256} if sha256 else {})}
 
-    return await _operator_change(cell_name, "credential", change)
+    return await _operator_change(cell_name, "credential", change, expected)
 
 
 async def _operator_change(
-    cell_name: str, action: str, change: Callable[[Any, Cell], Awaitable[dict[str, Any]]]
+    cell_name: str,
+    action: str,
+    change: Callable[[Any, Cell], Awaitable[dict[str, Any]]],
+    expected: Control,
 ) -> Cell:
-    async with _reading(), _connection() as conn, conn.transaction():
-        await conn.execute("SELECT pg_advisory_xact_lock($1)", _DIRECTORY_LOCK)
-        locked = await conn.fetchrow(f"{_CELL} WHERE cell = $1 FOR UPDATE", cell_name)
-        if locked is None:
-            raise NoSuchCell(f"cell {cell_name!r} is not in the directory")
-        detail = await change(conn, _cell(locked))
-        await conn.execute(
-            "INSERT INTO loom_router.audit (actor, action, detail) VALUES ('operator', $1, $2)",
-            action,
-            {"cell": cell_name, **detail},
-        )
+    async with _attach_change(cell_name, expected) as (conn, found):
+        detail = await change(conn, found.row)
+        await _audit(conn, action, {"cell": cell_name, **detail})
         row = await conn.fetchrow(f"{_CELL} WHERE cell = $1", cell_name)
     return _cell(row)
 
@@ -986,17 +990,86 @@ async def restore_read(
         raise OperatorRefused("the directory restore metadata is invalid") from error
 
 
+# Every acceptance controller compares the full registration and exact JSON pair.
+CONTROL_IDENTITY = ("cell", "is_first", "host", "deployment_id", *_REGISTERED)
+CONTROL_FIELDS = (*CONTROL_IDENTITY, "current_fp", "next_fp")
+CONTROL_MAX_S = _bound_s(10)  # not a setting: transaction, commit and pool release bound
+
+
+@dataclass(frozen=True)
+class Control:
+    """The operator's observed registration and pair, with its claimed generation."""
+
+    values: dict[str, Any]
+    generation: UUID | None
+
+
+def control_refusal(found: Attaching, expected: Control, *, claim: bool = False) -> str:
+    if not claim and expected.generation != found.row.mutation_generation:
+        return "cell control generation changed: stop and rerun the command with a fresh claim"
+    actual = {
+        name: getattr(found.row, name) if hasattr(found.row, name) else getattr(found, name)
+        for name in CONTROL_FIELDS
+    }
+    if _as_json(actual) != _as_json(expected.values):
+        return (
+            "cell registration or fingerprints changed: stop and rerun from a fresh directory read"
+        )
+    return ""
+
+
 @asynccontextmanager
-async def _attach_change(cell_name: str) -> AsyncIterator[tuple[Any, Attaching]]:
-    """A directory transaction holding the directory lock and then the cell's row lock, with
-    the row and any other row's name."""
-    async with _reading(), _connection() as conn, conn.transaction():
+async def _control_transaction() -> AsyncIterator[Any]:
+    """Bound acquisition, statements, COMMIT and release; never await rollback on cancel."""
+    async with _reading(), asyncio.timeout(CONTROL_MAX_S), _connection() as conn:
+        settled = False
+        tx = conn.transaction()
+        try:
+            await tx.start()
+            try:
+                yield conn
+            except Exception:
+                await tx.rollback()
+                settled = True
+                raise
+            else:
+                await tx.commit()
+                settled = True
+        finally:
+            if not settled:
+                # A cancelled/unknown COMMIT cannot return this backend to the pool.
+                conn.terminate()
+
+
+@asynccontextmanager
+async def _attach_change(
+    cell_name: str, expected: Control, *, claim: bool = False
+) -> AsyncIterator[tuple[Any, Attaching]]:
+    async with _control_transaction() as conn:
         await conn.execute("SELECT pg_advisory_xact_lock($1)", _DIRECTORY_LOCK)
         found = await conn.fetchrow(f"{_CELL_ATTACH} WHERE cell = $1 FOR UPDATE", cell_name)
         if found is None:
             raise NoSuchCell(f"cell {cell_name!r} is not in the directory")
         other = await conn.fetchval(_OTHER, cell_name)
-        yield conn, _attaching(found, other)
+        attaching = _attaching(found, other)
+        if reason := control_refusal(attaching, expected, claim=claim):
+            raise OperatorRefused(reason)
+        # A no-op still has a synchronous WAL commit: a primary-visible earlier write
+        # whose acknowledgement was lost is not yet a durability proof.
+        await conn.execute("SELECT pg_logical_emit_message(true, 'loom.control', '')")
+        yield conn, attaching
+
+
+async def claim(cell_name: str, expected: Control) -> Attaching:
+    """Rotate on EVERY execution, including an identical HTTP replay."""
+    async with _attach_change(cell_name, expected, claim=True) as (conn, _found):
+        await conn.execute(
+            "UPDATE loom_router.cells SET mutation_generation = gen_random_uuid() WHERE cell = $1",
+            cell_name,
+        )
+        await _audit(conn, "control_claim", {"cell": cell_name})
+        written = await conn.fetchrow(f"{_CELL_ATTACH} WHERE cell = $1", cell_name)
+    return _attaching(written, _found.other)
 
 
 async def _audit(conn: Any, action: str, detail: dict[str, Any]) -> None:
@@ -1007,11 +1080,11 @@ async def _audit(conn: Any, action: str, detail: dict[str, Any]) -> None:
     )
 
 
-async def attach_begin(cell_name: str, begin: Begin) -> Attaching:
+async def attach_begin(cell_name: str, begin: Begin, *, expected: Control) -> Attaching:
     """`attach/begin`: write `attach_started_at` once, the fingerprints while the row has
     none, and the root-secret fingerprint on every call, audited with the allow lists.
     Idempotent: a rerun posting the same fingerprints writes only `keys_fp`."""
-    async with _attach_change(cell_name) as (conn, found):
+    async with _attach_change(cell_name, expected) as (conn, found):
         if reason := begin_refusal(found, begin):
             raise OperatorRefused(reason)
         await conn.execute(
@@ -1037,7 +1110,9 @@ async def attach_begin(cell_name: str, begin: Begin) -> Attaching:
     return _attaching(written, None)
 
 
-async def attach_place(cell_name: str, deployment_id: str, orgs: list[str]) -> tuple[int, int]:
+async def attach_place(
+    cell_name: str, deployment_id: str, orgs: list[str], *, expected: Control
+) -> tuple[int, int]:
     """`attach/place`: place a batch of the first cell's orgs, once its directory mode is
     `enforced`, past its closed mark and quota (the orgs are the cell's already); the count
     it placed now and the cell's count. An org already placed in the cell is skipped, so a
@@ -1047,7 +1122,7 @@ async def attach_place(cell_name: str, deployment_id: str, orgs: list[str]) -> t
     reads `enforced`, judges that."""
     _refuse_long(orgs)
     batch = sorted(set(orgs))
-    async with _attach_change(cell_name) as (conn, found):
+    async with _attach_change(cell_name, expected) as (conn, found):
         if reason := attach_refusal(found, deployment_id, enforced=True):
             raise OperatorRefused(reason)
         new = await conn.fetch(
@@ -1089,10 +1164,10 @@ async def attach_place(cell_name: str, deployment_id: str, orgs: list[str]) -> t
     return len(new), int(placed)
 
 
-async def attach_enforced(cell_name: str, deployment_id: str) -> Attaching:
+async def attach_enforced(cell_name: str, deployment_id: str, *, expected: Control) -> Attaching:
     """`attach/enforced`: record directory mode `enforced` (registration wrote `recording`),
     after which the cell places new orgs live; idempotent."""
-    async with _attach_change(cell_name) as (conn, found):
+    async with _attach_change(cell_name, expected) as (conn, found):
         if reason := attach_refusal(found, deployment_id):
             raise OperatorRefused(reason)
         await conn.execute(
@@ -1121,10 +1196,10 @@ def issuers(row: Cell) -> list[str]:
     return sorted(found)
 
 
-async def attach_serving(cell_name: str, deployment_id: str) -> Attaching:
+async def attach_serving(cell_name: str, deployment_id: str, *, expected: Control) -> Attaching:
     """`attach/serving`: mark the first cell `serving`, with the issuers its fingerprints
     accept computed from the row as locked. A `serving` row is answered as it is."""
-    async with _attach_change(cell_name) as (conn, found):
+    async with _attach_change(cell_name, expected) as (conn, found):
         row = found.row
         if found.served(deployment_id):
             await _audit(conn, "attach_serving", {"cell": cell_name, "serving_already": True})
@@ -1155,7 +1230,7 @@ def remove_refusal(cell_name: str, state: str, placed: int) -> str:
     return ""
 
 
-async def remove(cell_name: str) -> Cell:
+async def remove(cell_name: str, *, expected: Control) -> Cell:
     """`DELETE /cells/v1/operator/cells/<cell>` (`loom cell remove`): remove a cell's row
     and its host rows, audited, while it is `attaching` with no placement, whatever its
     directory mode. A placement in flight either commits first (and the removal refuses) or
@@ -1163,12 +1238,8 @@ async def remove(cell_name: str) -> Cell:
     first cell's Postgres reads `open` first, and a direct call skips that check, leaving a
     first cell still prepared answering its new orgs 503 and unable to register again until
     the full back-out has run."""
-    async with _reading(), _connection() as conn, conn.transaction():
-        await conn.execute("SELECT pg_advisory_xact_lock($1)", _DIRECTORY_LOCK)
-        found = await conn.fetchrow(f"{_CELL} WHERE cell = $1 FOR UPDATE", cell_name)
-        if found is None:
-            raise NoSuchCell(f"cell {cell_name!r} is not in the directory")
-        row = _cell(found)
+    async with _attach_change(cell_name, expected) as (conn, found):
+        row = found.row
         if reason := remove_refusal(cell_name, row.state, row.placed):
             raise OperatorRefused(reason)
         await conn.execute("DELETE FROM loom_router.hosts WHERE cell = $1", cell_name)
