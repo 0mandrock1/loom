@@ -598,6 +598,8 @@ def call(client: Any, model: str, system: str, messages: list[dict[str, str]]) -
                 system=system,
                 messages=messages,
                 output_config={"effort": "low"},
+                # InvokeModel uses Bedrock's request version.
+                extra_body={"anthropic_version": "bedrock-2023-05-31"},
                 timeout=600,
             )
             return reply.to_dict()

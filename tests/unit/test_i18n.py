@@ -471,16 +471,19 @@ def _fake_anthropic(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     return module
 
 
+@pytest.mark.parametrize("model", list(t.PRICES))
 def test_a_call_asks_bedrock_for_the_global_profile_of_the_model(
     monkeypatch: pytest.MonkeyPatch,
+    model: str,
 ) -> None:
     _fake_anthropic(monkeypatch)
     messages = _FakeMessages([])
     client = types.SimpleNamespace(messages=messages)
-    reply = t.call(client, "claude-sonnet-5-5", "system", [{"role": "user", "content": "x"}])
+    reply = t.call(client, model, "system", [{"role": "user", "content": "x"}])
     assert reply["stop_reason"] == "end_turn"
     (request,) = messages.sent
-    assert request["model"] == "global.anthropic.claude-sonnet-5-5"
+    assert request["model"] == f"global.anthropic.{model}"
+    assert request["extra_body"] == {"anthropic_version": "bedrock-2023-05-31"}
     assert request["output_config"] == {"effort": "low"} and request["max_tokens"] == t.MAX_TOKENS
     assert request["system"] == "system" and request["timeout"] == 600
 
