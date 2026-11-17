@@ -34,6 +34,8 @@ if TYPE_CHECKING:
 
     from server.embedding import Embedder
     from server.knowledge.app.search import ChunkHit
+    from server.knowledge.app.search_legs import LegPools
+    from server.knowledge.app.source_search_passes import SearchPasses
 
 # A hit this close (cosine similarity) answers the query: as a first-pass hit it ends a
 # private-first search before its public pass, and it ranks ahead of noise sections.
@@ -46,6 +48,8 @@ _BAD_DEFAULT_LOGGED = LogOnce()
 async def handle_knowledge_search(input: KnowledgeSearchInput) -> KnowledgeSearchOutput:
     from server.auth.context import current_auth
     from server.auth.gateway import is_end_user
+    from server.knowledge.app.source_access import prepare
+    from server.knowledge.app.source_search_passes import SearchPasses
     from server.observability.otel import traced
 
     if is_end_user(current_auth()) and "namespace_scope" not in input.model_fields_set:
@@ -53,13 +57,6 @@ async def handle_knowledge_search(input: KnowledgeSearchInput) -> KnowledgeSearc
         # collection the user reaches: another agent's files stay out of it.
         input = input.model_copy(update={"namespace_scope": "this"})
 
-    embedder = get_embedder()
-    with traced("embed.compute.query", model=embedder.model_name):
-        query_vec = await embedder.embed(input.query)
-    endpoint = _rerank_endpoint(input)
-    pool = settings.knowledge_search_rerank_top if endpoint else 0
-    dropped = _Dropped()
-    search = _namespaces_search(input, embedder, query_vec, pool, dropped)
     skipped: list[str] = []
     if input.namespaces:
         namespaces = await readable_namespaces(input.org, input.namespace, input.namespaces)
@@ -71,7 +68,20 @@ async def handle_knowledge_search(input: KnowledgeSearchInput) -> KnowledgeSearc
             cap=settings.knowledge_search_max_namespaces,
             kinds=settings.knowledge_search_fanout_kinds,
         )
-    results_per_ns = await _search_private_first(input, namespaces, search)
+    plan = await prepare(input.org, namespaces)
+    checked = SearchPasses(plan) if plan.marked else None
+    embedder = get_embedder()
+    with traced("embed.compute.query", model=embedder.model_name):
+        query_vec = await embedder.embed(input.query)
+    endpoint = _rerank_endpoint(input)
+    pool = settings.knowledge_search_rerank_top if endpoint else 0
+    dropped = _Dropped()
+    search = _namespaces_search(input, embedder, query_vec, pool, dropped, checked=checked)
+    results_per_ns = (
+        await _search_marked(input, namespaces, search, checked, dropped)
+        if checked is not None
+        else await _search_private_first(input, namespaces, search)
+    )
     all_hits = _as_search_hits(results_per_ns)
     all_hits.sort(key=lambda x: (x.score, x.similarity), reverse=True)
     reranked_by = ""
@@ -237,6 +247,8 @@ def _namespaces_search(
     query_vec: list[float],
     pool: int,
     dropped: _Dropped,
+    *,
+    checked: SearchPasses | None = None,
 ) -> Callable[[list[str]], Awaitable[list[tuple[str, list[ChunkHit]]]]]:
     """A search over several namespaces in the requested mode, one statement per leg
     whatever their number: the vector leg alone (semantic), the lexical leg alone
@@ -258,7 +270,7 @@ def _namespaces_search(
     # none does): the legs fetch at least that many, not that many times three.
     page_k = max(input.top_k * 3 if input.collapse_sections else input.top_k, pool)
 
-    async def _ranked(namespaces: list[str], top_k: int) -> list[ChunkHit]:
+    async def _ranked(namespaces: list[str], top_k: int) -> LegPools:
         base = HybridSearchQuery(
             org=input.org,
             namespaces=tuple(namespaces),
@@ -275,20 +287,72 @@ def _namespaces_search(
             tokens=tokens,
             keys=keys,
         )
-        legs = await collect(base, input.search_mode, lexical_weight=input.lexical_weight)
-        return legs.ranked()
+        return await collect(base, input.search_mode, lexical_weight=input.lexical_weight)
 
     async def _search(namespaces: list[str]) -> list[tuple[str, list[ChunkHit]]]:
-        hits, gone = await pg_serving.served_search(
-            input.org, functools.partial(_ranked, namespaces), page_k
-        )
+        captured: list[LegPools] = []
+
+        async def fetch(top_k: int) -> list[ChunkHit]:
+            legs = await _ranked(namespaces, top_k)
+            captured[:] = [legs]
+            return legs.ranked()
+
+        hits, gone = await pg_serving.served_search(input.org, fetch, page_k)
         dropped.count += gone
+        if checked is not None:
+            legs = captured[0]
+            serving, fallback = await legs.serving(hits)
+            dropped.count += len(hits) - len(fallback)
+            hits = fallback
+            await checked.collect(
+                legs.query,
+                serving,
+                legs=tuple(legs.pools),
+                fallback=hits,
+                top_k=page_k,
+                lexical_weight=input.lexical_weight,
+            )
         by_ns: dict[str, list[ChunkHit]] = {}
         for hit in hits:
             by_ns.setdefault(hit.namespace, []).append(hit)
         return list(by_ns.items())
 
     return _search
+
+
+async def _search_marked(
+    input: KnowledgeSearchInput,
+    namespaces: list[str],
+    search: Callable[[list[str]], Awaitable[list[tuple[str, list[ChunkHit]]]]],
+    checked: SearchPasses,
+    dropped: _Dropped,
+) -> list[tuple[str, list[ChunkHit]]]:
+    from server.core.ch import set_query_tag
+    from server.core.vectors.private_first import best_similarity, private_first_passes
+
+    possible = [namespaces]
+    if input.namespace_scope == "all_mine" and len(namespaces) > 1:
+        visibility = await namespace_visibility.visibility_map(input.org, namespaces)
+        split = private_first_passes(input.namespace, namespaces, visibility)
+        if split is not None:
+            possible = [names for names in split if names]
+    counts = []
+    set_query_tag("knowledge.mirror.search_passes")
+    for names in possible:
+        before = dropped.count
+        await search(names)
+        counts.append(dropped.count - before)
+    final = await checked.finish()
+    if len(final) > 1:
+        first = [(item.chunk.namespace, [item.chunk]) for item in final[0]]
+        if best_similarity(first, not_noise()) >= PRIVATE_HIT_THRESHOLD:
+            final = final[:1]
+    dropped.count = sum(counts[: len(final)])
+    by_ns: dict[str, list[ChunkHit]] = {}
+    for selected in final:
+        for item in selected:
+            by_ns.setdefault(item.chunk.namespace, []).append(item.chunk)
+    return list(by_ns.items())
 
 
 async def _search_private_first(

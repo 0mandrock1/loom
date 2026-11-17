@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Literal
 
 from server.core import ch, pg
 from server.knowledge.app import bm25 as knowledge_bm25
-from server.knowledge.app import search
+from server.knowledge.app import pg_serving, search
 
 if TYPE_CHECKING:
     from server.knowledge.app.search import ChunkHit, HybridSearchQuery
@@ -33,6 +33,25 @@ class LegPools:
             w_lex=self.lexical_weight,
             by_version=pg.enabled(),
         )
+
+    async def serving(
+        self, fallback: list[ChunkHit]
+    ) -> tuple[dict[Leg, list[ChunkHit]], list[ChunkHit]]:
+        """Filter ordinary heads before they can shadow a checked source copy."""
+        ch.set_query_tag("knowledge.search.serving_legs")
+        candidates = [*fallback, *(hit for pool in self.pools.values() for hit in pool)]
+        kept, _dropped = await pg_serving.keep_served(self.query.org, candidates)
+        alive = {id(hit) for hit in kept}
+        out: dict[Leg, list[ChunkHit]] = {}
+        for leg, pool in self.pools.items():
+            seen = set()
+            out[leg] = []
+            for hit in pool:
+                key = (hit.namespace, hit.source_uri, hit.chunk_idx)
+                if id(hit) in alive and key not in seen:
+                    seen.add(key)
+                    out[leg].append(hit)
+        return out, [hit for hit in fallback if id(hit) in alive]
 
 
 async def collect(
