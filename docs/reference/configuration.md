@@ -1738,6 +1738,7 @@ Process shape, deployment, event stream and cost budgets.
 | `LOOM_KEEPER_SWEEP_INTERVAL_SECONDS` | `float` | `3600.0` |  | Seconds between passes of the always-on sweep that deletes the KeeperMap keys (leases, claims, graph slots) a stopped process left behind. |
 | `LOOM_WORKERS_PROCESS` | `'child' \| 'inline'` | `'child'` |  | auto mode: where the lease holder runs the workers. child = a separate process it starts and stops with the lease, so the passes do not share the event loop that serves requests; inline = in the serving process. |
 | `LOOM_SHUTDOWN_READY_DELAY_S` | `float` | `15.0` |  | Seconds a process keeps serving after SIGTERM while /v1/health/ready answers 503, so the load balancer stops routing to it before its port closes. Size it to the LB's probe interval × failure threshold. 0 = stop at once. |
+| `LOOM_NATIVE_COMMAND_DRAIN_TIMEOUT_S` | `float` | `15.0` |  | Seconds a native CLI command allows its producers, deferred writes and participant retirement to finish. Expiry leaves the participant unretired. |
 | `LOOM_BOOT_WARMUP_TIMEOUT_S` | `float` | `30.0` |  | Seconds boot waits for the first load of the tracker registry and the runtime overrides, and the first publish of the dashboard bundle, before it serves; readiness stays false until the first two load. |
 | `LOOM_READY_REQUIRES_MIRRORS` | `bool` | `False` |  | True: /v1/health/ready also waits until the mirror warm-up has queued its clones and while a clone of this host's git mirrors is running or queued (a failed clone does not hold it). Needs LOOM_CODE_MIRROR_WARMUP: without the warm-up nothing is cloned at boot and readiness does not wait for mirrors. Off by default: history ops answer `no_git_mirror` meanwhile. |
 | `LOOM_RUNTIME_OVERRIDES_REFRESH_SECONDS` | `float` | `10.0` |  | Seconds between re-reads of loom.runtime_overrides (the admin rate-limit, latency-budget and live-setting overrides) in every process. |
@@ -1748,6 +1749,9 @@ Process shape, deployment, event stream and cost budgets.
 | `LOOM_BIND_HOST` | `str` | `'127.0.0.1'` |  | The address Loom is reachable on: `loom serve` and `make server` bind it; in a container (which listens on all its interfaces) it is the address the port is published on. Anything but loopback turns on the startup checks in the deployment guide's "Proxy and TLS" section. |
 | `LOOM_TRUSTED_PROXIES` | `str` | `'127.0.0.1'` |  | Comma-separated peer addresses or CIDRs whose X-Forwarded-For/Proto headers uvicorn applies; any other peer's are ignored. "*" trusts all. Required behind a load balancer: at the default every client counts as the balancer's address for the sign-in and sign-up limits. |
 | `LOOM_ALLOW_INSECURE` | `bool` | `False` |  | True lets a non-loopback bind start with auth off, MCP open mode, open self-signup outside trust-network, the dev signing secret or a weak root, gateway or end-user key. Only for a port others cannot reach. |
+| `LOOM_TLS_CERT_FILE` | `str` | `''` |  | PEM certificate chain the web port serves, with tls_key_file: both set, HTTPS only and a renewed pair served without a restart (scripts/serve.sh, `loom serve`); both "", HTTP. |
+| `LOOM_TLS_KEY_FILE` | `str` | `''` |  | PEM private key of tls_cert_file, not encrypted: a key that needs a passphrase is refused. |
+| `LOOM_TLS_MIN_VERSION` | `'1.2' \| '1.3'` | `'1.2'` |  | Lowest TLS version the web port accepts with tls_cert_file: "1.2" or "1.3". |
 
 ### Outbound HTTP
 
