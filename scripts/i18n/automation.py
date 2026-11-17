@@ -147,15 +147,18 @@ def reserve(total: Decimal, every: bool, codes: list[str] | None) -> float:
 
 
 def approved_languages(codes: list[str] | None = None) -> list[str]:
-    approved = os.environ.get("LOOM_I18N_LANGUAGES", "").split()
+    approved = os.environ.get("LOOM_I18N_LANGUAGES", "").split() or list(t.ROLLOUT_LANGUAGES)
     known = {lang.code for lang in t.LANGUAGES}
     if not set(approved) <= known:
         raise ValueError("LOOM_I18N_LANGUAGES contains an unknown language")
     if not set(approved) <= set(t.ROLLOUT_LANGUAGES):
-        raise ValueError("configured language is outside the Japanese rollout")
-    if codes is not None and not set(codes) <= set(approved):
+        raise ValueError("configured language is outside the active translation rollout")
+    selected = os.environ.get("LOOM_I18N_BATCH_LANGUAGES", "").split() or approved
+    if not set(selected) <= set(approved):
+        raise ValueError("batch language lacks repository approval")
+    if codes is not None and not set(codes) <= set(selected):
         raise ValueError("requested language lacks repository approval")
-    return sorted(set(approved if codes is None else codes))
+    return sorted(set(selected if codes is None else codes))
 
 
 def prepare() -> None:
@@ -205,7 +208,8 @@ def generated_path(path: str, text: str, *, deleted: bool) -> bool:
         return False
     if not text.startswith(t.header(source, language, model, blob)):
         return False
-    if checkpoint and language.code not in t.ROLLOUT_LANGUAGES and not deleted:
+    # Hidden archives carry ownership, not permission to activate.
+    if checkpoint and not deleted:
         return True
     return (
         (checkpoint or source not in t.sources())
@@ -241,6 +245,7 @@ def validate_changes(base: str, candidate: str) -> None:
 
 
 def publish() -> None:
+    codes = approved_languages()
     configure_git()
     if t.check(skip_stale=True):
         raise ValueError("translation validation failed")
@@ -267,11 +272,12 @@ def publish() -> None:
             "-p",
             base,
             input_text=(
-                f"Japanese translations follow {base[:9]}\n\n"
-                f"Signed-off-by: {BOT_NAME} <{BOT_EMAIL}>\n"
+                f"Translations follow {base[:9]}\n\nSigned-off-by: {BOT_NAME} <{BOT_EMAIL}>\n"
             ),
         )
     validate_changes(base, candidate)
+    if not rollout_changes_allowed(base, candidate, codes):
+        raise ValueError("translation publisher refuses changes outside the selected batch")
     if candidate != previous:
         git(
             "push",
@@ -279,7 +285,7 @@ def publish() -> None:
             f"{candidate}:{PENDING}",
             f"--force-with-lease={PENDING}:{previous or ''}",
         )
-    publish_pr(f"Japanese translations follow {base[:9]}")
+    publish_pr(f"Translations follow {base[:9]}")
     command(
         "gh",
         "workflow",
@@ -303,8 +309,8 @@ Machine translations follow the English source after its merge.
 ### Scope and risk
 
 This generated-data batch preserves pending coverage and link dependencies. Missing
-or stale Japanese pages remain queued for bounded batches. Deferred locale artifacts
-stay intact. No executable source changes.
+or stale pages remain queued for bounded batches across all five translation locales.
+Checkpoints outside a requested batch stay intact. No executable source changes.
 
 ### Compatibility, rollout and rollback
 

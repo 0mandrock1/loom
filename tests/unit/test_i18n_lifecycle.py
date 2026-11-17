@@ -121,6 +121,33 @@ def test_changed_present_pages_precede_new_pages(repo: pathlib.Path) -> None:
     assert selected[0] == ("docs/b.md", JA)
 
 
+def test_default_batches_progress_across_all_five_locales_with_one_shared_cap(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake(source: str, lang: t.Language, client: object, spend: t.Spend) -> None:
+        calls.append((source, lang.code))
+        text, line = t.prepare(source, lang)
+        body = "\n".join(t.english_requests(text))
+        body = body.replace("# Alpha", "# Uno").replace("# Beta", "# Dos")
+        lc.stage(
+            t.target_path(lang.code, source), t.render(source, lang, body, line, t.DEFAULT_MODEL)
+        )
+
+    monkeypatch.setenv("LOOM_I18N_MAX_USD", "1")
+    monkeypatch.setattr(t, "estimate_usd", lambda model, chars: 1.0)
+    monkeypatch.setattr(t, "bedrock_client", lambda: None)
+    monkeypatch.setattr(t, "translate_page", fake)
+    expected = {(source, code) for source in t.sources() for code in t.ROLLOUT_LANGUAGES}
+    for completed in range(1, len(expected) + 1):
+        assert t.main(["update"]) == 0
+        assert len(calls) == completed
+        assert len(set(calls)) == completed
+    assert set(calls) == expected
+    assert t.stale() == []
+
+
 def test_checkpoint_waits_for_inbound_anchor_repair_without_retranslation(
     repo: pathlib.Path,
 ) -> None:

@@ -582,20 +582,33 @@ def test_update_cli_selects_only_rollout_languages_by_default(
 ) -> None:
     calls: list[tuple[bool, list[str] | None]] = []
     monkeypatch.setattr(t, "update", lambda every, codes: calls.append((every, codes)) or 0)
-    assert t.ROLLOUT_LANGUAGES == ("ja",)
+    assert t.ROLLOUT_LANGUAGES == ("zh-CN", "ja", "ko", "pt-BR", "es")
     assert {language.code for language in t.LANGUAGES} == {"zh-CN", "ja", "ko", "pt-BR", "es"}
     assert t.main(["update"]) == 0
-    assert calls == [(False, ["ja"])]
+    assert calls == [(False, list(t.ROLLOUT_LANGUAGES))]
 
 
-@pytest.mark.parametrize("code", ["zh-CN", "ko", "pt-BR", "es"])
-def test_update_cli_refuses_deferred_languages_before_any_mutation(
+@pytest.mark.parametrize("code", ["fr", "id", "xx"])
+def test_update_cli_refuses_additional_languages_before_any_mutation(
     monkeypatch: pytest.MonkeyPatch,
     code: str,
 ) -> None:
-    monkeypatch.setattr(t, "update", lambda *args: pytest.fail("deferred locale reached update"))
+    ja = t.LANGUAGES[1]
+    extra = t.Language(code, code, code, ja.banner, ja.style)
+    monkeypatch.setattr(t, "LANGUAGES", (*t.LANGUAGES, extra))
+    monkeypatch.setattr(t, "update", lambda *args: pytest.fail("additional locale reached update"))
     with pytest.raises(SystemExit):
         t.main(["update", "--all", "--lang", code])
+
+
+@pytest.mark.parametrize("code", ["zh-CN", "ja", "ko", "pt-BR", "es"])
+def test_update_cli_accepts_each_retained_locale(
+    monkeypatch: pytest.MonkeyPatch, code: str
+) -> None:
+    calls: list[tuple[bool, list[str]]] = []
+    monkeypatch.setattr(t, "update", lambda every, codes: calls.append((every, codes)) or 0)
+    assert t.main(["update", "--lang", code]) == 0
+    assert calls == [(False, [code])]
 
 
 def test_language_line_maintenance_preserves_nonselected_locale_bytes(

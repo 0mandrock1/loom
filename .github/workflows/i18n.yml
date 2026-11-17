@@ -22,7 +22,7 @@ on:
         type: boolean
         default: false
       languages:
-        description: Selected Japanese rollout codes (empty for configured subset)
+        description: Language codes separated by spaces (empty for all five or configured subset)
         type: string
         default: ""
 
@@ -47,6 +47,7 @@ jobs:
       pull-requests: write
     env:
       LOOM_I18N_LANGUAGES: ${{ vars.LOOM_I18N_LANGUAGES }}
+      LOOM_I18N_BATCH_LANGUAGES: ${{ inputs.languages }}
     defaults:
       run:
         shell: bash
@@ -73,12 +74,10 @@ jobs:
         env:
           LOOM_I18N_TOTAL_USD: ${{ vars.LOOM_I18N_TOTAL_USD || '0' }}
           ALL: ${{ inputs.all }}
-          LANGUAGES: ${{ inputs.languages }}
         run: |
           export AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
           args=()
           if [ "$ALL" = "true" ]; then args+=(--all); fi
-          for code in $LANGUAGES; do args+=(--lang "$code"); done
           python -m scripts.i18n.automation update "${args[@]}" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Validate and publish for hosted CI
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' && steps.translate.outcome != 'skipped' }}

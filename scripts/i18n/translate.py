@@ -31,7 +31,7 @@ from scripts.i18n import lifecycle, refresh
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = "i18n"
 REPO_URL = "https://github.com/ClickHouse/loom"
-ROLLOUT_LANGUAGES = ("ja",)
+ROLLOUT_LANGUAGES = ("zh-CN", "ja", "ko", "pt-BR", "es")
 
 
 def sources() -> tuple[str, ...]:

@@ -232,6 +232,7 @@ def test_paid_runner_remains_main_only_with_finite_cumulative_default() -> None:
     workflow = yaml.load((root / ".github/workflows/i18n.yml").read_text(), Loader=yaml.BaseLoader)
     assert "pull_request" not in workflow["on"]
     update = workflow["jobs"]["update"]
+    assert update["env"]["LOOM_I18N_BATCH_LANGUAGES"] == "${{ inputs.languages }}"
     assert "github.ref == 'refs/heads/main'" in update["if"]
     assert update["environment"] == "i18n"
     assert "workflow_run" not in update["if"]
@@ -418,7 +419,7 @@ def test_hosted_finalizer_respects_reviews_and_merges_only_exact_successful_head
         return ""
 
     monkeypatch.setattr(a, "command", command)
-    permitted = published_code in approved.split()
+    permitted = published_code in (approved.split() or list(a.t.ROLLOUT_LANGUAGES))
     if merged and permitted and site_raises:
         with pytest.raises(RuntimeError, match="strict site build failed"):
             a.finalize()
@@ -554,13 +555,19 @@ def test_publisher_validates_unicode_and_space_paths_without_git_quote_parsing(
         a.validate_changes(base, commit_all())
 
 
-def test_missing_language_approval_defers_without_reservation_or_generation(
+@pytest.mark.parametrize("configured", [None, ""])
+def test_default_selection_keeps_all_five_locales_with_zero_allowance(
     monkeypatch: pytest.MonkeyPatch,
+    configured: str | None,
 ) -> None:
-    monkeypatch.delenv("LOOM_I18N_LANGUAGES", raising=False)
-    monkeypatch.setenv("LOOM_I18N_TOTAL_USD", "200")
+    if configured is None:
+        monkeypatch.delenv("LOOM_I18N_LANGUAGES", raising=False)
+    else:
+        monkeypatch.setenv("LOOM_I18N_LANGUAGES", configured)
+    monkeypatch.delenv("LOOM_I18N_TOTAL_USD", raising=False)
     monkeypatch.setattr(a, "configure_git", lambda: None)
-    monkeypatch.setattr(a, "reserve", lambda *args: pytest.fail("unapproved reservation"))
+    reservations: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(a, "reserve", lambda *args: reservations.append(args) or 0.0)
     calls: list[tuple[bool, list[str] | None, str]] = []
     monkeypatch.setattr(
         a.t,
@@ -568,7 +575,9 @@ def test_missing_language_approval_defers_without_reservation_or_generation(
         lambda every, codes: calls.append((every, codes, a.os.environ["LOOM_I18N_MAX_USD"])) or 0,
     )
     a.update(True, None)
-    assert calls == [(False, [], "0.0")]
+    expected = sorted(a.t.ROLLOUT_LANGUAGES)
+    assert reservations == [(Decimal(0), True, expected)]
+    assert calls == [(True, expected, "0.0")]
 
 
 def test_persistent_approval_selects_only_configured_languages(
@@ -591,11 +600,10 @@ def test_persistent_approval_selects_only_configured_languages(
     [
         ("unknown", None),
         ("ja", ["es"]),
-        ("", ["ja"]),
-        ("es", None),
-        ("zh-CN ja", None),
-        ("ko", ["ko"]),
-        ("pt-BR", None),
+        ("ja", ["zh-CN"]),
+        ("fr", None),
+        ("ko", ["pt-BR"]),
+        ("pt-BR", ["es"]),
     ],
 )
 def test_unapproved_or_unknown_languages_refuse_before_budget_reservation(
@@ -607,6 +615,46 @@ def test_unapproved_or_unknown_languages_refuse_before_budget_reservation(
     monkeypatch.setattr(a, "reserve", lambda *args: pytest.fail("unapproved reservation"))
     with pytest.raises(ValueError, match="language"):
         a.update(False, requested)
+
+
+@pytest.mark.parametrize(
+    "configured,batch,requested",
+    [("", "fr", None), ("ja", "es", None), ("", "ja", ["es"])],
+)
+def test_invalid_batch_selection_refuses_before_mutation_or_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+    batch: str,
+    requested: list[str] | None,
+) -> None:
+    monkeypatch.setenv("LOOM_I18N_LANGUAGES", configured)
+    monkeypatch.setenv("LOOM_I18N_BATCH_LANGUAGES", batch)
+    monkeypatch.setattr(a, "configure_git", lambda: pytest.fail("invalid batch mutated Git"))
+    monkeypatch.setattr(a, "reserve", lambda *args: pytest.fail("invalid batch reserved money"))
+    with pytest.raises(ValueError, match="language"):
+        a.update(False, requested)
+
+
+def test_publisher_refuses_changes_outside_requested_batch_before_push(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LOOM_I18N_LANGUAGES", raising=False)
+    monkeypatch.delenv("LOOM_I18N_PENDING_SHA", raising=False)
+    monkeypatch.setenv("LOOM_I18N_BATCH_LANGUAGES", "ja")
+    monkeypatch.setattr(a.t, "check", lambda **kwargs: 0)
+    monkeypatch.setattr(a, "fetch", lambda ref: None)
+    monkeypatch.setattr(a, "publish_pr", lambda *args: pytest.fail("excluded output reached PR"))
+    output(repository, code="es")
+    actual = a.command
+
+    def command(*args: str, **kwargs: Any) -> str:
+        if args[:2] == ("git", "push"):
+            pytest.fail("excluded output reached push")
+        return actual(*args, **kwargs)
+
+    monkeypatch.setattr(a, "command", command)
+    with pytest.raises(ValueError, match="outside the selected batch"):
+        a.publish()
 
 
 def test_finalize_retries_merged_site_while_next_translation_pr_waits_for_ci(
@@ -635,7 +683,7 @@ def test_finalize_retries_merged_site_while_next_translation_pr_waits_for_ci(
 
 
 def test_rollout_scope_preserves_generic_language_capability() -> None:
-    assert a.t.ROLLOUT_LANGUAGES == ("ja",)
+    assert a.t.ROLLOUT_LANGUAGES == ("zh-CN", "ja", "ko", "pt-BR", "es")
     assert {lang.code for lang in a.t.LANGUAGES} == {"zh-CN", "ja", "ko", "pt-BR", "es"}
 
 
@@ -659,27 +707,73 @@ def test_rollout_retains_deferred_checkpoints_while_accepting_new_preservation_c
 
 
 @pytest.mark.parametrize("source", ["README.md", "docs/removed.md"])
-def test_publisher_accepts_only_owned_deferred_archives_without_current_source(
-    repository: Path, source: str
+@pytest.mark.parametrize("code", ["zh-CN", "ja", "ko", "pt-BR", "es"])
+def test_publisher_accepts_owned_archives_but_never_stale_publication(
+    repository: Path, source: str, code: str
 ) -> None:
     base = a.git("rev-parse", "HEAD")
-    for code in ("es", "ja"):
-        lang = next(lang for lang in a.t.LANGUAGES if lang.code == code)
-        path = repository / a.t.lifecycle.checkpoint_path(a.t.target_path(code, source))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(a.t.header(source, lang, a.t.DEFAULT_MODEL, "0" * 40) + "# Archivo\n")
-        candidate = commit_all()
-        if code == "es":
-            a.validate_changes(base, candidate)
-            assert a.t.target_path(code, source) not in a.t.lifecycle.current_checkpoints()
-            original = path.read_text()
-            banner = lang.banner.format(url=f"{a.t.REPO_URL}/blob/main/{source}")
-            invalid = original.replace(banner, "Unknown ownership", 1)
-            assert invalid != original
-            path.write_text(invalid)
-            with pytest.raises(ValueError, match="refuses path"):
-                a.validate_changes(base, commit_all())
-            path.write_text(original)
-        else:
-            with pytest.raises(ValueError, match="refuses path"):
-                a.validate_changes(base, candidate)
+    lang = next(lang for lang in a.t.LANGUAGES if lang.code == code)
+    published = a.t.target_path(code, source)
+    path = repository / a.t.lifecycle.checkpoint_path(published)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = a.t.header(source, lang, a.t.DEFAULT_MODEL, "0" * 40) + "# Archivo\n"
+    path.write_text(original)
+    a.validate_changes(base, commit_all())
+    assert published not in a.t.lifecycle.current_checkpoints()
+    banner = lang.banner.format(url=f"{a.t.REPO_URL}/blob/main/{source}")
+    invalid = original.replace(banner, "Unknown ownership", 1)
+    assert invalid != original
+    path.write_text(invalid)
+    with pytest.raises(ValueError, match="refuses path"):
+        a.validate_changes(base, commit_all())
+    path.write_text(original)
+    destination = repository / published
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(original)
+    with pytest.raises(ValueError, match="refuses path"):
+        a.validate_changes(base, commit_all())
+
+
+def test_requested_batch_preserves_excluded_data_through_prepare_update_and_finalizer_validation(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LOOM_I18N_LANGUAGES", raising=False)
+    monkeypatch.setenv("LOOM_I18N_BATCH_LANGUAGES", "ja")
+    monkeypatch.setenv("LOOM_I18N_TOTAL_USD", "0")
+    monkeypatch.setattr(a.t, "bedrock_client", lambda: pytest.fail("zero allowance provider"))
+    readme = repository / "README.md"
+    readme.write_text("# English\n\n" + a.t.language_line("README.md") + "\n")
+    ko = output(repository, code="ko")
+    language = next(lang for lang in a.t.LANGUAGES if lang.code == "ko")
+    english, line = a.t.prepare("README.md", language)
+    body = "\n".join(a.t.english_requests(english)).replace("# English", "# 한국어")
+    incoming_ko = a.t.render("README.md", language, body, line, a.t.DEFAULT_MODEL)
+    assert a.t.lifecycle.candidate_problems("i18n/ko/README.md", incoming_ko) == []
+    retained = incoming_ko.replace(a.t.blob("README.md"), "0" * 40)
+    ko.write_text(retained)
+    base = commit_all()
+    a.git("switch", "-qc", "i18n/update")
+    ko.write_text(incoming_ko)
+    es = output(repository, code="es")
+    archived = es.read_text().replace(a.t.blob("README.md"), "0" * 40)
+    es.write_text(archived)
+    pending = commit_all()
+    a.git("switch", "-q", "main")
+    monkeypatch.setattr(a, "fetch", lambda ref: pending)
+    a.prepare()
+    assert ko.read_text() == retained
+    assert not (repository / "i18n/es/README.md").exists()
+    assert (repository / "i18n/.pending/es/README.md").read_text() == archived
+    assert (repository / "i18n/.pending/ko/README.md").read_text() == incoming_ko
+    assert a.update(False, None) == 0
+    assert ko.read_text() == retained
+    a.git("add", ".")
+    candidate = a.git("commit-tree", a.git("write-tree"), "-p", base, input_text="Batch\n")
+    a.validate_changes(base, candidate)
+    assert a.rollout_changes_allowed(base, candidate, a.approved_languages())
+    # The hosted finalizer sees current configuration, without manual-run batch context.
+    monkeypatch.delenv("LOOM_I18N_BATCH_LANGUAGES")
+    assert set(a.approved_languages()) == set(a.t.ROLLOUT_LANGUAGES)
+    a.validate_changes(base, candidate)
+    assert a.rollout_changes_allowed(base, candidate, a.approved_languages())
+    assert "i18n/es/README.md" not in a.t.lifecycle.current_checkpoints()
