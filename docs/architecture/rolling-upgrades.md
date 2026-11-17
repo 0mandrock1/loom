@@ -926,6 +926,22 @@ than `default` (rule 5), new revocation keys (rule 18), an `/assistant` history 
 (rule 46), or a process killed mid-migration. It skips with exit 0 where docker is
 unreachable; CI passes `--require`, which fails there instead.
 
+### Analyst event-view cutover
+
+The marked-event boundary replaces the analyst's raw event grant with the signed,
+typed `analysis_agent_events` view and advances the entity version. The raw table
+keeps a deny policy for the analyst while interrupted provisioning repairs its grants.
+The entity stamp is written after the view and grants, under the existing access lease.
+
+Deploy the probe ordering described in [Analyst probes across catalog versions](#analyst-probes-across-catalog-versions)
+across the fleet before this cutover. A capable older probe checks the key canary,
+then trusts the newer catalog; supported ordinary statements keep working without
+restoring raw access. Earlier probes count their raw event grant first and can refuse
+`insights.query` until rolled forward. Complete the fleet while mirrored creation is
+disabled. Raw SQL statements must use the catalog's masked relation. Starting an older
+build after enablement still requires the marked-event rollback cleanup; regranting
+raw access cannot substitute for it.
+
 ### Analyst probes across catalog versions
 
 The analyst probe checks its signed key canary before reading the stored entity version.

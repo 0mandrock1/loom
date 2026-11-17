@@ -127,11 +127,16 @@ def test_events_tail_filters_thread_through(
     captured: dict[str, Any] = {}
 
     async def fake(
-        since_seconds: int, limit: int, *, filters: dict[str, Any] | None = None
+        since_seconds: int,
+        limit: int,
+        *,
+        filters: dict[str, Any] | None = None,
+        operator: bool = False,
     ) -> list[dict[str, Any]]:
         captured["since"] = since_seconds
         captured["limit"] = limit
         captured["filters"] = filters
+        captured["operator"] = operator
         return []
 
     monkeypatch.setattr(admin_repo, "events_tail", fake)
@@ -146,6 +151,7 @@ def test_events_tail_filters_thread_through(
         },
     )
     assert r.status_code == 200
+    assert captured["operator"] is False
     assert captured["since"] == 120
     assert captured["limit"] == 5
     assert captured["filters"] == {"org": "clickhouse", "agent": "bot", "success": False}

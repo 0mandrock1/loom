@@ -56,6 +56,7 @@ from server.insights.api.models_analysis import (
 from server.insights.domain import analysis as boundary
 from server.insights.store import analysis as store
 from server.observability.event_args import text_digest
+from server.observability.store.event_reads import MASKED_EVENT_COLUMNS
 from server.settings import settings
 
 log = logging.getLogger(__name__)
@@ -228,7 +229,16 @@ def entity_statements(
 ) -> list[str]:
     """The SQL that writes the analyst user for this deployment, password and key included."""
     db = store.target_database()
-    return boundary.entity_sql(db, _names(), _password(), _key(), caps(), granted, roles)
+    return boundary.entity_sql(
+        db,
+        _names(),
+        _password(),
+        _key(),
+        caps(),
+        granted,
+        roles,
+        event_columns=MASKED_EVENT_COLUMNS,
+    )
 
 
 def printed_checks() -> list[str]:

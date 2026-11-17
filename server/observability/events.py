@@ -4,9 +4,9 @@ Every operation emits exactly one row. The transport layer calls
 `emit()` after each request (success or failure). Writes are batched:
 flush every 100 ms or every 500 rows, whichever comes first.
 
-Failure to write an event must never fail a request. Errors are logged
-and dropped; the at-most-once semantics are acceptable for cost
-attribution at this scale.
+Ordinary events use a best-effort shared queue: failed batches are logged and
+dropped. Private source events and marked request witnesses use direct awaited
+writes; their owners handle failure without shared queue statistics.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any
 
 from server.core.ch import get_client
-from server.core.ch_writes import batched_insert_settings
+from server.core.ch_writes import async_insert_settings, batched_insert_settings
 from server.observability.instance import stamp_row
 
 log = logging.getLogger(__name__)
@@ -120,6 +120,8 @@ class AgentEvent:
     slo_class: str = ""
     status_class: str = ""
     budget_ms: int = 0
+    # The logical request marks itself before any mirror admission.
+    mirror_marked: bool = False
 
     def to_row(self) -> dict[str, Any]:
         row: dict[str, Any] = {
@@ -152,6 +154,7 @@ class AgentEvent:
             "slo_class": self.slo_class,
             "status_class": self.status_class,
             "budget_ms": self.budget_ms,
+            "mirror_marked": int(self.mirror_marked),
             "response_tokens": self.response_tokens,
             "consumer": self.consumer,
             "traffic_class": self.traffic_class,
@@ -335,4 +338,20 @@ async def write_private_event(event: AgentEvent) -> None:
         raise ValueError("private events require a mirror and a private scope")
     await get_client().insert(
         "loom.agent_events", [for_this_cell(event).to_row()], settings=batched_insert_settings()
+    )
+
+
+async def write_marked_request_event(event: AgentEvent) -> None:
+    """Commit a captured marked request with the server clock, outside the queue."""
+    from server.core.diagnostics import codes_only
+
+    if not codes_only() or event.kind != "request" or event.mirror_marked is not True:
+        raise ValueError("marked request events require a private scope and server classification")
+    row = for_this_cell(event).to_row()
+    row.pop("ts", None)
+    await get_client().insert(
+        "loom.agent_events",
+        [row],
+        settings=async_insert_settings(),
+        required_columns=frozenset({"mirror_marked"}),
     )

@@ -301,6 +301,8 @@ def target_database() -> str:
 # it holds grants on, so the probe asks for what it must not. LIMIT 1: a
 # LIMIT 0 statement can finish before ClickHouse checks columns.
 REFUSED_READS = {
+    "agent_events": "SELECT count() FROM {db}.agent_events",
+    "agent_events.upstream_cost_usd": "SELECT upstream_cost_usd FROM {db}.agent_events LIMIT 1",
     "system.query_log": "SELECT count() FROM system.query_log",
     "system.users": "SELECT count() FROM system.users",
     "memory.value": "SELECT toString(value) FROM {db}.memory LIMIT 1",

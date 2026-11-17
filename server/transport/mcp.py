@@ -37,6 +37,7 @@ from typing import Any
 
 from fastapi import APIRouter, FastAPI, Request, Response
 
+from server.core import request_tail, request_work
 from server.core.errors import classified
 from server.identity.app.caller_home import caller_org
 from server.observability.consumer import ASSISTANT_CONSUMER
@@ -315,6 +316,7 @@ async def _dispatch_batch(
     responses: list[dict[str, Any]] = []
     with one_refusal_row_each():
         for i, req in enumerate(payload):
+            request_work.begin()
             method = str(req.get("method", "") or "") if isinstance(req, dict) else ""
             # The entries share one task, and the Langfuse span processor stamps
             # the published identity on every span: drop the previous entry's
@@ -322,6 +324,10 @@ async def _dispatch_batch(
             genai.set_identity()
             with traced("mcp.batch.entry", rpc_method=method, batch_index=i):
                 resp = await dispatch(req)
+            if request_work.mirror_marked():
+                if resp is not None and len(payload) > 1:
+                    resp = _err(resp.get("id"), INVALID_REQUEST, "Send this request individually")
+                await request_tail.drain_required()
             if resp is not None:
                 responses.append(resp)
     return responses
