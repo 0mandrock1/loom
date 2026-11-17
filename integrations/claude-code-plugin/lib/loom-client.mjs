@@ -94,11 +94,10 @@ export function envNumber(name, fallback, { min = -Infinity, max = Infinity, env
 
 // --- auth + scoping ----------------------------------------------------------
 
-// File-based config for a hosted/remote Loom: ~/.loom/config.json may hold
-// { url, token, namespace, org } so a user points the plugin at their server
-// with ONE file — no shell exports in ~/.zshrc. Env vars still take priority
-// (overrides / CI); this is the file-based default beneath them. Read once
-// (hook processes are short-lived) and never throws.
+// ~/.loom/config.json may hold { url, token, namespace, org }. Claude's
+// configured MCP endpoint selects its destination; the file can supply its
+// token and scope. Other clients use the file's URL beneath environment
+// overrides. Read once per short-lived hook process; missing files do not throw.
 /** ~/.loom/config.json, or LOOM_CONFIG_FILE. */
 export function loomConfigPath(env = process.env) {
   return env.LOOM_CONFIG_FILE || join(homedir(), ".loom", "config.json");
