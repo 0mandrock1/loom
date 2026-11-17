@@ -24,18 +24,55 @@ async def chunks(
     embedded_only: bool = True,
 ) -> list[dict[str, Any]]:
     """Fetch one bounded batch at its admitted key, never a replacement version."""
+    if keys:
+        set_query_tag("knowledge.mirror.hydrate")
+    return await _read_chunks(
+        org,
+        model,
+        keys,
+        "content, context, tags, chunk_metadata, ingested_at, agent, session_id, "
+        "toString(source_class) AS source_class",
+        ch=ch,
+        embedded_only=embedded_only,
+    )
+
+
+async def chunk_keys(org: str, model: str, keys: list[ChunkKey]) -> list[ChunkKey]:
+    """Probe exact live embedded keys without transferring content or context."""
+    if keys:
+        set_query_tag("knowledge.mirror.search_proof")
+    rows = await _read_chunks(org, model, keys, "")
+    return [
+        (
+            row["namespace"],
+            row["source_uri"],
+            int(row["chunk_idx"]),
+            int(row["doc_version"]),
+            int(row["revision"]),
+        )
+        for row in rows
+    ]
+
+
+async def _read_chunks(
+    org: str,
+    model: str,
+    keys: list[ChunkKey],
+    fields: str,
+    *,
+    ch: CHClient | None = None,
+    embedded_only: bool = True,
+) -> list[dict[str, Any]]:
     if not keys:
         return []
     if len(keys) > 64:
         raise ValueError("chunk hydration batch exceeds bound")
     keys = sorted(set(keys))
-    set_query_tag("knowledge.mirror.hydrate")
     return await (ch or get_client()).query_all(
         "SELECT namespace, source_uri, chunk_idx, doc_version, "
-        "JSONExtractUInt(chunk_metadata, 'revision') AS revision, "
-        "content, context, tags, chunk_metadata, ingested_at, agent, session_id, "
-        "toString(source_class) AS source_class "
-        "FROM loom.chunks WHERE org = {org:String} "
+        "JSONExtractUInt(chunk_metadata, 'revision') AS revision"
+        + (", " + fields if fields else "")
+        + " FROM loom.chunks WHERE org = {org:String} "
         "AND namespace IN {nss:Array(String)} AND embedding_model = {model:String} "
         + ("AND embedding_dim > 0 " if embedded_only else "")
         + "AND "
