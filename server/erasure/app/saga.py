@@ -129,7 +129,7 @@ def request_row_template(
         "actor": actor,
         "urgency": input.urgency,
         # The scope's mode (a single namespace's: tombstone, whatever was asked); a scope
-        # that holds a mirror is purged anyway (`saga_steps.with_mirrors`).
+        # that holds a mirror is purged anyway (`saga_steps.erased_scope`).
         "purge": applied_purge(input.scope_type, input.scope_value, bool(input.purge)),
         "attempts": attempts,
         "mirror_marked": mirror_marked,

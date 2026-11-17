@@ -95,33 +95,36 @@ def _recorded() -> tuple[list[Any], Any]:
 
 
 @pytest.mark.parametrize("purge", [False, True])
-def test_a_scope_with_a_mirror_is_erased_in_one_purging_pass(
+async def test_a_scope_with_a_mirror_is_erased_in_one_purging_pass(
     registry: list[Any], purge: bool
 ) -> None:
     seen, step = _recorded()
     with purge_scope(purge):
-        assert asyncio.run(saga_steps.with_mirrors(step)(ORG, "team")) == 1
+        async with saga_steps.erased_scope(ORG, "namespace", "team") as scope:
+            assert await step(ORG, scope) == 1
     # One pass, so a Postgres step commits one mark and an org-wide step runs once.
     assert seen == [(["team", MIRROR], True)]
 
 
 @pytest.mark.parametrize("purge", [False, True])
-def test_a_scope_without_a_mirror_keeps_the_erasure_s_mode(
+async def test_a_scope_without_a_mirror_keeps_the_erasure_s_mode(
     registry: list[Any], purge: bool
 ) -> None:
     seen, step = _recorded()
     with purge_scope(purge):
-        asyncio.run(saga_steps.with_mirrors(step)(ORG, "other"))
+        async with saga_steps.erased_scope(ORG, "namespace", "other") as scope:
+            await step(ORG, scope)
     assert seen == [("other", purge)]
 
 
-def test_a_scope_naming_its_own_mirror_lists_it_once(registry: list[Any]) -> None:
+async def test_a_scope_naming_its_own_mirror_lists_it_once(registry: list[Any]) -> None:
     seen, step = _recorded()
-    asyncio.run(saga_steps.with_mirrors(step)(ORG, ["team", MIRROR]))
+    async with saga_steps.erased_scope(ORG, "namespace", ["team", MIRROR]) as scope:
+        await step(ORG, scope)
     assert seen == [(["team", MIRROR], True)]
 
 
-def test_a_list_scope_covers_every_named_namespace_s_mirrors(
+async def test_a_list_scope_covers_every_named_namespace_s_mirrors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def _mirrors_of(
@@ -131,22 +134,25 @@ def test_a_list_scope_covers_every_named_namespace_s_mirrors(
 
     monkeypatch.setattr(app_mirrors, "mirrors_of", _mirrors_of)
     seen, step = _recorded()
-    asyncio.run(saga_steps.with_mirrors(step)(ORG, ["a", "b", "c"]))
+    async with saga_steps.erased_scope(ORG, "namespace", ["a", "b", "c"]) as scope:
+        await step(ORG, scope)
     assert seen == [(["a", "b", "c", MIRROR, OLD_MIRROR], True)]
 
 
-def test_a_list_with_one_mirrored_namespace_is_purged_whole(registry: list[Any]) -> None:
+async def test_a_list_with_one_mirrored_namespace_is_purged_whole(registry: list[Any]) -> None:
     seen, step = _recorded()
-    asyncio.run(saga_steps.with_mirrors(step)(ORG, ["team", "other"]))
+    async with saga_steps.erased_scope(ORG, "namespace", ["team", "other"]) as scope:
+        await step(ORG, scope)
     # `other` has no mirror and is deleted too: the scope runs as one purge.
     assert seen == [(["team", "other", MIRROR], True)]
 
 
-def test_a_mirror_named_in_the_scope_is_purged_and_has_no_mirror_looked_up(
+async def test_a_mirror_named_in_the_scope_is_purged_and_has_no_mirror_looked_up(
     registry: list[Any],
 ) -> None:
     seen, step = _recorded()
-    asyncio.run(saga_steps.with_mirrors(step)(ORG, OLD_MIRROR))
+    async with saga_steps.erased_scope(ORG, "namespace", OLD_MIRROR) as scope:
+        await step(ORG, scope)
     assert seen == [([OLD_MIRROR], True)]
     assert registry == []
 

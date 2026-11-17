@@ -219,20 +219,6 @@ async def erased_scope(
         yield list(dict.fromkeys([*names, *mirrors]))
 
 
-def with_mirrors(
-    step: Callable[[str, _NS], Awaitable[int]],
-) -> Callable[[str, _NS], Awaitable[int]]:
-    """`step` over the `erased_scope`. A scope that holds a mirror is erased as a purge:
-    no token reads or restores an `acl-` name, so its rows leave the disk, and in one
-    pass, so a Postgres step commits one mark and an org-wide step runs once."""
-
-    async def run(org: str, namespace: _NS) -> int:
-        async with erased_scope(org, "namespace", namespace) as scope:
-            return await step(org, scope)
-
-    return run
-
-
 async def _step_forget_mirrors_by_ns(org: str, namespace: _NS) -> int:
     """The last Loom step, before the backends and the census: writes the named
     namespaces' live mirrors `deleted`, so the name registered again gets a new one; a
