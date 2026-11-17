@@ -73,7 +73,12 @@ def world(monkeypatch):
         if state.conditional_error:
             raise RuntimeError("private permission backend")
         return [
-            Admitted("team", candidate, dict(state.docs[key]), serving=Serving(False, 0, 0, 9))
+            Admitted(
+                sources[(key[0], key[1].rsplit("#", 1)[1])],
+                candidate,
+                dict(state.docs[key]),
+                serving=Serving(False, 0, 0, 9),
+            )
             for candidate in candidates
             if (key := (candidate["namespace"], candidate["source_uri"])) in state.docs
             and state.allowed[key]
@@ -91,7 +96,7 @@ def world(monkeypatch):
                 yield {
                     "namespace": ns,
                     "source_uri": stored,
-                    "public_namespace": "team",
+                    "public_namespace": sources[(ns, stored.rsplit("#", 1)[1])],
                     "public_uri": stored.rsplit("#", 1)[0],
                 }
             if state.stream_error:
@@ -129,9 +134,14 @@ async def collect(world, *, cursor=None, **fields):
     from server.knowledge.app import source_listing
 
     _state, plan, _add = world
-    return await source_listing.collect(
-        plan, KnowledgeListInput(org="acme", namespace="team", **fields), cursor=cursor
-    )
+    return (
+        await source_listing.collect(
+            plan,
+            KnowledgeListInput(org="acme", namespace="team", **fields),
+            namespaces=["team"],
+            cursor=cursor,
+        )
+    ).rows
 
 
 async def test_selection_reads_no_preview_or_chunk_count_before_title_projection(world):
@@ -140,11 +150,30 @@ async def test_selection_reads_no_preview_or_chunk_count_before_title_projection
     _state, plan, add = world
     add("gdrive:a", 10)
     selected = await source_listing.select(
-        plan, KnowledgeListInput(org="acme", namespace="team", limit=1), None
+        plan, KnowledgeListInput(org="acme", namespace="team", limit=1), None, namespaces=["team"]
     )
     assert [item.candidate["source_uri"] for item in selected] == ["gdrive:a#" + SID]
     source_documents.store.list_projection.assert_not_awaited()
     source_documents.store.list_chunk_count.assert_not_awaited()
+
+
+@pytest.mark.parametrize("source_id", [None, OTHER_SID])
+async def test_shared_plan_discovery_keeps_each_childs_resolved_namespace_scope(world, source_id):
+    from server.knowledge.app import source_listing
+
+    state, plan, add = world
+    plan.discovery_sources[(NS, OTHER_SID)] = "another-team"
+    add("gdrive:ours", 10)
+    add("gdrive:other", 20, source=OTHER_SID)
+    selected = await source_listing.select(
+        plan,
+        KnowledgeListInput(org="acme", namespace="team", limit=2),
+        None,
+        namespaces=["team"],
+        source_id=source_id,
+    )
+    assert [item.namespace for item in selected] == ([] if source_id else ["team"])
+    assert state.discovered == (0 if source_id else 1)
 
 
 async def test_source_selection_keeps_its_own_copy_despite_other_source_and_ordinary_copy(world):
@@ -155,7 +184,11 @@ async def test_source_selection_keeps_its_own_copy_despite_other_source_and_ordi
     add("gdrive:a", 20, source=OTHER_SID, title="Another source")
     state.shadows.add(("team", "gdrive:a"))
     selected = await source_listing.select(
-        plan, KnowledgeListInput(org="acme", namespace="team", limit=1), None, source_id=SID
+        plan,
+        KnowledgeListInput(org="acme", namespace="team", limit=1),
+        None,
+        namespaces=["team"],
+        source_id=SID,
     )
     assert [item.document["title"] for item in selected] == ["Requested source"]
     assert len(plan.discovery_sources) == 2 and state.discovered == 1
@@ -169,7 +202,11 @@ async def test_unknown_source_selection_opens_no_conditional_discovery(world):
     add("gdrive:a", 10)
     assert (
         await source_listing.select(
-            plan, KnowledgeListInput(org="acme", namespace="team"), None, source_id="unregistered"
+            plan,
+            KnowledgeListInput(org="acme", namespace="team"),
+            None,
+            namespaces=["team"],
+            source_id="unregistered",
         )
         == []
     )
@@ -184,7 +221,9 @@ async def test_final_selection_barrier_only_catalogs_apply_ordinary_shadows(worl
     state, plan, add = world
     add("gdrive:a", 10)
     input = KnowledgeListInput(org="acme", namespace="team")
-    selected = await source_listing.select(plan, input, None, source_id=source_id)
+    selected = await source_listing.select(
+        plan, input, None, namespaces=["team"], source_id=source_id
+    )
     state.shadows.add(("team", "gdrive:a"))
     final = await source_listing.finish(plan, input, selected, source_id=source_id)
     assert (final is not None) == (source_id is not None)

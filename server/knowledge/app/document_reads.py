@@ -4,7 +4,10 @@ and `loom decisions extract` read through it)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
+from contextlib import nullcontext
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -15,6 +18,7 @@ from server.core.cursors import (
     encode_cursor,
 )
 from server.core.datetimes import to_naive_utc_second
+from server.core.diagnostics import private_work
 from server.core.tag_sql import list_tag_filter
 from server.embedding import get_embedder
 from server.knowledge.api.models_knowledge import (
@@ -29,6 +33,10 @@ from server.knowledge.api.models_knowledge import (
 )
 from server.knowledge.app import pg_serving
 from server.knowledge.app.readable import readable_namespaces
+from server.knowledge.app.source_access import ReadPlan
+from server.knowledge.app.source_corpus import LostCorpus
+from server.knowledge.app.source_list_proofs import ListProofs
+from server.knowledge.app.source_listing import Position
 from server.knowledge.domain.chunk_metadata import read_structure
 from server.knowledge.domain.chunking import Chunk
 from server.knowledge.domain.document_access import public_tags
@@ -62,39 +70,34 @@ async def document_counts(org: str, namespaces: list[str]) -> dict[str, int]:
 # ============================================================
 
 
-async def handle_knowledge_list(
-    input: KnowledgeListInput,
-) -> KnowledgeListOutput:
-    """Paginated listing of one namespace's documents, or several namespaces' as one.
+@dataclass(frozen=True)
+class ListRequest:
+    input: KnowledgeListInput
+    namespaces: tuple[str, ...]
+    cursor: Position | None
 
-    Reads a page of `loom.documents FINAL`, then the live chunk counts of that page's
-    sources. Keyset pagination on (ingested_at, namespace, source_uri) DESC keeps the
-    cursor stable across inserts."""
-    from server.core.ch import own_write_reads
-    from server.knowledge.app import source_access, source_listing
-    from server.knowledge.store import documents as documents_repo
 
+async def resolve_list(input: KnowledgeListInput) -> ListRequest:
+    """Resolve authorized namespaces and the bound cursor before composing read plans."""
+    input = input.model_copy(deep=True)
     namespaces = await readable_namespaces(input.org, input.namespace, input.namespaces)
     cursor = _list_position(input.cursor, input.org, namespaces) if input.cursor else None
-    plan = await source_access.prepare(input.org, namespaces)
-    with own_write_reads():  # a document added a call ago
-        raw_rows = await documents_repo.list_with_chunk_counts(
-            input.org,
-            namespaces,
-            include_superseded=input.include_superseded,
-            tag_filter=list_tag_filter(input.tags, every=input.tags_every),
-            uri_prefixes=list(input.uri_prefix) if input.uri_prefix else None,
-            cursor=cursor,
-            limit=input.limit + 1,
-        )
-    if plan.marked:
-        checked = await source_listing.collect(plan, input, cursor=cursor)
-        if checked:
-            ordinary = {(row["namespace"], row["source_uri"]) for row in raw_rows}
-            raw_rows = [
-                *raw_rows,
-                *(row for row in checked if (row["namespace"], row["source_uri"]) not in ordinary),
-            ]
+    return ListRequest(input, tuple(namespaces), cursor)
+
+
+@dataclass(frozen=True)
+class _ListRenderer:
+    request: ListRequest
+
+    def render(
+        self, ordinary: list[DocumentListRow], mirrored: list[DocumentListRow]
+    ) -> KnowledgeListOutput:
+        raw_rows = list(ordinary)
+        if mirrored:
+            families = {(row["namespace"], row["source_uri"]) for row in ordinary}
+            raw_rows.extend(
+                row for row in mirrored if (row["namespace"], row["source_uri"]) not in families
+            )
             raw_rows.sort(
                 key=lambda row: (
                     to_naive_utc_second(row["ingested_at"]),
@@ -103,7 +106,105 @@ async def handle_knowledge_list(
                 ),
                 reverse=True,
             )
-            raw_rows = raw_rows[: input.limit + 1]
+            raw_rows = raw_rows[: self.request.input.limit + 1]
+        return _list_output(raw_rows, self.request)
+
+
+@dataclass
+class CheckedList:
+    output: KnowledgeListOutput
+    proofs: ListProofs | None
+    marked: bool
+    _renderer: _ListRenderer
+    _ordinary: list[DocumentListRow]
+    lost: bool = False
+    _failed: bool = field(default=False, init=False)
+    _checking: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+
+    def _fallback(self) -> KnowledgeListOutput:
+        if self._failed:
+            raise LostCorpus()
+        if self.proofs is not None:
+            self.proofs, self.lost = None, True
+            try:
+                self.output = self._renderer.render(self._ordinary, [])
+            except BaseException:
+                self._failed = True
+                raise
+        return self.output
+
+    async def ordinary(self) -> KnowledgeListOutput:
+        async with self._checking:
+            with private_work() if self.marked else nullcontext():
+                return self._fallback()
+
+    async def current(self) -> KnowledgeListOutput:
+        """Return the renewed page or one complete ordinary page with its own cursor."""
+        async with self._checking:
+            with private_work() if self.marked else nullcontext():
+                if self._failed:
+                    raise LostCorpus()
+                if self.proofs is not None:
+                    try:
+                        await self.proofs.check()
+                    except LostCorpus:
+                        return self._fallback()
+                return self.output
+
+
+async def handle_knowledge_list(input: KnowledgeListInput) -> KnowledgeListOutput:
+    return (await checked_knowledge_list(input)).output
+
+
+async def checked_knowledge_list(input: KnowledgeListInput) -> CheckedList:
+    from server.knowledge.app import source_access
+
+    request = await resolve_list(input)
+    plan = await source_access.prepare(request.input.org, list(request.namespaces))
+    return await run_checked_list(request, plan)
+
+
+async def run_checked_list(request: ListRequest, plan: ReadPlan) -> CheckedList:
+    from server.core.ch import own_write_reads
+    from server.knowledge.app import source_listing
+    from server.knowledge.store import documents as documents_repo
+
+    input = request.input
+    if input.org != plan.org:
+        raise ValueError("document read scope changed")
+    with private_work() if plan.marked else nullcontext():
+        with own_write_reads():  # a document added a call ago
+            ordinary = await documents_repo.list_with_chunk_counts(
+                input.org,
+                list(request.namespaces),
+                include_superseded=input.include_superseded,
+                tag_filter=list_tag_filter(input.tags, every=input.tags_every),
+                uri_prefixes=list(input.uri_prefix) if input.uri_prefix else None,
+                cursor=request.cursor,
+                limit=input.limit + 1,
+            )
+        proofs = None
+        mirrored = []
+        if plan.marked:
+            listing = await source_listing.collect(
+                plan, input, namespaces=list(request.namespaces), cursor=request.cursor
+            )
+            mirrored = listing.rows
+            proofs = listing.proofs if listing.proofs.mirrored else None
+        renderer = _ListRenderer(request)
+        output = renderer.render(ordinary, mirrored)
+        lost = False
+        if proofs is not None:
+            try:
+                await proofs.check()
+            except LostCorpus:
+                proofs, lost = None, True
+                output = renderer.render(ordinary, [])
+        return CheckedList(output, proofs, plan.marked, renderer, ordinary, lost=lost)
+
+
+def _list_output(raw_rows: list[DocumentListRow], request: ListRequest) -> KnowledgeListOutput:
+    input = request.input
     has_more = len(raw_rows) > input.limit
     page = raw_rows[: input.limit]
 
@@ -125,7 +226,9 @@ async def handle_knowledge_list(
         )
         for r in page
     ]
-    next_cursor = _list_cursor(page[-1], input.org, namespaces) if rows and has_more else None
+    next_cursor = (
+        _list_cursor(page[-1], input.org, list(request.namespaces)) if rows and has_more else None
+    )
     # The caller's field whitelist, resolved once.
     keep = _resolve_projection(_KnowledgeListEntry, input.fields, always=_LIST_ALWAYS)
     if keep is not None:

@@ -53,6 +53,30 @@ async def test_concurrent_renewals_render_and_cache_one_complete_ordinary_fallba
     renderer.render.assert_awaited_once()
 
 
+async def test_forced_ordinary_fallback_is_cached_without_readmitting_valid_mirrors():
+    initial = KnowledgeSearchOutput(results=[], embedding_model="fake-model")
+    fallback = KnowledgeSearchOutput(results=[], embedding_model="fake-model", stale_dropped=7)
+    renderer = SimpleNamespace(marked=True, render=AsyncMock(return_value=fallback))
+    proofs = SimpleNamespace(check=AsyncMock())
+    result = app.CheckedSearch(initial, proofs, renderer, [], 7)
+    first, second = await asyncio.gather(result.ordinary(), result.current())
+    assert first is second is await result.ordinary() is fallback
+    assert result.lost and result.proofs is None
+    proofs.check.assert_not_awaited()
+    renderer.render.assert_awaited_once_with([], 7)
+
+
+async def test_initially_ordinary_reply_needs_no_additional_provider_or_query_work():
+    initial = KnowledgeSearchOutput(results=[], embedding_model="fake-model")
+    renderer = SimpleNamespace(
+        marked=True, render=AsyncMock(side_effect=AssertionError("no retry"))
+    )
+    result = app.CheckedSearch(initial, None, renderer, [], 0)
+    assert await result.ordinary() is await result.current() is initial
+    assert not result.lost
+    renderer.render.assert_not_awaited()
+
+
 @pytest.mark.parametrize("many", [False, True])
 @pytest.mark.parametrize("lost", ["before", "during", "never"])
 async def test_each_span_embedding_is_guarded_and_proof_loss_is_not_swallowed(

@@ -11,6 +11,7 @@ import pytest
 from server.knowledge.api.models_knowledge import KnowledgeListInput
 from server.knowledge.app import document_reads as app
 from server.knowledge.app import source_access, source_listing
+from server.knowledge.app.source_list_proofs import ListProofs
 from server.knowledge.store import documents
 
 
@@ -39,7 +40,7 @@ def world(monkeypatch):
     async def prepare(org, names):
         calls.append("prepare")
         assert (org, names) == ("acme", ["team"])
-        return SimpleNamespace(marked=state.marked)
+        return SimpleNamespace(org=org, marked=state.marked)
 
     async def ordinary(*args, **kwargs):
         calls.append("ordinary")
@@ -47,7 +48,10 @@ def world(monkeypatch):
 
     async def mirrored(*args, **kwargs):
         calls.append("mirror")
-        return state.mirrored
+        assert kwargs["namespaces"] == ["team"]
+        return source_listing.Listing(
+            state.mirrored, ListProofs(source_access.ReadPlan("acme"), False, ())
+        )
 
     monkeypatch.setattr(app, "readable_namespaces", AsyncMock(return_value=["team"]))
     monkeypatch.setattr(source_access, "prepare", AsyncMock(side_effect=prepare))

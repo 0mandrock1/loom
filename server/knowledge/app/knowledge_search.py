@@ -24,6 +24,7 @@ from server.knowledge.api.models_knowledge import (
 )
 from server.knowledge.app import gaps as gaps_app
 from server.knowledge.app.readable import readable_namespaces
+from server.knowledge.app.source_access import ReadPlan
 from server.knowledge.app.source_corpus import LostCorpus
 from server.knowledge.app.source_search_proofs import SearchProofs
 from server.knowledge.domain.chunking import embedding_text
@@ -115,6 +116,7 @@ class CheckedSearch:
     _renderer: _SearchRenderer
     _ordinary: list[tuple[str, list[ChunkHit]]]
     _ordinary_dropped: int
+    lost: bool = False
     _failed: bool = dataclasses.field(default=False, init=False)
     _checking: asyncio.Lock = dataclasses.field(
         default_factory=asyncio.Lock, init=False, repr=False
@@ -123,6 +125,23 @@ class CheckedSearch:
     @property
     def marked(self) -> bool:
         return self._renderer.marked
+
+    async def _fallback(self) -> KnowledgeSearchOutput:
+        if self._failed:
+            raise LostCorpus()
+        if self.proofs is not None:
+            self.proofs, self.lost = None, True
+            try:
+                self.output = await self._renderer.render(self._ordinary, self._ordinary_dropped)
+            except BaseException:
+                self._failed = True
+                raise
+        return self.output
+
+    async def ordinary(self) -> KnowledgeSearchOutput:
+        async with self._checking:
+            with private_work() if self.marked else nullcontext():
+                return await self._fallback()
 
     async def current(self) -> KnowledgeSearchOutput:
         """Return the renewed reply, rebuilding one ordinary fallback after access loss."""
@@ -134,28 +153,26 @@ class CheckedSearch:
                     try:
                         await self.proofs.check()
                     except LostCorpus:
-                        self.proofs = None
-                        try:
-                            self.output = await self._renderer.render(
-                                self._ordinary, self._ordinary_dropped
-                            )
-                        except BaseException:
-                            self._failed = True
-                            raise
+                        return await self._fallback()
                 return self.output
+
+
+@dataclasses.dataclass(frozen=True)
+class SearchRequest:
+    input: KnowledgeSearchInput
+    namespaces: tuple[str, ...]
+    skipped: tuple[str, ...]
 
 
 async def handle_knowledge_search(input: KnowledgeSearchInput) -> KnowledgeSearchOutput:
     return (await checked_knowledge_search(input)).output
 
 
-async def checked_knowledge_search(input: KnowledgeSearchInput) -> CheckedSearch:
+async def resolve_search(input: KnowledgeSearchInput) -> SearchRequest:
     from server.auth.context import current_auth
     from server.auth.gateway import is_end_user
-    from server.knowledge.app.source_access import prepare
-    from server.knowledge.app.source_search_passes import SearchPasses
-    from server.observability.otel import traced
 
+    input = input.model_copy(deep=True)
     if is_end_user(current_auth()) and "namespace_scope" not in input.model_fields_set:
         # An end user's search reads what it names (`namespaces`), not every
         # collection the user reaches: another agent's files stay out of it.
@@ -172,7 +189,30 @@ async def checked_knowledge_search(input: KnowledgeSearchInput) -> CheckedSearch
             cap=settings.knowledge_search_max_namespaces,
             kinds=settings.knowledge_search_fanout_kinds,
         )
-    plan = await prepare(input.org, namespaces)
+    return SearchRequest(input, tuple(namespaces), tuple(skipped))
+
+
+async def checked_knowledge_search(input: KnowledgeSearchInput) -> CheckedSearch:
+    from server.knowledge.app.source_access import prepare
+
+    request = await resolve_search(input)
+    plan = await prepare(request.input.org, list(request.namespaces))
+    return await run_checked_search(request, plan)
+
+
+async def run_checked_search(request: SearchRequest, plan: ReadPlan) -> CheckedSearch:
+    if request.input.org != plan.org:
+        raise ValueError("document read scope changed")
+    with private_work() if plan.marked else nullcontext():
+        return await _run_search(request, plan)
+
+
+async def _run_search(request: SearchRequest, plan: ReadPlan) -> CheckedSearch:
+    from server.knowledge.app.source_search_passes import SearchPasses
+    from server.observability.otel import traced
+
+    input = request.input
+    namespaces, skipped = list(request.namespaces), list(request.skipped)
     checked = SearchPasses(plan) if plan.marked else None
     embedder = get_embedder()
     with traced("embed.compute.query", model=embedder.model_name):
@@ -185,17 +225,18 @@ async def checked_knowledge_search(input: KnowledgeSearchInput) -> CheckedSearch
         results_per_ns, ordinary, ordinary_dropped = await _search_marked(
             input, namespaces, search, checked, dropped
         )
-        proofs: SearchProofs | None = checked.proofs
+        proofs: SearchProofs | None = checked.proofs if checked.proofs.mirrored else None
     else:
         results_per_ns = await _search_private_first(input, namespaces, search)
         ordinary, ordinary_dropped, proofs = results_per_ns, dropped.count, None
     renderer = _SearchRenderer(input, embedder, query_vec, endpoint, pool, skipped, plan.marked)
+    lost = False
     try:
         output = await renderer.render(results_per_ns, dropped.count, proofs)
     except LostCorpus:
         output = await renderer.render(ordinary, ordinary_dropped)
-        proofs = None
-    return CheckedSearch(output, proofs, renderer, ordinary, ordinary_dropped)
+        proofs, lost = None, True
+    return CheckedSearch(output, proofs, renderer, ordinary, ordinary_dropped, lost=lost)
 
 
 # The fields that narrow a knowledge.search to part of the namespace's documents.

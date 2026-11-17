@@ -34,7 +34,7 @@ def world(monkeypatch):
     phases, collected, counts = [], [], []
     pending = {"strong": False}
     final = [[hit("private")], [hit("public")]]
-    plan = SimpleNamespace(marked=True)
+    plan = SimpleNamespace(org="acme", marked=True)
 
     class Embedder:
         model_name = "fake"
@@ -58,7 +58,7 @@ def world(monkeypatch):
 
     session = SimpleNamespace(
         finish=finish,
-        proofs=SimpleNamespace(check=AsyncMock()),
+        proofs=SimpleNamespace(check=AsyncMock(), mirrored=True),
         ordinary=lambda: [[hit("private")], [hit("public")]],
     )
 

@@ -71,7 +71,11 @@ async def collect(
     set_query_tag("knowledge.mirror.titles")
     input = KnowledgeListInput(org=plan.org, namespace=namespace, limit=limit)
     with private_work(), sequential_reads():
-        items = (await source_listing.select(plan, input, None, source_id=source_id))[:limit]
+        items = (
+            await source_listing.select(
+                plan, input, None, namespaces=[namespace], source_id=source_id
+            )
+        )[:limit]
         if not items or plan.failed or plan.unread:
             return []
         try:

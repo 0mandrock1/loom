@@ -13,6 +13,8 @@ from server.core.datetimes import to_naive_utc_second
 from server.core.diagnostics import private_work
 from server.knowledge.api.models_knowledge import KnowledgeListInput
 from server.knowledge.app.source_access import Admitted, ReadPlan
+from server.knowledge.app.source_corpus import LostCorpus
+from server.knowledge.app.source_list_proofs import ListProofs
 from server.knowledge.domain.access_list import candidate_keys
 from server.knowledge.domain.document_access import public_tags
 from server.knowledge.store import source_documents as store
@@ -22,6 +24,12 @@ if TYPE_CHECKING:
 
 type Position = tuple[datetime, str, str]
 type Family = tuple[str, str]
+
+
+@dataclass(frozen=True)
+class Listing:
+    rows: list[DocumentListRow]
+    proofs: ListProofs
 
 
 def _family(item: Admitted) -> Family:
@@ -149,11 +157,14 @@ async def select(
     input: KnowledgeListInput,
     cursor: Position | None,
     *,
+    namespaces: list[str],
     source_id: str | None = None,
 ) -> list[Admitted]:
     """Select metadata families; a source inspection selects only its own copies."""
     set_query_tag("knowledge.mirror.select")
-    sources = plan.discovery_sources
+    sources = {
+        key: original for key, original in plan.discovery_sources.items() if original in namespaces
+    }
     if source_id is not None:
         sources = {key: value for key, value in sources.items() if key[1] == source_id}
     if not sources:
@@ -232,14 +243,12 @@ async def finish(
     return await renew(plan, items)
 
 
-async def _materialize(
-    plan: ReadPlan, items: list[Admitted], input: KnowledgeListInput
-) -> list[DocumentListRow]:
+async def _materialize(plan: ReadPlan, items: list[Admitted], input: KnowledgeListInput) -> Listing:
     out = []
     for item in items:
         fresh = await renew(plan, [item])
         if fresh is None:
-            return []
+            raise LostCorpus()
         item = fresh[0]
         namespace, uri = item.candidate["namespace"], item.candidate["source_uri"]
         version, revision = int(item.document["version"]), int(item.document["revision"])
@@ -253,15 +262,14 @@ async def _materialize(
             row["ingested_at"],
             row["superseded_at"],
         ) != (plan.org, namespace, uri, version, revision, item.document["ingested_at"], None):
-            return []
+            raise LostCorpus()
         row["chunk_count"] = await store.list_chunk_count(
             plan.org, namespace, uri, revision, item.serving
         )
         out.append(row)
-    final = await finish(plan, input, items)
-    if final is None:
-        return []
-    return [_public(row, item) for row, item in zip(out, final, strict=True)]
+    proofs = ListProofs(plan, input.include_superseded, tuple(items))
+    await proofs.check()
+    return Listing([_public(row, item) for row, item in zip(out, items, strict=True)], proofs)
 
 
 def _public(row: dict[str, Any], item: Admitted) -> DocumentListRow:
@@ -283,16 +291,18 @@ def _public(row: dict[str, Any], item: Admitted) -> DocumentListRow:
 
 
 async def collect(
-    plan: ReadPlan, input: KnowledgeListInput, *, cursor: Position | None
-) -> list[DocumentListRow]:
+    plan: ReadPlan, input: KnowledgeListInput, *, namespaces: list[str], cursor: Position | None
+) -> Listing:
     """Return at most limit+1 complete admitted families, or an empty mirror leg."""
     set_query_tag("knowledge.mirror.list")
     with private_work(), sequential_reads():
-        items = await select(plan, input, cursor)
+        items = await select(plan, input, cursor, namespaces=namespaces)
         if not items or plan.failed or plan.unread:
-            return []
+            return Listing([], ListProofs(plan, input.include_superseded, ()))
         try:
             return await _materialize(plan, items, input)
+        except LostCorpus:
+            pass
         except Exception:  # noqa: BLE001 — selected fields, counts and final proofs fail closed together
             plan.failed = True
-            return []
+        return Listing([], ListProofs(plan, input.include_superseded, ()))
