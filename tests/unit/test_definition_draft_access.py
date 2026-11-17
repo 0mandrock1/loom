@@ -139,6 +139,7 @@ async def test_lineage_does_not_disclose_an_unapproved_drafts_rationale(
     candidate = dict(
         candidate_id=cid,
         source_kind=kind,
+        supporter_count=3,
         supporters=[],
         rationale="private-canary",
         decided_at=datetime(2026, 1, 1),
@@ -184,3 +185,7 @@ async def test_lineage_does_not_disclose_an_unapproved_drafts_rationale(
     assert result.found
     assert (result.candidate is not None) is admin
     assert ("private-canary" in result.model_dump_json()) is admin
+    if admin:
+        assert result.candidate is not None
+        assert result.candidate.supporter_count == 3
+    assert result.supporters == []
