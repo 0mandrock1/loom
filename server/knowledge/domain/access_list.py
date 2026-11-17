@@ -131,6 +131,22 @@ def allows(
     )
 
 
+def candidate_keys(*, subject: str, emails: frozenset[str], domains: frozenset[str]) -> list[str]:
+    """Coarse candidates only; the current strict permission list still decides.
+
+    Unicode buckets avoid mismatches between database and Python normalization.
+    Owner aliases and group membership are resolved after candidate selection.
+    """
+    keys = ["anyone"]
+    if subject:
+        keys.append("owner")
+        if emails:
+            keys.extend(["group", "email_unicode", *("e:" + e for e in sorted(emails))])
+        if domains:
+            keys.extend(["domain_unicode", *("d:" + d for d in sorted(domains))])
+    return keys
+
+
 def from_drive_permissions(permissions: list[dict[str, Any]] | None) -> AccessList:
     """The list a `shared` source reads from a Drive file's `permissions`; `unread` when
     the file has no `permissions` field. A deleted, link-only or one-view (`view`)
@@ -163,6 +179,7 @@ __all__ = [
     "UNREAD",
     "AccessList",
     "allows",
+    "candidate_keys",
     "common",
     "from_drive_permissions",
     "from_json",

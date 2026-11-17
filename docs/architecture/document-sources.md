@@ -711,6 +711,15 @@ unconditional read marks `mirror_unread`; a failed candidate read invalidates th
 mirror plan without that marker. The checked planner is internal; public read wiring,
 marked-request sinks and session protections remain prerequisites to serving mirrors.
 
+`documents.access_keys` and its bloom index select coarse candidates under the
+ClickHouse authority. Owner and group buckets retain candidates needing identity
+resolution; Unicode buckets retain matches whose database and Python normalization
+can differ. Every candidate still needs the current strict permission check. Under
+the Postgres authority these keys do not filter candidates: an unpublished head may
+widen permission. Both chunk-frequency views exclude mirrors, and a lexical-statistics
+rebuild refuses their names before reading or writing statistics. Mirrored lexical
+scores use fixed corpus constants.
+
 A token reads as one person, for both the `owner` entry and the emails, or as nobody:
 
 - a person's own session token (a primary token whose own `sid` claim names a sign-in

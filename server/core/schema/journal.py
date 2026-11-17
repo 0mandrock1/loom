@@ -118,7 +118,9 @@ def split_statements(sql: str) -> list[str]:
 _OBJECT_DDL = re.compile(
     r"\b(CREATE)\s+(?:OR\s+REPLACE\s+)?(?:TABLE|MATERIALIZED\s+VIEW|VIEW|DICTIONARY)\s+"
     r"(?:IF\s+NOT\s+EXISTS\s+)?(?:`?(\w+)`?\.)?`?([A-Za-z_]\w*)`?"
-    r"|\b(DROP)\s+(?:TABLE|VIEW|DICTIONARY)\s+(?:IF\s+EXISTS\s+)?(?:`?(\w+)`?\.)?`?([A-Za-z_]\w*)`?",
+    r"|\b(DROP)\s+(?:TABLE|VIEW|DICTIONARY)\s+(?:IF\s+EXISTS\s+)?(?:`?(\w+)`?\.)?`?([A-Za-z_]\w*)`?"
+    r"|\b(RENAME)\s+TABLE\s+(?:`?(\w+)`?\.)?`?([A-Za-z_]\w*)`?\s+TO\s+"
+    r"(?:`?(\w+)`?\.)?`?([A-Za-z_]\w*)`?",
     re.IGNORECASE,
 )
 
@@ -126,12 +128,19 @@ _OBJECT_DDL = re.compile(
 def object_ddl(sql: str) -> Iterator[tuple[str, str]]:
     """`("create" | "drop", name)` for each object `sql` creates or drops, in
     order, comment lines skipped. A `loom` object is named bare; one in
-    another database keeps its qualifier (`loom_telemetry.sli_minute`)."""
+    another database keeps its qualifier (`loom_telemetry.sli_minute`). A
+    single-object RENAME drops its old name and creates its destination."""
     for m in _OBJECT_DDL.finditer(without_comments(sql)):
-        op, db, name = (
-            ("create", m.group(2), m.group(3)) if m.group(1) else ("drop", m.group(5), m.group(6))
-        )
-        yield op, name if db is None or db == "loom" else f"{db}.{name}"
+        if m.group(7):
+            operations = [("drop", m.group(8), m.group(9)), ("create", m.group(10), m.group(11))]
+        else:
+            operations = [
+                ("create", m.group(2), m.group(3))
+                if m.group(1)
+                else ("drop", m.group(5), m.group(6))
+            ]
+        for op, db, name in operations:
+            yield op, name if db is None or db == "loom" else f"{db}.{name}"
 
 
 def created_objects(sql: str) -> tuple[str, ...]:

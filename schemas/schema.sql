@@ -1626,7 +1626,9 @@ CREATE TABLE IF NOT EXISTS loom.documents
     `coverage` String DEFAULT '',
     `ingestion_id` String DEFAULT '',
     `access_json` String DEFAULT '',
-    INDEX tags_bloom tags TYPE bloom_filter() GRANULARITY 1
+    `access_keys` Array(String) MATERIALIZED arrayDistinct(arrayConcat(arrayMap(x -> concat('e:', lowerUTF8(trimBoth(x, char(9, 10, 11, 12, 13, 28, 29, 30, 31, 32)))), JSONExtract(access_json, 'emails', 'Array(String)')), arrayMap(x -> concat('d:', lowerUTF8(trimBoth(x, char(9, 10, 11, 12, 13, 28, 29, 30, 31, 32)))), JSONExtract(access_json, 'domains', 'Array(String)')), if(JSONExtractString(access_json, 'owner') != '', ['owner'], []), if(notEmpty(JSONExtract(access_json, 'groups', 'Array(String)')), ['group'], []), if(JSONExtractBool(access_json, 'anyone'), ['anyone'], []), if(arrayExists(x -> (NOT isASCII(x)), JSONExtract(access_json, 'emails', 'Array(String)')), ['email_unicode'], []), if(arrayExists(x -> (NOT isASCII(x)), JSONExtract(access_json, 'domains', 'Array(String)')), ['domain_unicode'], []))),
+    INDEX tags_bloom tags TYPE bloom_filter() GRANULARITY 1,
+    INDEX access_keys_bloom access_keys TYPE bloom_filter(0.01) GRANULARITY 4
 )
 ENGINE = ReplacingMergeTree(version)
 PARTITION BY toYYYYMM(ingested_at)
@@ -4947,7 +4949,7 @@ AS SELECT
     now() AS df_added_at
 FROM loom.chunks
 ARRAY JOIN arrayDistinct(arrayFilter(t -> (length(t) >= 3), arrayMap(t -> lowerUTF8(t), splitByNonAlpha(context)))) AS term
-WHERE (content != '') AND (context != '') AND (doc_superseded_at IS NULL)
+WHERE (content != '') AND (context != '') AND (doc_superseded_at IS NULL) AND (NOT match(namespace, '^acl-[0-9a-f]{24}$'))
 GROUP BY
     org,
     namespace,
@@ -4972,7 +4974,7 @@ AS SELECT
     now() AS df_added_at
 FROM loom.chunks
 ARRAY JOIN arrayDistinct(arrayFilter(t -> (length(t) >= 3), arrayMap(t -> lowerUTF8(t), splitByNonAlpha(content)))) AS term
-WHERE (content != '') AND (doc_superseded_at IS NULL)
+WHERE (content != '') AND (doc_superseded_at IS NULL) AND (NOT match(namespace, '^acl-[0-9a-f]{24}$'))
 GROUP BY
     org,
     namespace,

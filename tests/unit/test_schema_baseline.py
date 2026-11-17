@@ -160,6 +160,7 @@ def test_the_journal_files() -> None:
         "102_query_history_sources.sql",
         "102_sso_domain_evidence.sql",
         "103_knowledge_group_members.sql",
+        "104_mirror_access_candidates.sql",
     ]
 
 

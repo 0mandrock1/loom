@@ -216,7 +216,7 @@ the `loom` tables each view reads, and, for each materialized view, its target, 
 | `deployment_config` | `ReplacingMergeTree(version)` | `name` |  |  |  |
 | `derived_facts` | `MergeTree` | `(org, namespace, subject, predicate, category)` | `toYYYYMM(created_at)` |  |  |
 | `document_blobs` | `ReplacingMergeTree(created_at)` | `(org, namespace, sha256)` |  |  |  |
-| `documents` | `ReplacingMergeTree(version)` | `(org, namespace, source_uri)` | `toYYYYMM(ingested_at)` |  | 1 skip index (bloom_filter) |
+| `documents` | `ReplacingMergeTree(version)` | `(org, namespace, source_uri)` | `toYYYYMM(ingested_at)` |  | 2 skip index (bloom_filter) |
 | `embedder_calibration` | `ReplacingMergeTree(version)` | `embedder_model` |  |  |  |
 | `embedding_cache` | `ReplacingMergeTree(created_at)` | `(model, key)` |  | `created_at + toIntervalDay(30)` |  |
 | `entity_canonical_map` | `ReplacingMergeTree(version)` | `(org, namespace, mention_text)` | `org` |  | 1 skip index (bloom_filter) |

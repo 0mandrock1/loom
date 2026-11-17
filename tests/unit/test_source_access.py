@@ -178,3 +178,23 @@ async def test_next_request_has_no_preceding_mirror_mark():
     second = request_work.begin()
     assert first.mirror_marked and first.mirror_unread
     assert not request_work.mirror_marked() and not second.mirror_unread
+
+
+def test_candidate_keys_are_coarse_and_keep_unknown_readers_to_anyone():
+    from server.knowledge.domain.access_list import candidate_keys
+
+    assert candidate_keys(subject="", emails=frozenset(), domains=frozenset()) == ["anyone"]
+    keys = candidate_keys(
+        subject="reader",
+        emails=frozenset({"lee@example.com"}),
+        domains=frozenset({"example.com"}),
+    )
+    assert set(keys) == {
+        "anyone",
+        "owner",
+        "group",
+        "email_unicode",
+        "domain_unicode",
+        "e:lee@example.com",
+        "d:example.com",
+    }
