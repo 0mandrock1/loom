@@ -266,7 +266,15 @@ or memory. See [Frameworks](../features/integrations/frameworks.md#langchain).
 
 `loomTools(agent, scope)` from `@clickhouse/loom/integrations/mastra` returns `AgentTools`
 as Mastra tools keyed by name, built with `createTool` from `@mastra/core`, an optional peer
-dependency (`@mastra/core` 1.83 or a later 1.x, which needs Node 22.13 or later). See
+dependency (`@mastra/core` 1.83.x, which needs Node 22.13 or later).
+`LoomMemoryStorage(agent, { resourceId, storeId? })` from the same entry point implements
+the native `MemoryStorage` domain. Bind one canonical end-user resource to each instance;
+it becomes the actual Loom `user_id` for threads, messages and resource working memory.
+Combine it with `MastraCompositeStore({ id, domains: { memory: storage } })` and
+`@mastra/memory` with semantic recall and observational memory disabled. `storeId`
+defaults to `default` and separates applications under one Loom agent and user.
+Lists scan all matching scoped rows; updates use hash preconditions. No transaction,
+resource reassignment, cloning, run fencing or atomic working-memory merge is provided. See
 [Frameworks](../features/integrations/frameworks.md#mastra).
 
 ## OpenAI Agents SDK adapter
