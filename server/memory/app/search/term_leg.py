@@ -356,6 +356,7 @@ async def _score(
         log.warning("term leg scores not read: %s", error_summary(e))
         return
     for ident, hit in zip(idents, hits, strict=True):
+        await asyncio.sleep(0)
         vec = vectors.get(ident)
         if vec and len(vec) == len(query_vec):
             hit.similarity = max(0.0, min(1.0, cosine(query_vec, vec)))

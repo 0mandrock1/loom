@@ -885,3 +885,29 @@ async def test_an_expanding_alias_needs_a_matching_work_budget_before_preparatio
     assert await _keys(alias if mentioned else "what is ARR") == expected
     # Normalization expands the alias eighteenfold; its pattern needs an admitted match.
     assert alias not in prepared
+
+
+async def test_cancellation_stops_definition_scoring_between_hits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def vectors(*args: Any, **kwargs: Any) -> dict:
+        return {ident: [1.0, 0.0] for ident in args[2]}
+
+    scored = 0
+
+    def cosine(left: list[float], right: list[float]) -> float:
+        nonlocal scored
+        scored += 1
+        if scored == 1:
+            task = asyncio.current_task()
+            assert task is not None
+            asyncio.get_running_loop().call_soon(task.cancel)
+        return 1.0
+
+    monkeypatch.setattr(term_leg, "live_vectors", vectors)
+    monkeypatch.setattr(term_leg, "cosine", cosine)
+    hits = [_governed(f"definition/{i}") for i in range(6)]
+    task = asyncio.create_task(term_leg._score(hits, "o", "n", [1.0, 0.0], "m"))
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert scored == 1
