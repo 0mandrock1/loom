@@ -96,8 +96,9 @@ both means uncapped.
 
 `daily_user_cost_cap_usd` sets the same separate allowance for each named logical
 `user_id` in the namespace. 0 inherits `LOOM_DEFAULT_DAILY_USER_COST_CAP_USD` (default 0);
-0 on both tiers disables user caps. `memory.ask` checks both ceilings and uses their
-largest spend fraction for budget-pressure routing. Workers and operations that record
+0 on both tiers disables user caps. `memory.ask`, `code.ask`, `knowledge.synthesize`
+and `code.search` query expansion check both ceilings; `memory.ask` uses their largest spend fraction for budget-pressure
+routing, including whole-document synthesis. Workers and operations that record
 cost without a named user remain namespace-only. These are soft spend controls:
 concurrent calls can overshoot, and the logical user is the request's cost attribution,
 not the authenticated account or a billing identity.
@@ -138,6 +139,9 @@ user's spend. Delivery is bounded and asynchronous: a failed delivery does not c
 the budget decision, and a later check retries it. Repeated checks deduplicate within
 each UTC day for the same scope, inbox, cap and share; the next day can send a reminder.
 Warnings wait until every live replica supports their erasure metadata.
+Updates and watch streams show only warnings inside the caller's user and session
+scope. A scope without the required identity receives no warnings. Other task events
+retain their shared inbox visibility.
 
 The $1 default stops a runaway extraction loop on a laptop. A production namespace that
 ingests heavily needs its own cap, or extraction stops partway through the day.

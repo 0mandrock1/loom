@@ -390,7 +390,7 @@ NARROW_SAFE_OPS: dict[str, str] = {
     # The groups below are planes with no path to memory rows.
     "tracker.": "tracker records: issues and their sources, no user's memory",
     "knowledge.": "namespace documents: access is the namespace's; the user column is authorship",
-    "task.": "the task inbox: tasks, not memory",
+    "task.": "shared task inboxes; budget warnings carry the caller's read scope",
     "inbox.": "inbox registrations and policies",
     "grants.": "namespace grants",
     # Not policy.set / policy.delete: a rule is namespace-wide and denies every user's

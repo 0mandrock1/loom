@@ -443,6 +443,7 @@ async def _maybe_route_to_synthesize(input: MemoryAskInput) -> MemoryAskOutput |
             KnowledgeSynthesizeInput(
                 org=input.org,
                 namespace=input.namespace,
+                user_id=input.user_id or "-",
                 source_uris=docs,
                 task=input.query,
             )

@@ -4477,6 +4477,7 @@ export interface KnowledgeSourceUpdateOutput {
 export interface KnowledgeSynthesizeInput {
   org: string;
   namespace: string;
+  user_id?: string;
   source_uris?: string[];
   datasets?: QueryDataset[];
   task: string;

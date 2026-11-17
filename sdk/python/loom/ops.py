@@ -11890,6 +11890,7 @@ class KnowledgeSynthesizeInput(TypedDict, total=False):
 
     org: Required[str]
     namespace: Required[str]
+    user_id: NotRequired[str]
     source_uris: NotRequired[list[str]]
     datasets: NotRequired[list["QueryDataset"]]
     task: Required[str]
@@ -11903,6 +11904,7 @@ class KnowledgeSynthesizeBody(TypedDict, total=False):
 
     org: NotRequired[str]
     namespace: NotRequired[str]
+    user_id: NotRequired[str]
     source_uris: NotRequired[list[str]]
     datasets: NotRequired[list["QueryDataset"]]
     task: Required[str]

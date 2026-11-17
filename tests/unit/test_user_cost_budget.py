@@ -152,3 +152,154 @@ async def test_ask_admission_uses_the_same_named_user_as_its_ledger(
     assert state[4] is True
     assert state[:4] == (None, None, None, None)
     assert ch.reads[-1]["uid"] == "alice"
+
+
+@pytest.mark.parametrize("query", ["summarize the report", "overview of the report"])
+@pytest.mark.parametrize("user_id", ["alice", "bob"])
+async def test_document_route_honors_the_named_users_cap(
+    ch: BudgetCH, monkeypatch: pytest.MonkeyPatch, query: str, user_id: str
+) -> None:
+    from types import SimpleNamespace
+
+    from server.knowledge.app import knowledge_search, synthesize
+    from server.memory.api.models_ask import MemoryAskInput
+    from server.memory.app.ask.handler import _maybe_route_to_synthesize
+    from server.memory.domain.corpus_synthesis import CorpusChunk
+
+    calls: list[str] = []
+
+    async def search(inp: Any) -> Any:
+        return SimpleNamespace(
+            results=[SimpleNamespace(source_uri="doc://report", tags=[]) for _ in range(2)]
+        )
+
+    class LLM:
+        model = "fake"
+
+        async def complete(self, *args: Any, **kwargs: Any) -> Any:
+            calls.append(user_id)
+            return SimpleNamespace(text="The report describes a deployment. [doc://report#0]")
+
+    async def chunks(inp: Any) -> Any:
+        return [CorpusChunk(source_uri="doc://report", idx=0, text="Deployment report.")], 1
+
+    from server.settings import settings
+
+    monkeypatch.setattr(settings, "memory_ask_synth_model", "")
+    monkeypatch.setattr("server.llm.client.get_llm_client", LLM)
+    monkeypatch.setattr(knowledge_search, "handle_knowledge_search", search)
+    monkeypatch.setattr(synthesize, "_corpus_chunks", chunks)
+    out = await _maybe_route_to_synthesize(
+        MemoryAskInput(org="o", namespace="n", user_id=user_id, query=query)
+    )
+    if user_id == "alice":
+        assert out is None, "a capped user must fall through to retrieval without synthesis"
+        assert calls == []
+    else:
+        assert out is not None and out.source == "synthesized"
+        assert calls == ["bob", "bob"]
+
+
+async def test_direct_synthesis_checks_the_token_pinned_users_budget(
+    ch: BudgetCH, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.identity.domain.read_scope import ReadFilters, with_read_identity
+    from server.knowledge.api.models_knowledge import KnowledgeSynthesizeInput
+    from server.knowledge.app.synthesize import handle_knowledge_synthesize
+
+    inp = with_read_identity(
+        KnowledgeSynthesizeInput(
+            org="o", namespace="n", source_uris=["doc://report"], task="Summarize"
+        ),
+        ReadFilters("own_user", "alice", None),
+    )
+    out = await handle_knowledge_synthesize(inp)
+    assert out.abstain and out.abstain_reason == "budget_capped"
+    assert ch.reads[-1]["uid"] == "alice"
+
+
+@pytest.mark.parametrize("user_id", ["alice", "bob"])
+async def test_code_synthesis_checks_its_ledger_user_before_building_a_client(
+    ch: BudgetCH, monkeypatch: pytest.MonkeyPatch, user_id: str
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from server.code.api.models_search import CodeAskInput
+    from server.code.app import answers
+    from server.code.app import ask as code_ask
+    from server.settings import settings
+
+    class Retrieved(Exception):
+        pass
+
+    clients: list[str] = []
+    selected: list[Any] = []
+
+    def client() -> Any:
+        clients.append(user_id)
+        return SimpleNamespace(model="fake")
+
+    async def retrieve(*args: Any, **kwargs: Any) -> Any:
+        selected.append(kwargs["llm"])
+        raise Retrieved
+
+    monkeypatch.setattr(code_ask, "require_code_intel", lambda: None)
+    monkeypatch.setattr(code_ask, "refuse_synthesis", lambda *args: None)
+    monkeypatch.setattr(code_ask, "resolve_code_identity", lambda org, ns: (org, ns))
+    monkeypatch.setattr(code_ask, "CodeRepo", lambda: object())
+    monkeypatch.setattr(code_ask, "resolve_code_thresholds", AsyncMock(return_value=(0.5, 0.1)))
+    monkeypatch.setattr(code_ask, "index_as_of", AsyncMock(return_value={}))
+    monkeypatch.setattr("server.embedding.embedder.get_embedder", lambda: object())
+    monkeypatch.setattr("server.llm.client.get_llm_client", client)
+    monkeypatch.setattr(settings, "code_ask_llm_model", "")
+    monkeypatch.setattr(answers, "ask", retrieve)
+    with pytest.raises(Retrieved):
+        await code_ask.handle_code_ask(
+            CodeAskInput(org="o", namespace="n", user_id=user_id, question="Explain this function")
+        )
+    assert clients == ([] if user_id == "alice" else ["bob"])
+    assert (selected[0] is None) == (user_id == "alice")
+    assert ch.reads[-1]["uid"] == user_id
+
+
+@pytest.mark.parametrize("user_id", ["alice", "bob"])
+async def test_code_query_expansion_checks_its_named_users_cap(
+    ch: BudgetCH, monkeypatch: pytest.MonkeyPatch, user_id: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from server.code.api.models_search import CodeSearchInput
+    from server.code.app import answers
+    from server.code.app.search import handler
+
+    class Retrieved(Exception):
+        pass
+
+    expanded: list[str] = []
+
+    async def expand(*args: Any) -> list[str]:
+        expanded.append(user_id)
+        return ["retention"]
+
+    def retrieve(*args: Any) -> Any:
+        raise Retrieved
+
+    monkeypatch.setattr(handler, "require_code_intel", lambda: None)
+    monkeypatch.setattr(handler, "resolve_code_identity", lambda org, ns: (org, ns))
+    monkeypatch.setattr(handler, "CodeRepo", lambda: object())
+    monkeypatch.setattr(handler, "resolve_code_thresholds", AsyncMock(return_value=(0.5, 0.1)))
+    monkeypatch.setattr(handler, "_not_covered_output", lambda *args: None)
+    monkeypatch.setattr(handler, "_search_embedder", lambda inp: (None, "fake"))
+    monkeypatch.setattr(handler, "_user_recent_dirs", AsyncMock(return_value=[]))
+    monkeypatch.setattr(handler, "reads_llm_free", lambda: False)
+    monkeypatch.setattr(handler, "_budget_allows", lambda *args: True)
+    monkeypatch.setattr(handler, "page_plan", retrieve)
+    monkeypatch.setattr(answers, "_propose_identifiers", expand)
+    monkeypatch.setattr("server.llm.client.get_llm_client", lambda: object())
+    with pytest.raises(Retrieved):
+        await handler.handle_code_search(
+            CodeSearchInput(org="o", namespace="n", user_id=user_id, query="retention", expand=True)
+        )
+    assert expanded == ([] if user_id == "alice" else ["bob"])
+    assert ch.reads[-1]["uid"] == user_id

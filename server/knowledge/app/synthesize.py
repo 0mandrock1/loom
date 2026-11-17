@@ -46,7 +46,7 @@ async def handle_knowledge_synthesize(
     from server.observability.budget import namespace_over_cap
     from server.settings import settings as _s
 
-    if await namespace_over_cap(input.org, input.namespace):
+    if await namespace_over_cap(input.org, input.namespace, user_id=input.user_id):
         return _abstain("budget_capped")
     synth_model = _s.memory_ask_synth_model.strip()
     if synth_model:

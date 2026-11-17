@@ -4,8 +4,9 @@ Namespace and named-user caps use the rolling 24-hour cost ledger in `agent_even
 A positive namespace policy overrides its corresponding server default; zero inherits,
 and zero on both tiers disables that cap. A named user's cap is independent of the
 namespace ceiling. Admission refuses paid synthesis when either is reached, and model
-routing uses the larger spend fraction. `memory.ask` supplies the same logical user it
-records in the ledger. Namespace-wide workers keep their existing namespace accounting;
+routing uses the larger spend fraction. `memory.ask`, including its whole-document
+route, `code.ask`, `knowledge.synthesize` and `code.search` query expansion supply the
+logical user recorded in the ledger. Namespace-wide workers keep their namespace accounting;
 a token subject is never substituted for an unattributed user. These soft controls do
 not reserve spend or establish a billing identity.
 
@@ -24,6 +25,10 @@ with each other. There is no discovery worker. The event ID includes org, namesp
 and UTC day. A distributed claim and strongly consistent event read serialize the
 check and insert; a deduplication token plus readback handles an uncertain retry.
 Notification failures cannot change a cap verdict.
+
+Task updates and watch streams apply the caller's user and session scope to warnings
+before pagination. An incomplete scope receives no warnings; ordinary task events stay
+shared within the inbox. The registered inbox's webhook receives its namespace stream.
 
 Every delivery and task-event erasure takes the same org-wide warning-writer lease.
 Inserts use the existing server-side start deadline and execution bound; the lease TTL
