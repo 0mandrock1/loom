@@ -67,7 +67,11 @@ class OverrideNotStoredError(LoomServerError):
 
 
 async def put(
-    kind: str, key: tuple[str, ...], value: Any, *, ch: _CHClient | None = None,
+    kind: str,
+    key: tuple[str, ...],
+    value: Any,
+    *,
+    ch: _CHClient | None = None,
     deadline: float | None = None,
 ) -> None:
     version = await _write(kind, key, json.dumps(value), deleted=0, ch=ch, deadline=deadline)
@@ -75,7 +79,10 @@ async def put(
 
 
 async def clear(
-    kind: str, key: tuple[str, ...], *, ch: _CHClient | None = None,
+    kind: str,
+    key: tuple[str, ...],
+    *,
+    ch: _CHClient | None = None,
     deadline: float | None = None,
 ) -> None:
     version = await _write(kind, key, "null", deleted=1, ch=ch, deadline=deadline)
@@ -83,7 +90,12 @@ async def clear(
 
 
 async def _write(
-    kind: str, key: tuple[str, ...], value: str, *, deleted: int, ch: _CHClient | None,
+    kind: str,
+    key: tuple[str, ...],
+    value: str,
+    *,
+    deleted: int,
+    ch: _CHClient | None,
     deadline: float | None = None,
 ) -> int:
     """Store one row; return its version. Bounded callers never infer no write
@@ -97,8 +109,13 @@ async def _write(
         else:
             check_bounded_write(kind, key, value)
             stamps = await read_rows(
-                _VERSION_SQL + " LIMIT 2 FORMAT JSONEachRow", {}, ch=client,
-                deadline=deadline, row_bytes=1024, total_bytes=1024, max_rows=1,
+                _VERSION_SQL + " LIMIT 2 FORMAT JSONEachRow",
+                {},
+                ch=client,
+                deadline=deadline,
+                row_bytes=1024,
+                total_bytes=1024,
+                max_rows=1,
                 tag="cell.each.override_clock",
             )
             if len(stamps) != 1 or type(stamps[0].get("v")) is not int:
@@ -120,7 +137,8 @@ async def _write(
             async with asyncio.timeout(remaining):
                 with statement_timeout(remaining):
                     await client.insert(
-                        TABLE, [{**row, "version": version}],
+                        TABLE,
+                        [{**row, "version": version}],
                         settings={"async_insert": 0, "max_memory_usage": 128 * 1024**2},
                     )
     except LoomServerError:
@@ -150,14 +168,22 @@ def check_bounded_write(kind: str, key: tuple[str, ...], value: str) -> None:
     if len(_own) > 4096 or ((kind, key) not in _own and len(_own) == 4096):
         raise BoundedReadError("Override bookkeeping exceeds its allowance")
     maximum = 16384 if kind == SETTING else 1024
-    payload = {"kind": kind, "key": json.dumps(list(key)), "value": value,
-               "deleted": 0, "version": 2**64 - 1}
+    payload = {
+        "kind": kind,
+        "key": json.dumps(list(key)),
+        "value": value,
+        "deleted": 0,
+        "version": 2**64 - 1,
+    }
     if len(json.dumps(payload).encode("utf-8")) > maximum:
         raise BoundedReadError("Override key and value exceed their allowance")
 
 
 async def load_settings(
-    *, deadline: float, name: str | None = None, ch: _CHClient | None = None,
+    *,
+    deadline: float,
+    name: str | None = None,
+    ch: _CHClient | None = None,
 ) -> Snapshot:
     """Read setting-kind rows, or one exact setting, without a full override scan."""
     from server.settings import Settings
@@ -173,8 +199,13 @@ async def load_settings(
     rows = await read_rows(
         "SELECT key, value, deleted, version FROM loom.runtime_overrides FINAL "
         "WHERE kind = {kind:String}" + predicate + " LIMIT {limit:UInt32} FORMAT JSONEachRow",
-        params, ch=ch or _default_client(), deadline=deadline, row_bytes=16384,
-        total_bytes=2 * 1024**2, max_rows=maximum, tag="cell.each.setting_overrides",
+        params,
+        ch=ch or _default_client(),
+        deadline=deadline,
+        row_bytes=16384,
+        total_bytes=2 * 1024**2,
+        max_rows=maximum,
+        tag="cell.each.setting_overrides",
     )
     out: dict[tuple[str, ...], Any] = {}
     seen: dict[tuple[str, ...], int] = {}
@@ -188,9 +219,15 @@ async def load_settings(
             raise BoundedReadError("Malformed setting override key")
         key = (decoded[0],)
         version, deleted = row["version"], row["deleted"]
-        if (key in seen or type(version) is not int or version < 0
-                or type(deleted) is not int or deleted not in (0, 1)
-                or name is not None and key != (name,)):
+        if (
+            key in seen
+            or type(version) is not int
+            or version < 0
+            or type(deleted) is not int
+            or deleted not in (0, 1)
+            or name is not None
+            and key != (name,)
+        ):
             raise BoundedReadError("Ambiguous setting override")
         seen[key] = version
         if not deleted:

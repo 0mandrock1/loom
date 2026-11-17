@@ -361,8 +361,11 @@ async def _write(
         "reason": reason or "",
         "revoked_by": revoked_by or "",
         "issued_before": issued_before,
-        "version": (await _next_version(key) if deadline is None
-                    else await _bounded_version(key, ch=ch or get_client(), deadline=deadline)),
+        "version": (
+            await _next_version(key)
+            if deadline is None
+            else await _bounded_version(key, ch=ch or get_client(), deadline=deadline)
+        ),
     }
     if deadline is None:
         await get_client().insert("loom.revoked_tokens", [row])
@@ -381,17 +384,28 @@ async def _write(
 
 @asynccontextmanager
 async def subject_change(
-    subject: str, *, deadline: float | None = None, ch: Any = None,
+    subject: str,
+    *,
+    deadline: float | None = None,
+    ch: Any = None,
 ) -> AsyncIterator[None]:
     """Serialize subject revocations across every writer and replica."""
     from server.core import leases
     from server.core.errors import GrantBusyError
 
     name = f"subject-revocation:{uuid.uuid5(_LEASE_NAMESPACE, subject)}"
-    bounded: dict[str, Any] = {} if deadline is None else {
-        "deadline": deadline, "confirm_release": True, "ch": ch,
-    }
-    async with leases.holding(name, ttl_s=60.0, wait_s=10.0 if deadline is None else 0, **bounded) as held:
+    bounded: dict[str, Any] = (
+        {}
+        if deadline is None
+        else {
+            "deadline": deadline,
+            "confirm_release": True,
+            "ch": ch,
+        }
+    )
+    async with leases.holding(
+        name, ttl_s=60.0, wait_s=10.0 if deadline is None else 0, **bounded
+    ) as held:
         if not held:
             raise GrantBusyError("another revocation of this subject is running; retry shortly")
         yield
@@ -414,31 +428,48 @@ async def _bounded_insert(row: dict[str, Any], *, ch: Any, deadline: float) -> N
     set_query_tag("cell.each.subject_write")
     async with asyncio.timeout(remaining):
         with statement_timeout(remaining):
-            await ch.insert("loom.revoked_tokens", [row], settings={
-                "async_insert": 0, "wait_for_async_insert": 1, "max_memory_usage": 128 * 1024**2,
-            })
+            await ch.insert(
+                "loom.revoked_tokens",
+                [row],
+                settings={
+                    "async_insert": 0,
+                    "wait_for_async_insert": 1,
+                    "max_memory_usage": 128 * 1024**2,
+                },
+            )
 
 
 async def stored_bounded(key: str, *, deadline: float, ch: Any) -> dict[str, Any] | None:
     from server.core.ch_bounded import BoundedReadError, read_rows
 
     rows = await read_rows(
-        "SELECT jti, reason, revoked_by, version, toUnixTimestamp64Milli(revoked_at) AS revoked_at, "
+        "SELECT jti, reason, revoked_by, version, "
+        "toUnixTimestamp64Milli(revoked_at) AS revoked_at, "
         "toUnixTimestamp64Milli(expires_at) AS expires_at, "
         "toUnixTimestamp64Milli(issued_before) AS issued_before FROM ("
         "SELECT jti, reason, revoked_by, version, revoked_at, expires_at, issued_before "
         "FROM loom.revoked_tokens FINAL WHERE jti = {key:String} AND expires_at > now() "
         "LIMIT 2) FORMAT JSONEachRow",
-        {"key": key}, ch=ch, deadline=deadline, row_bytes=1024, total_bytes=1024,
-        max_rows=1, tag="cell.each.subject_record",
+        {"key": key},
+        ch=ch,
+        deadline=deadline,
+        row_bytes=1024,
+        total_bytes=1024,
+        max_rows=1,
+        tag="cell.each.subject_record",
     )
     if not rows:
         return None
     row = rows[0]
-    if (set(row) != {"jti", "reason", "revoked_by", "version", "revoked_at", "expires_at", "issued_before"}
-            or row["jti"] != key or type(row["reason"]) is not str
-            or type(row["revoked_by"]) is not str or type(row["version"]) is not int
-            or not 0 <= row["version"] <= 2**64 - 1):
+    if (
+        set(row)
+        != {"jti", "reason", "revoked_by", "version", "revoked_at", "expires_at", "issued_before"}
+        or row["jti"] != key
+        or type(row["reason"]) is not str
+        or type(row["revoked_by"]) is not str
+        or type(row["version"]) is not int
+        or not 0 <= row["version"] <= 2**64 - 1
+    ):
         raise BoundedReadError("Malformed subject record")
     _bounded_times(row, ("revoked_at", "expires_at", "issued_before"))
     return row
@@ -459,7 +490,11 @@ def _bounded_times(row: dict[str, Any], fields: tuple[str, ...]) -> None:
 
 
 async def cutoffs_bounded(
-    subjects: list[str], *, deadline: float, ch: Any, permanent: bool = False,
+    subjects: list[str],
+    *,
+    deadline: float,
+    ch: Any,
+    permanent: bool = False,
 ) -> dict[str, int | None]:
     from server.core.ch_bounded import BoundedReadError, read_rows
 
@@ -467,20 +502,29 @@ async def cutoffs_bounded(
         raise BoundedReadError("Revocation key set exceeds its allowance")
     found: dict[str, int | None] = {}
     for start in range(0, len(subjects), 5):
-        keys = _keys_of(subjects[start:start + 5])
+        keys = _keys_of(subjects[start : start + 5])
         rows = await read_rows(
             "SELECT jti, toUnixTimestamp64Milli(issued_before) AS issued_before, "
             "toUnixTimestamp64Milli(expires_at) AS expires_at FROM ("
             "SELECT jti, issued_before, expires_at FROM loom.revoked_tokens FINAL "
             "WHERE jti IN {keys:Array(String)} AND expires_at > now() "
-            "LIMIT {limit:UInt32}) FORMAT JSONEachRow", {"keys": keys, "limit": len(keys) + 1},
-            ch=ch, deadline=deadline, row_bytes=1024, total_bytes=65536, max_rows=len(keys),
+            "LIMIT {limit:UInt32}) FORMAT JSONEachRow",
+            {"keys": keys, "limit": len(keys) + 1},
+            ch=ch,
+            deadline=deadline,
+            row_bytes=1024,
+            total_bytes=65536,
+            max_rows=len(keys),
             tag="cell.each.subject_cutoffs",
         )
         seen: set[str] = set()
         for row in rows:
-            if (set(row) != {"jti", "issued_before", "expires_at"} or type(row["jti"]) is not str
-                    or row["jti"] not in keys or row["jti"] in seen):
+            if (
+                set(row) != {"jti", "issued_before", "expires_at"}
+                or type(row["jti"]) is not str
+                or row["jti"] not in keys
+                or row["jti"] in seen
+            ):
                 raise BoundedReadError("Malformed revocation view")
             seen.add(row["jti"])
             _bounded_times(row, ("issued_before", "expires_at"))
@@ -591,11 +635,22 @@ def check_bounded_bookkeeping(key: str) -> None:
     """
     from server.core.ch_bounded import BoundedReadError
 
-    if (any(len(collection) > 4096 for collection in (
-            _revoked_jtis, _revoked_folded, _revoked_before, _cut_off,
-        )) or len(_recent) >= 4096
-            or len(_revoked_jtis) == 4096 and key not in _revoked_jtis
-            or len(_revoked_folded) == 4096 and key.lower() not in _revoked_folded):
+    if (
+        any(
+            len(collection) > 4096
+            for collection in (
+                _revoked_jtis,
+                _revoked_folded,
+                _revoked_before,
+                _cut_off,
+            )
+        )
+        or len(_recent) >= 4096
+        or len(_revoked_jtis) == 4096
+        and key not in _revoked_jtis
+        or len(_revoked_folded) == 4096
+        and key.lower() not in _revoked_folded
+    ):
         raise BoundedReadError("Local revocation bookkeeping exceeds its allowance")
 
 

@@ -244,14 +244,23 @@ class Lease:
             rows = await read_rows(
                 f"SELECT holder, (renewed_at + toIntervalSecond(ttl_s)) < now64(3) AS stale "
                 f"FROM {LOCK_TABLE} WHERE name = {{name:String}} LIMIT 2 FORMAT JSONEachRow",
-                {"name": self.name}, ch=self.ch, deadline=self.deadline,
-                row_bytes=4096, total_bytes=4096, max_rows=1, tag="cell.each.claim_read",
+                {"name": self.name},
+                ch=self.ch,
+                deadline=self.deadline,
+                row_bytes=4096,
+                total_bytes=4096,
+                max_rows=1,
+                tag="cell.each.claim_read",
             )
             if not rows:
                 return None
             row = rows[0]
-            if (set(row) != {"holder", "stale"} or type(row["holder"]) is not str
-                    or type(row["stale"]) is not int or row["stale"] not in (0, 1)):
+            if (
+                set(row) != {"holder", "stale"}
+                or type(row["holder"]) is not str
+                or type(row["stale"]) is not int
+                or row["stale"] not in (0, 1)
+            ):
                 raise BoundedReadError("Malformed claim holder")
             return row["holder"], bool(row["stale"])
         row = await self.ch.query_one(LOCK_HOLDER, {"name": self.name})
@@ -270,7 +279,9 @@ class Lease:
         set_query_tag("cell.each.claim_write")
         async with asyncio.timeout(remaining):
             with statement_timeout(remaining):
-                await self.ch.execute(sql, params=params, settings={"max_memory_usage": 128 * 1024**2})
+                await self.ch.execute(
+                    sql, params=params, settings={"max_memory_usage": 128 * 1024**2}
+                )
 
     async def _keeper_attempt(self) -> bool:
         row = None if self.expect_free else await self._holder_row()
@@ -429,8 +440,13 @@ class ClaimExpired(LeaseUnavailable):
 
 @asynccontextmanager
 async def holding(
-    name: str, *, ttl_s: float, wait_s: float = 0.0, ch: Any = None,
-    deadline: float | None = None, confirm_release: bool = False,
+    name: str,
+    *,
+    ttl_s: float,
+    wait_s: float = 0.0,
+    ch: Any = None,
+    deadline: float | None = None,
+    confirm_release: bool = False,
 ) -> AsyncIterator[bool]:
     """Claim `name` for the block, waiting up to `wait_s`: yields True when this
     caller has it, False when another holder keeps it. LeaseUnavailable when the

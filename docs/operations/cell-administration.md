@@ -69,8 +69,8 @@ Tenant policy, org-limit sweeps, arbitrary commands and native store operations 
 not supported. Use `loom cell each --help` for coordinator options. A server lacking
 the capability contract or requested action refuses before business work; the command
 does not fall back to an older API.
-Global blacklist removal is unavailable while its bounded storage operation awaits
-native validation. A parsed removal command receives no advertised capability.
+Global blacklist removal is unavailable. A parsed removal command receives no
+advertised capability.
 
 The command runs one cell at a time. It reads the directory before the run, again for
 each target, and once after all attempts. Exit zero requires every target to have a

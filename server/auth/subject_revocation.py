@@ -82,7 +82,13 @@ async def audit_revocation(
             async with asyncio.timeout(remaining):
                 with statement_timeout(remaining):
                     await audit_revocation(
-                        row, token_id=token_id, kind=kind, by=by, org=org, scim=scim, **extra,
+                        row,
+                        token_id=token_id,
+                        kind=kind,
+                        by=by,
+                        org=org,
+                        scim=scim,
+                        **extra,
                     )
         except TimeoutError:
             return
@@ -122,8 +128,13 @@ class Revoked:
 
 
 async def record(
-    subject: str, *, by: str, reason: str = "", at: datetime | None = None,
-    deadline: float | None = None, ch: Any = None,
+    subject: str,
+    *,
+    by: str,
+    reason: str = "",
+    at: datetime | None = None,
+    deadline: float | None = None,
+    ch: Any = None,
     progress: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Revoke `subject` for good: outright (`at` None), on its own key, unless
@@ -142,8 +153,11 @@ async def record(
         )
     bounded: dict[str, Any] = {} if deadline is None else {"deadline": deadline, "ch": ch}
     async with revocation.subject_change(subject, **bounded):
-        current = (await revocation.stored(subject) if deadline is None
-                   else await revocation.stored_bounded(subject, **bounded))
+        current = (
+            await revocation.stored(subject)
+            if deadline is None
+            else await revocation.stored_bounded(subject, **bounded)
+        )
         if (
             current is not None
             and current["issued_before"] is None
@@ -154,7 +168,10 @@ async def record(
             revocation.remember_row(current, **({} if deadline is None else {"bounded": True}))
             return current, True
         row = await revocation.revoke(
-            subject, reason=reason, revoked_by=by, **bounded,
+            subject,
+            reason=reason,
+            revoked_by=by,
+            **bounded,
             **({} if deadline is None else {"progress": progress}),
         )
         if progress is not None:
@@ -163,8 +180,15 @@ async def record(
 
 
 async def finish(
-    subject: str, row: dict[str, Any], kept: bool, *, by: str, org: str,
-    deadline: float | None = None, ch: Any = None, progress: dict[str, int] | None = None,
+    subject: str,
+    row: dict[str, Any],
+    kept: bool,
+    *,
+    by: str,
+    org: str,
+    deadline: float | None = None,
+    ch: Any = None,
+    progress: dict[str, int] | None = None,
 ) -> Revoked:
     """After `record`: count the sign-in sessions the subject's revocations end
     (a logout or a refusal ended some already; one refreshed since a cutoff
@@ -176,14 +200,20 @@ async def finish(
     subject = subject.strip()
     outright, in_force, sessions, tokens = False, None, 0, 0
     try:
-        revoked = (await revocation.cutoffs([subject]) if deadline is None else
-                   await revocation.cutoffs_bounded([subject], deadline=deadline, ch=ch))
+        revoked = (
+            await revocation.cutoffs([subject])
+            if deadline is None
+            else await revocation.cutoffs_bounded([subject], deadline=deadline, ch=ch)
+        )
         if subject in revoked:
             at = revoked[subject]
             outright = at is None
             in_force = None if at is None else datetime.fromtimestamp(at, UTC)
-            families = (await oauth_store.session_families(subject) if deadline is None else
-                        await oauth_store.session_families(subject, deadline=deadline, ch=ch))
+            families = (
+                await oauth_store.session_families(subject)
+                if deadline is None
+                else await oauth_store.session_families(subject, deadline=deadline, ch=ch)
+            )
             sessions = sum(
                 revocation.kills(at, newest) and not revocation.is_revoked(family)
                 for family, newest in families.items()
@@ -193,10 +223,15 @@ async def finish(
         if deadline is None:
             tokens = len(await service_accounts.revoke_created_by([subject], revoked_by=by))
         else:
-            tokens = len(await service_accounts.revoke_created_by_bounded(
-                subject, revoked_by=by, deadline=deadline, ch=ch,
-                progress=progress if progress is not None else {},
-            ))
+            tokens = len(
+                await service_accounts.revoke_created_by_bounded(
+                    subject,
+                    revoked_by=by,
+                    deadline=deadline,
+                    ch=ch,
+                    progress=progress if progress is not None else {},
+                )
+            )
     finally:  # a revocation that landed is recorded, even if the marking did not finish
         end_user_org = org_of_end_user_revocation(subject)
         await audit_revocation(

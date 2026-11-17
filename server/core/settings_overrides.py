@@ -97,8 +97,14 @@ async def change(
 
 
 async def _change(
-    name: str, value: Any, snapshot: ro.Snapshot, *, clear: bool, expected: Any,
-    ch: _CHClient | None, deadline: float | None = None,
+    name: str,
+    value: Any,
+    snapshot: ro.Snapshot,
+    *,
+    clear: bool,
+    expected: Any,
+    ch: _CHClient | None,
+    deadline: float | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     known = name in Settings.model_fields
     before = row(name) if known else None
@@ -132,8 +138,12 @@ async def _change(
 def check_selected(name: str) -> None:
     """Only known, non-secret LIVE fields belong to cell administration."""
     field = Settings.model_fields.get(name)
-    if (len(Settings.model_fields) > 4096 or field is None
-            or not is_live(field) or is_secret_field(name)):
+    if (
+        len(Settings.model_fields) > 4096
+        or field is None
+        or not is_live(field)
+        or is_secret_field(name)
+    ):
         raise BoundedReadError("Cell administration requires a non-secret LIVE setting")
 
 
@@ -145,8 +155,13 @@ def _finite(name: str, value: Any) -> None:
 
 
 async def change_bounded(
-    name: str, value: Any = None, *, clear: bool = False, expected: Any = NOT_GIVEN,
-    deadline: float, ch: _CHClient | None = None,
+    name: str,
+    value: Any = None,
+    *,
+    clear: bool = False,
+    expected: Any = NOT_GIVEN,
+    deadline: float,
+    ch: _CHClient | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Refresh only this setting before the ordinary precondition and stored-first change."""
     check_selected(name)
@@ -158,7 +173,13 @@ async def change_bounded(
     else:
         _restore(name)
     return await _change(
-        name, value, snapshot, clear=clear, expected=expected, ch=ch, deadline=deadline,
+        name,
+        value,
+        snapshot,
+        clear=clear,
+        expected=expected,
+        ch=ch,
+        deadline=deadline,
     )
 
 
@@ -166,8 +187,11 @@ async def refresh_bounded(*, deadline: float, ch: _CHClient | None = None) -> No
     """Adopt a complete bounded setting snapshot only after all selected values validate."""
     if len(Settings.model_fields) > 4096:
         raise BoundedReadError("Settings catalog exceeds its allowance")
-    eligible = {name for name, field in Settings.model_fields.items()
-                if is_live(field) and not is_secret_field(name)}
+    eligible = {
+        name
+        for name, field in Settings.model_fields.items()
+        if is_live(field) and not is_secret_field(name)
+    }
     snapshot = await ro.load_settings(deadline=deadline, ch=ch)
     wanted = {}
     for key, raw in snapshot[KIND].items():
@@ -271,7 +295,10 @@ def _shown(name: str, value: Any) -> Any:
 
 
 def _rows(
-    *, prefix: str, changed: bool, selected: bool = False,
+    *,
+    prefix: str,
+    changed: bool,
+    selected: bool = False,
 ) -> Iterator[dict[str, Any]]:
     """Every setting whose name starts with `prefix`: its value in force, its
     default, where the value came from and whether it takes an override.
@@ -290,13 +317,13 @@ def _rows(
         if changed and value == default and sources[name] != "override":
             continue
         yield {
-                "name": name,
-                "env": f"LOOM_{name.upper()}",
-                "value": _shown(name, value),
-                "default": _shown(name, default),
-                "source": sources[name],
-                "live": is_live(field),
-                "description": about.get(name, ""),
+            "name": name,
+            "env": f"LOOM_{name.upper()}",
+            "value": _shown(name, value),
+            "default": _shown(name, default),
+            "source": sources[name],
+            "live": is_live(field),
+            "description": about.get(name, ""),
         }
 
 

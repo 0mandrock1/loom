@@ -62,9 +62,7 @@ Name = Annotated[str, AfterValidator(lambda value: _text(value, 256))]
 ShortName = Annotated[str, AfterValidator(lambda value: _text(value, 64))]
 Prefix = Annotated[str, AfterValidator(lambda value: _text(value, 256, empty=True))]
 PatternID = Annotated[str, AfterValidator(_uuid)]
-Reason = Annotated[
-    str, AfterValidator(lambda value: _text(value, 1024, empty=True, controls=True))
-]
+Reason = Annotated[str, AfterValidator(lambda value: _text(value, 1024, empty=True, controls=True))]
 Nonnegative = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
 
@@ -232,9 +230,9 @@ class CellBudgetSetInput(CellActionInput):
 
 class CellBlacklistGlobalAddInput(CellActionInput):
     pattern_id: PatternID
-    pattern: Annotated[
-        str, AfterValidator(lambda value: _text(value, 4096, controls=True))
-    ] = Field(repr=False)
+    pattern: Annotated[str, AfterValidator(lambda value: _text(value, 4096, controls=True))] = (
+        Field(repr=False)
+    )
     pattern_type: Literal["substring", "regex"] = "substring"
     reason: Reason = Field(default="", repr=False)
 

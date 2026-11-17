@@ -482,7 +482,7 @@ async def _read(*, ch: _CHClient | None = None, deadline: float | None = None) -
                 if max(len(_view.keys), len(_view.retired), len(_view.retired_public)) > 128:
                     raise ValueError("keyring history exceeds its allowance")
                 rows = [{**r, "retired": r["retired_at"] is not None} for r in rows]
-    except Exception as e:  # noqa: BLE001 — keep the last keyring on a CH glitch
+    except Exception as e:  # Keep the last keyring when the ordinary read fails.
         if deadline is not None:
             raise ValueError("the complete keyring could not be read") from e
         log.warning("signing keyring read failed: %s — keeping %d keys", e, len(_view.keys))
@@ -589,7 +589,10 @@ def _is_this_root(recorded: str) -> bool:
 
 
 async def record_root(
-    *, ch: _CHClient, force: bool = False, deadline: float | None = None,
+    *,
+    ch: _CHClient,
+    force: bool = False,
+    deadline: float | None = None,
 ) -> None:
     """Write the `default` row for this root secret, when it has none (or
     always, with `force`: the operator replaced the root on purpose). A
@@ -598,7 +601,8 @@ async def record_root(
     if deadline is None:
         row = await ch.query_one(
             f"SELECT {', '.join(_COLUMNS)}, version FROM loom.signing_keys FINAL "
-            "WHERE kid = {kid:String}", params={"kid": ROOT_KID},
+            "WHERE kid = {kid:String}",
+            params={"kid": ROOT_KID},
         )
     else:
         rows = await _bounded_rows(ch, deadline=deadline, kid=ROOT_KID)
@@ -759,7 +763,11 @@ def _new_key(algorithm: str) -> tuple[str, str]:
 
 
 async def rotate(
-    algorithm: str, *, activate_in_s: float, ch: _CHClient, deadline: float | None = None,
+    algorithm: str,
+    *,
+    activate_in_s: float,
+    ch: _CHClient,
+    deadline: float | None = None,
 ) -> SigningKey:
     """Write a new key that signs from `activate_in_s` from now on the
     ClickHouse server's clock: it must exceed two of the servers' keyring
@@ -815,7 +823,11 @@ async def retire(kid: str, *, ch: _CHClient) -> bool:
 
 
 async def _retire(
-    kid: str, *, ch: _CHClient, held: Callable[[], bool], deadline: float | None = None,
+    kid: str,
+    *,
+    ch: _CHClient,
+    held: Callable[[], bool],
+    deadline: float | None = None,
 ) -> bool:
     view = await _same_root(ch) if deadline is None else await _same_root(ch, deadline=deadline)
     if deadline is None:
@@ -860,7 +872,10 @@ async def listing(*, ch: _CHClient) -> list[dict[str, Any]]:
 
 
 async def _bounded_rows(
-    ch: Any, *, deadline: float, kid: str | None = None,
+    ch: Any,
+    *,
+    deadline: float,
+    kid: str | None = None,
 ) -> list[dict[str, Any]]:
     from server.core.ch_bounded import BoundedReadError, read_rows
 
@@ -874,16 +889,30 @@ async def _bounded_rows(
         "toUnixTimestamp64Milli(now64(3)) AS server_now "
         "FROM loom.signing_keys FINAL" + where + " LIMIT {limit:UInt32} FORMAT JSONEachRow",
         {"kid": kid, "limit": maximum + 1} if kid is not None else {"limit": maximum + 1},
-        ch=ch, deadline=deadline, row_bytes=16384, total_bytes=1024**2,
-        max_rows=maximum, tag="cell.each.keyring_read",
+        ch=ch,
+        deadline=deadline,
+        row_bytes=16384,
+        total_bytes=1024**2,
+        max_rows=maximum,
+        tag="cell.each.keyring_read",
     )
     seen: set[str] = set()
     for row in rows:
-        if (set(row) != {*_COLUMNS, "version", "server_now"}
-                or any(type(row[key]) is not str for key in ("kid", "algorithm", "sealed_key", "public_pem"))
-                or row["kid"] in seen or not row["kid"] or len(row["kid"].encode()) > 256
-                or row["algorithm"] not in ALGORITHMS or type(row["version"]) is not int
-                or row["version"] < 0 or kid is not None and row["kid"] != kid):
+        if (
+            set(row) != {*_COLUMNS, "version", "server_now"}
+            or any(
+                type(row[key]) is not str
+                for key in ("kid", "algorithm", "sealed_key", "public_pem")
+            )
+            or row["kid"] in seen
+            or not row["kid"]
+            or len(row["kid"].encode()) > 256
+            or row["algorithm"] not in ALGORITHMS
+            or type(row["version"]) is not int
+            or row["version"] < 0
+            or kid is not None
+            and row["kid"] != kid
+        ):
             raise BoundedReadError("Malformed keyring row")
         seen.add(row["kid"])
         for key in ("created_at", "activate_at", "retired_at", "server_now"):
@@ -902,8 +931,13 @@ async def _bounded_now(ch: Any, deadline: float) -> datetime:
     from server.core.ch_bounded import BoundedReadError, read_rows
 
     rows = await read_rows(
-        "SELECT toUnixTimestamp64Milli(now64(3)) AS now LIMIT 2 FORMAT JSONEachRow", {},
-        ch=ch, deadline=deadline, row_bytes=1024, total_bytes=1024, max_rows=1,
+        "SELECT toUnixTimestamp64Milli(now64(3)) AS now LIMIT 2 FORMAT JSONEachRow",
+        {},
+        ch=ch,
+        deadline=deadline,
+        row_bytes=1024,
+        total_bytes=1024,
+        max_rows=1,
         tag="cell.each.keyring_clock",
     )
     if len(rows) != 1 or set(rows[0]) != {"now"} or type(rows[0]["now"]) is not int:
@@ -927,9 +961,14 @@ async def _insert_key(ch: Any, row: dict[str, Any], deadline: float | None) -> N
     set_query_tag("cell.each.keyring_write")
     async with asyncio.timeout(remaining):
         with statement_timeout(remaining):
-            await ch.insert("loom.signing_keys", [stored], settings={
-                "async_insert": 0, "max_memory_usage": 128 * 1024**2,
-            })
+            await ch.insert(
+                "loom.signing_keys",
+                [stored],
+                settings={
+                    "async_insert": 0,
+                    "max_memory_usage": 128 * 1024**2,
+                },
+            )
 
 
 async def listing_bounded(*, ch: Any, deadline: float) -> list[dict[str, Any]]:
@@ -944,7 +983,11 @@ async def listing_bounded(*, ch: Any, deadline: float) -> list[dict[str, Any]]:
 
 
 async def rotate_bounded(
-    algorithm: str, *, activate_in_s: float, ch: Any, deadline: float,
+    algorithm: str,
+    *,
+    activate_in_s: float,
+    ch: Any,
+    deadline: float,
 ) -> SigningKey:
     import math
 
@@ -955,13 +998,22 @@ async def rotate_bounded(
     rows = await read_rows(
         f"SELECT max(refresh_seconds) AS s FROM {READERS_TABLE} "
         "WHERE seen_at > now64(3) - toIntervalSecond({age:UInt32}) "
-        "LIMIT 2 FORMAT JSONEachRow", {"age": int(2 * _ANNOUNCE_S)},
-        ch=ch, deadline=deadline, row_bytes=1024, total_bytes=1024, max_rows=1,
+        "LIMIT 2 FORMAT JSONEachRow",
+        {"age": int(2 * _ANNOUNCE_S)},
+        ch=ch,
+        deadline=deadline,
+        row_bytes=1024,
+        total_bytes=1024,
+        max_rows=1,
         tag="cell.each.keyring_refresh_interval",
     )
-    if (len(rows) != 1 or set(rows[0]) != {"s"}
-            or type(rows[0]["s"]) not in (int, float) or not math.isfinite(rows[0]["s"])
-            or rows[0]["s"] < 0):
+    if (
+        len(rows) != 1
+        or set(rows[0]) != {"s"}
+        or type(rows[0]["s"]) not in (int, float)
+        or not math.isfinite(rows[0]["s"])
+        or rows[0]["s"] < 0
+    ):
         raise BoundedReadError("The serving refresh interval could not be verified")
     refresh = rows[0]["s"] or settings.jwt_keyring_refresh_seconds
     if not math.isfinite(activate_in_s) or activate_in_s < 2 * refresh:
@@ -975,11 +1027,19 @@ async def retire_bounded(kid: str, *, ch: Any, deadline: float) -> bool:
     from server.core.ch_bounded import BoundedReadError
 
     async with leases.holding(
-        RETIRE_CLAIM, ttl_s=60, wait_s=0, ch=ch, deadline=deadline, confirm_release=True,
+        RETIRE_CLAIM,
+        ttl_s=60,
+        wait_s=0,
+        ch=ch,
+        deadline=deadline,
+        confirm_release=True,
     ) as held:
         if not held:
             raise BoundedReadError("Another key retirement holds the claim")
-        with sequential_reads(), statement_timeout(min(2.0, max(0.001, deadline - time.monotonic()))):
+        with (
+            sequential_reads(),
+            statement_timeout(min(2.0, max(0.001, deadline - time.monotonic()))),
+        ):
             return await _retire(kid, ch=ch, held=lambda: True, deadline=deadline)
 
 

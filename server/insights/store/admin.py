@@ -6,8 +6,8 @@ dicts; the handler builds the wire Pydantic shape on top.
 
 from __future__ import annotations
 
-from typing import Any
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from server.core.ch_bounded import BoundedReadError, read_rows
 from server.core.ch_names import SCHEMA, database, logical, telemetry_database
@@ -95,7 +95,12 @@ async def setting_changes(
 
 
 async def setting_changes_bounded(
-    event_type: str, name: str, limit: int, *, deadline: float, ch: _CHClient | None = None,
+    event_type: str,
+    name: str,
+    limit: int,
+    *,
+    deadline: float,
+    ch: _CHClient | None = None,
 ) -> list[dict[str, Any]]:
     """The requested newest setting changes, bounded before their subject JSON decodes."""
     if not name or not 1 <= limit <= 50:
@@ -105,13 +110,21 @@ async def setting_changes_bounded(
         "WHERE org = '-' AND namespace = '-' AND event_type = {event:String} "
         "AND JSONExtractString(subject, 'name') = {name:String} "
         "ORDER BY ts DESC LIMIT {limit:UInt32} FORMAT JSONEachRow",
-        {"event": event_type, "name": name, "limit": limit}, ch=ch or _default_client(),
-        deadline=deadline, row_bytes=16384, total_bytes=512 * 1024, max_rows=limit,
+        {"event": event_type, "name": name, "limit": limit},
+        ch=ch or _default_client(),
+        deadline=deadline,
+        row_bytes=16384,
+        total_bytes=512 * 1024,
+        max_rows=limit,
         tag="cell.each.setting_history",
     )
     for row in rows:
-        if (set(row) != {"ts_ms", "actor", "subject"} or type(row["ts_ms"]) is not int
-                or type(row["actor"]) is not str or type(row["subject"]) is not str):
+        if (
+            set(row) != {"ts_ms", "actor", "subject"}
+            or type(row["ts_ms"]) is not int
+            or type(row["actor"]) is not str
+            or type(row["subject"]) is not str
+        ):
             raise BoundedReadError("Malformed setting-history row")
         try:
             row["ts"] = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=row.pop("ts_ms"))

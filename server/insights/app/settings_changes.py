@@ -37,7 +37,12 @@ async def change(
         )
     else:
         before, row = await settings_overrides.change_bounded(
-            name, value, clear=clear, expected=expected, ch=ch, deadline=deadline,
+            name,
+            value,
+            clear=clear,
+            expected=expected,
+            ch=ch,
+            deadline=deadline,
         )
     subject = {
         "name": name,
@@ -59,7 +64,10 @@ async def change(
 
 
 async def history(
-    name: str = "", limit: int = 50, *, ch: _CHClient | None = None,
+    name: str = "",
+    limit: int = 50,
+    *,
+    ch: _CHClient | None = None,
     deadline: float | None = None,
 ) -> list[dict[str, Any]]:
     """The recorded changes of setting `name` ("" = every setting), newest first."""
@@ -67,20 +75,30 @@ async def history(
         rows = await admin_repo.setting_changes(EVENT, name, limit, ch=ch)
     else:
         settings_overrides.check_selected(name)
-        rows = await admin_repo.setting_changes_bounded(EVENT, name, limit, ch=ch, deadline=deadline)
+        rows = await admin_repo.setting_changes_bounded(
+            EVENT, name, limit, ch=ch, deadline=deadline
+        )
     out = []
     for r in rows:
         subject = json.loads(r["subject"]) if deadline is None else decode_json(r["subject"])
         if deadline is not None and (
             not isinstance(subject, dict)
             or set(subject) != {"name", "value", "previous", "previous_source", "cleared"}
-            or subject["name"] != name or type(subject["cleared"]) is not bool
-            or subject["previous_source"] is not None and type(subject["previous_source"]) is not str
+            or subject["name"] != name
+            or type(subject["cleared"]) is not bool
+            or subject["previous_source"] is not None
+            and type(subject["previous_source"]) is not str
         ):
             raise BoundedReadError("Malformed setting-history subject")
-        out.append({
-            "ts": r["ts"], "actor": r["actor"], "name": subject["name"],
-            "value": subject["value"], "previous": subject["previous"],
-            "previous_source": subject["previous_source"], "cleared": subject["cleared"],
-        })
+        out.append(
+            {
+                "ts": r["ts"],
+                "actor": r["actor"],
+                "name": subject["name"],
+                "value": subject["value"],
+                "previous": subject["previous"],
+                "previous_source": subject["previous_source"],
+                "cleared": subject["cleared"],
+            }
+        )
     return out

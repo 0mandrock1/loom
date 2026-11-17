@@ -26,11 +26,18 @@ async def pattern_store() -> AsyncIterator[Any]:
 
 def _row(org: str, pattern_id: str, created_at: datetime) -> dict[str, Any]:
     return {
-        "pattern_id": pattern_id, "org": org, "namespace": "version-proof",
-        "pattern": "refusal-" + pattern_id, "pattern_type": "substring", "scope": "namespace",
-        "reason": "retain the selected fields", "created_by": "process:version-proof",
-        "hit_count": 7, "last_hit_at": created_at - timedelta(seconds=1),
-        "created_at": created_at, "tombstoned_at": None,
+        "pattern_id": pattern_id,
+        "org": org,
+        "namespace": "version-proof",
+        "pattern": "refusal-" + pattern_id,
+        "pattern_type": "substring",
+        "scope": "namespace",
+        "reason": "retain the selected fields",
+        "created_by": "process:version-proof",
+        "hit_count": 7,
+        "last_hit_at": created_at - timedelta(seconds=1),
+        "created_at": created_at,
+        "tombstoned_at": None,
     }
 
 
@@ -55,8 +62,11 @@ async def _remove_fixture(client: Any, row: dict[str, Any]) -> None:
 
 def _comparable(row: dict[str, Any]) -> dict[str, Any]:
     return {
-        key: value.replace(tzinfo=None) if isinstance(value, datetime)
-        else str(value) if key == "pattern_id" else value
+        key: value.replace(tzinfo=None)
+        if isinstance(value, datetime)
+        else str(value)
+        if key == "pattern_id"
+        else value
         for key, value in row.items()
     }
 
@@ -64,11 +74,14 @@ def _comparable(row: dict[str, Any]) -> dict[str, Any]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ahead_seconds", [0, 86400], ids=["current", "future"])
 async def test_tombstone_dominates_version_and_preserves_selected_fields(
-    pattern_store: Any, ahead_seconds: int,
+    pattern_store: Any,
+    ahead_seconds: int,
 ) -> None:
     set_query_tag("test.blacklist.tombstone_version")
     now = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
-    row = _row(unique_org("blacklist_version"), str(uuid4()), now + timedelta(seconds=ahead_seconds))
+    row = _row(
+        unique_org("blacklist_version"), str(uuid4()), now + timedelta(seconds=ahead_seconds)
+    )
     try:
         await insert_row(row, ch=pattern_store)
         before = await _stored(pattern_store, row)
@@ -78,15 +91,21 @@ async def test_tombstone_dominates_version_and_preserves_selected_fields(
         after = await _stored(pattern_store, row)
         assert after["created_at"].replace(tzinfo=None) > before["created_at"].replace(tzinfo=None)
         assert after["tombstoned_at"].replace(tzinfo=None) == now
-        assert {key: value for key, value in after.items() if key not in {"created_at", "tombstoned_at"}} == {
-            key: value for key, value in before.items() if key not in {"created_at", "tombstoned_at"}
+        assert {
+            key: value for key, value in after.items() if key not in {"created_at", "tombstoned_at"}
+        } == {
+            key: value
+            for key, value in before.items()
+            if key not in {"created_at", "tombstoned_at"}
         }
     finally:
         await _remove_fixture(pattern_store, row)
 
 
 @pytest.mark.asyncio
-async def test_tombstone_refuses_unrepresentable_successor_without_changing_row(pattern_store: Any) -> None:
+async def test_tombstone_refuses_unrepresentable_successor_without_changing_row(
+    pattern_store: Any,
+) -> None:
     set_query_tag("test.blacklist.tombstone_overflow")
     maximum = datetime(1970, 1, 1) + timedelta(seconds=2**32 - 1)
     row = _row(unique_org("blacklist_version"), str(uuid4()), maximum)

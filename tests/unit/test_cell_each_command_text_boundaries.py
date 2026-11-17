@@ -45,23 +45,28 @@ def test_global_policy_payload_keeps_controls_in_private_intent(payload, capsys)
 def test_exact_subject_reason_preserves_raw_text():
     from server.cli.cell_each import parse_command
 
-    command = parse_command(["revoke-token", "--subject", "sa:worker", "--reason", "one\ntwo\tthree"])
+    command = parse_command(
+        ["revoke-token", "--subject", "sa:worker", "--reason", "one\ntwo\tthree"]
+    )
     assert command.arguments["reason"] == "one\ntwo\tthree"
     assert command.digest == _digest(command)
 
 
-@pytest.mark.parametrize("tokens", [
-    ["settings", "list", "--prefix", "bad\nname"],
-    ["settings", "set", "bad\tname", "raw\nvalue"],
-    ["signing-key", "retire", "bad\x7fkid"],
-    ["revoke-token", "--subject", "sa:bad\nname"],
-    ["ratelimit", "reset", "--namespace", "bad\tname", "--op-class", "memory"],
-    ["ratelimit", "reset", "--namespace", "work", "--op-class", "bad\nclass"],
-    ["budget", "reset", "bad\nop"],
-    ["budget", "reset", "memory.get", "--consumer", "bad\tconsumer"],
-    ["blacklist", "global", "add", "bad\0pattern"],
-    ["settings", "set", "name", "bad\0value"],
-])
+@pytest.mark.parametrize(
+    "tokens",
+    [
+        ["settings", "list", "--prefix", "bad\nname"],
+        ["settings", "set", "bad\tname", "raw\nvalue"],
+        ["signing-key", "retire", "bad\x7fkid"],
+        ["revoke-token", "--subject", "sa:bad\nname"],
+        ["ratelimit", "reset", "--namespace", "bad\tname", "--op-class", "memory"],
+        ["ratelimit", "reset", "--namespace", "work", "--op-class", "bad\nclass"],
+        ["budget", "reset", "bad\nop"],
+        ["budget", "reset", "memory.get", "--consumer", "bad\tconsumer"],
+        ["blacklist", "global", "add", "bad\0pattern"],
+        ["settings", "set", "name", "bad\0value"],
+    ],
+)
 def test_identifier_and_nul_refusals_remain(tokens):
     from server.cli.cell_each import parse_command
 
@@ -74,7 +79,9 @@ def test_identifier_and_nul_refusals_remain(tokens):
 def test_multiplier_accepts_exact_32_byte_canonical_boundary(raw):
     from server.cli.cell_each import parse_command
 
-    command = parse_command(["budget", "set", "memory.get", "--consumer", "worker", "--multiplier", raw])
+    command = parse_command(
+        ["budget", "set", "memory.get", "--consumer", "worker", "--multiplier", raw]
+    )
     expected = "0." + "0" * 28 + "1x"
     assert len(expected.encode("ascii")) == 32
     assert command.arguments["budget"] == expected
@@ -93,6 +100,8 @@ def test_multiplier_refuses_oversized_canonical_expansion(raw):
 def test_zero_multiplier_is_canonical_without_exponent_expansion(raw):
     from server.cli.cell_each import parse_command
 
-    command = parse_command(["budget", "set", "memory.get", "--consumer", "worker", "--multiplier", raw])
+    command = parse_command(
+        ["budget", "set", "memory.get", "--consumer", "worker", "--multiplier", raw]
+    )
     assert command.arguments["budget"] == "0x"
     assert command.digest == _digest(command)

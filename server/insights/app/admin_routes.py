@@ -454,8 +454,11 @@ async def admin_budget_set(input: BudgetSetInput) -> BudgetSetOutput:
     set_query_tag("admin.budget_set")
     return BudgetSetOutput.model_validate(
         await change_budget(
-            input.op, consumer=input.consumer, budget_ms=input.budget_ms,
-            budget=input.budget, clear=input.clear,
+            input.op,
+            consumer=input.consumer,
+            budget_ms=input.budget_ms,
+            budget=input.budget,
+            clear=input.clear,
         )
     )
 
@@ -494,7 +497,11 @@ async def admin_ratelimit_set(input: RatelimitSetInput) -> RatelimitSetOutput:
 
         return RatelimitSetOutput.model_validate(
             await change_namespace_rate(
-                ns, input.op_class, capacity=input.capacity, rate=input.rate, clear=input.clear,
+                ns,
+                input.op_class,
+                capacity=input.capacity,
+                rate=input.rate,
+                clear=input.clear,
             )
         )
     limiter = get_limiter()

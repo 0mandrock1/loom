@@ -13,15 +13,24 @@ from server.observability.budgets import get_overrides, stored_ms
 
 
 async def change_namespace_rate(
-    namespace: str, op_class: str, *, capacity: float | None, rate: float | None,
-    clear: bool, deadline: float | None = None, ch: Any = None,
+    namespace: str,
+    op_class: str,
+    *,
+    capacity: float | None,
+    rate: float | None,
+    clear: bool,
+    deadline: float | None = None,
+    ch: Any = None,
 ) -> dict[str, Any]:
     limiter = get_limiter()
     bounded: dict[str, Any] = {} if deadline is None else {"deadline": deadline, "ch": ch}
     if deadline is not None:
         limiter.check_bounded_namespace_change(namespace, op_class, clear=clear)
     result: dict[str, Any] = {
-        "ok": True, "scope": "namespace", "key": namespace, "op_class": op_class,
+        "ok": True,
+        "scope": "namespace",
+        "key": namespace,
+        "op_class": op_class,
     }
     if clear:
         await ro.clear(ro.RATELIMIT_NAMESPACE, (namespace, op_class), **bounded)
@@ -30,11 +39,17 @@ async def change_namespace_rate(
         limiter.clear_namespace_limit(namespace, op_class)
         return {**result, "cleared": True}
     if capacity is None or rate is None:
-        raise HTTPException(status_code=422, detail={
-            "code": "VALIDATION_FAILED", "message": "capacity and rate required when clear=false",
-        })
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "VALIDATION_FAILED",
+                "message": "capacity and rate required when clear=false",
+            },
+        )
     await ro.put(
-        ro.RATELIMIT_NAMESPACE, (namespace, op_class), {"capacity": capacity, "rate": rate},
+        ro.RATELIMIT_NAMESPACE,
+        (namespace, op_class),
+        {"capacity": capacity, "rate": rate},
         **bounded,
     )
     if deadline is not None:
@@ -44,8 +59,14 @@ async def change_namespace_rate(
 
 
 async def change_budget(
-    op: str, *, consumer: str | None, budget_ms: int | None, budget: int | str | None,
-    clear: bool, deadline: float | None = None, ch: Any = None,
+    op: str,
+    *,
+    consumer: str | None,
+    budget_ms: int | None,
+    budget: int | str | None,
+    clear: bool,
+    deadline: float | None = None,
+    ch: Any = None,
 ) -> dict[str, Any]:
     overrides = get_overrides()
     bounded: dict[str, Any] = {} if deadline is None else {"deadline": deadline, "ch": ch}
@@ -59,33 +80,52 @@ async def change_budget(
             return {"ok": True, "cleared": True, "op": op, "consumer": consumer}
         value = budget if budget is not None else budget_ms
         if value is None:
-            raise HTTPException(status_code=422, detail={
-                "code": "VALIDATION_FAILED",
-                "message": "budget_ms (ms) or budget ('<n>x') required when clear=false",
-            })
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "VALIDATION_FAILED",
+                    "message": "budget_ms (ms) or budget ('<n>x') required when clear=false",
+                },
+            )
         if parse_budget_value(value) is None:
-            raise HTTPException(status_code=422, detail={
-                "code": "VALIDATION_FAILED",
-                "message": "budget must be a non-negative integer (ms) or '<n>x'",
-            })
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "VALIDATION_FAILED",
+                    "message": "budget must be a non-negative integer (ms) or '<n>x'",
+                },
+            )
         await ro.put(ro.BUDGET_CONSUMER, (consumer, op or "*"), value, **bounded)
         overrides.set_for_consumer(consumer, op, value, **adoption)
-        return {"ok": True, "op": op, "consumer": consumer, "budget": value,
-                "budget_ms": value if isinstance(value, int) else None}
+        return {
+            "ok": True,
+            "op": op,
+            "consumer": consumer,
+            "budget": value,
+            "budget_ms": value if isinstance(value, int) else None,
+        }
     if clear:
         await ro.clear(ro.BUDGET_OP, (op,), **bounded)
         overrides.clear(op, **adoption)
         return {"ok": True, "cleared": True, "op": op}
     if budget_ms is None:
-        raise HTTPException(status_code=422, detail={
-            "code": "VALIDATION_FAILED", "message": "budget_ms required when clear=false",
-        })
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "VALIDATION_FAILED",
+                "message": "budget_ms required when clear=false",
+            },
+        )
     try:
         stored_ms(budget_ms)
     except ValueError as error:
-        raise HTTPException(status_code=422, detail={
-            "code": "VALIDATION_FAILED", "message": str(error),
-        }) from error
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "VALIDATION_FAILED",
+                "message": str(error),
+            },
+        ) from error
     await ro.put(ro.BUDGET_OP, (op,), budget_ms, **bounded)
     overrides.set(op, budget_ms, **adoption)
     return {"ok": True, "op": op, "budget_ms": budget_ms}

@@ -35,7 +35,8 @@ def _text(value: str, maximum: int) -> bool:
     except UnicodeError:
         return False
     return (
-        bool(value) and size <= maximum
+        bool(value)
+        and size <= maximum
         and not any(ord(char) < 32 or ord(char) == 127 for char in value)
     )
 
@@ -47,7 +48,8 @@ def _inputs(cell: str, deployment_id: str, automation: BotKey, recovery: BotKey)
         raise _refuse()
     for bot in (automation, recovery):
         if (
-            not _text(bot.name, 256) or type(bot.thumbprint) is not str
+            not _text(bot.name, 256)
+            or type(bot.thumbprint) is not str
             or re.fullmatch(r"[A-Za-z0-9_-]{43}", bot.thumbprint) is None
         ):
             raise _refuse()
@@ -57,17 +59,30 @@ def _inputs(cell: str, deployment_id: str, automation: BotKey, recovery: BotKey)
 
 def _whoami(answer: dict[str, Any], name: str) -> str:
     if answer.keys() != {
-        "authenticated", "subject", "org", "namespaces", "roles", "is_service_account",
-        "kid", "exp", "iat",
+        "authenticated",
+        "subject",
+        "org",
+        "namespaces",
+        "roles",
+        "is_service_account",
+        "kid",
+        "exp",
+        "iat",
     }:
         raise _refuse()
     expires, issued = answer["exp"], answer["iat"]
     if (
-        answer["authenticated"] is not True or answer["is_service_account"] is not True
-        or answer["subject"] != "sa:" + name or answer["namespaces"] != ["*"]
-        or answer["roles"] != ["PLATFORM_ADMIN"] or not _text(answer["org"], 256)
-        or not _text(answer["kid"], 256) or type(expires) is not int or type(issued) is not int
-        or not 0 < expires - issued <= 60 or not 35 <= expires - time.time() <= 60
+        answer["authenticated"] is not True
+        or answer["is_service_account"] is not True
+        or answer["subject"] != "sa:" + name
+        or answer["namespaces"] != ["*"]
+        or answer["roles"] != ["PLATFORM_ADMIN"]
+        or not _text(answer["org"], 256)
+        or not _text(answer["kid"], 256)
+        or type(expires) is not int
+        or type(issued) is not int
+        or not 0 < expires - issued <= 60
+        or not 35 <= expires - time.time() <= 60
     ):
         raise _refuse()
     return answer["org"]
@@ -77,7 +92,14 @@ def _registration(
     answer: dict[str, Any], cell: str, deployment_id: str, bot: BotKey, org: str
 ) -> None:
     if answer.keys() != {
-        "version", "cell", "deployment_id", "name", "org", "thumbprint", "active", "platform_admin"
+        "version",
+        "cell",
+        "deployment_id",
+        "name",
+        "org",
+        "thumbprint",
+        "active",
+        "platform_admin",
     } or not transport._version(answer["version"]):
         raise _refuse()
     expected = (cell, deployment_id, bot.name, org, bot.thumbprint)
@@ -87,8 +109,12 @@ def _registration(
 
 
 async def _one(
-    client: httpx.AsyncClient, origin: str, cell: str, deployment_id: str,
-    bot: BotKey, deadline: float,
+    client: httpx.AsyncClient,
+    origin: str,
+    cell: str,
+    deployment_id: str,
+    bot: BotKey,
+    deadline: float,
 ) -> None:
     endpoint = origin + "/oauth/token"
     pem = private_files.read_private(bot.key_file, 65536)
@@ -97,10 +123,18 @@ async def _one(
     )
     issued = time.monotonic()
     status, answer = await transport._request(
-        client, "POST", endpoint, limit=16384, deadline=deadline,
-        form={"grant_type": "client_credentials", "client_id": bot.name,
-              "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-              "client_assertion": assertion, "expires_in": "60"},
+        client,
+        "POST",
+        endpoint,
+        limit=16384,
+        deadline=deadline,
+        form={
+            "grant_type": "client_credentials",
+            "client_id": bot.name,
+            "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+            "client_assertion": assertion,
+            "expires_in": "60",
+        },
     )
     if status != 200:
         raise _refuse()
@@ -112,8 +146,12 @@ async def _one(
         raise _refuse()
     org = _whoami(answer, bot.name)
     status, answer = await transport._request(
-        client, "POST", origin + "/v1/admin/bots.list?self_only=true",
-        bearer=token, limit=2048, deadline=deadline,
+        client,
+        "POST",
+        origin + "/v1/admin/bots.list?self_only=true",
+        bearer=token,
+        limit=2048,
+        deadline=deadline,
     )
     if status != 200:
         raise _refuse()
@@ -121,7 +159,12 @@ async def _one(
 
 
 async def prove_pair(
-    *, cell: str, deployment_id: str, origin: str, automation: BotKey, recovery: BotKey,
+    *,
+    cell: str,
+    deployment_id: str,
+    origin: str,
+    automation: BotKey,
+    recovery: BotKey,
     ca_file: Path | None = None,
 ) -> list[dict[str, str]]:
     """Return public records after two live proofs; perform no metadata write or action."""
@@ -136,11 +179,16 @@ async def prove_pair(
             verify=tls, follow_redirects=False, trust_env=False, timeout=15.0
         ) as client:
             status, metadata = await transport._request(
-                client, "GET", origin + "/.well-known/oauth-authorization-server",
-                limit=16384, deadline=deadline,
+                client,
+                "GET",
+                origin + "/.well-known/oauth-authorization-server",
+                limit=16384,
+                deadline=deadline,
             )
-            if status != 200 or metadata.get("token_endpoint") != origin + "/oauth/token" or (
-                metadata.get("issuer", origin) != origin
+            if (
+                status != 200
+                or metadata.get("token_endpoint") != origin + "/oauth/token"
+                or (metadata.get("issuer", origin) != origin)
             ):
                 raise _refuse()
             # Both purposes require their own key proof, never a fallback for an action.

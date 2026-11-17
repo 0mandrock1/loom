@@ -23,8 +23,12 @@ def _text(value: str, maximum: int, *, empty: bool = False, allow_controls: bool
         size = len(value.encode("utf-8"))
     except UnicodeError:
         raise _refuse() from None
-    if ((not empty and not size) or size > maximum or "\0" in value
-            or (not allow_controls and any(ord(c) < 32 or ord(c) == 127 for c in value))):
+    if (
+        (not empty and not size)
+        or size > maximum
+        or "\0" in value
+        or (not allow_controls and any(ord(c) < 32 or ord(c) == 127 for c in value))
+    ):
         raise _refuse()
     return value
 
@@ -65,7 +69,11 @@ def _multiplier(value: str) -> str:
     ):
         raise _refuse()
     number = Decimal(value)
-    if not number.is_finite() or not 0 <= number <= 1000 or (number and number.adjusted() < 3 - MAX_MULTIPLIER_BYTES):
+    if (
+        not number.is_finite()
+        or not 0 <= number <= 1000
+        or (number and number.adjusted() < 3 - MAX_MULTIPLIER_BYTES)
+    ):
         raise _refuse()
     # For values below one, even one significant digit needs 3-adjusted bytes with x.
     canonical = format(number, "f") if number else "0"
@@ -114,19 +122,34 @@ def _settings(tokens: list[str]) -> Command:
     verb, rest = tokens[0], tokens[1:]
     if verb == "list":
         options = _options(rest, {"--prefix"})
-        return _command("settings_list", {"prefix": _text(options.get("--prefix", ""), 256, empty=True)}, mutating=False)
+        return _command(
+            "settings_list",
+            {"prefix": _text(options.get("--prefix", ""), 256, empty=True)},
+            mutating=False,
+        )
     if verb == "history" and rest:
         options = _options(rest[1:], {"--limit"})
-        return _command("settings_history", {"name": _text(rest[0], 256), "limit": _integer(options.get("--limit", "50"), 50, 1)}, mutating=False)
+        return _command(
+            "settings_history",
+            {"name": _text(rest[0], 256), "limit": _integer(options.get("--limit", "50"), 50, 1)},
+            mutating=False,
+        )
     if verb in {"set", "reset"} and len(rest) >= (2 if verb == "set" else 1):
         count = 2 if verb == "set" else 1
         options = _options(rest[count:], {"--expect"})
-        return _command("settings_set", {
-            "name": _text(rest[0], 256),
-            "value": _text(rest[1], 16384, empty=True, allow_controls=True) if verb == "set" else None,
-            "clear": verb == "reset",
-            "expected": _text(options["--expect"], 16384, empty=True, allow_controls=True) if "--expect" in options else None,
-        })
+        return _command(
+            "settings_set",
+            {
+                "name": _text(rest[0], 256),
+                "value": _text(rest[1], 16384, empty=True, allow_controls=True)
+                if verb == "set"
+                else None,
+                "clear": verb == "reset",
+                "expected": _text(options["--expect"], 16384, empty=True, allow_controls=True)
+                if "--expect" in options
+                else None,
+            },
+        )
     raise _refuse()
 
 
@@ -140,7 +163,10 @@ def _signing(tokens: list[str]) -> Command:
         algorithm = options.get("--algorithm", "HS256")
         if algorithm not in {"HS256", "RS256"}:
             raise _refuse()
-        return _command("signing_keys_rotate", {"algorithm": algorithm, "activate_in": _number(options.get("--activate-in", "300"))})
+        return _command(
+            "signing_keys_rotate",
+            {"algorithm": algorithm, "activate_in": _number(options.get("--activate-in", "300"))},
+        )
     raise _refuse()
 
 
@@ -151,7 +177,13 @@ def _revoke(tokens: list[str]) -> Command:
     subject = _text(options["--subject"], 512)
     if "/user:" in subject:
         raise _refuse()
-    return _command("subject_revoke", {"subject": subject, "reason": _text(options.get("--reason", ""), 1024, empty=True, allow_controls=True)})
+    return _command(
+        "subject_revoke",
+        {
+            "subject": subject,
+            "reason": _text(options.get("--reason", ""), 1024, empty=True, allow_controls=True),
+        },
+    )
 
 
 def _rate(tokens: list[str]) -> Command:
@@ -168,11 +200,16 @@ def _rate(tokens: list[str]) -> Command:
     op_class = _text(options["--op-class"], 64)
     if namespace == "*":
         raise _refuse()
-    return _command("ratelimit_namespace_set", {
-        "namespace": namespace, "op_class": op_class, "clear": clear,
-        "capacity": None if clear else _number(options["--capacity"], positive=True),
-        "rate": None if clear else _number(options["--rate"]),
-    })
+    return _command(
+        "ratelimit_namespace_set",
+        {
+            "namespace": namespace,
+            "op_class": op_class,
+            "clear": clear,
+            "capacity": None if clear else _number(options["--capacity"], positive=True),
+            "rate": None if clear else _number(options["--rate"]),
+        },
+    )
 
 
 def _budget(tokens: list[str]) -> Command:
@@ -189,11 +226,18 @@ def _budget(tokens: list[str]) -> Command:
         raise _refuse()
     if "--multiplier" in options and consumer is None:
         raise _refuse()
-    return _command("budget_set", {
-        "op": operation, "consumer": consumer, "clear": clear,
-        "budget_ms": _integer(options["--budget-ms"], 86400000) if "--budget-ms" in options else None,
-        "budget": _multiplier(options["--multiplier"]) if "--multiplier" in options else None,
-    })
+    return _command(
+        "budget_set",
+        {
+            "op": operation,
+            "consumer": consumer,
+            "clear": clear,
+            "budget_ms": _integer(options["--budget-ms"], 86400000)
+            if "--budget-ms" in options
+            else None,
+            "budget": _multiplier(options["--multiplier"]) if "--multiplier" in options else None,
+        },
+    )
 
 
 def _blacklist(tokens: list[str]) -> Command:
@@ -202,7 +246,11 @@ def _blacklist(tokens: list[str]) -> Command:
     verb, rest = tokens[1], tokens[2:]
     if verb == "list":
         options = _options(rest, {"--limit"})
-        return _command("blacklist_global_list", {"limit": _integer(options.get("--limit", "50"), 50, 1)}, mutating=False)
+        return _command(
+            "blacklist_global_list",
+            {"limit": _integer(options.get("--limit", "50"), 50, 1)},
+            mutating=False,
+        )
     if verb == "remove" and len(rest) == 1:
         try:
             pattern_id = str(uuid.UUID(rest[0]))
@@ -216,13 +264,26 @@ def _blacklist(tokens: list[str]) -> Command:
         if kind not in {"substring", "regex"} or (kind == "regex" and len(pattern) > 256):
             raise _refuse()
         reason = _text(options.get("--reason", ""), 1024, empty=True, allow_controls=True)
-        return _command("blacklist_global_add", {"pattern_id": str(uuid.uuid4()), "pattern": pattern, "pattern_type": kind, "reason": reason})
+        return _command(
+            "blacklist_global_add",
+            {
+                "pattern_id": str(uuid.uuid4()),
+                "pattern": pattern,
+                "pattern_type": kind,
+                "reason": reason,
+            },
+        )
     raise _refuse()
 
 
 def parse_command(argv: list[str]) -> Command:
     """Parse intent only; server capabilities and owning validation still authorize work."""
-    if not isinstance(argv, list) or not argv or len(argv) > 256 or any(type(x) is not str for x in argv):
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or len(argv) > 256
+        or any(type(x) is not str for x in argv)
+    ):
         raise _refuse()
     try:
         size = sum(len(token.encode("utf-8")) + 1 for token in argv)
@@ -230,7 +291,14 @@ def parse_command(argv: list[str]) -> Command:
         raise _refuse() from None
     if size > 16384 or any("\0" in token for token in argv):
         raise _refuse()
-    parsers = {"settings": _settings, "signing-key": _signing, "revoke-token": _revoke, "ratelimit": _rate, "budget": _budget, "blacklist": _blacklist}
+    parsers = {
+        "settings": _settings,
+        "signing-key": _signing,
+        "revoke-token": _revoke,
+        "ratelimit": _rate,
+        "budget": _budget,
+        "blacklist": _blacklist,
+    }
     parser = parsers.get(argv[0])
     if parser is None:
         raise _refuse()

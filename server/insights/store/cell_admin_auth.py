@@ -29,9 +29,7 @@ async def machine(name: str, *, deadline: float, ch: Any = None) -> dict[str, An
     return rows[0] if rows else None
 
 
-async def revocations(
-    keys: list[str], *, deadline: float, ch: Any = None
-) -> list[dict[str, Any]]:
+async def revocations(keys: list[str], *, deadline: float, ch: Any = None) -> list[dict[str, Any]]:
     """Read the complete finite token/subject keys, including owed revocations."""
     if (
         not keys

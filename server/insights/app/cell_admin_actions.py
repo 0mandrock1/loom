@@ -45,14 +45,19 @@ async def _allowance(deadline: float) -> AsyncIterator[float]:
 
 def _result(model: Any) -> dict[str, Any]:
     result = model.model_dump(mode="json")
-    encoded = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    encoded = json.dumps(
+        result, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
     if len(encoded.encode("utf-8")) > 2 * 1024**2:
         raise BoundedReadError("Cell action result exceeds its allowance")
     return result
 
 
 async def settings_list(
-    input: CellSettingsListInput, *, deadline: float, ch: Any = None,
+    input: CellSettingsListInput,
+    *,
+    deadline: float,
+    ch: Any = None,
 ) -> dict[str, Any]:
     async with _allowance(deadline) as deadline:
         await settings_overrides.refresh_bounded(deadline=deadline, ch=ch)
@@ -61,19 +66,32 @@ async def settings_list(
 
 
 async def settings_set(
-    input: CellSettingsSetInput, *, actor: str, deadline: float, ch: Any = None,
+    input: CellSettingsSetInput,
+    *,
+    actor: str,
+    deadline: float,
+    ch: Any = None,
 ) -> dict[str, Any]:
     async with _allowance(deadline) as deadline:
         row = await settings_changes.change(
-            input.name, input.value, clear=input.clear,
-            expected=(input.expected if input.expected is not None else settings_overrides.NOT_GIVEN),
-            actor=actor, ch=ch, deadline=deadline,
+            input.name,
+            input.value,
+            clear=input.clear,
+            expected=(
+                input.expected if input.expected is not None else settings_overrides.NOT_GIVEN
+            ),
+            actor=actor,
+            ch=ch,
+            deadline=deadline,
         )
         return _result(SettingSetOutput(ok=True, setting=SettingRow(**row) if row else None))
 
 
 async def settings_history(
-    input: CellSettingsHistoryInput, *, deadline: float, ch: Any = None,
+    input: CellSettingsHistoryInput,
+    *,
+    deadline: float,
+    ch: Any = None,
 ) -> dict[str, Any]:
     async with _allowance(deadline) as deadline:
         rows = await settings_changes.history(input.name, input.limit, ch=ch, deadline=deadline)
@@ -81,18 +99,29 @@ async def settings_history(
 
 
 async def ratelimit_namespace_set(
-    input: CellRatelimitNamespaceSetInput, *, deadline: float, ch: Any = None,
+    input: CellRatelimitNamespaceSetInput,
+    *,
+    deadline: float,
+    ch: Any = None,
 ) -> dict[str, Any]:
     async with _allowance(deadline) as deadline:
         result = await limit_changes.change_namespace_rate(
-            input.namespace, input.op_class, capacity=input.capacity, rate=input.rate,
-            clear=input.clear, deadline=deadline, ch=ch,
+            input.namespace,
+            input.op_class,
+            capacity=input.capacity,
+            rate=input.rate,
+            clear=input.clear,
+            deadline=deadline,
+            ch=ch,
         )
         return _result(RatelimitSetOutput.model_validate(result))
 
 
 async def budget_set(
-    input: CellBudgetSetInput, *, deadline: float, ch: Any = None,
+    input: CellBudgetSetInput,
+    *,
+    deadline: float,
+    ch: Any = None,
 ) -> dict[str, Any]:
     from server.operations.registry import OPERATIONS_BY_NAME
 
@@ -100,7 +129,12 @@ async def budget_set(
         raise BoundedReadError("Unsupported operation budget")
     async with _allowance(deadline) as deadline:
         result = await limit_changes.change_budget(
-            input.op, consumer=input.consumer, budget_ms=input.budget_ms, budget=input.budget,
-            clear=input.clear, deadline=deadline, ch=ch,
+            input.op,
+            consumer=input.consumer,
+            budget_ms=input.budget_ms,
+            budget=input.budget,
+            clear=input.clear,
+            deadline=deadline,
+            ch=ch,
         )
         return _result(BudgetSetOutput.model_validate(result))

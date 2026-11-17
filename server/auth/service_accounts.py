@@ -238,7 +238,10 @@ _MADE_BY = "(created_by IN {subs:Array(String)} OR hasAny(lineage, {subs:Array(S
 
 
 async def revoke_created_by(
-    subjects: list[str], *, revoked_by: str, work: _RevocationWork | None = None,
+    subjects: list[str],
+    *,
+    revoked_by: str,
+    work: _RevocationWork | None = None,
 ) -> set[str]:
     """Mark revoked each token any of `subjects` made, directly or through
     their tokens, whose token the revocations kill, so its name comes free;
@@ -265,13 +268,17 @@ async def revoke_created_by(
                     rows = await ch.query_all(
                         "SELECT org, name, sa_subject, created_by, created_at, lineage, "
                         "revoked_at IS NULL AS live FROM loom.service_accounts FINAL "
-                        f"WHERE {_MADE_BY} AND {_UNEXPIRED}", params={"subs": chunk},
+                        f"WHERE {_MADE_BY} AND {_UNEXPIRED}",
+                        params={"subs": chunk},
                     )
             else:
                 rows = await work.read(f"{_MADE_BY} AND {_UNEXPIRED}", {"subs": chunk})
             # Read after the list, so it tells whether each token listed is dead.
-            revoked = (await revocation.cutoffs(chunk, permanent=True) if work is None
-                       else await work.cutoffs(chunk))
+            revoked = (
+                await revocation.cutoffs(chunk, permanent=True)
+                if work is None
+                else await work.cutoffs(chunk)
+            )
             # Only those still dead: a row listed revoked is judged again, as the gate would.
             dead |= {
                 str(r["sa_subject"]) for r in rows if not r["live"] and _is_dead(r, revoked, dead)
@@ -319,7 +326,8 @@ async def _revoke_all(
     revoked: dict[str, int | None],
     dead: set[str],
     revoked_by: str,
-    *, work: _RevocationWork | None = None,
+    *,
+    work: _RevocationWork | None = None,
 ) -> set[str]:
     """Revoke those of the rows `found` whose token is dead, each name claimed
     as a create claims it and read again under it: a revoked copy of a row
@@ -341,7 +349,15 @@ async def _revoke_all(
                 work.statements(6)  # The existing finite claim's worst path, including release.
             async with service_account_change(org, name, **bounded):
                 return await _revoke_named(
-                    org, name, creators, revoked, dead, revoked_by, listed, ch=ch, work=work,
+                    org,
+                    name,
+                    creators,
+                    revoked,
+                    dead,
+                    revoked_by,
+                    listed,
+                    ch=ch,
+                    work=work,
                 )
 
     try:
@@ -353,8 +369,15 @@ async def _revoke_all(
 
 
 async def _revoke_named(
-    org: str, name: str, creators: list[str], revoked: dict[str, int | None],
-    dead: set[str], revoked_by: str, listed: set[str], *, ch: Any,
+    org: str,
+    name: str,
+    creators: list[str],
+    revoked: dict[str, int | None],
+    dead: set[str],
+    revoked_by: str,
+    listed: set[str],
+    *,
+    ch: Any,
     work: _RevocationWork | None,
 ) -> str | None:
     from server.auth import revocation
@@ -373,7 +396,8 @@ async def _revoke_named(
         rows = await work.read(
             "org = {org:String} AND name = {name:String} "
             f"AND {_MADE_BY} AND revoked_at IS NULL AND {_UNEXPIRED}",
-            {"org": org, "name": name, "subs": creators}, point=True,
+            {"org": org, "name": name, "subs": creators},
+            point=True,
         )
         row = rows[0] if rows else None
     if row is None:
@@ -382,8 +406,11 @@ async def _revoke_named(
     # A replacement under the name may postdate the discovery's revocation view.
     now_revoked = revoked
     if row["sa_subject"] not in listed:
-        now_revoked = (await revocation.cutoffs(sorted(_above(row)), permanent=True) if work is None
-                       else await work.cutoffs(sorted(_above(row))))
+        now_revoked = (
+            await revocation.cutoffs(sorted(_above(row)), permanent=True)
+            if work is None
+            else await work.cutoffs(sorted(_above(row)))
+        )
     if not _is_dead(row, now_revoked, dead):
         return None
     revoked_copy = revoked_row(row, revoked_at=naive_utc_now_seconds(), revoked_by=revoked_by)
@@ -396,9 +423,24 @@ async def _revoke_named(
 
 
 _SA_COLUMNS = (
-    "org", "name", "sa_subject", "namespaces", "roles", "ttl_days", "created_by",
-    "created_at", "expires_at", "revoked_at", "revoked_by", "version", "kind", "client",
-    "inherit_creator_grants", "ns_roles", "lineage", "saves_to",
+    "org",
+    "name",
+    "sa_subject",
+    "namespaces",
+    "roles",
+    "ttl_days",
+    "created_by",
+    "created_at",
+    "expires_at",
+    "revoked_at",
+    "revoked_by",
+    "version",
+    "kind",
+    "client",
+    "inherit_creator_grants",
+    "ns_roles",
+    "lineage",
+    "saves_to",
 )
 
 
@@ -423,7 +465,11 @@ class _RevocationWork:
         self.used_statements += count
 
     async def read(
-        self, predicate: str, params: dict[str, Any], *, point: bool = False,
+        self,
+        predicate: str,
+        params: dict[str, Any],
+        *,
+        point: bool = False,
     ) -> list[dict[str, Any]]:
         from server.core.ch_bounded import BoundedReadError, read_rows
 
@@ -439,11 +485,20 @@ class _RevocationWork:
         # Reserve before awaiting: four point readers share this same finite pass.
         self.fetched += maximum
         rows = await read_rows(
-            "SELECT " + projection + " FROM (SELECT " + ", ".join(_SA_COLUMNS)
-            + " FROM loom.service_accounts FINAL WHERE " + predicate
-            + " LIMIT {limit:UInt32}) FORMAT JSONEachRow", {**params, "limit": maximum + 1},
-            ch=self.ch, deadline=self.deadline, row_bytes=8191,
-            total_bytes=maximum * 8192, max_rows=maximum, tag="cell.each.subject_descendants",
+            "SELECT "
+            + projection
+            + " FROM (SELECT "
+            + ", ".join(_SA_COLUMNS)
+            + " FROM loom.service_accounts FINAL WHERE "
+            + predicate
+            + " LIMIT {limit:UInt32}) FORMAT JSONEachRow",
+            {**params, "limit": maximum + 1},
+            ch=self.ch,
+            deadline=self.deadline,
+            row_bytes=8191,
+            total_bytes=maximum * 8192,
+            max_rows=maximum,
+            tag="cell.each.subject_descendants",
         )
         # Charging the full row allowance covers whitespace and newlines across every read.
         self.fetched -= maximum - len(rows)
@@ -461,16 +516,29 @@ class _RevocationWork:
 
         if set(row) != set(_SA_COLUMNS):
             raise BoundedReadError("Malformed descendant row")
-        for key in ("org", "name", "sa_subject", "created_by", "revoked_by", "kind", "client", "ns_roles", "saves_to"):
+        for key in (
+            "org",
+            "name",
+            "sa_subject",
+            "created_by",
+            "revoked_by",
+            "kind",
+            "client",
+            "ns_roles",
+            "saves_to",
+        ):
             if type(row[key]) is not str:
                 raise BoundedReadError("Malformed descendant identity")
         for key in ("namespaces", "roles", "lineage"):
             if type(row[key]) is not list or any(type(value) is not str for value in row[key]):
                 raise BoundedReadError("Malformed descendant collection")
-        if (type(row["version"]) is not int or not 0 <= row["version"] < 2**64 - 1
-                or type(row["ttl_days"]) is not int
-                or type(row["inherit_creator_grants"]) not in (int, bool)
-                or row["inherit_creator_grants"] not in (0, 1)):
+        if (
+            type(row["version"]) is not int
+            or not 0 <= row["version"] < 2**64 - 1
+            or type(row["ttl_days"]) is not int
+            or type(row["inherit_creator_grants"]) not in (int, bool)
+            or row["inherit_creator_grants"] not in (0, 1)
+        ):
             raise BoundedReadError("Malformed descendant row")
         for key in ("created_at", "expires_at", "revoked_at"):
             if row[key] is None and key != "created_at":
@@ -488,7 +556,10 @@ class _RevocationWork:
 
         self.statements((len(subjects) + 4) // 5)
         return await revocation.cutoffs_bounded(
-            subjects, permanent=True, ch=self.ch, deadline=self.deadline,
+            subjects,
+            permanent=True,
+            ch=self.ch,
+            deadline=self.deadline,
         )
 
     async def insert(self, row: dict[str, Any]) -> None:
@@ -503,13 +574,24 @@ class _RevocationWork:
         set_query_tag("cell.each.subject_descendant_write")
         async with asyncio.timeout(remaining):
             with statement_timeout(remaining):
-                await self.ch.insert("loom.service_accounts", [row], settings={
-                    "async_insert": 0, "wait_for_async_insert": 1, "max_memory_usage": 128 * 1024**2,
-                })
+                await self.ch.insert(
+                    "loom.service_accounts",
+                    [row],
+                    settings={
+                        "async_insert": 0,
+                        "wait_for_async_insert": 1,
+                        "max_memory_usage": 128 * 1024**2,
+                    },
+                )
 
 
 async def revoke_created_by_bounded(
-    subject: str, *, revoked_by: str, ch: Any, deadline: float, progress: dict[str, int],
+    subject: str,
+    *,
+    revoked_by: str,
+    ch: Any,
+    deadline: float,
+    progress: dict[str, int],
 ) -> set[str]:
     work = _RevocationWork(ch=ch, deadline=deadline, roots={subject})
     try:

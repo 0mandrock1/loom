@@ -145,7 +145,11 @@ async def handle_blacklist_add(input: BlacklistAddInput) -> BlacklistAddOutput:
 
 
 async def _store_pattern(
-    input: BlacklistAddInput, pattern_id: str, *, deadline: float | None = None, ch: Any = None,
+    input: BlacklistAddInput,
+    pattern_id: str,
+    *,
+    deadline: float | None = None,
+    ch: Any = None,
 ) -> datetime:
     now = naive_utc_now_seconds()
     stored_org, stored_ns = _scope_args(input.scope, input.org, input.namespace)
@@ -164,14 +168,17 @@ async def _store_pattern(
             "hit_count": 0,
             "created_at": now,
             "tombstoned_at": None,
-        }, **bounded,
+        },
+        **bounded,
     )
     invalidate_cache()
     await _bump_version(updated_by=f"add:{created_by or 'unknown'}", org=stored_org, **bounded)
     return now
 
 
-async def _sweep_added(input: BlacklistAddInput, pattern_id: str, now: datetime) -> BlacklistAddOutput:
+async def _sweep_added(
+    input: BlacklistAddInput, pattern_id: str, now: datetime
+) -> BlacklistAddOutput:
     # The pattern reaches the rows written before it.
     from server.memory.app.blacklist_sweep import SweepResult, sweep_error_text, sweep_pattern
 
@@ -207,30 +214,48 @@ def require_global_authority(verb: str) -> None:
 
 
 async def add_global_bounded(
-    pattern_id: str, pattern: str, pattern_type: PatternType, reason: str,
-    *, ch: Any, deadline: float,
+    pattern_id: str,
+    pattern: str,
+    pattern_type: PatternType,
+    reason: str,
+    *,
+    ch: Any,
+    deadline: float,
 ) -> BlacklistAddOutput:
     from server.core import leases
     from server.core.ch import sequential_reads, statement_timeout
     from server.core.ch_bounded import BoundedReadError
+
     require_global_authority("add")
     parsed = uuid.UUID(pattern_id)
     if str(parsed) != pattern_id or parsed.version != 4:
         raise BoundedReadError("A fresh canonical pattern identity is required")
     input = BlacklistAddInput(
-        org="*", namespace="*", scope="global", sweep=False,
-        pattern=pattern, pattern_type=pattern_type, reason=reason,
+        org="*",
+        namespace="*",
+        scope="global",
+        sweep=False,
+        pattern=pattern,
+        pattern_type=pattern_type,
+        reason=reason,
     )
     await blacklist_repo.check_bounded_storage(ch=ch, deadline=deadline)
     if pattern_type == "regex":
         await _check_global_regex(pattern, ch=ch, deadline=deadline)
     async with leases.holding(
-        "blacklist-pattern:" + pattern_id, ttl_s=60, wait_s=0, ch=ch,
-        deadline=deadline, confirm_release=True,
+        "blacklist-pattern:" + pattern_id,
+        ttl_s=60,
+        wait_s=0,
+        ch=ch,
+        deadline=deadline,
+        confirm_release=True,
     ) as held:
         if not held:
             raise BoundedReadError("The pattern identity is unavailable")
-        with sequential_reads(), statement_timeout(min(2.0, max(0.001, deadline - time.monotonic()))):
+        with (
+            sequential_reads(),
+            statement_timeout(min(2.0, max(0.001, deadline - time.monotonic()))),
+        ):
             if await blacklist_repo.collision_bounded(pattern_id, ch=ch, deadline=deadline):
                 raise BoundedReadError("The pattern identity is unavailable")
             now = await _store_pattern(input, pattern_id, ch=ch, deadline=deadline)
@@ -267,13 +292,21 @@ async def list_global_bounded(limit: int, *, ch: Any, deadline: float) -> dict[s
     with sequential_reads():
         rows = await blacklist_repo.global_list_bounded(limit, ch=ch, deadline=deadline)
     return {
-        "rows": [{
-            "pattern_id": row["pattern_id"], "pattern": row["pattern"],
-            "pattern_type": row["pattern_type"], "reason": row["reason"],
-            "created_by": row["created_by"], "hit_count": row["hit_count"],
-            "last_hit_at": row["last_hit_at"].isoformat() if row["last_hit_at"] is not None else None,
-            "created_at": row["created_at"].isoformat(),
-        } for row in rows[:limit]],
+        "rows": [
+            {
+                "pattern_id": row["pattern_id"],
+                "pattern": row["pattern"],
+                "pattern_type": row["pattern_type"],
+                "reason": row["reason"],
+                "created_by": row["created_by"],
+                "hit_count": row["hit_count"],
+                "last_hit_at": row["last_hit_at"].isoformat()
+                if row["last_hit_at"] is not None
+                else None,
+                "created_at": row["created_at"].isoformat(),
+            }
+            for row in rows[:limit]
+        ],
         "truncated": len(rows) > limit,
     }
 

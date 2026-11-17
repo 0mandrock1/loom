@@ -787,6 +787,7 @@ async def _bounded_policy_statement(conn: Any, deadline: float) -> None:
     if remaining_ms <= 0:
         raise PostgresUnavailableError("policy change allowance exhausted")
     await conn.execute(
-        "SELECT set_config('statement_timeout', $1, true)", str(remaining_ms),
+        "SELECT set_config('statement_timeout', $1, true)",
+        str(remaining_ms),
         timeout=remaining_ms / 1000,
     )

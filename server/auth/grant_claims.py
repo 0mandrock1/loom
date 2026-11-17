@@ -104,7 +104,11 @@ def collections_change(org: str) -> AbstractAsyncContextManager[None]:
 
 
 def service_account_change(
-    org: str, name: str, *, deadline: float | None = None, ch: object = None,
+    org: str,
+    name: str,
+    *,
+    deadline: float | None = None,
+    ch: object = None,
 ) -> AbstractAsyncContextManager[None]:
     """Hold a person's service-account name in `org` from the check that it is
     free to its row: a second create with the name would replace the first
@@ -120,11 +124,18 @@ async def _bounded_service_account(key: str, *, deadline: float, ch: object) -> 
     from server.core.leases import holding
 
     async with holding(
-        key, ttl_s=TTL_S, wait_s=0, ch=ch, deadline=deadline, confirm_release=True,
+        key,
+        ttl_s=TTL_S,
+        wait_s=0,
+        ch=ch,
+        deadline=deadline,
+        confirm_release=True,
     ) as held:
         if not held:
             raise GrantBusyError("another change holds the service-account name")
-        async with _bounded("a service-account name", 2.0, min(CHANGE_S, deadline - time.monotonic())):
+        async with _bounded(
+            "a service-account name", 2.0, min(CHANGE_S, deadline - time.monotonic())
+        ):
             yield
 
 

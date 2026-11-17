@@ -160,7 +160,11 @@ async def _current_version() -> tuple[int, int]:
 
 
 async def _bump_version(
-    updated_by: str = "", *, org: str = "*", deadline: float | None = None, ch: Any = None,
+    updated_by: str = "",
+    *,
+    org: str = "*",
+    deadline: float | None = None,
+    ch: Any = None,
 ) -> None:
     """Move the watermark for every replica: one insert, no read, so two
     concurrent add/remove calls cannot write the same version. Under the Postgres
@@ -171,7 +175,10 @@ async def _bump_version(
         await _repo.insert_version(time.time_ns(), updated_by=updated_by, ch=get_client())
     else:
         await _repo.insert_version(
-            time.time_ns(), updated_by=updated_by, ch=ch or get_client(), deadline=deadline,
+            time.time_ns(),
+            updated_by=updated_by,
+            ch=ch or get_client(),
+            deadline=deadline,
         )
     from server.core import pg
 

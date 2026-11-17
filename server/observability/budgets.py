@@ -90,8 +90,9 @@ class BudgetOverrides:
             raise BoundedReadError("Budget overrides exceed their allowance")
         if not clear:
             if consumer:
-                if ((consumer, op_name or ANY_OP) not in self._by_consumer
-                        and len(self._by_consumer) == 1024):
+                if (consumer, op_name or ANY_OP) not in self._by_consumer and len(
+                    self._by_consumer
+                ) == 1024:
                     raise BoundedReadError("Consumer budgets exceed their allowance")
             elif op_name not in self._overrides and len(self._overrides) == 4096:
                 raise BoundedReadError("Operation budgets exceed their allowance")
@@ -120,7 +121,12 @@ class BudgetOverrides:
     # -- per consumer --------------------------------------
 
     def set_for_consumer(
-        self, consumer: str, op_name: str, value: int | str, *, bounded: bool = False,
+        self,
+        consumer: str,
+        op_name: str,
+        value: int | str,
+        *,
+        bounded: bool = False,
     ) -> None:
         """`value` is milliseconds or a "<n>x" multiplier; `op_name` "*"
         covers every op for the consumer."""
@@ -142,7 +148,11 @@ class BudgetOverrides:
             return hit
 
     def clear_for_consumer(
-        self, consumer: str, op_name: str = ANY_OP, *, bounded: bool = False,
+        self,
+        consumer: str,
+        op_name: str = ANY_OP,
+        *,
+        bounded: bool = False,
     ) -> None:
         with self._lock:
             if bounded:
