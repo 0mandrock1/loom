@@ -448,7 +448,7 @@ includes all threads, messages and working memory. Keep the same Loom agent and 
 `storeId` when resuming in another process. Resource reassignment, observational memory,
 run fencing, atomic working-memory merges and cloning are unsupported. Data stays in
 your Loom deployment; the adapter adds no database, vector store or cache. See
-[the memory contract and limits](../../docs/features/integrations/frameworks.md#mastra).
+[the memory contract and limits](https://github.com/ClickHouse/loom/blob/main/docs/features/integrations/frameworks.md#mastra).
 
 ## OpenAI Agents SDK
 
