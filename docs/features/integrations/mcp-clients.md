@@ -334,6 +334,30 @@ or through the provider's tunnel where it has one; a self-hosted builder reaches
 same network. On the same machine, `loom install --client claude-desktop` writes the
 `mcp-remote` bridge entry instead. Where these take the server:
 
+- **Flowise**: add a Custom MCP tool to an Agent node. Its
+  [Streamable HTTP configuration](https://docs.flowiseai.com/tutorials/tools-and-mcp#streamable-http-recommended)
+  accepts a `url` and `headers` object. Set the URL to your reachable Loom `/mcp` endpoint
+  and the `Authorization` header to `Bearer <JWT>`; use a Flowise variable for the token.
+  Refresh Available Actions and select the Loom tools the agent needs.
+- **Langflow**: register the server in Settings → MCP Servers or the MCP sidebar, using
+  [HTTP/SSE and header fields](https://docs.langflow.org/mcp-client#connect-to-a-non-langflow-mcp-server).
+  Enter the reachable Loom `/mcp` URL and `Authorization: Bearer <JWT>`; header values
+  can use Langflow global variables. Drag the registered server onto the canvas, select
+  its tools, enable Tool mode and connect its Toolset port to the Agent's Tools port.
+- **Zapier**: add an Apps connection for
+  [MCP Client](https://help.zapier.com/hc/en-us/articles/38777069364109-Connect-remote-MCP-servers-to-Zapier-using-MCP-Client),
+  select Streamable HTTP, enter your reachable Loom `/mcp` URL, select OAuth **No** and
+  put the JWT in Bearer Token. OAuth **Yes** ignores that token field and requires the
+  [browser sign-in](#clients-that-sign-in-by-browser) route instead. MCP Client is beta
+  and exposes tool calls; its Run Tool action can call a chosen Loom tool explicitly.
+- **Make**: add an [MCP Client module](https://apps.make.com/c5ZhYquO55e90hoCJ0rzt),
+  create a connection and choose **+ New MCP Server**. Enter your reachable Loom `/mcp`
+  URL. The connection offers an API Key / Access token field; its documented instructions
+  do not establish the outgoing header or bearer-prefix behavior for Loom, so verify
+  those before treating an authenticated connection as working
+  ([token errors](#bearer-or-bare-token)). Use **Call a tool** for an explicit tool call;
+  **Execute an action with AI** also uses a model and consumes provider or Make credits.
+  The client is open beta; a custom connection is separate from its verified-server list.
 - **Replit Agent**: an install link, `https://replit.com/integrations?mcp=` followed by the
   base64 of `{"displayName": "Loom", "baseUrl": "https://loom.example.com/mcp"}`. A
   `headers` list (`[{"key": "Authorization", "value": "Bearer <JWT>"}]`) puts the token in
@@ -395,6 +419,12 @@ same network. On the same machine, `loom install --client claude-desktop` writes
   authentication method from the URL. Choose **HTTP Bearer Token / Basic Auth** and enter
   the token as a bearer token, since Loom does not accept Basic
   ([telling which](#bearer-or-bare-token)).
+
+The Flowise, Langflow, Zapier and Make instructions above follow their linked client
+documentation. Their connection to Loom and model tool selection have not been tested.
+These entries provide MCP tools, without the coding plugins' transcript capture or hooks.
+The builders' MCP server features expose their own workflows to other clients; they are
+separate from the MCP client features that call Loom.
 
 ### Bearer or bare token
 
