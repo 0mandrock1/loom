@@ -848,6 +848,16 @@ schema. These rules keep that safe. The operator procedure is in
     marked receipts and audit counts while preserving their mark and version priority;
     a schema downgrade alone provides no privacy protection.
 
+57. **Stopped mirrored sources retain their retirement requests**: N writes a
+    `knowledge_source_retire:<source id>` key under the mirror in `code_index_state`
+    before inactivating the registration. Its always-on `knowledge_source_retire`
+    worker deletes that source id's owned copies under its own cursor, deadline and
+    document bound, even after the name is reused. N-1 ignores those queue keys and
+    cannot serve the mirrored registration; its ordinary cleanup skips it. Queue rows
+    remain until N finishes, and namespace erasure removes them with the mirror.
+    Mirrored registration remains unavailable. `tests/unit/test_knowledge_source_retirements.py`
+    checks name replacement, bounded progress and cursor persistence.
+
 ## What checks them
 
 `scripts/gates/mixed_version.py` (`make test-mixed-version`, the `mixed-version` CI job,
