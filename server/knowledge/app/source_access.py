@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -34,6 +35,7 @@ class Admitted:
     access: AccessList = UNREAD
     canonical_owner: str = ""
     groups: tuple[tuple[str, datetime], ...] = ()
+    reader_emails: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -45,6 +47,15 @@ class ReadPlan:
     marked: bool = False
     unread: bool = False
     failed: bool = False
+    _bindings: tuple[tuple[str, str, str], ...] = field(default=(), repr=False)
+    _reader_subject: str = field(default="", repr=False)
+    discovery_reader: ReaderIdentity | None = field(default=None, repr=False)
+    _checking: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+
+    @property
+    def discovery_sources(self) -> dict[tuple[str, str], str]:
+        """The request's fixed discovery scope, unaffected by conditional checks."""
+        return {(mirror, source): original for mirror, source, original in self._bindings}
 
     def listing_current(self, namespace: str, source: str, *, at: datetime | None = None) -> bool:
         return fresh(
@@ -71,7 +82,9 @@ class ReadPlan:
             groups=frozenset(
                 name
                 for name, read_at in item.groups
-                if fresh(read_at, at, settings.knowledge_source_acl_stale_seconds)
+                if reader
+                and item.reader_emails == reader.emails
+                and fresh(read_at, at, settings.knowledge_source_acl_stale_seconds)
             ),
         )
 
@@ -79,17 +92,39 @@ class ReadPlan:
         self, candidates: list[dict[str, Any]], *, chunks: bool = False
     ) -> list[Admitted]:
         """Check a bounded batch; any candidate read failure invalidates the whole plan."""
-        if self.failed or self.unread or not self.sources or not candidates:
-            return []
-        set_query_tag("knowledge.mirror.check")
-        try:
-            with sequential_reads(), private_work():
-                return await self._check(candidates, chunks=chunks)
-        except Exception:  # noqa: BLE001 — a failed candidate read must disclose no partial leg
-            self.failed = True
-            return []
+        async with self._checking:
+            # Serialize shared evidence so an older refresh cannot overwrite a newer check.
+            if self.failed or self.unread or not self.sources or not candidates:
+                return []
+            set_query_tag("knowledge.mirror.check")
+            try:
+                with sequential_reads(), private_work():
+                    return await self._check(candidates, chunks=chunks)
+            except Exception:  # noqa: BLE001 — a failed candidate read must disclose no partial leg
+                self.failed = True
+                return []
+
+    async def _refresh_scope(self) -> None:
+        """Refresh conditional evidence without adding a discovery leg to this request."""
+        initial = self.discovery_sources
+        sources = await store.active_sources(self.org, sorted(set(initial.values())))
+        snapshot = ReadPlan(self.org)
+        await _prepare(snapshot, sources, self._reader_subject)
+        self.sources = {
+            key: original
+            for key, original in snapshot.sources.items()
+            if initial.get(key) == original
+        }
+        self.listing_starts = {
+            key: started for key, started in snapshot.listing_starts.items() if key in self.sources
+        }
+        self.reader = snapshot.reader
 
     async def _check(self, candidates: list[dict[str, Any]], *, chunks: bool) -> list[Admitted]:
+        await self._refresh_scope()
+        if not self.sources:
+            return []
+        reader = self.reader
         pairs = sorted({(r["namespace"], r["source_uri"]) for r in candidates})
         heads = await store.heads(self.org, pairs) if pg.enabled() else {}
         rows = (
@@ -103,7 +138,7 @@ class ReadPlan:
             if r.get("org") == self.org and (r["namespace"], r["source_uri"]) in pairs
         }
         permissions = {p: from_json(r.get("access_json") or "") for p, r in docs.items()}
-        groups = await self._groups(docs, permissions)
+        groups = await self._groups(docs, permissions, reader)
         out = []
         owners: dict[str, str] = {}
         for candidate in candidates:
@@ -122,12 +157,18 @@ class ReadPlan:
                 continue
             access = permissions[pair]
             owner = ""
-            if access.owner and self.reader:
+            if access.owner and reader:
                 if access.owner not in owners:
                     owners[access.owner] = await canonical_subject(self.org, access.owner)
                 owner = owners[access.owner]
             item = Admitted(
-                original, candidate, doc, access, owner, tuple(groups.get(key, {}).items())
+                original,
+                candidate,
+                doc,
+                access,
+                owner,
+                tuple(groups.get(key, {}).items()),
+                reader.emails if reader else frozenset(),
             )
             if self.current(item):
                 out.append(item)
@@ -137,8 +178,9 @@ class ReadPlan:
         self,
         docs: dict[tuple[str, str], dict[str, Any]],
         permissions: dict[tuple[str, str], AccessList],
+        reader: ReaderIdentity | None,
     ) -> dict[tuple[str, str], dict[str, datetime]]:
-        if self.reader is None or not self.reader.emails:
+        if reader is None or not reader.emails:
             return {}
         wanted = [
             (ns, source_id(uri, docs[(ns, uri)]["tags"]), group)
@@ -158,7 +200,7 @@ class ReadPlan:
             ):
                 continue
             members = {email.strip().lower() for email in row["members"]}
-            if self.reader.emails.intersection(members):
+            if reader.emails.intersection(members):
                 found.setdefault(key[:2], {})[row["group"]] = row["read_at"]
         return found
 
@@ -201,7 +243,15 @@ async def prepare(org: str, namespaces: list[str]) -> ReadPlan:
                 return plan
             plan.marked = True
             with private_work():
-                await _prepare(plan, sources, reader_subject(auth))
+                plan._reader_subject = reader_subject(auth)
+                await _prepare(plan, sources, plan._reader_subject)
+                plan.discovery_reader = plan.reader
+                plan._bindings = tuple(
+                    sorted(
+                        (mirror, source, original)
+                        for (mirror, source), original in plan.sources.items()
+                    )
+                )
     except Exception:  # noqa: BLE001 — unreadable unconditional evidence must fail closed uniformly
         plan.marked = plan.unread = True
         request_work.mark_mirrored(unread=True)

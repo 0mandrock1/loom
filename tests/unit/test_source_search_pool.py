@@ -34,7 +34,13 @@ def row(i, *, uri=None, admitted=True):
 def world(monkeypatch):
     sizes, opened, closed = [], [], []
     plan = SimpleNamespace(
-        org="acme", sources={(MIRROR, SID): "docs"}, reader=None, failed=False, unread=False
+        org="acme",
+        sources={(MIRROR, SID): "docs"},
+        discovery_sources={(MIRROR, SID): "docs"},
+        reader=None,
+        discovery_reader=None,
+        failed=False,
+        unread=False,
     )
     plan.listing_current = lambda _namespace, _source: True
     plan.current = lambda item: plan.listing_current(item.document["namespace"], SID)
@@ -97,7 +103,7 @@ async def test_each_search_pass_discovers_only_its_requested_original_namespaces
     plan, q, _sizes, _opened, _closed, _install = world
     other = "acl-" + "2" * 24
     other_sid = "22222222-2222-4222-8222-222222222222"
-    plan.sources[(other, other_sid)] = "other-docs"
+    plan.discovery_sources[(other, other_sid)] = "other-docs"
     seen = []
 
     @asynccontextmanager
@@ -256,3 +262,26 @@ async def test_expiry_during_final_other_batch_also_evicts_earlier_rechecked_row
     out = await app.discover(plan, q, legs=("semantic",), limit=100)
     assert expired and out == {"semantic": []}
     assert not plan.unread
+
+
+async def test_later_discovery_still_opens_after_conditional_source_removal(world):
+    plan, q, _sizes, opened, closed, install = world
+
+    async def check(_batch, *, chunks):
+        plan.sources = {}
+        plan.reader = None
+        plan.failed = True
+        return []
+
+    plan.check = check
+
+    async def rows(leg):
+        if leg == "lexical":
+            raise RuntimeError("unconditional backend failure")
+        yield row(0)
+
+    install(rows)
+    assert await app.collect_leg(plan, q, "semantic", limit=2) == []
+    assert await app.collect_leg(plan, q, "lexical", limit=2) == []
+    assert opened == closed == ["semantic", "lexical"]
+    assert plan.failed and plan.unread

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -147,18 +148,17 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             )
             assert anonymous.status_code == 401
             # Install a trusted fixture directly; public source creation stays disabled.
-            await sources.insert_source(
-                KnowledgeSource(
-                    org=org,
-                    namespace=namespace,
-                    name="checked",
-                    kind="gdrive",
-                    source_id=source,
-                    items=[{"type": "file", "id": "synthetic-file"}],
-                    access="mirrored",
-                    active=True,
-                )
+            registration = KnowledgeSource(
+                org=org,
+                namespace=namespace,
+                name="checked",
+                kind="gdrive",
+                source_id=source,
+                items=[{"type": "file", "id": "synthetic-file"}],
+                access="mirrored",
+                active=True,
             )
+            await sources.insert_source(registration)
             await mirrors.add_mirror(org, namespace, mirror)
             await mirrors.record_listing(org, mirror, source, "checked", now)
             await write_document(namespace, "ordinary:visible", query + " ordinary")
@@ -245,6 +245,12 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert public_uri in [r["source_uri"] for r in (await search(owner_bot))["results"]]
             assert (await get(owner_bot))["found"]
             assert (await outline(owner_bot))["section_content"] == "Unembedded section."
+            await sources.insert_source(replace(registration, active=False))
+            assert await search(owner) == baseline
+            assert await get(owner) == missing_get
+            assert await outline(owner) == missing_outline
+            await sources.insert_source(registration)
+            assert (await get(owner))["found"]
             stale = now - timedelta(seconds=settings.knowledge_source_acl_stale_seconds + 1)
             await mirrors.record_listing(org, mirror, source, "checked", stale)
             assert await search(owner) == baseline

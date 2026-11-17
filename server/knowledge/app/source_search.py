@@ -35,7 +35,9 @@ async def collect_leg(
 ) -> list[Admitted]:
     """Close one ranked discovery stream when its admitted pool fills or it ends."""
     sources = {
-        key: original for key, original in plan.sources.items() if original in query.namespaces
+        key: original
+        for key, original in plan.discovery_sources.items()
+        if original in query.namespaces
     }
     if not sources or limit <= 0:
         return []
@@ -64,7 +66,7 @@ async def collect_leg(
                 toks=query.tokens,
                 keys=query.keys,
             )
-            reader = plan.reader
+            reader = plan.discovery_reader
             coarse = (
                 None
                 if pg.enabled()

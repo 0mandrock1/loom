@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -381,3 +382,156 @@ async def test_content_is_discarded_if_access_changes_during_hydration(world, mo
         "semantic": []
     }
     assert not plan.failed and not plan.unread and not world["bag"].mirror_unread
+
+
+@pytest.mark.parametrize(
+    "change", ["inactive", "missing_binding", "ambiguous_binding", "listing", "reader"]
+)
+async def test_each_batch_refreshes_current_source_and_reader_evidence(world, change):
+    plan = await app.prepare("acme", ["docs"])
+    assert await plan.check([candidate()], chunks=True)
+    if change == "inactive":
+        world["sources"].return_value = []
+    elif change == "missing_binding":
+        world["mirrors"].return_value = {}
+    elif change == "ambiguous_binding":
+        world["mirrors"].return_value = {MIRROR: "docs", "acl-" + "2" * 24: "docs"}
+    elif change == "listing":
+        world["listings"].return_value = []
+    else:
+        world["reader"].return_value = ReaderIdentity("lee", frozenset(), frozenset())
+    assert await plan.check([candidate()], chunks=True) == []
+    assert not plan.failed and not plan.unread and not world["bag"].mirror_unread
+
+
+@pytest.mark.parametrize("stage", ["sources", "mirrors", "listings", "reader"])
+async def test_scope_refresh_failures_are_conditional_without_unread(world, stage):
+    plan = await app.prepare("acme", ["docs"])
+    assert await plan.check([candidate()], chunks=True)
+    world[stage].side_effect = RuntimeError("private refresh failure")
+    assert await plan.check([candidate()], chunks=True) == []
+    assert plan.failed and not plan.unread and not world["bag"].mirror_unread
+
+
+async def test_refresh_never_adds_new_source_legs_or_rebinds_initial_sources(world):
+    plan = await app.prepare("acme", ["docs"])
+    second = "22222222-2222-4222-8222-222222222222"
+    world["sources"].return_value.append({"namespace": "docs", "source_id": second})
+    world["listings"].return_value.append(
+        {"namespace": MIRROR, "source_id": second, "started_at": NOW}
+    )
+    assert await plan.check([candidate()], chunks=True)
+    assert plan.sources == {(MIRROR, SID): "docs"}
+    replacement = "acl-" + "2" * 24
+    world["mirrors"].return_value = {replacement: "docs"}
+    world["listings"].return_value = [
+        {"namespace": replacement, "source_id": SID, "started_at": NOW}
+    ]
+    assert await plan.check([candidate()], chunks=True) == []
+    assert not plan.sources and not plan.unread
+
+
+@pytest.mark.parametrize("independent", ["owner", "anyone"])
+async def test_reader_contact_loss_keeps_independent_permission_arms(world, independent):
+    world["doc"]["access_json"] = to_json(
+        AccessList(
+            **{
+                "emails": ("lee@example.com",),
+                independent: "owner-alias" if independent == "owner" else True,
+            }
+        )
+    )
+    plan = await app.prepare("acme", ["docs"])
+    assert await plan.check([candidate()], chunks=True)
+    world["reader"].return_value = ReaderIdentity("lee", frozenset(), frozenset())
+    assert await plan.check([candidate()], chunks=True)
+    assert plan.reader.emails == frozenset()
+    assert not plan.failed and not plan.unread
+
+
+@pytest.mark.parametrize("independent", [False, True])
+async def test_old_group_proof_cannot_follow_a_changed_verified_email_set(world, independent):
+    world["doc"]["access_json"] = to_json(
+        AccessList(groups=("group@example.com",), anyone=independent)
+    )
+    world["groups"].return_value = [
+        {
+            "namespace": MIRROR,
+            "source_id": SID,
+            "group": "group@example.com",
+            "members": ["lee@example.com"],
+            "read_at": NOW,
+            "deleted": False,
+        }
+    ]
+    plan = await app.prepare("acme", ["docs"])
+    [earlier] = await plan.check([candidate()], chunks=True)
+    world["reader"].return_value = ReaderIdentity(
+        "lee", frozenset({"other@example.com"}), frozenset()
+    )
+    later = await plan.check([candidate()], chunks=True)
+    assert bool(later) is independent
+    assert plan.current(earlier) is independent
+    assert not plan.failed and not plan.unread
+
+
+async def test_overlapping_checks_cannot_restore_a_source_after_observing_its_removal(world):
+    plan = await app.prepare("acme", ["docs"])
+    started, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def active_sources(*_args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            snapshot = list(world["sources"].return_value)
+            started.set()
+            await release.wait()
+            return snapshot
+        return []
+
+    world["sources"].side_effect = active_sources
+    earlier = asyncio.create_task(plan.check([candidate()], chunks=True))
+    await started.wait()
+    later = asyncio.create_task(plan.check([candidate()], chunks=True))
+    try:
+        await asyncio.sleep(0)
+        assert not later.done()
+    finally:
+        release.set()
+        first, last = await asyncio.gather(earlier, later)
+    assert first and not last and calls == 2
+    assert not plan.current(first[0]) and not plan.sources
+    assert not plan.failed and not plan.unread
+
+
+async def test_a_queued_check_observes_an_earlier_checks_failure(world):
+    plan = await app.prepare("acme", ["docs"])
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def failed_metadata(*_args):
+        started.set()
+        await release.wait()
+        raise RuntimeError("private failed evidence")
+
+    world["metadata"].side_effect = failed_metadata
+    earlier = asyncio.create_task(plan.check([candidate()], chunks=True))
+    await started.wait()
+    later = asyncio.create_task(plan.check([candidate()], chunks=True))
+    release.set()
+    assert await asyncio.gather(earlier, later) == [[], []]
+    assert world["metadata"].await_count == 1
+    assert plan.failed and not plan.unread
+
+
+async def test_conditional_refresh_preserves_discovery_sources_and_reader(world):
+    plan = await app.prepare("acme", ["docs"])
+    initial_reader = plan.discovery_reader
+    world["sources"].return_value = []
+    world["reader"].return_value = ReaderIdentity("lee", frozenset(), frozenset())
+    assert await plan.check([candidate()], chunks=True) == []
+    assert plan.discovery_sources == {(MIRROR, SID): "docs"}
+    assert plan.discovery_reader is initial_reader
+    assert initial_reader.emails == frozenset({"lee@example.com"})
+    plan.discovery_sources.clear()
+    assert plan.discovery_sources == {(MIRROR, SID): "docs"}

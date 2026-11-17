@@ -59,11 +59,9 @@ def _same(row: DocumentRow, plan: ReadPlan, item: Admitted) -> bool:
 
 async def get(plan: ReadPlan, namespace: str, source_uri: str) -> CheckedDocument | None:
     """Admit metadata before text, then retain only an unchanged, freshly admitted copy."""
-    if plan.failed or plan.unread:
-        return None
     pairs = sorted(
         (mirror, source_uri + "#" + source)
-        for (mirror, source), original in plan.sources.items()
+        for (mirror, source), original in plan.discovery_sources.items()
         if original == namespace
     )
     set_query_tag("knowledge.mirror.document")

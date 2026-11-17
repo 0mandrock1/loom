@@ -27,7 +27,7 @@ def world(monkeypatch):
     )
     plan = SimpleNamespace(
         org="acme",
-        sources={(MIRROR, source): "team"},
+        discovery_sources={(MIRROR, source): "team"},
         failed=False,
         unread=False,
         current=lambda _item: True,
@@ -66,14 +66,18 @@ async def test_document_text_is_read_only_at_admitted_metadata_identity(world):
 
 
 @pytest.mark.parametrize("state", ["failed", "unread", "other_namespace"])
-async def test_unavailable_or_unselected_plan_reads_nothing(world, state):
+async def test_failed_plan_keeps_selected_discovery_but_never_reads_content(world, state):
     app, plan, _row, phases = world
     if state == "other_namespace":
-        plan.sources = {key: "other" for key in plan.sources}
+        plan.discovery_sources = {key: "other" for key in plan.discovery_sources}
     else:
         setattr(plan, state, True)
     assert await app.get(plan, "team", "gdrive:file#native") is None
-    assert phases == []
+    assert phases == (
+        [] if state == "other_namespace" else [("discover", "acme", [(MIRROR, _row.source_uri)])]
+    )
+    plan.check.assert_not_awaited()
+    app.store.contents.assert_not_awaited()
 
 
 async def test_missing_or_denied_document_never_reads_text(world):
@@ -134,7 +138,9 @@ async def test_postfetch_permission_or_identity_loss_drops_fetched_text(world, c
 
 async def test_all_bounded_discovery_queries_run_after_an_earlier_failure(world):
     app, plan, _row, phases = world
-    plan.sources = {(MIRROR, f"{i:08x}-1111-4111-8111-111111111111"): "team" for i in range(65)}
+    plan.discovery_sources = {
+        (MIRROR, f"{i:08x}-1111-4111-8111-111111111111"): "team" for i in range(65)
+    }
     calls = []
 
     async def broken(_org, pairs):
@@ -177,7 +183,7 @@ async def test_another_admitted_source_survives_a_missing_or_revoked_copy(world,
     from copy import copy
 
     second = "22222222-2222-4222-8222-222222222222"
-    plan.sources[(MIRROR, second)] = "team"
+    plan.discovery_sources[(MIRROR, second)] = "team"
     second_row = copy(row)
     second_row.source_uri = "gdrive:file#native#" + second
     app.store.contents.side_effect = [None if first == "missing" else row, second_row]
@@ -210,3 +216,14 @@ async def test_pg_discovery_uses_current_heads_without_ch_metadata_fallback(worl
     result = await app.get(plan, "team", "gdrive:file#native")
     assert result.row is row
     app.evidence.metadata.assert_not_awaited()
+
+
+async def test_prior_conditional_failure_cannot_hide_a_selected_discovery_failure(world):
+    app, plan, _row, _phases = world
+    plan.failed = True
+    app.evidence.metadata.side_effect = RuntimeError("unconditional metadata failure")
+    assert await app.get(plan, "team", "gdrive:file#native") is None
+    app.evidence.metadata.assert_awaited_once()
+    plan.check.assert_not_awaited()
+    app.store.contents.assert_not_awaited()
+    assert plan.failed and plan.unread
