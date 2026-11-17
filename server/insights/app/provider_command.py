@@ -9,9 +9,9 @@ from contextlib import asynccontextmanager
 
 from server.core import retirement, settings_overrides
 from server.core.background import drain_task_sets, flush_registered_buffers
-from server.core.ch import set_query_tag
+from server.core.ch import get_client, set_query_tag
 from server.core.model_work_gate import get_model_work_gate
-from server.insights.app.provider_barrier import register_process, retire_process
+from server.insights.app.provider_barrier import _retire_until, register_process
 from server.insights.app.provider_runtime import load_active_configuration
 from server.settings import settings
 
@@ -47,49 +47,64 @@ async def _keep_overrides(
         return error
 
 
+async def _drain_participant_until(end: float) -> None:
+    loop = asyncio.get_running_loop()
+    async with asyncio.timeout_at(end):
+        if not await drain_task_sets(timeout_s=max(0.0, end - loop.time())):
+            raise RuntimeError("Native command deferred writes did not drain")
+        if not await flush_registered_buffers():
+            raise RuntimeError("Native command buffers did not flush")
+        if await _retire_until(get_client(), end) is not True:
+            raise RuntimeError("Native command retirement was not certified")
+
+
 async def _finish_participant() -> None:
     gate = retirement.get_gate()
     gate.close()
     from server.memory.app import embedder_calibration
 
-    first: BaseException | None = None
+    loop = asyncio.get_running_loop()
+    end = loop.time() + COMMAND_DRAIN_S
+    first = gate.producer_failure
     stopped = False
     try:
         embedder_calibration.stop_refresh_loop()
         stopped = True
     except BaseException as error:  # noqa: BLE001 — finish safe cleanup, then raise the first failure
-        first = error
+        if first is None:
+            first = error
     producers = tuple(gate.producers)
     for producer in producers:
         producer.cancel()
     try:
         if producers:
-            _, pending = await asyncio.wait(producers, timeout=COMMAND_DRAIN_S)
+            _, pending = await asyncio.wait(producers, timeout=max(0.0, end - loop.time()))
             if pending:
                 raise RuntimeError("Native command producers did not stop")
     except BaseException as error:  # noqa: BLE001 — finish safe cleanup, then raise the first failure
         if first is None:
             first = error
         stopped = False
-    for producer in producers:
-        if producer.done() and not producer.cancelled():
-            try:
-                producer.result()
-            except BaseException as error:  # noqa: BLE001 — finish safe cleanup, then raise the first failure
-                if first is None:
-                    first = error
+    if first is None:
+        first = gate.producer_failure
     if stopped:
         gate.stopped()
-        try:
-            if not await drain_task_sets(timeout_s=COMMAND_DRAIN_S):
-                raise RuntimeError("Native command deferred writes did not drain")
-            if not await flush_registered_buffers():
-                raise RuntimeError("Native command buffers did not flush")
-            if await retire_process() is not True:
-                raise RuntimeError("Native command retirement was not certified")
-        except BaseException as error:  # noqa: BLE001 — finish safe cleanup, then raise the first failure
-            if first is None:
-                first = error
+        owner = asyncio.current_task()
+        while True:
+            cancelling = owner.cancelling() if owner is not None else 0
+            try:
+                if loop.time() >= end:
+                    raise TimeoutError("Native command cleanup deadline expired")
+                await _drain_participant_until(end)
+            except asyncio.CancelledError as error:
+                if first is None:
+                    first = error
+                if owner is not None and owner.cancelling() > cancelling:
+                    continue  # a new owner cancellation still allows cleanup within the same end
+            except BaseException as error:  # noqa: BLE001 — report the first required cleanup failure
+                if first is None:
+                    first = error
+            break
     if first is not None:
         raise first
 

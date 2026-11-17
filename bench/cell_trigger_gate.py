@@ -1210,6 +1210,15 @@ def _compare(
                 and left == right,
                 phase + " vector",
             )
+        elif field_name == "value_json":
+            try:
+                # PostgreSQL keeps JSON text; the native ClickHouse decoder returns its value.
+                left = json.loads(left) if isinstance(left, str) else left
+                right = json.loads(right) if isinstance(right, str) else right
+                same = sha256_value(left) == sha256_value(right)
+            except (ValueError, TypeError) as error:
+                raise Invalid(phase + " " + field_name) from error
+            _require(same, phase + " " + field_name)
         else:
             _require(_normal(left) == _normal(right), phase + " " + field_name)
 

@@ -67,6 +67,7 @@ def native(monkeypatch):
 
     client.connect, client.disconnect = connect, close_ch
     monkeypatch.setattr(ch, "get_client", lambda: client)
+    monkeypatch.setattr(command, "get_client", lambda: client, raising=False)
     monkeypatch.setattr(pg, "close_pool", close_pg)
     monkeypatch.setattr(pg_profile, "check_configured", verify)
     monkeypatch.setattr(_ch, "check_orgs", acceptance)
@@ -218,14 +219,14 @@ def test_unacknowledged_cleanup_refuses_without_early_certification(
     calls = []
     first = first_class("work") if first_class else None
 
-    async def unacknowledged(**_):
+    async def unacknowledged(*_, **__):
         calls.append(phase)
         return False
 
     target = {
         "drain": "drain_task_sets",
         "flush": "flush_registered_buffers",
-        "retire": "retire_process",
+        "retire": "_retire_until",
     }
     monkeypatch.setattr(command, target[phase], unacknowledged)
 
@@ -381,11 +382,12 @@ def test_first_role_producer_failure_is_retrieved_and_does_not_skip_safe_drain(n
         async def producer(error):
             raise error
 
-        # Hold completed producer handles until the composition retrieves both errors.
+        # Completion callbacks run before native shutdown snapshots tracked producers.
         for error in [first, first]:
             task = asyncio.create_task(producer(error))
-            native.gate.producers.add(task)
+            native.gate.track(task)
             producers.append(task)
+            await asyncio.sleep(0)
             await asyncio.sleep(0)
         return 7
 
@@ -397,6 +399,7 @@ def test_first_role_producer_failure_is_retrieved_and_does_not_skip_safe_drain(n
 
 
 def test_actual_retirement_refusal_stays_registered_and_refuses_success(native, monkeypatch):
+    monkeypatch.setattr(command, "COMMAND_DRAIN_S", 0.02)
     stopped = []
     monkeypatch.setattr(
         barrier,
@@ -407,9 +410,9 @@ def test_actual_retirement_refusal_stays_registered_and_refuses_success(native, 
     async def work(_):
         return 7
 
-    with pytest.raises(RuntimeError, match="retirement was not certified"):
+    with pytest.raises(TimeoutError):
         _ch.run_connected(work, orgs=("o",))
-    assert stopped == [True]
+    assert stopped and all(stopped)
     assert "certificate" not in native.events
     assert native.gate.enrolled and native.gate.quiescent
     assert native.events[-2:] == ["pg", "ch"]

@@ -228,7 +228,12 @@ async def check_setup_stores() -> None:
             pg.expect_deployment((str(recorded["deployment_id"]), int(recorded["epoch"])))
         await check_org_free(writes("ClickHouse users and grants, no tenant rows"))
     finally:
-        await disconnect(ch)
+        first = sys.exception()
+        try:
+            await disconnect(ch)
+        except BaseException:  # a close failure must not replace the store-check refusal
+            if first is None:
+                raise
 
 
 async def check_orgs(orgs: Iterable[str]) -> None:

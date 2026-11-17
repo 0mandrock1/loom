@@ -901,7 +901,12 @@ def _cmd_import_clickgap(args: argparse.Namespace) -> int:
             async with command_stack:
                 return await _run()
         finally:
-            await disconnect(get_client())
+            first = sys.exception()
+            try:
+                await disconnect(get_client())
+            except BaseException:  # a disconnect failure must not replace the command failure
+                if first is None:
+                    raise
 
     from contextlib import AsyncExitStack
 

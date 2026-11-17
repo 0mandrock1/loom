@@ -482,7 +482,12 @@ def _doctor_tier_failures() -> tuple[Any, ...] | None:
             await tier_health.refresh_failing()
             return tier_health.problem_rows()
         finally:
-            await disconnect(client)
+            first = sys.exception()
+            try:
+                await disconnect(client)
+            except BaseException:  # keep the diagnostic failure when close also fails
+                if first is None:
+                    raise
 
     _read_code_registry()  # the self-service entries too; a no-op once a read succeeded
     try:
@@ -509,7 +514,12 @@ def _read_code_registry() -> None:
             await connect_declared(client, org_free=reads("reads"))
             await repo_registry.refresh_db_repos(force=True)
         finally:
-            await disconnect(client)
+            first = sys.exception()
+            try:
+                await disconnect(client)
+            except BaseException:  # keep the diagnostic failure when close also fails
+                if first is None:
+                    raise
 
     try:
         asyncio.run(asyncio.wait_for(read(), timeout=5))

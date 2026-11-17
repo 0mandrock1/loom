@@ -105,7 +105,12 @@ def _cmd_export(args: argparse.Namespace) -> int:
                         day, prefix=args.prefix, put=put, name_key=name_key, ch=ch
                     )
             finally:
-                await disconnect(ch)
+                first = sys.exception()
+                try:
+                    await disconnect(ch)
+                except BaseException:  # a disconnect failure must not replace the command failure
+                    if first is None:
+                        raise
 
     for e in asyncio.run(_go()):
         # A kept object's size is the earlier run's, which this run never read.
