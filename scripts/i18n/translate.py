@@ -1,70 +1,61 @@
-"""Machine translations of a fixed set of English pages into i18n/<lang>/.
+"""Bounded machine translation of tracked README.md and docs/**/*.md.
 
-    python -m scripts.i18n.translate check    # exit 1: a page is stale, orphaned, or has a broken
-                                              # link, an English label or an old language line
-    python -m scripts.i18n.translate update   # translate the stale pages (needs AWS credentials)
-    python -m scripts.i18n.translate update --all [--lang ja ...]   # after a prompt change
+    python -m scripts.i18n.translate check   # strict missing/stale/obsolete coverage
+    python -m scripts.i18n.translate check --skip-stale  # validate present output
+    python -m scripts.i18n.translate update  # bounded batch; needs paid-call authorization
 
-Claude is called on Amazon Bedrock through the `anthropic` package's AnthropicBedrock client
-(scripts/i18n/requirements.txt), which signs each request with the default AWS credential
-chain: on the workflow's self-hosted runner, the instance role; locally, a profile or the
-AWS_* variables. The region comes from AWS_REGION, AWS_DEFAULT_REGION or the profile. A
-short page is sent in one call, a longer one a `## ` section at a time (`WHOLE_PAGE_CHARS`).
-A translation is kept only when its fenced code blocks (in order), inline code spans, link
-targets, URLs, heading anchors and numbers match the English; otherwise the call is retried
-once with the differences named, then the page is not written (below). The assembled page is
-held to the same label rule before it is written. Relative links in the prose are rewritten
-before translation: a page of the set links to its translation, anything else to the English
-file on GitHub. Every heading gets an explicit `<a id>` with its English anchor, so
-`#anchor` links keep working on the translated page. The first line of each translation
-stamps the git blob of the English page it was made from; `check` compares that stamp with
-the file. A change to the model or a banner makes every page stale; a change to the prompt
-does not: regenerate with `--all`. The READMEs carry a generated language line that `update`
-rewrites without translating; adding a language changes the English README's line, so its
-blob, and every README is translated again.
-
-The run estimates its cost before the first call and stops when the estimate, or the
-spend reported by the API, passes LOOM_I18N_MAX_USD (default 5). Every call checks the cap
-first, so the spend passes it by at most the calls already in flight, one per worker, and
-reaching it stops every worker before its next call. A page whose translation still differs
-after its retry is not written; the other pages go on, and the run then fails naming it.
+The main-only workflow books a durable cumulative allowance before calling Bedrock.
+The generator shares one approximate actual-usage cap across every page and language.
+Only verified pages are written. Relative links use available translated targets and
+otherwise point to English. Obsolete generated output waits for surviving inbound links.
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import posixpath
 import re
 import subprocess
-import threading
 import time
 from collections import Counter
 from collections.abc import Callable
-from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, unquote
+
+from scripts.i18n import lifecycle
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = "i18n"
 REPO_URL = "https://github.com/ClickHouse/loom"
 
-SOURCES = (
-    "README.md",
-    "docs/getting-started/quickstart.md",
-    "docs/use-cases/index.md",
-    "docs/use-cases/agent-memory.md",
-    "docs/use-cases/autonomous-agents.md",
-    "docs/use-cases/code-intelligence.md",
-    "docs/use-cases/code-intelligence-by-language.md",
-    "docs/use-cases/coding-agent-cost.md",
-    "docs/use-cases/document-search.md",
-    "docs/use-cases/memory-linked-to-code.md",
-    "docs/use-cases/multi-agent.md",
-    "docs/use-cases/runs-and-pr-history.md",
-    "docs/use-cases/self-hosted-clickhouse.md",
-)
+
+def sources() -> tuple[str, ...]:
+    """Tracked English Markdown that still exists in the working tree."""
+    names = subprocess.run(
+        ["git", "ls-files", "-z", "--", "README.md", "docs"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split("\0")
+    found = []
+    for name in sorted(set(names)):
+        if name != "README.md" and not (name.startswith("docs/") and name.endswith(".md")):
+            continue
+        if not lifecycle.source_path(name):
+            raise SystemExit(f"unsupported English source path: {name!r}")
+        file = ROOT / name
+        if any(parent.is_symlink() for parent in (file, *file.parents)):
+            raise SystemExit(f"English source is not a regular file: {name}")
+        if file.exists():
+            if not lifecycle.regular(name):
+                raise SystemExit(f"English source is not a regular file: {name}")
+            found.append(name)
+    return tuple(found)
 
 
 @dataclass(frozen=True)
@@ -137,7 +128,7 @@ BEDROCK_MODEL_PREFIX = "global.anthropic."
 MAX_TOKENS = 32000
 
 LANGUAGE_LINE = re.compile(r"<!-- languages -->.*?<!-- /languages -->", re.DOTALL)
-STAMP = re.compile(r"\A<!-- i18n: source=(\S+) blob=([0-9a-f]{40}) model=(\S+) -->\n")
+STAMP = re.compile(r"\A<!-- i18n: source=(.*?) blob=([0-9a-f]{40}) model=(\S+) -->\n")
 FENCE = re.compile(r"^(`{3,}|~{3,})")
 # A Markdown link or image target, an HTML href or src, or a reference definition.
 LINK = re.compile(r"(\]\(|(?:href|src)=\"|^\[(?!\^)[^\]\n]+\]:[ \t]+)([^)\"\s]+)", re.MULTILINE)
@@ -272,18 +263,25 @@ def in_prose(text: str, change: Callable[[str], str]) -> str:
 def rewrite_links(text: str, source: str, lang: str) -> str:
     """Point every relative link of `source` at its target as seen from the translation."""
     here = posixpath.dirname(target_path(lang, source))
+    inventory = frozenset(sources())
 
     def fix(prose: str, match: re.Match[str]) -> str:
         prefix, link = match.groups()
         if re.match(r"[a-z]+:|#|/", link):
             return match.group(0)
         path, _, anchor = link.partition("#")
-        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), path))
+        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), unquote(path)))
         suffix = f"#{anchor}" if anchor else ""
-        if resolved in SOURCES:
-            return prefix + posixpath.relpath(target_path(lang, resolved), here) + suffix
+        translated = ROOT / target_path(lang, resolved)
+        if (
+            resolved in inventory
+            and translated.is_file()
+            and not translated.is_symlink()
+            and (not anchor or f'<a id="{unquote(anchor)}"></a>' in translated.read_text())
+        ):
+            return prefix + quote(posixpath.relpath(target_path(lang, resolved), here)) + suffix
         image = prefix == 'src="' or (prefix == "](" and _is_image(prose, match.start()))
-        return f"{prefix}{REPO_URL}/{'raw' if image else 'blob'}/main/{resolved}{suffix}"
+        return f"{prefix}{REPO_URL}/{'raw' if image else 'blob'}/main/{quote(resolved)}{suffix}"
 
     return in_prose(text, lambda prose: LINK.sub(lambda m: fix(prose, m), prose))
 
@@ -310,7 +308,7 @@ def language_line(current: str) -> str:
     ]
     links = [
         name
-        if path == current
+        if path == current or not lifecycle.regular(path)
         else f'<a href="{posixpath.relpath(path, here) if here else "./" + path}">{name}</a>'
         for path, name in items
     ]
@@ -346,6 +344,9 @@ def invariants(text: str) -> dict[str, Counter[str]]:
         "anchors": Counter(m.group(1) for m in map(ANCHOR.match, prose) if m),
         "headings": Counter(m.group(1) for m in map(HEADING.match, prose) if m),
         "numbers": Counter(NUMBER.findall(without_urls)),
+        "HTML tags": Counter(
+            HTML_ALT.sub('alt="translated"', tag) for tag in HTML_TAG.findall(without_spans)
+        ),
     }
 
 
@@ -404,12 +405,6 @@ def differences(source: str, translation: str) -> list[str]:
 # ---- stamps ---------------------------------------------------------------------------
 
 
-def require_sources() -> None:
-    missing = [s for s in SOURCES if not (ROOT / s).is_file()]
-    if missing:
-        raise SystemExit(f"in SOURCES but missing: {', '.join(missing)}; update SOURCES")
-
-
 def blob(source: str) -> str:
     return subprocess.run(
         ["git", "hash-object", source], cwd=ROOT, check=True, capture_output=True, text=True
@@ -418,7 +413,7 @@ def blob(source: str) -> str:
 
 def header(source: str, lang: Language, model: str, blob_sha: str) -> str:
     """A translation's first lines: the stamp and the two banner lines."""
-    url = f"{REPO_URL}/blob/main/{source}"
+    url = f"{REPO_URL}/blob/main/{quote(source)}"
     english = f"Machine-translated from the [English page]({url}), which is authoritative."
     stamp = f"<!-- i18n: source={source} blob={blob_sha} model={model} -->\n"
     return f"{stamp}> {lang.banner.format(url=url)}\n> {english}\n\n"
@@ -430,7 +425,7 @@ def stale(
     """Every (source, language) whose translation is missing, or whose stamp or banner
     differs: another English blob, another model, another banner."""
     out = []
-    for source in SOURCES:
+    for source in sources():
         current = blob(source)
         for lang in languages:
             path = ROOT / target_path(lang.code, source)
@@ -441,10 +436,9 @@ def stale(
 
 
 def orphans() -> list[str]:
-    """Files under i18n/ that no (source, language) pair writes."""
-    expected = {target_path(lang.code, s) for s in SOURCES for lang in LANGUAGES}
-    found = {p.relative_to(ROOT).as_posix() for p in (ROOT / OUT_DIR).rglob("*") if p.is_file()}
-    return sorted(found - expected)
+    """Every output outside the current source/language inventory, including unknown files."""
+    expected = {target_path(lang.code, s) for s in sources() for lang in LANGUAGES}
+    return sorted(set(lifecycle.output_files()) - expected)
 
 
 def prose_links(text: str) -> list[re.Match[str]]:
@@ -459,33 +453,15 @@ def prose_links(text: str) -> list[re.Match[str]]:
     return found
 
 
-def link_problems(stale_pages: frozenset[str] = frozenset()) -> list[str]:
-    """Relative links and `#anchors` in i18n/ that point at nothing. An anchor into or out of
-    one of `stale_pages` is not checked: that page still carries its old English's anchors
-    and links."""
-    problems = []
-    for file in sorted((ROOT / OUT_DIR).rglob("*.md")):
-        path = file.relative_to(ROOT).as_posix()
-        for match in prose_links(file.read_text()):
-            link, _, anchor = match.group(2).partition("#")
-            if re.match(r"[a-z]+:", link):
-                continue
-            target = (
-                posixpath.normpath(posixpath.join(posixpath.dirname(path), link)) if link else path
-            )
-            if not (ROOT / target).is_file():
-                problems.append(f"{path} links to {match.group(2)}, which does not exist")
-            elif target in stale_pages or path in stale_pages:
-                continue
-            elif anchor and f'<a id="{anchor}"></a>' not in (ROOT / target).read_text():
-                problems.append(f"{path} links to {match.group(2)}, which has no such anchor")
-    return problems
+def link_problems() -> list[str]:
+    """Check actual present links and anchors, including stale and obsolete translations."""
+    return lifecycle.link_problems()
 
 
 def untranslated_pages() -> list[str]:
     """Translations that kept a heading, link text, alt text or table cell in English."""
     problems = []
-    for source in SOURCES:
+    for source in sources():
         for lang in LANGUAGES:
             path = ROOT / target_path(lang.code, source)
             if not path.is_file():
@@ -525,14 +501,13 @@ class TranslationDiffers(Exception):
 
 @dataclass
 class Spend:
-    """What a run has spent, shared by its workers; `stopped` tells them to make no more calls."""
+    """One cumulative usage cap across every selected page and language."""
 
     model: str
     cap_usd: float
     input_tokens: int = 0
     output_tokens: int = 0
-    stopped: threading.Event = field(default_factory=threading.Event, repr=False)
-    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    stopped: bool = False
 
     @property
     def usd(self) -> float:
@@ -540,18 +515,16 @@ class Spend:
         return (self.input_tokens * price_in + self.output_tokens * price_out) / 1e6
 
     def before_call(self) -> None:
-        if self.stopped.is_set():
-            raise SystemExit("stopped: another page failed or the cap was reached")
-        with self.lock:
-            spent = self.usd
+        if self.stopped:
+            raise SystemExit("stopped: the cap was reached")
+        spent = self.usd
         if spent > self.cap_usd:
-            self.stopped.set()
+            self.stopped = True
             raise SystemExit(f"spent ${spent:.2f}, over LOOM_I18N_MAX_USD=${self.cap_usd:.2f}")
 
     def add(self, usage: dict[str, int]) -> None:
-        with self.lock:
-            self.input_tokens += usage.get("input_tokens", 0)
-            self.output_tokens += usage.get("output_tokens", 0)
+        self.input_tokens += usage.get("input_tokens", 0)
+        self.output_tokens += usage.get("output_tokens", 0)
 
 
 def request_chars(source: str, lang: Language) -> int:
@@ -699,10 +672,9 @@ def translate_page(source: str, lang: Language, client: Any, spend: Spend) -> No
     kept = labels("\n".join(requests)) & labels(body)
     if kept:
         raise TranslationDiffers(f"keeps in English: {sorted(kept)[:4]}")
-    path = ROOT / target_path(lang.code, source)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render(source, lang, body, line, spend.model))
-    print(f"{path.relative_to(ROOT)}  (${spend.usd:.2f} so far)", flush=True)
+    path = target_path(lang.code, source)
+    lifecycle.stage(path, render(source, lang, body, line, spend.model))
+    print(f"verified {path}  (${spend.usd:.2f} so far)", flush=True)
 
 
 def write_language_lines() -> None:
@@ -719,82 +691,112 @@ def write_language_lines() -> None:
 
 
 def check(skip_stale: bool = False) -> int:
-    require_sources()
     model = os.environ.get("LOOM_I18N_MODEL", DEFAULT_MODEL)
     pending = stale(model=model)
-    stale_lines = [
-        f"{target_path(lang.code, source)} is missing, or older than {source}, the model or "
-        "the banner"
-        for source, lang in pending
-    ]
-    problems = [] if skip_stale else stale_lines
-    problems += [f"{path} is translated from no page in SOURCES" for path in orphans()]
-    # After a partial run, a page that failed keeps its old anchors until it is translated.
-    waiting = (
-        frozenset(target_path(lang.code, s) for s, lang in pending) if skip_stale else frozenset()
-    )
-    problems += link_problems(waiting)
-    problems += untranslated_pages()
-    problems += [
-        f"{path}'s language line differs from the generated one" for path in language_lines_differ()
-    ]
+    coverage = [f"{target_path(lang.code, source)} is missing or stale" for source, lang in pending]
+    obsolete = orphans()
+    coverage += [f"{path} is outside the current source inventory" for path in obsolete]
+    problems = lifecycle.present_problems()
+    if not skip_stale:
+        problems += coverage
+    invalid = len(problems) if skip_stale else len(problems) - len(coverage)
+    print(f"pending={len(pending)} obsolete={len(obsolete)} invalid={invalid}")
     for problem in problems:
         print(problem)
     return 1 if problems else 0
 
 
-# Pages translated at once; each page's requests still go one after another.
-WORKERS = 6
-
-
-def update(every: bool = False, codes: list[str] | None = None) -> int:
-    require_sources()
+def batch(
+    every: bool, codes: list[str] | None, cap: float
+) -> tuple[list[tuple[str, Language]], int]:
+    """Select a stable whole-page batch; stale present pages precede missing pages."""
+    if not math.isfinite(cap) or cap < 0:
+        raise SystemExit("LOOM_I18N_MAX_USD must be finite and nonnegative")
     model = os.environ.get("LOOM_I18N_MODEL", DEFAULT_MODEL)
     if model not in PRICES:
         raise SystemExit(
             f"LOOM_I18N_MODEL={model!r} has no price in PRICES; the cost cap needs one"
         )
-    spend = Spend(model, float(os.environ.get("LOOM_I18N_MAX_USD", "5")))
     languages = tuple(lg for lg in LANGUAGES if not codes or lg.code in codes)
-    write_language_lines()
-    work = [(s, lg) for s in SOURCES for lg in languages] if every else stale(languages, model)
-    estimate = estimate_usd(model, sum(request_chars(s, lg) for s, lg in work))
-    print(f"{len(work)} page(s) to translate with {model}, estimated at about ${estimate:.2f}")
-    if estimate > spend.cap_usd:
-        raise SystemExit(
-            f"estimate over LOOM_I18N_MAX_USD=${spend.cap_usd:.2f}; nothing translated"
+    work = [(s, lg) for s in sources() for lg in languages] if every else stale(languages, model)
+    work.sort(
+        key=lambda pair: (
+            not (ROOT / target_path(pair[1].code, pair[0])).is_file(),
+            pair[0],
+            pair[1].code,
         )
-    if work:
-        client = bedrock_client()
-        try:
-            with ThreadPoolExecutor(WORKERS) as pool:
-                futures = {
-                    pool.submit(translate_page, s, lg, client, spend): target_path(lg.code, s)
-                    for s, lg in work
-                }
-                differ: list[str] = []
-                pending = set(futures)
-                while pending:
-                    done, pending = wait(pending, return_when=FIRST_EXCEPTION)
-                    failures = [(f, f.exception()) for f in done if f.exception() is not None]
-                    differ += [
-                        f"{futures[f]}: {e}"
-                        for f, e in failures
-                        if isinstance(e, TranslationDiffers)
-                    ]
-                    fatal = [e for _, e in failures if not isinstance(e, TranslationDiffers)]
-                    if fatal:
-                        # The cap, the API or a bug: stop every worker.
-                        spend.stopped.set()
-                        pool.shutdown(cancel_futures=True)
-                        also = "".join(f"\nnot written: {d}" for d in differ)
-                        raise SystemExit(f"{fatal[0]} (pages finished so far are written){also}")
-                if differ:
-                    raise SystemExit("pages not written:\n" + "\n".join(differ))
-        finally:
-            # Printed on failure too, so a stopped run's spend is known.
-            tokens = f"{spend.input_tokens} input, {spend.output_tokens} output tokens"
-            print(f"spent: {tokens}, ${spend.usd:.2f}")
+    )
+    checkpoints = lifecycle.current_checkpoints()
+    work = [(s, lg) for s, lg in work if target_path(lg.code, s) not in checkpoints]
+    selected, cost = [], 0.0
+    for source, lang in work:
+        estimate = estimate_usd(model, request_chars(source, lang))
+        if cost + estimate <= cap and cap > 0:
+            selected.append((source, lang))
+            cost += estimate
+    return selected, len(work) - len(selected)
+
+
+def batch_reservation(every: bool = False, codes: list[str] | None = None, cap: float = 5) -> float:
+    """Book all possible calls before a batch: two verifier attempts, four API attempts.
+
+    Input bytes bound source tokens; retry input includes the generated reply and feedback.
+    The allowance is deliberately conservative and is never refunded after an uncertain call.
+    """
+    model = os.environ.get("LOOM_I18N_MODEL", DEFAULT_MODEL)
+    work, _ = batch(every, codes, cap)
+    price_in, price_out = PRICES[model]
+    total = 0.0
+    for source, lang in work:
+        system = SYSTEM.format(language=lang.english, style=lang.style)
+        for request in english_requests(prepare(source, lang)[0]):
+            size = len((system + request).encode()) + 4096
+            total += 4 * ((3 * size + 2 * MAX_TOKENS) * price_in + 2 * MAX_TOKENS * price_out) / 1e6
+    return math.ceil(total * 1e6) / 1e6
+
+
+def import_pending(ref: str) -> int:
+    return lifecycle.import_pending(ref)
+
+
+def update(every: bool = False, codes: list[str] | None = None) -> int:
+    cap = float(os.environ.get("LOOM_I18N_MAX_USD", "5"))
+    lifecycle.require_owned_outputs()
+    work, deferred = batch(every, codes, cap)
+    model = os.environ.get("LOOM_I18N_MODEL", DEFAULT_MODEL)
+    spend = Spend(model, cap)
+    written = 0
+    failed: list[str] = []
+    write_language_lines()
+    try:
+        client = bedrock_client() if work else None
+        for index, (source, lang) in enumerate(work):
+            try:
+                translate_page(source, lang, client, spend)
+                written += 1
+            except TranslationDiffers as exc:
+                failed.append(f"{target_path(lang.code, source)}: {exc}")
+            except (Exception, SystemExit) as exc:  # Report progress before refusing.
+                failed.append(f"{target_path(lang.code, source)}: {exc}")
+                deferred += len(work) - index - 1
+                raise
+    finally:
+        # Preserve verified progress even when a later page fails.
+        lifecycle.activate_ready()
+        removed, blocked = lifecycle.retire_obsolete()
+        print(f"obsolete_removed={removed} obsolete_deferred={blocked}")
+        print(
+            f"translated={written} failed={len(failed)} deferred={deferred} "
+            f"obsolete={len(orphans())}"
+        )
+        print(
+            f"spent: {spend.input_tokens} input, {spend.output_tokens} output tokens, "
+            f"${spend.usd:.2f}"
+        )
+        for failure in failed:
+            print(f"not written: {failure}")
+    if failed:
+        raise SystemExit("pages not written:\n" + "\n".join(failed))
     return 0
 
 

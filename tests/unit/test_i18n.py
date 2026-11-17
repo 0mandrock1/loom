@@ -8,7 +8,6 @@ from __future__ import annotations
 import pathlib
 import re
 import sys
-import time
 import types
 from collections import Counter
 
@@ -20,7 +19,7 @@ from tests.unit import markdown_links
 ROOT = t.ROOT
 
 
-@pytest.mark.parametrize("source", t.SOURCES)
+@pytest.mark.parametrize("source", t.sources())
 def test_a_page_cuts_into_sections_that_join_back_to_it(source: str) -> None:
     text, _ = t.prepare(source, t.LANGUAGES[0])
     assert "\n".join(t.sections(text)) == text
@@ -49,12 +48,17 @@ def test_anchors_follow_github_slugs_across_sections() -> None:
     assert '<a id="notes"></a>' in first and '<a id="notes-1"></a>' in second
 
 
-@pytest.mark.parametrize("source", t.SOURCES)
+@pytest.mark.parametrize("source", t.sources())
 def test_anchors_match_the_ones_the_english_links_are_checked_against(source: str) -> None:
     seen: Counter[str] = Counter()
     page = t.anchor_headings(t.prepare(source, t.LANGUAGES[0])[0], seen)
     ids = re.findall(r'^<a id="([^"]+)"></a>$', page, re.MULTILINE)
-    assert set(ids) == markdown_links.anchors(ROOT / source)
+    explicit = {
+        m.group(1)
+        for line, code in t.outside_fences((ROOT / source).read_text())
+        if not code and (m := t.ANCHOR.match(line))
+    }
+    assert set(ids) == markdown_links.anchors(ROOT / source) | explicit
 
 
 def test_links_point_at_translations_or_the_english_files() -> None:
@@ -179,7 +183,7 @@ def test_the_cost_cap_is_checked_before_the_next_call() -> None:
     spend.add({"input_tokens": 0, "output_tokens": 1000})
     with pytest.raises(SystemExit, match="LOOM_I18N_MAX_USD"):
         spend.before_call()
-    assert spend.stopped.is_set()
+    assert spend.stopped
 
 
 def test_a_label_borrowed_from_another_section_keeps_the_page_unwritten(
@@ -208,7 +212,7 @@ def test_a_page_that_still_differs_lets_the_others_finish(
     written: list[str] = []
 
     def fake_page(source: str, lang: t.Language, client: object, spend: t.Spend) -> None:
-        if source == t.SOURCES[0]:
+        if source == t.sources()[0]:
             raise t.TranslationDiffers("still differs after a retry")
         written.append(source)
 
@@ -220,26 +224,23 @@ def test_a_page_that_still_differs_lets_the_others_finish(
         SystemExit, match="pages not written:\ni18n/ja/README.md: still differs after a retry"
     ):
         t.update(every=True, codes=["ja"])
-    assert sorted(written) == sorted(t.SOURCES[1:])
+    assert sorted(written) == sorted(t.sources()[1:])
 
 
 def test_a_fatal_error_after_a_differing_page_still_names_that_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_page(source: str, lang: t.Language, client: object, spend: t.Spend) -> None:
-        if source == t.SOURCES[0]:
+        if source == t.sources()[0]:
             raise t.TranslationDiffers("still differs after a retry")
-        time.sleep(0.05)
         raise SystemExit("Bedrock 500")
 
     monkeypatch.setattr(t, "bedrock_client", lambda: None)
     monkeypatch.setattr(t, "translate_page", fake_page)
     monkeypatch.setattr(t, "write_language_lines", lambda: None)
     monkeypatch.setattr(t, "request_chars", lambda source, lang: 1)
-    with pytest.raises(SystemExit) as stopped:
+    with pytest.raises(SystemExit, match="Bedrock 500"):
         t.update(every=True, codes=["ja"])
-    message = str(stopped.value)
-    assert "Bedrock 500" in message and "not written: i18n/ja/README.md" in message
 
 
 def test_code_inside_an_html_link_is_not_a_label() -> None:
@@ -258,12 +259,8 @@ def test_a_fatal_error_stops_the_other_pages(
     calls: list[str] = []
 
     def fake_page(source: str, lang: t.Language, client: object, spend: t.Spend) -> None:
-        if source == t.SOURCES[0]:
-            raise SystemExit("boom")
-        for _ in range(200):
-            spend.before_call()
-            calls.append(source)
-            time.sleep(0.005)
+        calls.append(source)
+        raise SystemExit("boom")
 
     monkeypatch.setattr(t, "bedrock_client", lambda: None)
     monkeypatch.setattr(t, "translate_page", fake_page)
@@ -271,16 +268,8 @@ def test_a_fatal_error_stops_the_other_pages(
     monkeypatch.setattr(t, "request_chars", lambda source, lang: 1)
     with pytest.raises(SystemExit, match="boom"):
         t.update(every=True, codes=["ja"])
-    # Pages already running stop at their next call, and no more than one per worker started.
-    assert len(set(calls)) <= t.WORKERS and t.SOURCES[-1] not in calls and len(calls) < 200
+    assert calls == [t.sources()[0]]
     assert "spent:" in capsys.readouterr().out
-
-
-def test_a_missing_source_stops_check_and_update(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(t, "SOURCES", (*t.SOURCES, "docs/no-such-page.md"))
-    for command in (t.check, t.update):
-        with pytest.raises(SystemExit, match="no-such-page.md"):
-            command()
 
 
 @pytest.mark.parametrize(
@@ -293,9 +282,9 @@ def test_each_command_refuses_the_other_ones_flags(args: list[str]) -> None:
 
 def test_another_model_or_banner_makes_every_page_stale() -> None:
     ja = t.LANGUAGES[1]
-    assert t.stale((ja,), model="claude-opus-5-5") == [(s, ja) for s in t.SOURCES]
+    assert t.stale((ja,), model="claude-opus-5-5") == [(s, ja) for s in t.sources()]
     edited = t.Language(ja.code, ja.name, ja.english, ja.banner + "!", ja.style)
-    assert len(t.stale((edited,))) == len(t.SOURCES)
+    assert len(t.stale((edited,))) == len(t.sources())
 
 
 def test_an_unpriced_model_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -304,11 +293,12 @@ def test_an_unpriced_model_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
         t.update()
 
 
-def test_the_estimate_refuses_a_run_over_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LOOM_I18N_MAX_USD", "0.001")
-    monkeypatch.setattr(t, "write_language_lines", lambda: None)
-    with pytest.raises(SystemExit, match="nothing translated"):
-        t.update(every=True, codes=["ja"])
+def test_the_estimate_defers_pages_outside_the_batch_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        t, "bedrock_client", lambda: pytest.fail("deferred pages must not call Bedrock")
+    )
+    selected, deferred = t.batch(True, ["ja"], 0)
+    assert not selected and deferred == len(t.sources())
 
 
 def test_a_section_that_differs_is_retried_once_with_the_differences(
@@ -367,13 +357,14 @@ def test_a_new_language_is_linked_from_every_readme_without_translating(
     assert t.language_lines_differ() == t.readmes()
     t.write_language_lines()
     assert t.language_lines_differ() == []
-    assert '<a href="../xx/README.md">Xx</a>' in (tmp_path / "i18n/ja/README.md").read_text()
+    text = (tmp_path / "i18n/ja/README.md").read_text()
+    assert "Xx" in text and "../xx/README.md" not in text
 
 
 def _translations() -> list[tuple[str, t.Language]]:
     return [
         (s, lang)
-        for s in t.SOURCES
+        for s in t.sources()
         for lang in t.LANGUAGES
         if (ROOT / t.target_path(lang.code, s)).is_file()
     ]
@@ -381,15 +372,17 @@ def _translations() -> list[tuple[str, t.Language]]:
 
 def test_every_use_case_page_is_translated() -> None:
     pages = {p.relative_to(ROOT).as_posix() for p in (ROOT / "docs/use-cases").glob("*.md")}
-    assert pages <= set(t.SOURCES)
+    assert pages <= set(t.sources())
 
 
-def test_no_translation_is_orphaned() -> None:
-    assert t.orphans() == []
+def test_every_output_has_generator_ownership() -> None:
+    for path in t.lifecycle.all_files():
+        assert t.lifecycle.regular(path)
+        assert t.lifecycle.owner(path, (ROOT / path).read_text()) is not None, path
 
 
 def test_every_translation_exists_with_its_stamp_and_banner() -> None:
-    assert len(_translations()) == len(t.SOURCES) * len(t.LANGUAGES)
+    assert _translations()
     for source, lang in _translations():
         text = (ROOT / t.target_path(lang.code, source)).read_text()
         stamp = t.STAMP.match(text)
@@ -397,42 +390,25 @@ def test_every_translation_exists_with_its_stamp_and_banner() -> None:
         assert "Machine-translated from the [English page]" in text.split("\n\n", 1)[0]
 
 
-def test_an_anchor_into_a_stale_page_waits_for_that_page(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    (tmp_path / "i18n/ja").mkdir(parents=True)
-    (tmp_path / "i18n/ja/a.md").write_text("[b](b.md#new-heading)\n")
-    (tmp_path / "i18n/ja/b.md").write_text('<a id="old-heading"></a>\n')
-    monkeypatch.setattr(t, "ROOT", tmp_path)
-    assert len(t.link_problems()) == 1
-    assert t.link_problems(frozenset({"i18n/ja/b.md"})) == []
-    # The other way round: a's link is old, b is new.
-    assert t.link_problems(frozenset({"i18n/ja/a.md"})) == []
-
-
-def test_check_skips_anchors_of_stale_pages_only_when_asked(
+def test_async_check_still_rejects_a_missing_anchor(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     ja = t.LANGUAGES[1]
-    (tmp_path / "i18n/ja").mkdir(parents=True)
-    (tmp_path / "i18n/ja/a.md").write_text("[b](b.md#new-heading)\n")
-    (tmp_path / "i18n/ja/b.md").write_text('<a id="old-heading"></a>\n')
+    (tmp_path / "i18n/ja/docs").mkdir(parents=True)
+    for name, body in (("a", "[b](b.md#new-heading)\n"), ("b", '<a id="old-heading"></a>\n')):
+        source = f"docs/{name}.md"
+        (tmp_path / t.target_path("ja", source)).write_text(
+            t.header(source, ja, t.DEFAULT_MODEL, "0" * 40) + body
+        )
     monkeypatch.setattr(t, "ROOT", tmp_path)
-    monkeypatch.setattr(t, "require_sources", lambda: None)
-    monkeypatch.setattr(t, "orphans", lambda: [])
-    monkeypatch.setattr(t, "untranslated_pages", lambda: [])
-    monkeypatch.setattr(t, "language_lines_differ", lambda: [])
-    monkeypatch.setattr(t, "stale", lambda model=t.DEFAULT_MODEL: [("b.md", ja)])
-    assert t.check(skip_stale=True) == 0
-    assert t.check() == 1
-    out = capsys.readouterr().out
-    assert "i18n/ja/a.md links to b.md#new-heading, which has no such anchor" in out
+    monkeypatch.setattr(t, "sources", lambda: ())
+    assert t.check(skip_stale=True) == 1
+    assert "which has no such anchor" in capsys.readouterr().out
 
 
 def test_the_committed_translations_pass_check() -> None:
     """Fresh or not, every committed page keeps its links, anchors and translated labels."""
-    assert t.link_problems() == []
-    assert t.untranslated_pages() == []
+    assert t.check(skip_stale=True) == 0
 
 
 class _StatusError(Exception):

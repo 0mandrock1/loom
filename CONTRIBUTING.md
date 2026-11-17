@@ -144,12 +144,19 @@ An operation or field may be renamed or removed. Say so in the PR description an
 
 ## Translations
 
-`i18n/<lang>/` holds machine translations of the README, the quickstart and the use-case pages. `scripts/i18n/translate.py` writes them and `.github/workflows/i18n.yml` runs it on main after an English page changes; never edit a translation by hand.
+`i18n/<lang>/` holds machine translations of every tracked `README.md` and `docs/**/*.md`, including generated references. Edit English or its generator; never edit translations by hand. Inventory discovery includes nested additions and renames and excludes untracked or deleted files.
 
-The script calls Claude Sonnet 5.5 on Amazon Bedrock through the `anthropic` package's `AnthropicBedrock` client, which signs each request with the default AWS credential chain. To run it yourself, sign in to an AWS account where Bedrock serves the model and install the pinned client:
+English is canonical and the default. A translation language requires evidence that the relevant developer audience expects local-language technical documentation. Country, native language and developer population do not establish that need. An existing locale entry is not evidence of a requirement; review the audience's expectations before authorizing generation or extending coverage.
+
+Translation follows an English merge to main. It is asynchronous: the English PR can merge while coverage is pending. The workflow queues a bounded batch after relevant main pushes and every six hours. Changed existing translations precede missing pages. Relative links use an available translated target and anchor, otherwise the English page. A verified replacement that would break surviving links waits in `i18n/.pending/<lang>/`; later batches reuse it. Obsolete pages are removed only after surviving inbound links are repaired, and only with a matching generator stamp, language and source path. Unknown files are refused.
+
+`python -m scripts.i18n.translate check` reports every missing, stale and obsolete page. `check --skip-stale` permits pending coverage but still checks present stamps, banners, links, anchors and translated labels, plus the content invariants of current output. Ordinary PR tests follow this asynchronous contract. A changed prompt requires an explicit `update --all`; model and banner changes invalidate stamps automatically.
+
+The updater imports only validated generated blobs from `i18n/update`, preserving fresh main output. It executes no code from that branch. It dispatches hosted CI for the exact bot commit because PR events created with `GITHUB_TOKEN` do not start CI. A hosted finalizer checks the successful commit, generated diff, current main parent and repository review requirements before merging. Required human reviews remain required. After merge it explicitly dispatches the docs-site workflow; publication also requires the site's deployment configuration. A newer main commit defers merging until the producer composes another batch.
+
+The script calls Claude Sonnet 5.5 on Amazon Bedrock through `AnthropicBedrock`. Local runs also spend money and require separate authorization. For an authorized run:
 
 ```bash
-# A separate virtualenv: the lock pins versions that differ from Loom's own.
 python -m venv .venv-i18n && . .venv-i18n/bin/activate
 python -m pip install --require-hashes --no-deps --only-binary=:all: -r scripts/i18n/requirements.txt
 aws sso login
@@ -157,14 +164,16 @@ export AWS_REGION=<region>
 python -m scripts.i18n.translate update
 ```
 
-The workflow stores no credential in GitHub. Its job runs on a self-hosted runner in AWS, and the SDK signs with that runner's EC2 instance role, which may invoke the one model and nothing else. Every step of the job can use the role, so the job only runs on a push to main or a manual run on main, never on a pull request. The runner group's selected-workflow rule keeps every other workflow off the runner; the job's environment `i18n`, limited to main, records each run. While the repository variable `LOOM_I18N_RUNNER` is empty, the job is skipped.
+One batch shares an approximate USD 5 usage cap across every language. Before any workflow provider call, the updater books a conservative allowance covering every selected request, verifier retry, API retry and maximum output in the append-only `i18n/budget` branch. These reservations can greatly exceed the expected bill and are never refunded automatically, including after failures. `LOOM_I18N_TOTAL_USD` is the cumulative reservation ceiling, defaults to zero, and does not reset between runs or languages. An exhausted allowance defers work. A missing or invalid ledger refuses paid work. Raising the ceiling authorizes additional spending; a schedule cannot raise it.
 
-To turn translations on:
+The workflow stores no AWS credential in GitHub. Only main push, schedule and manual events may reach the role-bearing runner. Hosted CI and completion events cannot reach it. To activate authorized translation:
 
-1. Create the environment `i18n` with deployment branches set to `main` only (Settings → Environments).
-2. Get a runner group for this repository with "Allow public repositories" ticked (a group serves only private repositories otherwise, and the job would wait in the queue) and access limited to the selected workflow `ClickHouse/loom/.github/workflows/i18n.yml@refs/heads/main` (runner group settings → Workflow access → Selected workflows), so no other workflow and no fork's pull request can schedule a job on it. The runner image needs an OS that `actions/setup-python` supports, `git`, `bash` and the `gh` CLI.
-3. Give the runners' instance role the policy below. In the account, accept Bedrock's model access for Claude Sonnet 5.5 once: the first call can otherwise fail with an access-denied error about `aws-marketplace:Subscribe`, and the role is not granted those Marketplace actions.
-4. Set the repository variable `LOOM_I18N_RUNNER` to the runner group's labels as a JSON list, for example `["self-hosted","<label>"]`.
+1. Create environment `i18n` with deployment branches limited to `main`.
+2. Configure a runner group for this repository with public-repository access and selected-workflow access limited to `ClickHouse/loom/.github/workflows/i18n.yml@refs/heads/main`. Its image needs a supported OS, `git`, `bash` and `gh`.
+3. Give its instance role the policy below and accept the model's Bedrock access once. The role has no Marketplace subscription permissions.
+4. Initialize the ledger once with an authorized repository writer: `python -m scripts.i18n.automation init-budget`. Preserve this branch; never recreate it to reset usage.
+5. After approving the language selection, set `LOOM_I18N_TOTAL_USD` to an explicitly approved cumulative allowance and `LOOM_I18N_RUNNER` to the registered runner labels as a JSON list. Empty runner labels skip the updater; a zero allowance permits only free maintenance.
+6. Allow Actions to create pull requests and retain branch protections and review requirements. Set the site's deployment configuration as described in the docs-site workflow. Hosted validation and merge need repository contents, pull-request and Actions write permissions; the instance role still grants only the model invocation.
 
 The job calls the model's global inference profile from the runner's `AWS_REGION`, else its `AWS_DEFAULT_REGION`, else `us-east-1`. Bedrock authorizes a call through a global profile on three resources: the profile, the model in the calling region, and the model with no region. The policy names each; `<region>` is the calling region:
 
