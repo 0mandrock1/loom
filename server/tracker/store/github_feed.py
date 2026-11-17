@@ -98,7 +98,7 @@ def item_view(table: str) -> str:
     raw = "feed_issues" if table == "github_issues" else "feed_prs"
     kind = "github_issue" if table == "github_issues" else "github_pr"
     private = "greatest(r.is_private, i.is_private, ifNull(c.is_private, 0))"
-    ident = uuid5_sql(f"concat('{kind}', if({private}, '_private', ''), ':', i.source_id)")
+    ident = uuid5_sql(f"concat('{kind}', if(({private}) != 0, '_private', ''), ':', i.source_id)")
     columns = []
     for column in COLUMNS_READ[table]:
         expression = f"i.`{column}`"
