@@ -768,8 +768,7 @@ export async function requestJson(
 
 function opUrl(opName, serverUrl) {
   const configured = resolveServerUrl();
-  if (claudeEntryInUse() && serverUrl && normalizeUrl(serverUrl) !== normalizeUrl(configured))
-    throw new EndpointError();
+  if (claudeEntryInUse() && serverUrl && serverUrl !== configured) throw new EndpointError();
   return `${serverUrl || configured}/v1/${opName}`;
 }
 

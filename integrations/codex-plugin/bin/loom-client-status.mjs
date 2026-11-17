@@ -9,7 +9,6 @@ import {
   loomConfig,
   loomConfigPath,
   loomTokenPath,
-  normalizeUrl,
   requestJson,
   resolveScope,
   resolveServerUrl,
@@ -93,7 +92,7 @@ export async function clientStatus({
     // A config token saved for another server is what the MCP header helper
     // sends to this one; the hooks may hold a different token.
     const source = tokenSourceName(tokenKind);
-    const saved = normalizeUrl(configUrl);
+    const saved = String(configUrl || "").trim();
     const other = tokenKind === "config" && saved && !sameServer(saved, serverUrl);
     add(
       "source",

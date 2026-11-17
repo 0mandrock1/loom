@@ -11,7 +11,7 @@
 // waits briefly for that file. Writes are idempotent and private; an invalid
 // endpoint refuses network work with an actionable configuration notice.
 
-import { claudeEndpoint, EndpointError } from "./mcp-endpoint.mjs";
+import { claudeEndpoint, EndpointError, parseEndpoint } from "./mcp-endpoint.mjs";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -50,13 +50,13 @@ export function entryIsFixed() {
 /** Whether two control-plane bases match, including proxy prefixes, with the
  *  loopback spellings folded. Unparsable values compare as strings. */
 export function sameServer(a, b) {
-  const origin = (u) => {
-    const parsed = new URL(normalizeUrl(u));
+  const base = (u) => {
+    const parsed = new URL(parseEndpoint(`${String(u || "").trim()}/mcp`).url);
     const host = parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]" ? "localhost" : parsed.hostname;
-    return `${parsed.protocol}//${host}${parsed.port ? `:${parsed.port}` : ""}${parsed.pathname.replace(/\/+$/, "")}`;
+    return `${parsed.protocol}//${host}${parsed.port ? `:${parsed.port}` : ""}${parsed.pathname.slice(0, -4)}`;
   };
   try {
-    return origin(a) === origin(b);
+    return base(a) === base(b);
   } catch {
     return normalizeUrl(a) === normalizeUrl(b);
   }
@@ -122,7 +122,7 @@ export function planMaterialize(env, { configExists, configToken, tokenFileExist
  *  server. Pure. */
 export function installTokenNotice(plan, env = process.env) {
   if (String(env.LOOM_API_KEY || "").trim() || plan.write || !plan.configHasToken) return "";
-  const saved = normalizeUrl(plan.configUrl);
+  const saved = String(plan.configUrl || "").trim();
   const inUse = mcpServerUrl(env);
   if (!saved || sameServer(saved, inUse)) return "";
   const where = `Loom: ${loomConfigPath(env)} holds a token saved for ${saved}, which the loom MCP tools send to `;
@@ -145,7 +145,7 @@ export function applyPluginOptions(env = process.env, paths = {}) {
     configToken: existing.token,
     tokenFileExists: existsSync(tokenPath),
   });
-  plan.configUrl = normalizeUrl(existing.url);
+  plan.configUrl = String(existing.url || "").trim();
   plan.configHasToken = Boolean(String(existing.token || "").trim());
   if (!plan.write) return plan;
   try {

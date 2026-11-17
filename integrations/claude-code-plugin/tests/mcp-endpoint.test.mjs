@@ -59,7 +59,14 @@ test("the installed endpoint wins over the environment's default base", () => {
     "https://opt/proxy",
   );
   assert.equal(claudeEndpoint({ CLAUDE_CODE_MCP_SERVER_URL: "https://helper/mcp" }).base, "https://helper");
-  assert.equal(claudeEndpoint({ LOOM_BASE_URL: "https://env/proxy/" }).url, "https://env/proxy/mcp?toolset=coding");
+});
+
+test("the environment default preserves the manifest's literal proxy path", () => {
+  for (const base of ["https://env/proxy", "https://env/proxy/", "https://env/proxy//"]) {
+    const endpoint = claudeEndpoint({ LOOM_BASE_URL: base });
+    assert.equal(endpoint.url, `${base}/mcp?toolset=coding`);
+    assert.equal(endpoint.base, base);
+  }
 });
 
 test("an accepted endpoint can send to its own derived base without changing the request path", async (t) => {
@@ -134,6 +141,8 @@ test("an endpoint with a trailing-slash base still rejects other destinations be
     "https://other.example/proxy/",
     "https://loom.example/other/",
     "https://loom.example/proxy/other/",
+    "https://loom.example/proxy",
+    "https://loom.example/proxy//",
   ]) {
     await assert.rejects(
       postBoundedResult("context.pack", {}, { token: "dummy", serverUrl, timeoutMs: 100 }),

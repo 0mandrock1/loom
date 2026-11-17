@@ -47,6 +47,6 @@ export function claudeEndpoint(env = process.env) {
   return parseEndpoint(
     env.CLAUDE_PLUGIN_OPTION_SERVER_URL ??
       env.CLAUDE_CODE_MCP_SERVER_URL ??
-      `${String(env.LOOM_BASE_URL || "http://localhost:7777").replace(/\/+$/, "")}/mcp?toolset=coding`,
+      `${env.LOOM_BASE_URL || "http://localhost:7777"}/mcp?toolset=coding`,
   );
 }
