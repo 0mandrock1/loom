@@ -453,7 +453,7 @@ async def _maybe_route_to_synthesize(input: MemoryAskInput) -> MemoryAskOutput |
             results=[],
             synth_model=synth.model,
             route_tier="strong",
-            route_reason=ask_routing.route_reason(docs),
+            route_reason=ask_routing.route_reason(synth.documents),
         )
     except Exception as e:  # noqa: BLE001 - the memory path is always available
         log.debug("memory.ask synthesize route skipped: %s", e)

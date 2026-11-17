@@ -105,6 +105,18 @@ class Corpus:
 
 
 @dataclass(frozen=True)
+class CheckedLLM:
+    client: Any
+    proofs: Proofs
+
+    async def complete(self, *args: Any, **kwargs: Any) -> Any:
+        await self.proofs.check()
+        result = await self.client.complete(*args, **kwargs)
+        await self.proofs.check()
+        return result
+
+
+@dataclass(frozen=True)
 class _Document:
     chunks: list[CorpusChunk]
     mirrored: Admitted | None = None

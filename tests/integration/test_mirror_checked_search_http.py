@@ -27,10 +27,14 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
     from server.knowledge.domain.access_list import AccessList, to_json
     from server.knowledge.domain.sources import KnowledgeSource
     from server.knowledge.store import blobs, mirrors, pg_documents, sources
+    from server.llm.client import get_llm_client_for_model
     from server.settings import settings
 
     embedder = get_embedder()
     assert embedder.model_name.startswith("fake-"), "This fixture uses only fake embeddings"
+    assert not settings.llm_fallback_model.strip(), "This fixture uses no fallback provider"
+    synthesis_client = get_llm_client_for_model(settings.memory_ask_synth_model.strip())
+    assert synthesis_client.provider == "fake", "This fixture uses only fake synthesis"
     org, namespace, mirror = unique_org("checked-search"), "team", new_mirror_name()
     source = str(uuid4())
     query = "markedsearchcanary"
@@ -132,6 +136,20 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert response.status_code == 200, response.text
             return response.json()
 
+        async def synthesize(token):
+            response = await client.post(
+                "/v1/knowledge.synthesize",
+                json={
+                    "org": org,
+                    "namespace": namespace,
+                    "source_uris": [public_uri],
+                    "task": "Summarize this document",
+                },
+                headers={"Authorization": "Bearer " + token},
+            )
+            assert response.status_code == 200, response.text
+            return response.json()
+
         async def outline(token):
             response = await client.post(
                 "/v1/knowledge.outline",
@@ -195,6 +213,8 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert [r["source_uri"] for r in ordinary_list["rows"]] == ["ordinary:visible"]
             missing_get = await get(outsider)
             assert not missing_get["found"]
+            missing_synthesis = await synthesize(outsider)
+            assert missing_synthesis["abstain"] and missing_synthesis["documents"] == 0
             missing_outline = await outline(outsider)
             assert not missing_outline["found"]
             missing_download = await download(outsider)
@@ -235,6 +255,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert await search(owner_bot) == baseline
             assert await listing(outsider) == await listing(owner_bot) == ordinary_list
             assert await get(outsider) == await get(owner_bot) == missing_get
+            assert await synthesize(outsider) == await synthesize(owner_bot) == missing_synthesis
             assert await outline(outsider) == await outline(owner_bot) == missing_outline
             assert await download(outsider) == await download(owner_bot) == missing_download
             allowed = await search(owner)
@@ -247,6 +268,10 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert document["source_uri"] == public_uri
             assert not any(tag.startswith("source-id:") for tag in document["tags"])
             assert "access_json" not in document
+            synthesis = await synthesize(owner)
+            assert synthesis["documents"] == synthesis["windows"] == 1
+            assert synthesis["chunks_read"] == 2
+            assert not synthesis["abstain"] and source not in json.dumps(synthesis)
             listed = await listing(owner)
             assert len(listed["rows"]) == 2 and listed["next_cursor"] is None
             [listed_copy] = [item for item in listed["rows"] if item["source_uri"] == public_uri]
@@ -316,6 +341,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert await search(owner) == baseline
             assert await listing(owner) == ordinary_list
             assert await get(owner) == missing_get
+            assert await synthesize(owner) == missing_synthesis
             assert await outline(owner) == missing_outline
             assert await download(owner) == missing_download
             widened = {**row, "version": 13, "access_json": to_json(AccessList(anyone=True))}
@@ -325,6 +351,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
                 await ch.insert("loom.documents", [widened])
             assert public_uri in [r["source_uri"] for r in (await search(owner_bot))["results"]]
             assert (await get(owner_bot))["found"]
+            assert (await synthesize(owner_bot))["documents"] == 1
             assert (await download(owner_bot))[:2] == (200, original)
             assert (await outline(owner_bot))["section_content"] == "Unembedded section."
             assert len((await listing(owner_bot))["rows"]) == 2
@@ -332,6 +359,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert await listing(owner) == ordinary_list
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
+            assert await synthesize(owner) == missing_synthesis
             assert await outline(owner) == missing_outline
             assert await download(owner) == missing_download
             await sources.insert_source(registration)
@@ -341,6 +369,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert await listing(owner) == ordinary_list
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
+            assert await synthesize(owner) == missing_synthesis
             assert await outline(owner) == missing_outline
             assert await download(owner) == missing_download
         finally:

@@ -139,3 +139,28 @@ async def test_handler_falls_through_when_synthesis_abstains(monkeypatch):
     monkeypatch.setattr(ksyn, "handle_knowledge_synthesize", fake_synth)
     inp = MemoryAskInput(org="o", namespace="n", query="overview of the report")
     assert await h._maybe_route_to_synthesize(inp) is None
+
+
+@pytest.mark.asyncio
+async def test_route_count_only_names_documents_the_synthesis_actually_read(monkeypatch):
+    import server.knowledge.app.knowledge_search as search
+    import server.knowledge.app.synthesize as synthesize
+    from server.knowledge.api.models_knowledge import KnowledgeSynthesizeOutput
+    from server.memory.api.models_ask import MemoryAskInput
+    from server.memory.app.ask import handler
+
+    async def find(_input):
+        return SimpleNamespace(results=_hits("a", "a", "b", "b", "c", "d"))
+
+    async def synthesize_one(input):
+        assert input.source_uris == ["a", "b"]
+        return KnowledgeSynthesizeOutput(
+            answer="One retained document", documents=1, windows=1, chunks_read=1, reduce_rounds=1
+        )
+
+    monkeypatch.setattr(search, "handle_knowledge_search", find)
+    monkeypatch.setattr(synthesize, "handle_knowledge_synthesize", synthesize_one)
+    result = await handler._maybe_route_to_synthesize(
+        MemoryAskInput(org="o", namespace="n", query="summarize these reports")
+    )
+    assert result is not None and result.route_reason == "knowledge_synthesize:1_docs"
