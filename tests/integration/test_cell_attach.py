@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
+import sys
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import httpx
@@ -29,12 +31,13 @@ from server.cli import cell as cell_cli
 from server.cli import cell_attach, cell_attach_pg, cell_prepare
 from server.cli.cell_ch import Refused
 from server.core import cell, cell_probe, cell_triggers, instances, pg
-from server.core.ch import get_client
+from server.core import ch as ch_core
 from server.core.schema import pg_migrate
 from server.router import app as router_app
 from server.router import directory
 from server.settings import settings
 from tests.integration._pg_database import create_database, drop_database
+from tests.integration._resources import ch_client_from_env
 from tests.unit.cell_control_owner import owner as _owner
 
 OPERATOR = "lco_" + "2" * 128
@@ -71,8 +74,67 @@ async def _admin(sql: str, *args: Any) -> Any:
         await conn.close()
 
 
+@pytest.fixture(scope="module")
+def cell_clickhouse_databases() -> Iterator[tuple[str, str]]:
+    """Migrate one owned pair; no authority write can replace the suite server's row."""
+    from server.core.schema import migrate
+
+    for name in ("LOOM_PG_DSN", "LOOM_ROUTER_PG_DSN", "LOOM_CH_HOST"):
+        os.environ.get(name) or pytest.skip(f"{name} not set")
+    suffix = uuid.uuid4().hex
+    names = (f"loom_it_attach_{suffix}", f"loom_it_attacht_{suffix}")
+    created: list[str] = []
+    admin = ch_client_from_env(database="")
+    error: BaseException | None = None
+    try:
+        for name in names:
+            admin.command(f"CREATE DATABASE {name}")
+            created.append(name)
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(settings, "ch_database", names[0])
+            patch.setattr(settings, "ch_telemetry_database", names[1])
+            normal_client = migrate.client
+            bootstrap = normal_client()
+            patch.setattr(
+                migrate, "client", lambda **kwargs: normal_client(**kwargs) if kwargs else bootstrap
+            )
+            try:
+                assert migrate.main([]) == 0
+            finally:
+                if sys.exception() is None:
+                    bootstrap.close()
+                else:
+                    with contextlib.suppress(Exception):
+                        bootstrap.close()
+        admin.close()
+        admin = None
+        yield names
+    except BaseException as caught:  # noqa: BLE001 — exact owned cleanup retains the first failure.
+        error = caught
+    finally:
+        if admin is None:
+            try:
+                admin = ch_client_from_env(database="")
+            except BaseException as caught:  # noqa: BLE001 — cleanup cannot replace the first failure.
+                error = error or caught
+        if admin is not None:
+            for name in reversed(created):
+                try:
+                    admin.command(f"DROP DATABASE {name} SYNC")
+                except BaseException as caught:  # noqa: BLE001 — attempt every exact owned cleanup.
+                    error = error or caught
+            try:
+                admin.close()
+            except BaseException as caught:  # noqa: BLE001 — close cannot replace the first failure.
+                error = error or caught
+        if error is not None:
+            raise error
+
+
 @pytest.fixture
-async def cell_stores(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[dict[str, Any]]:
+async def cell_stores(
+    monkeypatch: pytest.MonkeyPatch, cell_clickhouse_databases: tuple[str, str]
+) -> AsyncIterator[dict[str, Any]]:
     cell_dsn = os.environ.get("LOOM_PG_DSN") or pytest.skip("LOOM_PG_DSN not set")
     router_dsn = os.environ.get("LOOM_ROUTER_PG_DSN") or pytest.skip("LOOM_ROUTER_PG_DSN not set")
     os.environ.get("LOOM_CH_HOST") or pytest.skip("LOOM_CH_HOST not set")
@@ -92,6 +154,8 @@ async def cell_stores(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[dict[str
         "router_operator_sha256": hashlib.sha256(OPERATOR.encode()).hexdigest(),
         "router_operator_token": OPERATOR,
         "ch_cluster": "",
+        "ch_database": cell_clickhouse_databases[0],
+        "ch_telemetry_database": cell_clickhouse_databases[1],
         "public_base_url": f"https://{HOST}",
         "oauth_issuer": "",
     }.items():
@@ -100,7 +164,8 @@ async def cell_stores(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[dict[str
     monkeypatch.setattr(directory, "_pool", None)
     # A step's poll interval and the waits stay short.
     monkeypatch.setattr(cell_attach_pg, "POLL_S", 0.2)
-    ch = get_client()
+    ch = ch_core.CHClient()
+    monkeypatch.setattr(ch_core, "_ch", ch)
     await ch.connect()
     ids: list[str] = []
     real_live, real_recent = instances.read_live, instances.read_recent
@@ -115,7 +180,7 @@ async def cell_stores(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[dict[str
         rows = await real_recent(ch, window_s=window_s, since=since)
         return [r for r in rows if r["instance_id"] in ids]
 
-    # The integration server shares ClickHouse and reports its own process heartbeats.
+    # These assertions inspect only the heartbeat identities created by this fixture.
     monkeypatch.setattr(instances, "read_live", read_live)
     monkeypatch.setattr(instances, "read_recent", read_recent)
     try:
@@ -763,6 +828,23 @@ async def test_doctor_reads_smallest_first_and_leaves_the_largest_unchecked(
         "INSERT INTO loom.it_large SELECT $1 || g FROM generate_series(1, 20000) g", tag + "l"
     )
     await pg.execute("ANALYZE loom.it_small, loom.it_large")
+    # This ordering check owns two Postgres tables; shared ClickHouse logs keep growing.
+    monkeypatch.setattr(
+        cell_triggers,
+        "ORG_TABLES",
+        "SELECT relname FROM pg_class WHERE oid IN "
+        "('loom.it_small'::regclass, 'loom.it_large'::regclass)",
+    )
+
+    async def clickhouse_inventory(*_args: Any) -> tuple[list[Any], list[Any]]:
+        return [], []
+
+    monkeypatch.setattr(cell_scan, "list_clickhouse", clickhouse_inventory)
+    clock = [0.0]
+    real_budget = cell_scan.Budget
+    monkeypatch.setattr(
+        cell_scan, "Budget", lambda seconds: real_budget(seconds, clock=lambda: clock[0])
+    )
     # The budget runs out on the largest table, as it does on a real cell when that table's
     # read is what is too slow: every smaller one was read first.
     real, read = cell_scan.pg_orgs, []
@@ -770,12 +852,13 @@ async def test_doctor_reads_smallest_first_and_leaves_the_largest_unchecked(
     async def pg_orgs(table: str, budget: Any) -> list[str]:
         read.append(table)
         if table == "loom.it_large":
-            await asyncio.sleep(budget.left() + 0.1)
+            clock[0] += budget.left() + 0.1
+            budget.require(table)
         return await real(table, budget)
 
     monkeypatch.setattr(cell_scan, "pg_orgs", pg_orgs)
     lines = {n: (g, d) for n, g, d in await doctor_cell._stray_reads(stores["ch"], 3)}
-    assert read[-1] == "loom.it_large" and "loom.it_small" in read
+    assert read == ["loom.it_small", "loom.it_large"]
     assert tag + "small" in lines["cell_stray_orgs"][1]
     grade, detail = lines["cell_stray_orgs_unchecked"]
     assert grade == "WARN" and detail.endswith(": loom.it_large")

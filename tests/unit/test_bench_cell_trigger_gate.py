@@ -958,6 +958,84 @@ async def test_composed_stored_verification_compares_authority_projection_vector
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault", ["", "memory_key", "value", "version", "content_sha256", "status"]
+)
+async def test_api_authority_failure_names_only_the_failed_field(monkeypatch, fault):
+    import logging
+
+    import server.embedding
+    from server.core.polled_copy import PolledCopy
+    from server.embedding.fake import FakeNGramEmbedder
+    from server.llm import customer
+    from server.memory.store import pg_memory
+
+    monkeypatch.setattr(
+        customer,
+        "_switch",
+        PolledCopy("switch", AsyncMock(return_value=frozenset()), logging.getLogger(__name__)),
+    )
+    monkeypatch.setattr(server.embedding, "get_embedder", lambda: FakeNGramEmbedder(dim=16))
+    block = await gate._build_block(args(), 1)
+    row, audit = block.rows[0], block.audits[0]
+    expected = gate.RequestRow(
+        str(row["memory_key"]),
+        str(row["memory_id"]),
+        row["version"],
+        row["content_sha256"],
+        1.0,
+        True,
+        "derived_ready",
+    )
+    head = dict(row)
+    if fault:
+        head[fault] = {
+            "memory_key": "changed-key",
+            "value": json.dumps("changed-value"),
+            "version": row["version"] + 1,
+            "content_sha256": "0" * 64,
+            "status": "conflicted",
+        }[fault]
+    stored = json.dumps(pg_memory.encode_row(head))
+    conn = SimpleNamespace(
+        fetch=AsyncMock(
+            return_value=[
+                {
+                    "head": stored,
+                    "revision": stored,
+                    "audit": json.dumps(pg_memory.encode_audit(audit)),
+                    "seq": 1,
+                    "targets": 0,
+                    "attempts": 0,
+                    "last_error": "",
+                }
+            ]
+        ),
+        fetchrow=AsyncMock(return_value={"pending": 0, "audits": 0, "errors": 0}),
+    )
+    document = await gate._expected_document(args(), row)
+    for field in ("embedding", "memory_key_embedding"):
+        document[field] = stored_bfloat16(document[field])
+
+    async def query(sql, params):
+        if "FROM loom.memory FINAL" in sql:
+            return [row]
+        if "FROM loom.memory_embeddings FINAL" in sql:
+            return [document]
+        if "FROM loom.audit_log" in sql:
+            return [audit]
+        raise AssertionError(sql)
+
+    ch = SimpleNamespace(query_all=query)
+    if fault:
+        with pytest.raises(gate.Invalid) as raised:
+            await gate._verify(conn, ch, args(), [expected])
+        assert str(raised.value) == "authority API " + fault
+    else:
+        await gate._verify(conn, ch, args(), [expected])
+
+
+@pytest.mark.asyncio
 async def test_real_customer_policy_can_refuse_expected_vectors_without_bypass(monkeypatch):
     import logging
 

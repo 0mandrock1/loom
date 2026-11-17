@@ -672,7 +672,8 @@ async def test_a_dropped_guard_function_is_named_in_any_state_and_fails_an_enfor
         await conn.execute(f"DROP FUNCTION {cell_triggers.TENANCY_FUNCTION}()")
         if state == "enforced":
             with pytest.raises(asyncpg.exceptions.UndefinedFunctionError):
-                await cell_triggers.ensure(conn)
+                async with conn.transaction():
+                    await cell_triggers.ensure(conn)
         defects = {(d.kind, d.text) for d in await cell_triggers.missing(conn)}
         assert ("function", "loom.tenancy_refuse_unmarked() is absent") in defects
         if state == "enforced":  # the failed boot created no guard

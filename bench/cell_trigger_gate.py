@@ -1316,14 +1316,14 @@ async def _verify(
                 )
             else:
                 key = str(expected["key"])
+                _require(head["memory_key"] == key, "authority API memory_key")
+                _require(json.loads(head["value"]) == _payload(key), "authority API value")
+                _require(head["version"] == expected["version"], "authority API version")
                 _require(
-                    head["memory_key"] == key
-                    and json.loads(head["value"]) == _payload(key)
-                    and head["version"] == expected["version"]
-                    and head["content_sha256"] == expected["content_sha256"]
-                    and head["status"] == "active",
-                    "authority API payload/version",
+                    head["content_sha256"] == expected["content_sha256"],
+                    "authority API content_sha256",
                 )
+                _require(head["status"] == "active", "authority API status")
             _compare(head, projections[id], tuple(head), "full memory projection")
             key = str(head["memory_key"])
             _require(key in documents, "search document identity")
