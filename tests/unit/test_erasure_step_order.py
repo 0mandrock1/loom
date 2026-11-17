@@ -624,6 +624,7 @@ async def test_namespace_saga_trace(
 ) -> None:
     want = [
         _SOURCES_RETIRE,
+        _push_delete(1 if scope_type == "namespace" else 2),
         (
             "query_history_sources.delete",
             (
@@ -632,7 +633,6 @@ async def test_namespace_saga_trace(
                 (D, "loom._migration_lock"),
             ),
         ),
-        _push_delete(1 if scope_type == "namespace" else 2),
         *_with_tail(NS_TRACE, backends),
     ]
     assert await run(scope_type, scope_value) == want
@@ -645,6 +645,7 @@ async def test_namespace_purge_saga_trace(run: Any, external: bool) -> None:
     got = await run("namespace_list", _ns_list(purge=True, external=external))
     assert got == [
         _SOURCES_RETIRE,
+        _push_delete(2),
         (
             "query_history_sources.delete",
             (
@@ -653,7 +654,6 @@ async def test_namespace_purge_saga_trace(run: Any, external: bool) -> None:
                 (D, "loom._migration_lock"),
             ),
         ),
-        _push_delete(2),
         *_with_tail(NS_PURGE_TRACE, NS_BACKENDS if external else []),
     ]
 
