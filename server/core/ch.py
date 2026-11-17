@@ -28,6 +28,7 @@ from clickhouse_connect.driver.asyncclient import AsyncClient
 from clickhouse_connect.driver.binding import quote_identifier
 from clickhouse_connect.driver.external import ExternalData
 
+from server.core import diagnostics
 from server.core.ch_class_settings import is_read_statement, traffic_class_settings
 from server.core.ch_errors import (
     QUANTIZED_SETTING,
@@ -514,10 +515,14 @@ def statement_settings(
     out = query_settings(extra)
     cls = cls or statement_class(sql)
     _apply_class_timeout(out, cls)
-    if settings.ch_capture_statements and not _uncaptured_var.get():
+    if (
+        settings.ch_capture_statements
+        and not _uncaptured_var.get()
+        and not diagnostics.codes_only()
+    ):
         capture_statement(sql, settings.ch_capture_statements)
     analyst = _analyst_var.get()
-    if settings.ch_log_comment_statement_digest:
+    if settings.ch_log_comment_statement_digest and not diagnostics.codes_only():
         tag = str(out.get("log_comment") or "")
         # The head would quote a secret, or a caller's SQL run as the analyst.
         shape_only = _uncaptured_var.get() or analyst is not None
@@ -581,6 +586,22 @@ def query_settings(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     key = quota_key_var.get()
     if key:
         out["quota_key"] = key
+    if diagnostics.codes_only():
+        # Query settings cover SELECTs and both ordinary and carried inserts.
+        # These override a caller's diagnostic options; functional fences remain.
+        out.update(
+            log_comment="",
+            log_queries=0,
+            log_query_threads=0,
+            log_query_views=0,
+            log_processors_profiles=0,
+            query_metric_log_interval=0,
+            query_profiler_real_time_period_ns=0,
+            query_profiler_cpu_time_period_ns=0,
+            memory_profiler_step=0,
+            memory_profiler_sample_probability=0,
+            trace_profile_events=0,
+        )
     return out
 
 

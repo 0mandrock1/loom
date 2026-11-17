@@ -276,3 +276,36 @@ def test_private_pricing_does_not_consume_an_ordinary_unpriced_model_warning(
     assert cost_accumulator._UNPRICED_SEEN == set()
     cost_accumulator.embed_cost_usd("unpriced-private-model", 17)
     assert len([r for r in caplog.records if "no price for model" in r.message]) == 1
+
+
+def test_private_sql_settings_override_logging_and_skip_capture(monkeypatch, tmp_path):
+    from server.core import ch
+
+    captures = []
+    monkeypatch.setattr(ch.settings, "ch_capture_statements", str(tmp_path / "statements.jsonl"))
+    monkeypatch.setattr(ch.settings, "ch_log_comment_statement_digest", True)
+    monkeypatch.setattr(ch, "capture_statement", lambda *args: captures.append(args))
+    token = ch.query_tag_var.set("knowledge.private synthetic-address")
+    try:
+        public = ch.statement_settings("SELECT 'synthetic-address'")
+        assert "synthetic-address" in public["log_comment"] and len(captures) == 1
+        with diagnostics.private_work():
+            private = ch.statement_settings(
+                "SELECT 'synthetic-address'", {"log_queries": 1, "log_comment": "private-title"}
+            )
+            insert = ch.query_settings({"log_queries": 1, "log_comment": "private-title"})
+        for actual in (private, insert):
+            assert actual["log_queries"] == 0
+            assert actual.get("log_comment", "") == ""
+            assert actual["log_query_views"] == 0
+            assert actual["log_processors_profiles"] == 0
+            assert actual["query_metric_log_interval"] == 0
+            assert actual["query_profiler_real_time_period_ns"] == 0
+            assert actual["query_profiler_cpu_time_period_ns"] == 0
+            assert actual["memory_profiler_step"] == 0
+            assert actual["memory_profiler_sample_probability"] == 0
+            assert actual["trace_profile_events"] == 0
+        assert len(captures) == 1
+        assert "synthetic-address" in ch.statement_settings("SELECT 1")["log_comment"]
+    finally:
+        ch.query_tag_var.reset(token)

@@ -498,6 +498,11 @@ that for collections, since one missed path leaks.
   advance a later ordinary pass's diagnostic streak. Ordinary work keeps its own cost
   accumulator; private spend is written directly under the mirror, without entering
   the shared event queue or its statistics.
+  Enablement also requires a database diagnostic policy that leaves no private query
+  text, work figures or exception payload in server logs or system log tables. A
+  deployment that pins query logging on cannot meet this requirement and must refuse
+  mirror work. Per-query controls do not prove the server's text and exception-log
+  policy; an unverified policy cannot admit a mirror.
 - **No scope reaches a mirror.** Every statement a request runs that reads a table
   holding mirror rows other than by a namespace the caller names leaves out the
   `acl-[0-9a-f]{24}` form; the workers named here are the exception, since they must
