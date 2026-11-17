@@ -1,11 +1,8 @@
 """A repository's documents.
 
-A document a repository depends on — a design note, a runbook, an internal
-spec — is a knowledge document in the repository's trunk code namespace
-(`server/code/app/repo_scope.py`). It is written there by a maintainer
-(admin on the code namespace, so `knowledge.add` passes the ordinary WRITER
-gate) and read by whoever may read the repository, so a restricted
-repository's documents are as restricted as its code.
+Repository documents live in the trunk code namespace
+(`server/code/app/repo_scope.py`). Ordinary documents inherit the repository's
+access. Mirrored documents keep their source's permissions for each reader.
 
 Under a code scope the repository's documents join `loom_search`'s knowledge
 section, and `code.context_pack` returns them as its `docs` section. Every
@@ -148,35 +145,42 @@ async def list_repo_docs(
     ns = await readable_repo_namespace(org, code_namespace)
     if not ns:
         return "", []
-    # the gate ran for this caller above; the listing itself is the same for
-    # every reader of the namespace, so it is cached briefly per namespace
-    hit = _LIST_CACHE.get((org, ns, limit))
-    if hit is not None and hit[0] > time.monotonic():
-        return ns, list(hit[1])
     try:
-        from server.knowledge.app.document_reads import handle_knowledge_list
+        from server.knowledge.app.document_reads import resolve_list, run_checked_list
+        from server.knowledge.app.source_access import prepare
+        from server.knowledge.app.source_read_results import settle
 
-        out = await asyncio.wait_for(
-            handle_knowledge_list(
+        async with asyncio.timeout(timeout_s):
+            request = await resolve_list(
                 KnowledgeListInput(
                     org=org,
                     namespace=ns,
                     limit=max(1, min(int(limit), 50)),
                     fields=["source_uri", "title", "description"],
                 )
-            ),
-            timeout=timeout_s,
-        )
-    except Exception as e:  # noqa: BLE001 — additive
-        log.info("repo docs listing on %s/%s did not answer: %s", org, ns, e)
+            )
+            plan = await prepare(org, list(request.namespaces))
+            if not plan.marked:
+                hit = _LIST_CACHE.get((org, ns, limit))
+                if hit is not None and hit[0] > time.monotonic():
+                    return ns, list(hit[1])
+            checked = await run_checked_list(request, plan)
+            await settle([checked])
+        # Check retained deadlines after the timeout context has finished its cleanup.
+        if checked.proofs is not None and not checked.proofs.fresh():
+            await checked.ordinary()
+    except Exception:  # noqa: BLE001 — a failed additive listing cannot expose private details
+        log.info("repo docs listing did not answer")
         return ns, []
     docs = [
-        RepoDoc(source_uri=r.source_uri, title=r.title, description=r.description) for r in out.rows
+        RepoDoc(source_uri=r.source_uri, title=r.title, description=r.description)
+        for r in checked.output.rows
     ]
-    _LIST_CACHE[(org, ns, limit)] = (
-        time.monotonic() + settings.knowledge_repo_docs_list_ttl_s,
-        docs,
-    )
+    if not plan.marked:
+        _LIST_CACHE[(org, ns, limit)] = (
+            time.monotonic() + settings.knowledge_repo_docs_list_ttl_s,
+            docs,
+        )
     return ns, list(docs)
 
 

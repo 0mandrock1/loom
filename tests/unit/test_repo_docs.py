@@ -233,20 +233,36 @@ def test_the_pack_section_names_each_doc_within_its_budget() -> None:
 @pytest.mark.asyncio
 async def test_the_orientation_pack_appends_the_docs_and_caches_the_listing(monkeypatch) -> None:
     from server.code.app import context as cc
+    from server.knowledge.app import document_reads, source_access
 
     listed: list[str] = []
 
-    async def handle_knowledge_list(inp):
-        listed.append(inp.namespace)
+    async def resolve(inp):
+        return document_reads.ListRequest(inp, (inp.namespace,), None)
+
+    async def prepare(org, namespaces):
+        assert namespaces == ["code-kj"]
+        return source_access.ReadPlan(org)
+
+    async def run(request, plan):
+        listed.append(request.input.namespace)
+        assert plan.org == ORG and not plan.marked
         return SimpleNamespace(
-            rows=[
-                SimpleNamespace(source_uri="doc://runbook", title="On-call runbook", description="")
-            ]
+            output=SimpleNamespace(
+                rows=[
+                    SimpleNamespace(
+                        source_uri="doc://runbook", title="On-call runbook", description=""
+                    )
+                ]
+            ),
+            marked=False,
+            lost=False,
+            proofs=None,
         )
 
-    monkeypatch.setattr(
-        "server.knowledge.app.document_reads.handle_knowledge_list", handle_knowledge_list
-    )
+    monkeypatch.setattr(document_reads, "resolve_list", resolve)
+    monkeypatch.setattr(source_access, "prepare", prepare)
+    monkeypatch.setattr(document_reads, "run_checked_list", run)
     monkeypatch.setattr("server.code.app.repo_scope.row_in_scope", _gate({"code-kj"}))
     out = await cc._with_repo_docs(ORG, "code-kj-26-7", "# map", 2500)
     assert out.startswith("# map\n\n## Repository docs (code-kj)")
