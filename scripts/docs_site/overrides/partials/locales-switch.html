@@ -8,6 +8,6 @@
   {% endfor %}
 </nav>
 {% endif %}
-{% if page and page.meta.translation_stale %}
+{% if page and page.meta.translation_stale and not page.meta.translation_obsolete %}
 <p role="note" lang="en">The English source has changed since this machine translation. Read the <a href="{{ page.meta.alternates[0].url | e }}">English page</a> for the current instructions.</p>
 {% endif %}

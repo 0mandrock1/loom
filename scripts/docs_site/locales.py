@@ -53,16 +53,21 @@ def translations(root: Path) -> dict[str, dict]:
         for path in sorted((root / "i18n" / language / "docs").rglob("*.md")):
             source = path.relative_to(root / "i18n" / language / "docs").as_posix()
             english = root / "docs" / source
-            if not english.is_file():
-                continue
             stamp = _STAMP.match(path.read_text(encoding="utf-8"))
-            content = english.read_bytes()
-            blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
+            obsolete = not english.is_file()
+            if obsolete and (stamp is None or stamp.group(1) != f"docs/{source}"):
+                continue
+            blob = None
+            if not obsolete:
+                content = english.read_bytes()
+                blob = hashlib.sha1(f"blob {len(content)}\0".encode() + content).hexdigest()
             pages[localized_uri(language, source)] = {
                 "language": language,
                 "source": source,
                 "path": str(path),
-                "stale": stamp is None
+                "obsolete": obsolete,
+                "stale": obsolete
+                or stamp is None
                 or stamp.group(1) != f"docs/{source}"
                 or stamp.group(2) != blob,
             }
@@ -93,7 +98,7 @@ def alternates(source: str, pages: dict, site_url: str) -> list[dict[str, str]]:
             "url": site_url + page_path(f"docs/{uri}"),
         }
         for uri, entry in pages.items()
-        if entry["source"] == source
+        if entry["source"] == source and not entry["obsolete"]
     ]
     if not available:
         return []
@@ -104,6 +109,9 @@ def alternates(source: str, pages: dict, site_url: str) -> list[dict[str, str]]:
 def _link_target(target: str, entry: dict, pages: dict, site_url: str, *, banner: bool) -> str:
     language = entry["language"]
     if target.startswith(BLOB + "docs/"):
+        if not banner:
+            # The producer chooses English when a translated anchor is absent.
+            return target
         source = target[len(BLOB + "docs/") :]
     elif target.startswith(BLOB + "i18n/"):
         parts = target[len(BLOB + "i18n/") :].split("/", 2)
@@ -114,20 +122,32 @@ def _link_target(target: str, entry: dict, pages: dict, site_url: str, *, banner
         source = posixpath.normpath(posixpath.join(posixpath.dirname(entry["source"]), target))
     else:
         return target
+    uri = localized_uri(language, source)
+    if not banner and uri in pages:
+        return site_url + page_path(f"docs/{uri}")
     if not (ROOT / "docs" / source).is_file():
         return target
     if not source.endswith(".md"):
         return site_url + source
-    uri = localized_uri(language, source)
     if banner or uri not in pages:
         uri = source
     return site_url + page_path(f"docs/{uri}")
 
 
 def translated_markdown(markdown: str, entry: dict, pages: dict, site_url: str) -> str:
-    # The stamped banner identifies the authoritative English source, even when a
-    # translation of its target exists. Body links prefer the matching language.
+    # Explicit English fallbacks retain the producer's anchor-safety decision.
     header, separator, body = markdown.partition("\n\n")
+    if entry.get("obsolete"):
+        if not separator:
+            header, _, body = markdown.partition("\n")
+            separator = "\n\n"
+        header = header.split("\n", 1)[0]
+        body = (
+            '<p role="note" lang="en">This machine translation is retained. '
+            "Its English source is no longer available. "
+            f'See the <a href="{html.escape(site_url, quote=True)}">English documentation</a> '
+            f"for current instructions.</p>\n\n{body}"
+        )
 
     def rewrite(text: str, *, banner: bool) -> str:
         def replace(match: re.Match[str]) -> str:
@@ -156,13 +176,14 @@ def on_page_markdown(markdown, page, config, files):
         page.meta["language_landings"] = [
             {"lang": language, "name": name, "url": config.site_url + language + "/"}
             for language, name in LANGUAGES.items()
-            if f"{language}/index.md" in pages
+            if f"{language}/index.md" in pages and not pages[f"{language}/index.md"]["obsolete"]
         ]
     if not entry:
         return markdown
     page.edit_url = None
     page.meta["title"] = page.title = page_summary(Path(entry["path"]))[0]
     page.meta["translation_stale"] = entry["stale"]
+    page.meta["translation_obsolete"] = entry["obsolete"]
     return translated_markdown(markdown, entry, pages, config.site_url)
 
 
@@ -178,7 +199,7 @@ def on_post_build(config):
         body = translated_markdown(
             Path(entry["path"]).read_text(encoding="utf-8"), entry, pages, config.site_url
         )
-        if entry["stale"]:
+        if entry["stale"] and not entry["obsolete"]:
             source_url = config.site_url + page_path(f"docs/{entry['source']}")
             body = (
                 "> The English source has changed since this machine translation. "

@@ -100,6 +100,8 @@ On the documentation site, `scripts/docs_site/hooks.py` serves each page's Markd
 
 The site also publishes the generated pages under `i18n/<language>/docs/`. Each language's use-case index lives at `/<language>/`; its other pages keep their docs-relative paths under that prefix. Each translated page links to its English source and to the available equivalent translations. A notice marks translations whose source blob differs from the current English page. Translation generation stays in `scripts/i18n/translate.py`; the site build does not call a translation provider.
 
+When an English source is removed, its stamped translations keep their routes until the producer removes the generated files. These pages show a removed-source notice instead of a link to the absent English page. Explicit English fallback links keep their repository destination because the corresponding translated page may not contain the requested anchor.
+
 The SDK op tables (`sdk/python/loom/ops.py`, `sdk/typescript/src/generated/ops.ts`) come from `scripts/codegen/sdk_py_gen.py` and `sdk_ts_gen.py` ([code generation](code-generation.md)).
 
 ## Before you push

@@ -29,15 +29,17 @@ def _translation(root: Path, language: str, source: str, blob: str) -> None:
     path.write_text(f"<!-- i18n: source=docs/{source} blob={blob} model=test -->\n# Page\n")
 
 
-def test_routes_require_existing_english_and_translation_and_report_stale_stamps(tmp_path):
+def test_routes_report_stale_stamps_and_retain_only_owned_obsolete_translations(tmp_path):
     blob = _source(tmp_path, "use-cases/index.md")
     _translation(tmp_path, "ja", "use-cases/index.md", blob)
     _translation(tmp_path, "es", "use-cases/index.md", "0" * 40)
     _translation(tmp_path, "ko", "missing.md", blob)
     pages = locales.translations(tmp_path)
-    assert set(pages) == {"ja/index.md", "es/index.md"}
+    assert set(pages) == {"ja/index.md", "es/index.md", "ko/missing.md"}
     assert pages["ja/index.md"]["stale"] is False
     assert pages["es/index.md"]["stale"] is True
+    assert pages["ko/missing.md"]["obsolete"] is True
+    assert pages["ko/missing.md"]["stale"] is True
     _source(tmp_path, "use-cases/index.md", "# Changed\n")
     assert locales.translations(tmp_path)["ja/index.md"]["stale"] is True
 
@@ -84,7 +86,7 @@ def test_localized_root_links_resolve_from_source_and_banner_stays_english(tmp_p
     assert f"[absolute]({URL}ja/use-cases/memory/)" in out
     assert f"[setup]({URL}features/setup/)" in out
     assert f"![figure]({URL}assets/figure.svg)" in out
-    assert f"[English docs]({URL}getting-started/quickstart/)" in out
+    assert f"[English docs]({locales.BLOB}docs/getting-started/quickstart.md)" in out
     assert "`[code](memory.md)`" in out and "[fenced](memory.md)" in out
     assert "[same](#anchor)" in out
 
@@ -151,15 +153,25 @@ def test_translated_heading_sets_page_and_metadata_title_after_the_source_banner
     assert page.meta["title"] == "ユースケース"
 
 
-def test_full_indexnow_submission_excludes_unpublished_orphans_but_accepts_deletion(
+def test_full_indexnow_submission_retains_owned_orphans_and_excludes_unowned_output(
     tmp_path, monkeypatch
 ):
     from scripts.docs_site import indexnow
 
     (tmp_path / "docs").mkdir()
     _translation(tmp_path, "ja", "missing.md", "0" * 40)
-    assert locales.translations(tmp_path) == {}
+    assert "ja/missing.md" in locales.translations(tmp_path)
     monkeypatch.setattr(indexnow, "DOCS", tmp_path / "docs")
+    assert indexnow.every_page() == [indexnow.SITE + "ja/missing/"]
+    assert indexnow.urls_for(["scripts/docs_site/locales.py"]) == [indexnow.SITE + "ja/missing/"]
+    (tmp_path / "i18n/ja/docs/missing.md").write_text("# Unstamped orphan\n")
+    _translation(tmp_path, "unknown", "hidden.md", "0" * 40)
+    _translation(tmp_path, ".pending/ja", "hidden.md", "0" * 40)
+    _translation(tmp_path, "es", "mismatch.md", "0" * 40)
+    (tmp_path / "i18n/es/docs/mismatch.md").write_text(
+        "<!-- i18n: source=docs/other.md blob=" + "0" * 40 + " model=test -->\n# Wrong source\n"
+    )
+    assert locales.translations(tmp_path) == {}
     assert indexnow.every_page() == []
     assert indexnow.urls_for(["scripts/docs_site/locales.py"]) == []
     assert indexnow.urls_for(["i18n/ja/docs/missing.md"]) == [indexnow.SITE + "ja/missing/"]
@@ -239,7 +251,7 @@ def test_removed_untranslated_target_resubmits_translations_with_rewritten_links
     pages = locales.translations(tmp_path)
     entry = pages["ja/index.md"]
     body = f"<!-- stamp -->\n\n[setup]({locales.BLOB}docs/features/setup.md)"
-    assert f"]({URL}features/setup/)" in locales.translated_markdown(body, entry, pages, URL)
+    assert locales.translated_markdown(body, entry, pages, URL) == body
     (tmp_path / "docs/features/setup.md").unlink()
     assert locales.translated_markdown(body, entry, pages, URL) == body
     assert indexnow.urls_for(["docs/features/setup.md"]) == sorted(
@@ -288,3 +300,76 @@ def test_markdown_aliases_warn_only_when_the_english_source_changes(
         assert (notice in text) is stale
         if stale:
             assert f"[English page]({URL}{english})" in text
+
+
+def test_explicit_english_anchor_fallback_is_not_redirected_to_a_translation(tmp_path, monkeypatch):
+    source = "use-cases/index.md"
+    blob = _source(tmp_path, source)
+    memory = _source(tmp_path, "use-cases/agent-memory.md", "# Memory\n\n## Measured\n")
+    _translation(tmp_path, "ja", source, blob)
+    _translation(tmp_path, "ja", "use-cases/agent-memory.md", memory)
+    pages = locales.translations(tmp_path)
+    monkeypatch.setattr(locales, "ROOT", tmp_path)
+    body = (
+        "<!-- stamp -->\n\n"
+        f"[measured]({locales.BLOB}docs/use-cases/agent-memory.md#measured) "
+        f"[translated]({locales.BLOB}i18n/ja/docs/use-cases/agent-memory.md)"
+    )
+    result = locales.translated_markdown(body, pages["ja/index.md"], pages, URL)
+    assert f"[measured]({locales.BLOB}docs/use-cases/agent-memory.md#measured)" in result
+    assert f"[translated]({URL}ja/use-cases/agent-memory/)" in result
+
+
+@pytest.mark.parametrize("source", ["use-cases/agent-memory.md", "use-cases/index.md"])
+def test_retained_machine_translation_survives_source_rename_until_dependency_cleanup(
+    tmp_path, monkeypatch, source
+):
+    blob = _source(tmp_path, source)
+    _translation(tmp_path, "ja", source, blob)
+    path = tmp_path / "i18n/ja/docs" / source
+    path.write_text(
+        f"<!-- i18n: source=docs/{source} blob={blob} model=test -->\n"
+        f"> Machine-translated from the [English page]({locales.BLOB}docs/{source}).\n\n"
+        '# Retained page\n\n<a id="measured"></a>\n'
+    )
+    monkeypatch.setattr(locales, "ROOT", tmp_path)
+    uri = locales.localized_uri("ja", source)
+    assert uri in locales.translations(tmp_path)
+    (tmp_path / "docs" / source).rename(tmp_path / "docs/use-cases/replacement.md")
+    pages = locales.translations(tmp_path)
+    assert uri in pages
+    assert pages[uri]["stale"] is True
+    page = SimpleNamespace(file=SimpleNamespace(src_uri=uri), meta={}, title="Page")
+    config = SimpleNamespace(
+        extra={"locale_pages": pages}, site_url=URL, site_dir=tmp_path / "site"
+    )
+    result = locales.on_page_markdown(path.read_text(), page, config, None)
+    assert page.meta["alternates"] == []
+    assert "Its English source is no longer available." in result
+    assert f"]({locales.BLOB}docs/{source})" not in result
+    assert "# Retained page" in result and 'id="measured"' in result
+    referring = {"language": "ja", "source": "use-cases/index.md"}
+    link = (
+        f"<!-- stamp -->\n\n[retained]({locales.BLOB}i18n/ja/docs/{source}#measured) "
+        f"[relative]({Path(source).name}#measured)"
+    )
+    assert (
+        locales.translated_markdown(link, referring, pages, URL).count(
+            URL + locales.page_path(f"docs/{uri}") + "#measured"
+        )
+        == 2
+    )
+    locales.on_post_build(config)
+    aliases = [
+        config.site_dir / uri,
+        config.site_dir / locales.page_path(f"docs/{uri}") / "index.html.md",
+    ]
+    if source == "use-cases/index.md":
+        aliases.append(config.site_dir / "ja.md")
+    for alias in aliases:
+        text = alias.read_text()
+        assert "Its English source is no longer available." in text
+        assert f"]({locales.BLOB}docs/{source})" not in text
+        assert "Read the [English page]" not in text
+    path.unlink()
+    assert uri not in locales.translations(tmp_path)
