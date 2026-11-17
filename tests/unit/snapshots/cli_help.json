@@ -445,7 +445,7 @@
  ],
  "loom cell limit": [
   "usage: loom cell limit [-h] --cell CELL [--closed | --open] [--placements-max N|none] [--router ROUTER]",
-  "options: -h, --help show this help message and exit --cell CELL The cell to limit --closed Refuse its new orgs --open Take new orgs again --placements-max N|none Its quota of orgs (none: no quota) --router ROUTER The router's URL (default: LOOM_CELL_ROUTER_URL)"
+  "options: -h, --help show this help message and exit --cell CELL The cell to limit --closed Refuse its new orgs --open Take new orgs again once serving --placements-max N|none Its quota of orgs (none: no quota) --router ROUTER The router's URL (default: LOOM_CELL_ROUTER_URL)"
  ],
  "loom cell which": [
   "usage: loom cell which [-h] --org ORG [--router ROUTER]",

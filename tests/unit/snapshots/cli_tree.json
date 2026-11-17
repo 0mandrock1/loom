@@ -12622,7 +12622,7 @@
            "nargs": 0,
            "type": null,
            "required": false,
-           "help": "Take new orgs again",
+           "help": "Take new orgs again once serving",
            "metavar": null
           },
           {
