@@ -861,6 +861,8 @@ _PLACEMENT_ORG_MAX = 6 * cell_state.ORG_MAX_BYTES  # not a setting: derived
 
 def _placement_refusal(cell: str, deployment_id: str, name: str, value: dict[str, Any]) -> str:
     """Reserve both live and operator placement bodies with the longest escaped org."""
+    # Native callers materialize known defaults; retain unknown stored fields too.
+    value = {**value, "fields": {**cell_state.DEFAULTS, **value["fields"]}}
     # The default encoding is the longest: spaces after separators, non-ASCII escaped.
     envelopes = (
         {"org": "", "cell": cell, "fingerprint": value},
