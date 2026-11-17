@@ -25,12 +25,12 @@ async def test_native_private_query_log_is_inaccessible_to_sql_and_analyst(
     org, namespace = unique_org("private-log"), "docs"
     token = mint_test_token(org=org, namespaces=[namespace], roles=["writer"])
     ch = get_client()
-    await ch.connect()
     set_query_tag("test.private_native_log_boundary")
     user = "it_docsrc_sql_" + uuid4().hex[:12]
     reader = None
     created = False
     try:
+        await ch.connect()
         capture = tmp_path / "statements.jsonl"
         with monkeypatch.context() as patch:
             patch.setattr(settings, "ch_capture_statements", str(capture))

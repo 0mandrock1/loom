@@ -18,11 +18,11 @@ async def test_private_costs_are_confined_to_the_mirror() -> None:
     from server.observability import cost_accumulator, events
 
     client = get_client()
-    await client.connect()
     org, mirror = unique_org("private-costs"), new_mirror_name()
     set_query_tag("test.private_source_accounting")
     before = events.get_emitter().stats()
     try:
+        await client.connect()
         with cost_accumulator.isolated_op() as outer:
             cost_accumulator.report_embed("fake-ngram-1024", 2)
             bag = request_work.begin()
