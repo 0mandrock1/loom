@@ -150,6 +150,26 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert response.status_code == 200, response.text
             return response.json()
 
+        async def inspect(token):
+            response = await client.post(
+                "/v1/knowledge.inspect",
+                json={"org": org, "namespace": namespace},
+                headers={"Authorization": "Bearer " + token},
+            )
+            assert response.status_code == 200, response.text
+            report = response.json()
+            report.pop("computed_at")
+            return report
+
+        async def source_inspect(token):
+            response = await client.post(
+                "/v1/knowledge.source.inspect",
+                json={"org": org, "namespace": namespace, "name": "checked"},
+                headers={"Authorization": "Bearer " + token},
+            )
+            assert response.status_code == 200, response.text
+            return response.json()
+
         async def outline(token):
             response = await client.post(
                 "/v1/knowledge.outline",
@@ -199,6 +219,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
                 name="checked",
                 kind="gdrive",
                 source_id=source,
+                created_at=now,
                 items=[{"type": "file", "id": "synthetic-file"}],
                 access="mirrored",
                 active=True,
@@ -211,6 +232,11 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert [r["source_uri"] for r in baseline["results"]] == ["ordinary:visible"]
             ordinary_list = await listing(outsider)
             assert [r["source_uri"] for r in ordinary_list["rows"]] == ["ordinary:visible"]
+            ordinary_inspect = await inspect(outsider)
+            assert [r["source_uri"] for r in ordinary_inspect["listed"]] == ["ordinary:visible"]
+            assert not ordinary_inspect["listed_complete"]
+            empty_source_inspect = await source_inspect(outsider)
+            assert empty_source_inspect["documents"] == []
             missing_get = await get(outsider)
             assert not missing_get["found"]
             missing_synthesis = await synthesize(outsider)
@@ -254,6 +280,12 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert await search(outsider) == baseline
             assert await search(owner_bot) == baseline
             assert await listing(outsider) == await listing(owner_bot) == ordinary_list
+            assert await inspect(outsider) == await inspect(owner_bot) == ordinary_inspect
+            assert (
+                await source_inspect(outsider)
+                == await source_inspect(owner_bot)
+                == empty_source_inspect
+            )
             assert await get(outsider) == await get(owner_bot) == missing_get
             assert await synthesize(outsider) == await synthesize(owner_bot) == missing_synthesis
             assert await outline(outsider) == await outline(owner_bot) == missing_outline
@@ -272,6 +304,25 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert synthesis["documents"] == synthesis["windows"] == 1
             assert synthesis["chunks_read"] == 2
             assert not synthesis["abstain"] and source not in json.dumps(synthesis)
+            inspection = await inspect(owner)
+            assert {doc["source_uri"] for doc in inspection["listed"]} == {
+                "ordinary:visible",
+                public_uri,
+            }
+            [inspected_copy] = [
+                doc for doc in inspection["listed"] if doc["source_uri"] == public_uri
+            ]
+            assert inspected_copy["title"] == "Checked search" and inspected_copy["version"] == 10
+            assert inspected_copy["ingestion_id"] == ""
+            for field in ("retired_versions", "chunks", "decisions", "extraction", "jobs"):
+                assert inspected_copy[field] is None
+            assert source not in json.dumps(inspected_copy)
+            assert {k: v for k, v in inspection.items() if k != "listed"} == {
+                k: v for k, v in ordinary_inspect.items() if k != "listed"
+            }
+            source_inspection = await source_inspect(owner)
+            assert [doc["source_uri"] for doc in source_inspection["documents"]] == [public_uri]
+            assert source not in json.dumps(source_inspection["documents"])
             listed = await listing(owner)
             assert len(listed["rows"]) == 2 and listed["next_cursor"] is None
             [listed_copy] = [item for item in listed["rows"] if item["source_uri"] == public_uri]
@@ -340,6 +391,8 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
                 await ch.insert("loom.documents", [narrowed])
             assert await search(owner) == baseline
             assert await listing(owner) == ordinary_list
+            assert await inspect(owner) == ordinary_inspect
+            assert await source_inspect(owner) == empty_source_inspect
             assert await get(owner) == missing_get
             assert await synthesize(owner) == missing_synthesis
             assert await outline(owner) == missing_outline
@@ -355,8 +408,11 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert (await download(owner_bot))[:2] == (200, original)
             assert (await outline(owner_bot))["section_content"] == "Unembedded section."
             assert len((await listing(owner_bot))["rows"]) == 2
+            assert len((await inspect(owner_bot))["listed"]) == 2
+            assert len((await source_inspect(owner_bot))["documents"]) == 1
             await sources.insert_source(replace(registration, active=False))
             assert await listing(owner) == ordinary_list
+            assert (await inspect(owner))["listed"] == ordinary_inspect["listed"]
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
             assert await synthesize(owner) == missing_synthesis
@@ -367,6 +423,8 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             stale = now - timedelta(seconds=settings.knowledge_source_acl_stale_seconds + 1)
             await mirrors.record_listing(org, mirror, source, "checked", stale)
             assert await listing(owner) == ordinary_list
+            assert await inspect(owner) == ordinary_inspect
+            assert await source_inspect(owner) == empty_source_inspect
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
             assert await synthesize(owner) == missing_synthesis
