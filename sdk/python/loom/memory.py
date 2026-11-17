@@ -388,7 +388,7 @@ class MemorySearchHit:
     below_threshold: bool = False
     # True on a governed definition, served first because the query names its term or
     # an alias; the server sends the key only when set.
-    governed: bool = False
+    governed: bool = field(default=False, kw_only=True)
     # Date metadata from the row; empty when the row had no date dimension.
     temporal_anchor: str = ""
     # How precisely the source pinned temporal_anchor (0..1; 0 = unscored).
