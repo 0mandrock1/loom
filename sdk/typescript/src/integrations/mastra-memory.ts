@@ -47,7 +47,7 @@ export class LoomMemoryStorage extends MemoryStorage {
   constructor(agent: Agent, options: LoomMemoryStorageOptions) {
     super();
     const { resourceId, storeId = "default" } = options;
-    if (!resourceId || resourceId === "-" || hasIdentityWhitespace(resourceId)) {
+    if (!resourceId || ["-", "*"].includes(resourceId) || hasIdentityWhitespace(resourceId)) {
       throw new Error("resourceId must name a Loom user without surrounding whitespace");
     }
     if (!storeId || hasIdentityWhitespace(storeId)) throw new Error("storeId must not be empty or padded");

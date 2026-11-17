@@ -151,8 +151,10 @@ describe("LoomMemoryStorage native memory domain", () => {
     await expect(storage.copyThread({ sourceThreadId: "t1" })).rejects.toThrow("not implemented");
   });
 
-  it.each(["", "-", " alice", "alice\u0085", "alice\u001c"])("rejects noncanonical user %j", (resourceId) => {
-    expect(() => harness().storage(resourceId)).toThrow("resourceId");
+  it.each(["", "-", "*", " alice", "alice\u0085", "alice\u001c"])("rejects noncanonical user %j", (resourceId) => {
+    const { agent, calls } = harness();
+    expect(() => new LoomMemoryStorage(agent, { resourceId })).toThrow("resourceId");
+    expect(calls).toEqual([]);
   });
 
   it("snapshots constructor options and the client identity before the first write", async () => {
