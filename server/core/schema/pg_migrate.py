@@ -119,7 +119,7 @@ async def migrate(
         result = await asyncio.shield(task)
         if isinstance(result, (SystemExit, KeyboardInterrupt)):
             raise result
-    except BaseException as error:
+    except BaseException as error:  # Keep the migration failure through owned cleanup.
         end = time.monotonic() + pg._RELEASE_TIMEOUT_S
         await _failed_migration(cm, conn, task, error, end)
         raise

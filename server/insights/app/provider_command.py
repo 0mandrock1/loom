@@ -117,7 +117,7 @@ async def participant_command() -> AsyncIterator[None]:
     try:
         async with retirement.get_gate().admit():
             yield
-    except BaseException:
+    except BaseException:  # Keep the body failure while attempting required retirement cleanup.
         with contextlib.suppress(BaseException):
             await _finish_participant()
         raise
@@ -154,6 +154,6 @@ async def model_command() -> AsyncIterator[None]:
                     else:
                         if fatal is not None:
                             raise fatal
-                except BaseException:
+                except BaseException:  # Keep the body's first failure through keeper cleanup.
                     if first is None:
                         raise

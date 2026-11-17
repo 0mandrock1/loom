@@ -344,7 +344,7 @@ async def connect_verified(ch: CHClient) -> None:
         await ch.connect()
     try:
         await check_configured(ch)
-    except BaseException:
+    except BaseException:  # Keep the pairing failure while closing its clients.
         with suppress(BaseException):
             await disconnect(ch)
         raise
@@ -370,7 +370,7 @@ async def disconnect(ch: CHClient) -> None:
     pg.expect_deployment(None)
     try:
         await pg.close_pool()
-    except BaseException:
+    except BaseException:  # Keep the pool close failure while closing ClickHouse.
         with suppress(BaseException):
             await ch.disconnect()
         raise
@@ -402,7 +402,7 @@ def run_connected[T](
             async with model_command():
                 await check_acceptance(orgs=named, org_free=org_free)
                 result = await run(ch)
-        except BaseException:
+        except BaseException:  # Keep the command failure while disconnecting its clients.
             with suppress(BaseException):
                 await disconnect(ch)
             raise

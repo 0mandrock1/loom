@@ -146,7 +146,7 @@ class Owner:
         try:
             await pg._check_deployment(self.conn)
             await pg.init_connection(self.conn)
-        except Exception as error:
+        except Exception as error:  # Classify unavailable openings; keep other failures.
             pg._raise_if_unavailable(error)
             raise
         refused = await apg.direct_refusals(self.conn, what)

@@ -651,7 +651,7 @@ def test_nonmodel_principal_command_enrolls_before_acceptance(monkeypatch):
     monkeypatch.setattr(provider_command, "register_process", register)
     monkeypatch.setattr(provider_command, "drain_task_sets", AsyncMock(return_value=True))
     monkeypatch.setattr(provider_command, "flush_registered_buffers", AsyncMock(return_value=True))
-    monkeypatch.setattr(provider_command, "retire_process", AsyncMock(return_value=True))
+    monkeypatch.setattr(provider_command, "_retire_until", AsyncMock(return_value=True))
     monkeypatch.setattr(_ch, "check_orgs", acceptance)
     assert sql_access._connected(work, orgs=("example",)) == 7
     assert retirement.get_gate().closed and retirement.get_gate().active == 0
