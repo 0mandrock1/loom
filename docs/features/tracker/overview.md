@@ -203,6 +203,7 @@ repository. The requests below illustrate one draft; they are not recorded resul
      "paths": ["src/upload/client.py"],
      "symbols": ["UploadClient.send"],
      "text": "Upload hangs after refreshing its token.",
+     "before": "now",
      "limit": 5
    }
    ```
@@ -210,8 +211,12 @@ repository. The requests below illustrate one draft; they are not recorded resul
    Supply `issue_number` only for an actual report in the primary linked tracker. If
    good and bad releases were observed, supply those observations as described in the
    [version-window example](../code-index/history-and-prs.md#bisect-candidates-codebisect_candidates).
-   Without that release evidence, the scan uses the retained history window; it does not
-   discover the last good version.
+   Here, `before: "now"` sets the upper bound at request time; it is not an observed
+   failure time. Prefer observed release bounds, an observed upper time bound in `before`
+   (and `after` when known), or a known-bad commit in `bad_sha`. With no release range,
+   time bound or issue observations supplying one, the result is `unknown` with
+   `no_failing_version`; no candidate scan runs. The operation does not discover the
+   last good version.
 
 4. Keep the evidence with the investigation. Read `candidates_from`, `epistemic`,
    `causes`, `tracker_unavailable` and any `partial` / `partial_reason` beside the
