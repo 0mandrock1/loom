@@ -2,7 +2,6 @@
 
 import base64
 import json
-import os
 from dataclasses import asdict
 
 import pytest
@@ -16,14 +15,15 @@ from loom.integrations.agno import LoomMemoryDb
 from tests.integration._resources import unique_org
 
 
-def test_agno_manager_persists_resumes_and_clears_its_user(control_plane_url):
+def test_agno_manager_persists_resumes_and_clears_its_user(control_plane_url, mint_test_token):
     org = unique_org("agno")
+    token = mint_test_token(org=org, namespaces=["memories"], roles=["writer"])
     with SyncAgent(
         org=org,
         namespace="memories",
         agent="agno",
         base_url=control_plane_url,
-        api_key=os.environ["LOOM_API_KEY"],
+        api_key=token,
     ) as agent:
         alice = LoomMemoryDb(agent, user_id="alice")
         bob = LoomMemoryDb(agent, user_id="bob")
@@ -49,7 +49,7 @@ def test_agno_manager_persists_resumes_and_clears_its_user(control_plane_url):
         assert row["found"] and row["user_id"] == "alice" and row["memory_type"] == "episodic"
         assert row["agent"] == "agno" and row["source_class"] == "asserted"
         assert row["session_id"] == alice._session
-        claims = os.environ["LOOM_API_KEY"].split(".")[1]
+        claims = token.split(".")[1]
         subject = json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))["sub"]
         assert row["actor"].endswith(f":{subject}")
         # Native epoch timestamps match Loom's contact-number detector.
