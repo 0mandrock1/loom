@@ -369,7 +369,6 @@
 2ceda4898429	SELECT count() AS n FROM loom.knowledge_ingestions WHERE org = {org:String} AND namespace IN {ns:Array(String)} AND ?
 2cfa7e08e12b	SELECT memory_id, memory_key, memory_type, version, pinned, created_at, conflict_with, sensitivity FROM loom.memory FINAL WHERE org = {org:String} AND namespace = {ns:String} AND status = ? AND tombst
 2cfc2e54fc8d	SELECT toString(evidence_id) AS eid, session_id, role, actor, toString(observed_at) AS observed, content, matched FROM ( SELECT evidence_id, session_id, role, actor, observed_at, content, tombstoned_a
-2d2905633e36	SELECT memory_key, if(JSONType(value, ?) = ?, JSONExtractString(value, ?), ?) AS term, JSONExtract(value, ?, ?) AS aliases FROM loom.shared FINAL WHERE org = {org:String} AND namespace = {ns:String} A
 2d457ef834a6	SELECT org, namespace, memory_key, valid_to FROM loom.memory FINAL WHERE tombstoned_at IS NULL AND status = ? AND valid_to IS NOT NULL AND valid_to < now()
 2d7e54998a72	SELECT count() AS n FROM loom.entity_degree WHERE org = {org:String} AND namespace = {ns:String} AND ?
 2db7427080f4	SELECT count() AS n FROM loom.documents FINAL WHERE org = {org:String} AND namespace = {ns:String} AND (superseded_at IS NULL OR (blob_path != ? AND blob_erased_at IS NULL))
@@ -514,6 +513,7 @@
 3fa46eec9e22	SELECT path, scope, symbol_ids, start_line, end_line, content FROM ( SELECT path, scope, symbol_ids, start_line, end_line, content, chunk_id, tombstoned_at FROM loom.code_chunks WHERE org = {org:Strin
 3fc2702e0bf1	SELECT count() AS n FROM loom.entity_edge_rows WHERE org = {org:String} AND user_id = {uid:String}
 3fcee425ac0e	SELECT head.? AS subject, if(active_rows > ?, active_role, head.?) AS role, if(active_rows > ?, ?, head.?) AS status, if(active_rows > ?, request.?, head.?) AS pending_role, if(active_rows > ?, reques
+3ffcecb600c6	SELECT memory_key, if(JSONType(value, ?) = ?, JSONExtractString(value, ?), ?) AS term, JSONExtract(value, ?, ?) AS aliases, promoted_from, promoted_at, promotion_event FROM loom.shared FINAL WHERE org
 40044ac7ac85	SELECT path, scope, symbol_ids, start_line, end_line, content, shingles, uniqExact(path) OVER () AS admitted_files FROM ( SELECT path, scope, symbol_ids, start_line, end_line, content, chunk_id, array
 4004b3d17ade	SELECT count() OVER () AS total, a.memory_key AS memory_key, a.created_at AS created_at FROM (SELECT org, namespace, agent, user_id, session_id, memory_key, created_at FROM loom.memory_embeddings FINA
 4014f350fe0d	SELECT e.memory_key AS memory_key, e.memory_type AS memory_type, e.content_excerpt AS content_excerpt, e.status AS status, e.version AS version, cosineDistance(e.embedding, {q:Array(Float32)}) AS dist
