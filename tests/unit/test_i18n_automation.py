@@ -34,8 +34,8 @@ def commit_all() -> str:
     return a.git("rev-parse", "HEAD")
 
 
-def output(repository: Path, source: str = "README.md") -> Path:
-    lang = a.t.LANGUAGES[1]
+def output(repository: Path, source: str = "README.md", code: str = "ja") -> Path:
+    lang = next(lang for lang in a.t.LANGUAGES if lang.code == code)
     path = repository / a.t.target_path(lang.code, source)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(a.t.header(source, lang, a.t.DEFAULT_MODEL, a.t.blob(source)) + "# 日本語\n")
@@ -113,6 +113,7 @@ def test_budget_reservation_precedes_update_and_is_not_refunded(
 ) -> None:
     events: list[Any] = []
     monkeypatch.setenv("LOOM_I18N_TOTAL_USD", "20")
+    monkeypatch.setenv("LOOM_I18N_LANGUAGES", "ja")
     monkeypatch.setattr(a, "configure_git", lambda: None)
     monkeypatch.setattr(a, "fetch", lambda ref: "a" * 40)
     monkeypatch.setattr(a, "budget_total", lambda tip: Decimal(12))
@@ -132,6 +133,7 @@ def test_budget_reservation_precedes_update_and_is_not_refunded(
 
 def test_failed_budget_push_prevents_provider_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOOM_I18N_TOTAL_USD", "20")
+    monkeypatch.setenv("LOOM_I18N_LANGUAGES", "ja")
     monkeypatch.setattr(a, "configure_git", lambda: None)
     monkeypatch.setattr(a, "fetch", lambda ref: "a" * 40)
     monkeypatch.setattr(a, "budget_total", lambda tip: Decimal(0))
@@ -194,6 +196,12 @@ def test_publisher_dispatches_ci_without_merging_the_unchecked_generated_sha(
         if args[0] != "gh":
             return real_command(*args, **kwargs)
         calls.append(args)
+        if args[1:3] == ("pr", "create"):
+            body = Path(args[args.index("--body-file") + 1]).read_text()
+            assert "### Changelog category" in body
+            assert "### Compatibility, rollout and rollback" in body
+            assert "### Tests" in body
+            assert "[ ] Hosted CI" in body
         return json.dumps([]) if args[1:3] == ("pr", "list") else ""
 
     monkeypatch.setattr(a, "command", gh)
@@ -267,7 +275,7 @@ def test_prepare_reports_only_the_successfully_imported_pending_tip(
     monkeypatch.setenv("GITHUB_OUTPUT", str(output_path))
     monkeypatch.setattr(a, "fetch", lambda ref: "a" * 40)
     imported: list[str] = []
-    monkeypatch.setattr(a.t, "import_pending", imported.append)
+    monkeypatch.setattr(a.t, "import_pending", lambda ref, codes=None: imported.append(ref))
     a.prepare()
     assert imported == ["a" * 40]
     assert output_path.read_text() == f"pending_sha={'a' * 40}\n"
@@ -329,6 +337,7 @@ def test_finalizer_requires_nonempty_successful_checks(checks: list[dict[str, An
     ],
 )
 @pytest.mark.parametrize("site_raises", [False, True])
+@pytest.mark.parametrize("published_code,approved", [("ja", "ja"), ("es", "ja"), ("es", "")])
 def test_hosted_finalizer_respects_reviews_and_merges_only_exact_successful_head(
     repository: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -336,13 +345,17 @@ def test_hosted_finalizer_respects_reviews_and_merges_only_exact_successful_head
     merge_state: str,
     merged: bool,
     site_raises: bool,
+    published_code: str,
+    approved: str,
 ) -> None:
-    base = a.git("rev-parse", "HEAD")
-    output(repository)
+    output(repository, code="ko")
+    base = commit_all()
+    output(repository, code=published_code)
     a.git("add", ".")
     sha = a.git("commit-tree", a.git("write-tree"), "-p", base, input_text="Generated\n")
     monkeypatch.setenv("GITHUB_REPOSITORY", "ClickHouse/loom")
     monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("LOOM_I18N_LANGUAGES", approved)
     monkeypatch.setattr(a, "fetch", lambda ref: sha)
     monkeypatch.setattr(a.t, "check", lambda **kwargs: 0)
     pr = {
@@ -383,13 +396,14 @@ def test_hosted_finalizer_respects_reviews_and_merges_only_exact_successful_head
         return ""
 
     monkeypatch.setattr(a, "command", command)
-    if merged and site_raises:
+    permitted = published_code in approved.split()
+    if merged and permitted and site_raises:
         with pytest.raises(RuntimeError, match="strict site build failed"):
             a.finalize()
     else:
         a.finalize()
     merge_calls = [call for call in calls if call[1:3] == ("pr", "merge")]
-    if merged and not site_raises:
+    if merged and permitted and not site_raises:
         assert len(merge_calls) == 1
         assert calls.index(("mkdocs", "build", "--strict")) < calls.index(merge_calls[0])
         assert merge_calls[0][-2:] == ("--match-head-commit", sha)
@@ -516,3 +530,47 @@ def test_publisher_validates_unicode_and_space_paths_without_git_quote_parsing(
     path.write_text(path.read_text().replace(a.t.blob(source), "0" * 40))
     with pytest.raises(ValueError, match="refuses path"):
         a.validate_changes(base, commit_all())
+
+
+def test_missing_language_approval_defers_without_reservation_or_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LOOM_I18N_LANGUAGES", raising=False)
+    monkeypatch.setenv("LOOM_I18N_TOTAL_USD", "200")
+    monkeypatch.setattr(a, "configure_git", lambda: None)
+    monkeypatch.setattr(a, "reserve", lambda *args: pytest.fail("unapproved reservation"))
+    calls: list[tuple[bool, list[str] | None, str]] = []
+    monkeypatch.setattr(
+        a.t,
+        "update",
+        lambda every, codes: calls.append((every, codes, a.os.environ["LOOM_I18N_MAX_USD"])) or 0,
+    )
+    a.update(True, None)
+    assert calls == [(False, [], "0.0")]
+
+
+def test_persistent_approval_selects_only_configured_languages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOOM_I18N_LANGUAGES", "ja")
+    monkeypatch.setenv("LOOM_I18N_TOTAL_USD", "20")
+    monkeypatch.setattr(a, "configure_git", lambda: None)
+    reservations: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(a, "reserve", lambda *args: reservations.append(args) or 1.0)
+    calls: list[list[str] | None] = []
+    monkeypatch.setattr(a.t, "update", lambda every, codes: calls.append(codes) or 0)
+    a.update(False, None)
+    assert reservations == [(Decimal(20), False, ["ja"])]
+    assert calls == [["ja"]]
+
+
+@pytest.mark.parametrize("approved,requested", [("unknown", None), ("ja", ["es"]), ("", ["ja"])])
+def test_unapproved_or_unknown_languages_refuse_before_budget_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+    approved: str,
+    requested: list[str] | None,
+) -> None:
+    monkeypatch.setenv("LOOM_I18N_LANGUAGES", approved)
+    monkeypatch.setattr(a, "reserve", lambda *args: pytest.fail("unapproved reservation"))
+    with pytest.raises(ValueError, match="language"):
+        a.update(False, requested)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 import sys
 import types
 from collections import Counter
@@ -206,8 +207,26 @@ def test_a_label_borrowed_from_another_section_keeps_the_page_unwritten(
     assert not (tmp_path / "i18n").exists()
 
 
+@pytest.fixture
+def update_repository(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for args in (
+        ("init", "-q"),
+        ("config", "user.name", "test"),
+        ("config", "user.email", "test@example.test"),
+    ):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
+    for source in ("README.md", "docs/a.md", "docs/b.md"):
+        path = tmp_path / source
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Start\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "English"], cwd=tmp_path, check=True)
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+
+
 def test_a_page_that_still_differs_lets_the_others_finish(
     monkeypatch: pytest.MonkeyPatch,
+    update_repository: None,
 ) -> None:
     written: list[str] = []
 
@@ -215,6 +234,11 @@ def test_a_page_that_still_differs_lets_the_others_finish(
         if source == t.sources()[0]:
             raise t.TranslationDiffers("still differs after a retry")
         written.append(source)
+        text, line = t.prepare(source, lang)
+        body = "\n".join(t.english_requests(text)).replace("# Start", "# Entrée")
+        t.lifecycle.stage(
+            t.target_path(lang.code, source), t.render(source, lang, body, line, spend.model)
+        )
 
     monkeypatch.setattr(t, "bedrock_client", lambda: None)
     monkeypatch.setattr(t, "translate_page", fake_page)
@@ -229,6 +253,7 @@ def test_a_page_that_still_differs_lets_the_others_finish(
 
 def test_a_fatal_error_after_a_differing_page_still_names_that_page(
     monkeypatch: pytest.MonkeyPatch,
+    update_repository: None,
 ) -> None:
     def fake_page(source: str, lang: t.Language, client: object, spend: t.Spend) -> None:
         if source == t.sources()[0]:
@@ -254,7 +279,9 @@ def test_a_link_or_alt_text_shown_as_code_is_not_a_label() -> None:
 
 
 def test_a_fatal_error_stops_the_other_pages(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    update_repository: None,
 ) -> None:
     calls: list[str] = []
 

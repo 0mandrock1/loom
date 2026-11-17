@@ -295,3 +295,88 @@ def test_import_refuses_to_overwrite_unowned_published_data(repo: pathlib.Path) 
     with pytest.raises(SystemExit, match="without generator ownership"):
         t.import_pending(sha)
     assert (repo / "i18n/ja/docs/a.md").read_text() == "# My notes\n"
+
+
+@pytest.mark.parametrize("limit", ["page", "total"])
+def test_import_refuses_size_before_reading_blob_contents(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    text = translated("docs/a.md")
+    sha = pending_branch(repo, "i18n/ja/docs/a.md", text)
+    monkeypatch.setattr(lc, "MAX_PAGE_BYTES" if limit == "page" else "MAX_PENDING_BYTES", 1)
+    run = subprocess.run
+
+    def checked(*args, **kwargs):
+        assert args[0][0:3] != ["git", "cat-file", "blob"], "oversized content was loaded"
+        return run(*args, **kwargs)
+
+    monkeypatch.setattr(lc.subprocess, "run", checked)
+    with pytest.raises(SystemExit, match="size limit"):
+        t.import_pending(sha)
+    assert not (repo / "i18n/ja/docs/a.md").exists()
+
+
+def test_deleted_english_body_fallback_repairs_to_owned_target_before_retirement(
+    repo: pathlib.Path,
+) -> None:
+    put(repo, "docs/b.md", "# Beta\n\n[guide](a.md#alpha)\n")
+    publish(repo, "docs/b.md")
+    old_url = f"{t.REPO_URL}/blob/main/docs/a.md#alpha"
+    assert old_url in (repo / "i18n/ja/docs/b.md").read_text()
+    publish(repo, "docs/a.md")
+    provenance = (repo / "i18n/ja/docs/a.md").read_text()
+    git(repo, "mv", "docs/a.md", "docs/new.md")
+    put(repo, "docs/b.md", "# Beta\n\n[guide](new.md#alpha)\n")
+    assert any("English destination or anchor" in problem for problem in lc.link_problems())
+    assert lc.retire_obsolete() == (0, 1)
+    assert "[guía](a.md#alpha)" in (repo / "i18n/ja/docs/b.md").read_text()
+    assert old_url not in (repo / "i18n/ja/docs/b.md").read_text()
+    assert (repo / "i18n/ja/docs/a.md").read_text() == provenance
+    assert lc.link_problems() == []
+    for source in ("docs/new.md", "docs/b.md"):
+        lc.stage(t.target_path("ja", source), translated(source))
+    assert lc.activate_ready() == 2
+    assert lc.retire_obsolete() == (1, 0)
+    assert lc.link_problems() == []
+
+
+@pytest.mark.parametrize("target", ["missing", "wrong-fragment"])
+def test_unrepairable_deleted_english_fallback_refuses_closure_and_retains_target(
+    repo: pathlib.Path,
+    target: str,
+) -> None:
+    put(repo, "docs/b.md", "# Beta\n\n[guide](a.md#alpha)\n")
+    publish(repo, "docs/b.md")
+    if target == "wrong-fragment":
+        put(
+            repo,
+            "i18n/ja/docs/a.md",
+            t.header("docs/a.md", JA, t.DEFAULT_MODEL, "0" * 40) + '<a id="other"></a>\n# Otro\n',
+        )
+    before = (repo / "i18n/ja/docs/b.md").read_text()
+    git(repo, "mv", "docs/a.md", "docs/new.md")
+    put(repo, "docs/b.md", "# Beta\n\n[guide](new.md#alpha)\n")
+    assert lc.retire_obsolete() == (0, int(target == "wrong-fragment"))
+    assert (repo / "i18n/ja/docs/b.md").read_text() == before
+    assert any("English destination or anchor" in problem for problem in lc.link_problems())
+    assert t.check(skip_stale=True) == 1
+
+
+def test_fallback_validation_checks_english_fragments_but_excludes_banner_and_external_urls(
+    repo: pathlib.Path,
+) -> None:
+    put(repo, "docs/b.md", "# Beta\n\n[guide](a.md#alpha)\n")
+    publish(repo, "docs/b.md")
+    assert lc.link_problems() == []
+    path = repo / "i18n/ja/docs/b.md"
+    path.write_text(path.read_text().replace("a.md#alpha", "a.md#missing"))
+    assert any("English destination or anchor" in problem for problem in lc.link_problems())
+    path.unlink()
+    publish(repo, "docs/a.md")
+    with (repo / "i18n/ja/docs/a.md").open("a") as stream:
+        stream.write("[externo](https://example.test/blob/main/docs/missing.md#missing)\n")
+    (repo / "docs/a.md").unlink()
+    assert (
+        lc.link_problems() == []
+    )  # Missing original-source provenance is distinct from body links.
+    assert lc.retire_obsolete() == (1, 0)

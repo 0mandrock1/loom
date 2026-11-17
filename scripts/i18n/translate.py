@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
-from scripts.i18n import lifecycle
+from scripts.i18n import lifecycle, refresh
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = "i18n"
@@ -692,7 +692,9 @@ def write_language_lines() -> None:
 
 def check(skip_stale: bool = False) -> int:
     model = os.environ.get("LOOM_I18N_MODEL", DEFAULT_MODEL)
-    pending = stale(model=model)
+    pending = list(
+        dict.fromkeys(stale(model=model) + refresh.work(refresh.plan(), include_blocked=True))
+    )
     coverage = [f"{target_path(lang.code, source)} is missing or stale" for source, lang in pending]
     obsolete = orphans()
     coverage += [f"{path} is outside the current source inventory" for path in obsolete]
@@ -717,8 +719,13 @@ def batch(
         raise SystemExit(
             f"LOOM_I18N_MODEL={model!r} has no price in PRICES; the cost cap needs one"
         )
-    languages = tuple(lg for lg in LANGUAGES if not codes or lg.code in codes)
-    work = [(s, lg) for s in sources() for lg in languages] if every else stale(languages, model)
+    languages = tuple(lg for lg in LANGUAGES if codes is None or lg.code in codes)
+    job = refresh.plan(every, codes)
+    forced = refresh.work(job, include_blocked=True)
+    force_paths = {target_path(lg.code, source) for source, lg in forced}
+    pairs = stale(languages, model) + [pair for pair in forced if pair[1] in languages]
+    unique = list(dict.fromkeys(pairs))
+    work = [pair for pair in unique if not refresh.blocked(target_path(pair[1].code, pair[0]), job)]
     work.sort(
         key=lambda pair: (
             not (ROOT / target_path(pair[1].code, pair[0])).is_file(),
@@ -727,14 +734,18 @@ def batch(
         )
     )
     checkpoints = lifecycle.current_checkpoints()
-    work = [(s, lg) for s, lg in work if target_path(lg.code, s) not in checkpoints]
+    work = [
+        (s, lg)
+        for s, lg in work
+        if target_path(lg.code, s) not in checkpoints or target_path(lg.code, s) in force_paths
+    ]
     selected, cost = [], 0.0
     for source, lang in work:
         estimate = estimate_usd(model, request_chars(source, lang))
         if cost + estimate <= cap and cap > 0:
             selected.append((source, lang))
             cost += estimate
-    return selected, len(work) - len(selected)
+    return selected, len(unique) - len(selected)
 
 
 def batch_reservation(every: bool = False, codes: list[str] | None = None, cap: float = 5) -> float:
@@ -755,13 +766,16 @@ def batch_reservation(every: bool = False, codes: list[str] | None = None, cap: 
     return math.ceil(total * 1e6) / 1e6
 
 
-def import_pending(ref: str) -> int:
-    return lifecycle.import_pending(ref)
+def import_pending(ref: str, codes: list[str] | None = None) -> int:
+    return lifecycle.import_pending(ref, codes)
 
 
 def update(every: bool = False, codes: list[str] | None = None) -> int:
     cap = float(os.environ.get("LOOM_I18N_MAX_USD", "5"))
     lifecycle.require_owned_outputs()
+    refresh.clear_merged()
+    if job := refresh.plan(every, codes):
+        refresh.save(job)
     work, deferred = batch(every, codes, cap)
     model = os.environ.get("LOOM_I18N_MODEL", DEFAULT_MODEL)
     spend = Spend(model, cap)
@@ -772,7 +786,9 @@ def update(every: bool = False, codes: list[str] | None = None) -> int:
         client = bedrock_client() if work else None
         for index, (source, lang) in enumerate(work):
             try:
+                base = refresh.published_hash(target_path(lang.code, source))
                 translate_page(source, lang, client, spend)
+                refresh.record(source, lang, base)
                 written += 1
             except TranslationDiffers as exc:
                 failed.append(f"{target_path(lang.code, source)}: {exc}")
@@ -782,7 +798,7 @@ def update(every: bool = False, codes: list[str] | None = None) -> int:
                 raise
     finally:
         # Preserve verified progress even when a later page fails.
-        lifecycle.activate_ready()
+        lifecycle.activate_ready(codes)
         removed, blocked = lifecycle.retire_obsolete()
         print(f"obsolete_removed={removed} obsolete_deferred={blocked}")
         print(

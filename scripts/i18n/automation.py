@@ -11,10 +11,12 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from scripts.i18n import refresh
 from scripts.i18n import translate as t
 
 PENDING = "refs/heads/i18n/update"
@@ -144,22 +146,35 @@ def reserve(total: Decimal, every: bool, codes: list[str] | None) -> float:
     return 0.0
 
 
+def approved_languages(codes: list[str] | None = None) -> list[str]:
+    approved = os.environ.get("LOOM_I18N_LANGUAGES", "").split()
+    known = {lang.code for lang in t.LANGUAGES}
+    if not set(approved) <= known:
+        raise ValueError("LOOM_I18N_LANGUAGES contains an unknown language")
+    if codes is not None and not set(codes) <= set(approved):
+        raise ValueError("requested language lacks repository approval")
+    return sorted(set(approved if codes is None else codes))
+
+
 def prepare() -> None:
+    codes = approved_languages()
     tip = fetch(PENDING)
     if tip is not None:
-        t.import_pending(tip)
+        t.import_pending(tip, codes)
     if output := os.environ.get("GITHUB_OUTPUT"):
         with Path(output).open("a") as stream:
             stream.write(f"pending_sha={tip or ''}\n")
 
 
 def update(every: bool, codes: list[str] | None) -> int:
+    codes = approved_languages(codes)
     configure_git()
-    cap = reserve(money(os.environ.get("LOOM_I18N_TOTAL_USD", "0")), every, codes)
+    total = money(os.environ.get("LOOM_I18N_TOTAL_USD", "0"))
+    cap = reserve(total, every, codes) if codes else 0.0
     previous = os.environ.get("LOOM_I18N_MAX_USD")
     os.environ["LOOM_I18N_MAX_USD"] = str(cap)
     try:
-        return t.update(every, codes)
+        return t.update(every and bool(codes), codes)
     finally:
         if previous is None:
             os.environ.pop("LOOM_I18N_MAX_USD", None)
@@ -168,6 +183,12 @@ def update(every: bool, codes: list[str] | None) -> int:
 
 
 def generated_path(path: str, text: str, *, deleted: bool) -> bool:
+    if path == refresh.PATH:
+        try:
+            refresh.parse(text)
+        except (ValueError, TypeError):
+            return False
+        return True
     match = t.STAMP.match(text)
     checkpoint = path.startswith("i18n/.pending/")
     mapped = "i18n/" + path.removeprefix("i18n/.pending/") if checkpoint else path
@@ -255,13 +276,59 @@ def publish() -> None:
             f"{candidate}:{PENDING}",
             f"--force-with-lease={PENDING}:{previous or ''}",
         )
-    title = f"Translations follow {base[:9]}"
-    body = (
-        "Machine translations follow the English source. Present pages pass provenance, "
-        "content and link validation. Missing or stale pages remain queued for bounded "
-        "batches. Hosted CI validates this exact commit; merging waits for required "
-        "checks and reviews."
+    publish_pr(f"Translations follow {base[:9]}")
+    command(
+        "gh",
+        "workflow",
+        "run",
+        "ci.yml",
+        "--ref",
+        "i18n/update",
+        "--raw-field",
+        f"expected_sha={candidate}",
     )
+
+
+PR_BODY = """### Changelog category (leave one):
+
+- Documentation (changelog entry is not required)
+
+### Why
+
+Machine translations follow the English source after its merge.
+
+### Scope and risk
+
+This generated-data batch preserves pending coverage and link dependencies. Missing
+or stale pages remain queued for bounded batches. No executable source changes.
+
+### Compatibility, rollout and rollback
+
+- Wire and operator steps: none.
+- Rollback: revert this batch; preserve the cumulative translation budget history.
+
+### Tests
+
+Present pages pass provenance, content and link validation. Hosted CI validates
+this exact commit. Merge waits for successful checks and required reviews.
+
+### AI assistance in the code (leave one; writing this description with AI is fine):
+
+- AI-generated: the configured translator generated documentation. The producer
+  validates provenance, content invariants and links before publication.
+
+- [x] This batch contains generated documentation data only.
+
+### Checklist
+
+- [x] Generated pages pass the producer's validation.
+- [ ] Hosted CI and required repository reviews pass before merge.
+- [x] No wire, migration, plugin or frontend change.
+- [x] Commits are signed off.
+"""
+
+
+def publish_pr(title: str) -> None:
     existing = json.loads(
         command(
             "gh",
@@ -277,32 +344,14 @@ def publish() -> None:
             "number",
         )
     )
-    if existing:
-        command("gh", "pr", "edit", str(existing[0]["number"]), "--title", title, "--body", body)
-    else:
-        command(
-            "gh",
-            "pr",
-            "create",
-            "--head",
-            "i18n/update",
-            "--base",
-            "main",
-            "--title",
-            title,
-            "--body",
-            body,
-        )
-    command(
-        "gh",
-        "workflow",
-        "run",
-        "ci.yml",
-        "--ref",
-        "i18n/update",
-        "--raw-field",
-        f"expected_sha={candidate}",
-    )
+    with tempfile.NamedTemporaryFile("w", suffix=".md") as body:
+        body.write(PR_BODY)
+        body.flush()
+        if existing:
+            args = ["edit", str(existing[0]["number"])]
+        else:
+            args = ["create", "--head", "i18n/update", "--base", "main"]
+        command("gh", "pr", *args, "--title", title, "--body-file", body.name)
 
 
 def api(path: str) -> Any:
@@ -403,6 +452,17 @@ def finalize() -> None:
         print("Translation merge waits for a batch based on current main")
         return
     validate_changes(base, sha)
+    approved = approved_languages()
+    changed = git("diff", "--name-status", "--no-renames", "-z", base, sha).split("\0")[:-1]
+    if any(
+        status != "D"
+        and path.startswith("i18n/")
+        and not path.startswith("i18n/.pending/")
+        and path.split("/", 2)[1] not in approved
+        for status, path in zip(changed[::2], changed[1::2], strict=True)
+    ):
+        print("Translation merge waits for the producer to apply current language approval")
+        return
     # Only validated generated data enters the trusted main checkout.
     git("restore", "--source", sha, "--worktree", "--", "README.md", "i18n")
     if t.check(skip_stale=True):

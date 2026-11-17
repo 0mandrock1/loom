@@ -22,7 +22,7 @@ on:
         type: boolean
         default: false
       languages:
-        description: Language codes to translate, separated by spaces (empty for all)
+        description: Approved language codes, separated by spaces (empty for approved subset)
         type: string
         default: ""
 
@@ -45,6 +45,8 @@ jobs:
       actions: write
       contents: write
       pull-requests: write
+    env:
+      LOOM_I18N_LANGUAGES: ${{ vars.LOOM_I18N_LANGUAGES }}
     defaults:
       run:
         shell: bash
@@ -108,4 +110,5 @@ jobs:
       - name: Merge the successful exact head and publish the site
         env:
           GH_TOKEN: ${{ github.token }}
+          LOOM_I18N_LANGUAGES: ${{ vars.LOOM_I18N_LANGUAGES }}
         run: python -m scripts.i18n.automation finalize

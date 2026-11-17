@@ -6,11 +6,13 @@ import posixpath
 import re
 import subprocess
 from pathlib import PurePosixPath
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlsplit
 
+from scripts.i18n import refresh
 from scripts.i18n import translate as t
 
 MAX_PAGE_BYTES = 16 * 1024 * 1024
+MAX_PENDING_BYTES = 256 * 1024 * 1024
 
 
 def source_path(source: str) -> bool:
@@ -46,7 +48,7 @@ def output_files() -> list[str]:
 
 
 def checkpoint_files() -> list[str]:
-    return [p for p in all_files() if p.startswith("i18n/.pending/")]
+    return [p for p in all_files() if p.startswith("i18n/.pending/") and p != refresh.PATH]
 
 
 def regular(path: str) -> bool:
@@ -126,15 +128,55 @@ def candidate_problems(path: str, text: str, *, current: bool = True) -> list[st
     return [f"{path}: {problem}" for problem in problems]
 
 
+def body_start(path: str, text: str) -> int:
+    owned = owner(path, text)
+    stamp = t.STAMP.match(text)
+    if owned and stamp:
+        header = t.header(owned[0], owned[1], stamp[3], stamp[2])
+        if text.startswith(header):
+            return len(header)
+    return 0
+
+
+def english_fallback(link: str) -> tuple[str, str] | None:
+    prefix = f"{t.REPO_URL}/blob/main/"
+    if not link.startswith(prefix):
+        return None
+    url = urlsplit(link)
+    source = unquote(url.path.removeprefix(urlsplit(prefix).path))
+    return (source, url.fragment) if source_path(source) else None
+
+
+def english_live(source: str, anchor: str, inventory: frozenset[str]) -> bool:
+    if source not in inventory or not regular(source):
+        return False
+    body = "\n".join(t.english_requests((t.ROOT / source).read_text()))
+    return not anchor or f'<a id="{unquote(anchor)}"></a>' in body
+
+
 def link_failures(extra: dict[str, str] | None = None) -> list[tuple[str, str, str]]:
     pages = {
         p: (t.ROOT / p).read_text() for p in output_files() if regular(p) and p.endswith(".md")
     }
     pages.update(extra or {})
+    inventory = frozenset(t.sources())
     problems = []
     for path, text in pages.items():
-        for match in t.prose_links(text):
+        for match in t.prose_links(text[body_start(path, text) :]):
             link, _, anchor = match[2].partition("#")
+            fallback = english_fallback(match[2])
+            if fallback:
+                source, fragment = fallback
+                if not english_live(source, fragment, inventory):
+                    problems.append(
+                        (
+                            path,
+                            source,
+                            f"{path} links to {match[2]}, "
+                            "whose English destination or anchor is missing",
+                        )
+                    )
+                continue
             if re.match(r"[a-z]+:", link):
                 continue
             target = (
@@ -153,6 +195,42 @@ def link_failures(extra: dict[str, str] | None = None) -> list[tuple[str, str, s
     return problems
 
 
+def repair_english_fallbacks() -> None:
+    """Keep deleted English body links on an owned published target that retains the anchor."""
+    inventory = frozenset(t.sources())
+    for path in output_files():
+        if not regular(path):
+            continue
+        text = (t.ROOT / path).read_text()
+        start = body_start(path, text)
+        owned = owner(path, text)
+        if not start or not owned:
+            continue
+
+        def fix(prose: str, path: str = path, language: str = owned[1].code) -> str:
+            def replace(match: re.Match[str]) -> str:
+                fallback = english_fallback(match[2])
+                if not fallback or english_live(*fallback, inventory):
+                    return match[0]
+                source, anchor = fallback
+                target = t.target_path(language, source)
+                if not regular(target):
+                    return match[0]
+                target_text = (t.ROOT / target).read_text()
+                if owner(target, target_text) is None or (
+                    anchor and f'<a id="{unquote(anchor)}"></a>' not in target_text
+                ):
+                    return match[0]
+                relative = quote(posixpath.relpath(target, posixpath.dirname(path)))
+                return f"{match[1]}{relative}{'#' + anchor if anchor else ''}"
+
+            return t.LINK.sub(replace, prose)
+
+        repaired = text[:start] + t.in_prose(text[start:], fix)
+        if repaired != text:
+            (t.ROOT / path).write_text(repaired)
+
+
 def link_problems(extra: dict[str, str] | None = None) -> list[str]:
     return [problem for _, _, problem in link_failures(extra)]
 
@@ -162,6 +240,11 @@ def require_owned_outputs() -> None:
     for path in all_files():
         if not regular(path):
             problems.append(f"{path}: refusing nonregular output")
+        elif path == refresh.PATH:
+            try:
+                refresh.read()
+            except (ValueError, TypeError) as error:
+                problems.append(f"{path}: refusing refresh without generator ownership: {error}")
         elif owner(path, (t.ROOT / path).read_text()) is None:
             problems.append(f"{path}: refusing output without generator ownership")
     if problems:
@@ -173,6 +256,12 @@ def present_problems() -> list[str]:
     inventory = frozenset(t.sources())
     model = t.os.environ.get("LOOM_I18N_MODEL", t.DEFAULT_MODEL)
     for path in all_files():
+        if path == refresh.PATH:
+            try:
+                refresh.read()
+            except (ValueError, TypeError) as error:
+                problems.append(f"{path}: {error}")
+            continue
         if not regular(path) or not path.endswith(".md"):
             problems.append(f"{path}: not a regular generated Markdown page")
             continue
@@ -193,21 +282,27 @@ def present_problems() -> list[str]:
 
 def retire_obsolete() -> tuple[int, int]:
     """Remove only owned obsolete pages with no inbound dependency from retained output."""
+    repair_english_fallbacks()
     obsolete = t.orphans()
     candidates = {p for p in obsolete if regular(p) and owner(p, (t.ROOT / p).read_text())}
     inbound: dict[str, set[str]] = {p: set() for p in candidates}
     for path in output_files():
         if not regular(path) or not path.endswith(".md"):
             continue
-        for match in t.prose_links((t.ROOT / path).read_text()):
+        text = (t.ROOT / path).read_text()
+        for match in t.prose_links(text[body_start(path, text) :]):
             link = match[2].partition("#")[0]
-            if re.match(r"[a-z]+:|/", link):
+            fallback = english_fallback(match[2])
+            if fallback:
+                target = t.target_path(path.split("/", 2)[1], fallback[0])
+            elif re.match(r"[a-z]+:|/", link):
                 continue
-            target = (
-                posixpath.normpath(posixpath.join(posixpath.dirname(path), unquote(link)))
-                if link
-                else path
-            )
+            else:
+                target = (
+                    posixpath.normpath(posixpath.join(posixpath.dirname(path), unquote(link)))
+                    if link
+                    else path
+                )
             if target in inbound:
                 inbound[target].add(path)
     while blocked := {p for p in candidates if inbound[p] - candidates}:
@@ -219,11 +314,16 @@ def retire_obsolete() -> tuple[int, int]:
 
 def current_checkpoints() -> dict[str, str]:
     ready = {}
+    job = refresh.plan()
     for path in checkpoint_files():
         if regular(path):
             text = (t.ROOT / path).read_text()
-            if not candidate_problems(path, text):
-                ready[publication_path(path)] = text
+            published = publication_path(path)
+            force = job and published.split("/", 2)[1] in job["languages"]
+            if not candidate_problems(path, text) and (
+                not force or refresh.proof_matches(published, text, job)
+            ):
+                ready[published] = text
     return ready
 
 
@@ -243,10 +343,14 @@ def stage(path: str, text: str) -> None:
     destination.write_text(text)
 
 
-def activate_ready() -> int:
+def activate_ready(codes: list[str] | None = None) -> int:
     """Install an overlay only when all present inbound and outbound links remain valid."""
     require_owned_outputs()
-    ready = current_checkpoints()
+    ready = {
+        path: text
+        for path, text in current_checkpoints().items()
+        if codes is None or path.split("/", 2)[1] in codes
+    }
     while ready:
         blocked = set()
         for source, target, _ in link_failures(ready):
@@ -270,20 +374,22 @@ def activate_ready() -> int:
             text = (t.ROOT / path).read_text()
             if owner(path, text) and candidate_problems(path, text):
                 (t.ROOT / path).unlink()
+    refresh.finish()
     print(f"published={len(ready)} checkpointed={len(checkpoint_files())}")
     return len(ready)
 
 
-def import_pending(ref: str) -> int:
+def import_pending(ref: str, codes: list[str] | None = None) -> int:
     """Read only blob objects, never branch code; current main output wins."""
     require_owned_outputs()
+    refresh.clear_merged()
     if not re.fullmatch(r"[0-9a-f]{40}", ref):
         raise SystemExit("pending ref must be an exact commit SHA")
     tree = subprocess.run(
         ["git", "ls-tree", "-rz", ref, "--", t.OUT_DIR], cwd=t.ROOT, check=True, capture_output=True
     ).stdout
-    proposed: dict[str, str] = {}
-    model = t.os.environ.get("LOOM_I18N_MODEL", t.DEFAULT_MODEL)
+    blobs: dict[str, str] = {}
+    pending_bytes = 0
     for entry in tree.split(b"\0"):
         if not entry:
             continue
@@ -292,12 +398,30 @@ def import_pending(ref: str) -> int:
         path = path_bytes.decode()
         if mode != "100644" or kind != "blob":
             raise SystemExit(f"{path}: pending output is not a regular blob")
+        size = int(
+            subprocess.run(
+                ["git", "cat-file", "-s", oid], cwd=t.ROOT, check=True, capture_output=True
+            ).stdout
+        )
+        if size > MAX_PAGE_BYTES:
+            raise SystemExit(f"{path}: pending page exceeds size limit")
+        pending_bytes += size
+        if pending_bytes > MAX_PENDING_BYTES:
+            raise SystemExit("pending translation data exceeds total size limit")
         data = subprocess.run(
             ["git", "cat-file", "blob", oid], cwd=t.ROOT, check=True, capture_output=True
         ).stdout
-        if len(data) > MAX_PAGE_BYTES:
-            raise SystemExit(f"{path}: pending page exceeds size limit")
-        text = data.decode()
+        blobs[path] = data.decode()
+    for path, text in blobs.items():
+        if path != refresh.PATH and owner(path, text) is None:
+            raise SystemExit(f"{path}: refusing unknown pending output")
+    force = refresh.import_receipt(blobs[refresh.PATH], blobs) if refresh.PATH in blobs else set()
+    proposed: dict[str, str] = {}
+    model = t.os.environ.get("LOOM_I18N_MODEL", t.DEFAULT_MODEL)
+    job = refresh.plan()
+    for path, text in blobs.items():
+        if path == refresh.PATH:
+            continue
         owned = owner(path, text)
         if owned is None:
             raise SystemExit(f"{path}: refusing unknown pending output")
@@ -305,8 +429,14 @@ def import_pending(ref: str) -> int:
         path = publication_path(path)
         if source not in t.sources():
             continue
-        if regular(path) and (t.ROOT / path).read_text().startswith(
-            t.header(source, lang, model, t.blob(source))
+        if path in force and job and not refresh.proof_matches(path, text, job, replacement=False):
+            continue
+        if (
+            path not in force
+            and regular(path)
+            and (t.ROOT / path)
+            .read_text()
+            .startswith(t.header(source, lang, model, t.blob(source)))
         ):
             continue
         problems = candidate_problems(path, text)
@@ -316,6 +446,6 @@ def import_pending(ref: str) -> int:
             proposed[path] = text
     for path, text in proposed.items():
         stage(path, text)
-    activate_ready()
+    activate_ready(codes)
     print(f"reused={len(proposed)}")
     return len(proposed)
