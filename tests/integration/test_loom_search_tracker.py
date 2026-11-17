@@ -237,7 +237,7 @@ async def test_general_tracker_search_cites_public_issues_and_prs_only(
     )
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
             response = await client.post(
                 "/v1/search.query",

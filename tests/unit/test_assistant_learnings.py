@@ -1540,6 +1540,7 @@ async def test_a_pinned_tokens_loom_search_serves_its_signed_bots_rules(
         page="",
         explain=False,
         repo_namespace="",
+        tracker_plan=None,
     )
 
     uris = [h["source_uri"] for h in payload["knowledge"]["results"]]
