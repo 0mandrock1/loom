@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import replace
 from types import SimpleNamespace
@@ -10,6 +11,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from server.core import lease_writes, rmt_carry
+from server.core.errors import BackendUnavailableError
 from server.observability.budget_notifications import BudgetWarning
 from server.tasks.app import budget_notifications as alerts
 from server.tasks.store import budget_notifications as store
@@ -25,8 +28,8 @@ def delivery(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     lease = SimpleNamespace(renewed_at=time.monotonic(), let_expire=Mock())
     take = AsyncMock(return_value=lease)
     release = AsyncMock()
-    monkeypatch.setattr(alerts.leases, "take", take)
-    monkeypatch.setattr(alerts.leases, "release_shielded", release)
+    monkeypatch.setattr(lease_writes.leases, "take", take)
+    monkeypatch.setattr(lease_writes.leases, "release_shielded", release)
     monkeypatch.setattr(alerts.machines, "fleet_at", AsyncMock(return_value=True))
     monkeypatch.setattr(alerts, "get_client", lambda: object())
     state = {
@@ -168,18 +171,77 @@ async def test_user_warning_waits_for_the_erasure_capable_fleet(
     delivery["insert"].assert_not_awaited()
 
 
+@pytest.mark.parametrize("entry", ["busy", "expired"])
+async def test_an_unavailable_writer_lease_suppresses_only_the_warning(
+    warning: BudgetWarning,
+    delivery: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+) -> None:
+    if entry == "busy":
+        delivery["take"].return_value = None
+    else:
+        monkeypatch.setattr(lease_writes.leases, "work_left", lambda *_: 0.0)
+    assert not await alerts.deliver(warning)
+    delivery["insert"].assert_not_awaited()
+    delivery["lease"].let_expire.assert_not_called()
+    if entry == "busy":
+        delivery["release"].assert_not_awaited()
+    else:
+        delivery["release"].assert_awaited_once_with(delivery["lease"])
+
+
+@pytest.mark.parametrize("entry", ["take", "work_left"])
+@pytest.mark.parametrize("error_type", [BackendUnavailableError, asyncio.CancelledError])
+async def test_writer_lease_backend_errors_propagate(
+    warning: BudgetWarning,
+    delivery: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    entry: str,
+    error_type: type[BaseException],
+) -> None:
+    error = error_type("lease backend unavailable")
+    if entry == "take":
+        delivery["take"].side_effect = error
+    else:
+        monkeypatch.setattr(lease_writes.leases, "work_left", Mock(side_effect=error))
+    with pytest.raises(error_type) as caught:
+        await alerts.deliver(warning)
+    assert caught.value is error
+    delivery["insert"].assert_not_awaited()
+    if entry == "take":
+        delivery["release"].assert_not_awaited()
+    else:
+        delivery["release"].assert_awaited_once_with(delivery["lease"])
+
+
+@pytest.mark.parametrize(
+    "error_type", [BackendUnavailableError, lease_writes.FenceUnavailableError]
+)
+async def test_insert_backend_and_nested_fence_errors_propagate_with_the_holder_retained(
+    warning: BudgetWarning, delivery: dict[str, Any], error_type: type[BackendUnavailableError]
+) -> None:
+    error = error_type("insert reply unavailable")
+    delivery["insert"].side_effect = error
+    with pytest.raises(error_type) as caught:
+        await alerts.deliver(warning)
+    assert caught.value is error
+    delivery["lease"].let_expire.assert_called_once()
+    delivery["release"].assert_awaited_once_with(delivery["lease"])
+
+
 async def test_uncertain_insert_retains_the_durable_lease(
     warning: BudgetWarning, delivery: dict[str, Any]
 ) -> None:
-    import asyncio
-
     for error in [RuntimeError("reply lost"), asyncio.CancelledError()]:
         delivery["insert"].side_effect = error
         with pytest.raises(type(error)):
             await alerts.deliver(warning)
         delivery["lease"].let_expire.assert_called()
     delivery["take"].assert_awaited_with(
-        "budget.warning.writer/o", ttl_s=alerts.writer_lease_ttl(alerts.rmt_carry.send_bound_s())
+        "budget.warning.writer/o",
+        ttl_s=lease_writes.lease_ttl_s(rmt_carry.send_bound_s()),
+        ch=None,
     )
 
 
@@ -187,19 +249,19 @@ async def test_insert_uses_the_existing_server_side_send_fence(
     warning: BudgetWarning, delivery: dict[str, Any]
 ) -> None:
     async def insert(row: dict[str, Any]) -> bool:
-        assert alerts.rmt_carry.sent_under_lease()
+        assert rmt_carry.sent_under_lease()
         return True
 
     delivery["insert"].side_effect = insert
     assert await alerts.deliver(warning)
-    assert not alerts.rmt_carry.sent_under_lease()
+    assert not rmt_carry.sent_under_lease()
     delivery["lease"].let_expire.assert_not_called()
     delivery["release"].assert_awaited_once()
 
 
 @pytest.mark.parametrize("bound", [20, 30, 80, 200])
 def test_server_finish_precedes_lease_expiry(bound: float) -> None:
-    ttl = alerts.writer_lease_ttl(bound)
+    ttl = lease_writes.lease_ttl_s(bound)
     assert 0.4 * ttl + bound + 4.9 < ttl
 
 

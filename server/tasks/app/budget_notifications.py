@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 import uuid
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 
 from server.auth import machines
-from server.core import leases, rmt_carry
+from server.core import lease_writes
 from server.core.background import TaskSet
 from server.core.ch import get_client
 from server.erasure.app import ledger_reads
@@ -19,7 +19,6 @@ from server.erasure.domain.scopes import may_cover
 from server.observability.budget_notifications import (
     BudgetWarning,
     writer_lease_name,
-    writer_lease_ttl,
 )
 from server.tasks.app import wakeups
 from server.tasks.store import budget_notifications as store
@@ -111,27 +110,14 @@ async def deliver(warning: BudgetWarning) -> bool:
     key = event_id(warning)
     if not await machines.fleet_at(get_client(), 103):
         return False
-    ttl = writer_lease_ttl(rmt_carry.send_bound_s())
-    lease = await leases.take(writer_lease_name(warning.org), ttl_s=ttl)
-    if lease is None:
-        return False
-    uncertain = False
-
-    def mark_uncertain(value: bool) -> None:
-        nonlocal uncertain
-        uncertain = value
-
-    try:
-        left = leases.work_left(lease, ttl)
-        if left <= 0:
+    async with AsyncExitStack() as stack:
+        try:
+            mark_uncertain = await stack.enter_async_context(
+                lease_writes.fenced(writer_lease_name(warning.org))
+            )
+        except lease_writes.FenceUnavailableError:
             return False
-        async with asyncio.timeout(left):
-            with rmt_carry.under_lease(time.monotonic() + left):
-                return await _deliver_claimed(warning, key, mark_uncertain)
-    finally:
-        if uncertain:
-            lease.let_expire()
-        await leases.release_shielded(lease)
+        return await _deliver_claimed(warning, key, mark_uncertain)
 
 
 async def _deliver_claimed(

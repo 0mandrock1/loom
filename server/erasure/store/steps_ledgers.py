@@ -27,7 +27,7 @@ from server.erasure.store.predicates import (
 )
 from server.erasure.store.steps_pg import delete_pg_idempotency
 from server.observability import events_stream
-from server.observability.budget_notifications import writer_lease_name, writer_lease_ttl
+from server.observability.budget_notifications import writer_lease_name
 from server.settings import settings
 
 log = logging.getLogger(__name__)
@@ -385,7 +385,10 @@ _TASK_TABLES = ("loom.tasks", "loom.task_events")
 
 async def delete_task_events_by_user(org: str, user_id: str, *, ch: _CHClient | None = None) -> int:
     async with leases.holding(
-        writer_lease_name(org), ttl_s=writer_lease_ttl(rmt_carry.send_bound_s()), wait_s=30, ch=ch
+        writer_lease_name(org),
+        ttl_s=lease_writes.lease_ttl_s(rmt_carry.send_bound_s()),
+        wait_s=30,
+        ch=ch,
     ) as held:
         if not held:
             raise BackendUnavailableError("budget warning writes have not settled; retry erasure")
@@ -400,7 +403,10 @@ async def delete_tasks_by_namespace(
     """Task briefs, notes and outcomes quote code and issue text.
     Both tables key on the inbox's owner namespace."""
     async with leases.holding(
-        writer_lease_name(org), ttl_s=writer_lease_ttl(rmt_carry.send_bound_s()), wait_s=30, ch=ch
+        writer_lease_name(org),
+        ttl_s=lease_writes.lease_ttl_s(rmt_carry.send_bound_s()),
+        wait_s=30,
+        ch=ch,
     ) as held:
         if not held:
             raise BackendUnavailableError("budget warning writes have not settled; retry erasure")

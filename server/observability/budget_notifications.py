@@ -40,8 +40,3 @@ def notify(warning: BudgetWarning) -> None:
 
 def writer_lease_name(org: str) -> str:
     return f"budget.warning.writer/{org}"
-
-
-def writer_lease_ttl(send_bound_s: float) -> float:
-    # The last send's finish bound stays strictly before this unrenewed lease expires.
-    return max(60.0, (send_bound_s + 5.0) / 0.6)
