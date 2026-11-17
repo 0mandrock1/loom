@@ -426,7 +426,7 @@ class MemorySearchHit:
     source_resource_id: str = ""
     verified: bool = False
     # The identity axes the row was written under, when the server read them.
-    agent: str = ""
+    agent: str = field(default="", kw_only=True)
     user_id: str = ""
     session_id: str = ""
     speaker: str = ""
