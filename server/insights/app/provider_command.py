@@ -17,8 +17,6 @@ from server.settings import settings
 
 log = logging.getLogger(__name__)
 
-COMMAND_DRAIN_S = 15.0  # bounded cleanup; timeout leaves the participant unretired
-
 
 async def _adopt_overrides(*, failing: bool = False) -> bool:
     """Whether the stored overrides loaded. A failure is logged when a run of them
@@ -64,7 +62,7 @@ async def _finish_participant() -> None:
     from server.memory.app import embedder_calibration
 
     loop = asyncio.get_running_loop()
-    end = loop.time() + COMMAND_DRAIN_S
+    end = loop.time() + settings.native_command_drain_timeout_s
     first = gate.producer_failure
     stopped = False
     try:

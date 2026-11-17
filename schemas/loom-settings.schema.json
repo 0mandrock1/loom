@@ -5324,6 +5324,12 @@
           "type": "number",
           "description": "loom.namespace_write_marks is an in-process max per (org, namespace, plane), flushed as one INSERT this often."
         },
+        "native_command_drain_timeout_s": {
+          "default": 15.0,
+          "exclusiveMinimum": 0,
+          "type": "number",
+          "description": "Seconds a native CLI command allows its producers, deferred writes and participant retirement to finish. Expiry leaves the participant unretired."
+        },
         "oauth_access_token_ttl_seconds": {
           "default": 3600,
           "maximum": 86400,

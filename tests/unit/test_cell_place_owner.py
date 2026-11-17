@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from server.cli import cell_control
 from server.core import pg
+from tests.unit.clock_fake import ManualClock
 from tests.unit.test_cell_attach import FakeConn
 
 pytestmark = pytest.mark.asyncio
@@ -163,7 +165,11 @@ async def test_public_close_defers_repeated_signals_until_acknowledged_within_or
         await asyncio.gather(task, return_exceptions=True)
 
 
-async def test_repeated_signals_cannot_extend_an_expired_public_close():
+async def test_repeated_signals_cannot_extend_an_expired_public_close(monkeypatch):
+    clock = ManualClock(t=100.0)
+    local_time = SimpleNamespace(monotonic=clock.monotonic)
+    monkeypatch.setattr(cell_control, "time", local_time)
+    monkeypatch.setattr(pg, "time", local_time)
     closing = asyncio.Event()
     conn = FakeConn()
 
@@ -174,28 +180,46 @@ async def test_repeated_signals_cannot_extend_an_expired_public_close():
     conn.close = stalled
     owner = cell_control.Owner(exit_s=0.04)
     owner.conn = conn
-    started = time.monotonic()
+    waits = []
+
+    async def signalled_wait(tasks, **kwargs):
+        assert tasks == {owner._close_task}
+        waits.append(kwargs["timeout"])
+        assert len(waits) <= 2, "signals cannot grant another cleanup allowance"
+        await closing.wait()
+        if len(waits) == 1:
+            clock.advance(0.01)
+        else:
+            clock.t = 100.04
+        asyncio.current_task().cancel("first signal" if len(waits) == 1 else "second signal")
+        await asyncio.sleep(0)
+        raise AssertionError("cancellation must reach the public close")
+
+    # Replace only this module's wait seam; native close and the event loop stay real.
+    monkeypatch.setattr(
+        cell_control,
+        "asyncio",
+        SimpleNamespace(
+            create_task=asyncio.create_task,
+            CancelledError=asyncio.CancelledError,
+            wait=signalled_wait,
+        ),
+    )
     task = asyncio.create_task(owner.close())
-    await closing.wait()
-    end = owner.close_end
-
-    async def signals():
-        while not task.done():
-            task.cancel("first signal")
-            await asyncio.sleep(0.001)
-
-    signal_task = asyncio.create_task(signals())
     try:
         done, _ = await asyncio.wait({task}, timeout=0.2)
         assert done, "repeated signals cannot restart the original cleanup allowance"
         with pytest.raises(asyncio.CancelledError, match="first signal"):
             await task
-        assert time.monotonic() - started < 0.2
-        assert owner.close_end == end
+        assert waits == pytest.approx([0.04, 0.03])
+        assert clock.monotonic() - 100.0 == pytest.approx(0.04)
+        assert owner.close_end == 100.04
         assert "TERMINATE" in conn.executed
     finally:
-        signal_task.cancel()
-        await asyncio.gather(signal_task, task, return_exceptions=True)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if owner._close_task is not None:
+            await asyncio.gather(owner._close_task, return_exceptions=True)
 
 
 async def test_closed_transport_cannot_acknowledge_pending_public_cancellation():
