@@ -1,6 +1,6 @@
 # Examples
 
-Runnable, self-contained scripts for `clickhouse-loom`; each was executed against a live Loom before it landed here and the output below is the actual run. The memory example reads `LOOM_BASE_URL`, `LOOM_API_KEY` and `LOOM_ORG` from the environment and registers a throwaway namespace. The handoff example uses an existing namespace and two separate tokens. The TypeScript SDK ships the twin of `agent_memory.py` (and a session-resume example) under `sdk/typescript/examples/`.
+Runnable, self-contained scripts for `clickhouse-loom`. The memory example's output below was recorded against a live Loom; the handoff output illustrates its checked result. The memory example reads `LOOM_BASE_URL`, `LOOM_API_KEY` and `LOOM_ORG` from the environment and registers a throwaway namespace. The handoff example uses an existing namespace and two separate tokens. The TypeScript SDK ships the twin of `agent_memory.py` (and a session-resume example) under `sdk/typescript/examples/`.
 
 ## agent_memory.py
 
@@ -69,7 +69,11 @@ verifies the stored value, agent, actor and `source_class`. It reads across the
 two agents within their shared namespace and default user/session scope; the
 example does not promote the memory to another namespace.
 
-Actual output from an auth-enabled local server with fake embedding and LLM
+The stored value includes the task id so separate calculations have distinct
+results. A write that reports no new memory cancels the task before completion;
+cleanup never follows or deletes a merged peer's key.
+
+Expected output with an auth-enabled server using fake embedding and LLM
 providers and distinct signed principals:
 
 ```text
@@ -82,7 +86,7 @@ source class: asserted
 cleanup: result memory is missing
 ```
 
-This run checks the task lifecycle, provenance and cleanup; it does not measure
+The example checks the task lifecycle, provenance and cleanup; it does not measure
 agent reasoning or retrieval quality. The suffix differs each run. In `finally`,
 the example cancels unfinished work with its current owner's token and deletes
 the result memory, then checks that the memory is missing. The inbox and task

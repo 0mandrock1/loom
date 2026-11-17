@@ -35,6 +35,8 @@ class HandoffServer:
         self.inbox = ""
         self.key = ""
         self.deleted = False
+        self.canonical_value: Any = None
+        self.force_noop = False
 
     def __call__(self, req: httpx.Request) -> httpx.Response:
         op = req.url.path.removeprefix("/v1/")
@@ -88,6 +90,15 @@ class HandoffServer:
         if op == "memory.set":
             assert token == "Bearer worker-token"
             self.key = body["memory_key"]
+            if self.force_noop or body["value"] == self.canonical_value:
+                return httpx.Response(
+                    200,
+                    json={
+                        "noop": True,
+                        "conflict_verdict": "merge",
+                        "merged_into_key": "existing-result",
+                    },
+                )
             self.memory = {
                 "found": True,
                 "value": body["value"],
@@ -137,6 +148,38 @@ async def test_handoff_uses_two_tokens_and_cleans_its_memory(
     assert "result: 7 squared is 49" in output
     assert "writer actor: process:handoff-worker" in output and "source class: asserted" in output
     assert "planner-token" not in output and "worker-token" not in output
+
+
+async def test_handoff_keeps_an_existing_identical_calculation_separate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = HandoffServer()
+    server.canonical_value = "7 squared is 49"
+    configure(monkeypatch, server)
+    await load_example().main()
+    assert server.task is not None and server.task["status"] == "done"
+    written = next(body for op, _, body in server.calls if op == "memory.set")
+    assert written["value"] == {"task_id": "task-1", "result": "7 squared is 49"}
+    assert server.canonical_value == "7 squared is 49"
+    assert server.deleted and server.memory is None
+    assert all(
+        body["memory_key"] != "existing-result"
+        for op, _, body in server.calls
+        if op == "memory.delete"
+    )
+
+
+async def test_handoff_refuses_to_complete_after_a_noop_result_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = HandoffServer()
+    server.force_noop = True
+    configure(monkeypatch, server)
+    with pytest.raises(RuntimeError, match="result memory was not written"):
+        await load_example().main()
+    assert server.task is not None and server.task["status"] == "cancelled"
+    assert not any(op == "task.complete" for op, _, _ in server.calls)
+    assert server.deleted and server.memory is None
 
 
 @pytest.mark.parametrize("fail_op", ["task.claim", "task.heartbeat", "task.complete"])

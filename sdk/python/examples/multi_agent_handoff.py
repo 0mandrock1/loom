@@ -65,7 +65,10 @@ async def handoff(planner: Agent, worker: Agent, inbox: str, key: str) -> None:
         await worker.tasks.heartbeat(task_id, fence=fence)
         number = task["brief"]["number"]
         result = f"{number} squared is {number * number}"
-        await worker.memory.set(key, result)
+        # A result belongs to this task, even when another task calculates the same value.
+        value = {"task_id": task_id, "result": result}
+        written = await worker.memory.set(key, value)
+        require(not written.get("noop"), "The result memory was not written")
         await worker.tasks.complete(task_id, fence=fence, outcome={"memory_key": key})
 
         finished = await planner.tasks.get(task_id)
@@ -76,13 +79,13 @@ async def handoff(planner: Agent, worker: Agent, inbox: str, key: str) -> None:
         memory = await planner.memory.get(key)
         require(memory is not None, "The planner cannot read the worker's memory")
         assert memory is not None
-        require(memory.get("value") == result, "The result differs from the worker's calculation")
+        require(memory.get("value") == value, "The result differs from the worker's calculation")
         require(memory.get("agent") == worker.agent, "The memory names another agent")
         actor = str(memory.get("actor") or "")
         require(actor == "process:handoff-worker", "The memory names another writing principal")
         require(memory.get("source_class") == "asserted", "The memory has another source class")
         print(f"task: {finished['status']}")
-        print(f"result: {memory['value']}")
+        print(f"result: {memory['value']['result']}")
         print(f"writer agent: {memory['agent']}")
         print(f"writer actor: {actor}")
         print(f"source class: {memory['source_class']}")
