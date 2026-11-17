@@ -1,7 +1,7 @@
 """The mirrored sources' share of a sync pass: they run first, apart from the namespace
-sources' document bound, rotate, keep their state under the mirror, spend as the mirror,
-and read their lists on from a cursor (docs/architecture/document-sources.md, Every
-complete listing reads the lists again)."""
+sources' document bound, rotate, keep their state under the mirror, attribute their
+model calls to the mirror, and read their lists on from a cursor
+(docs/architecture/document-sources.md, Every complete listing reads the lists again)."""
 
 from __future__ import annotations
 
@@ -119,7 +119,7 @@ def test_a_source_added_again_under_the_name_inherits_no_state(world: Any, mirro
     assert [written.namespace for written, _ in world.upserts] == [MIRROR]
 
 
-def test_a_mirrored_turn_spends_as_its_mirror(
+def test_a_mirrored_turn_attributes_model_calls_to_its_mirror(
     world: Any, mirror: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: list[str] = []

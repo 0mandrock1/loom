@@ -813,9 +813,10 @@ schema. These rules keep that safe. The operator procedure is in
     (`LOOM_KNOWLEDGE_SOURCE_MIRROR_DOCUMENTS_PER_PASS`), the one synced longest ago
     first, a sync request included; the namespace sources then have the rest of the pass
     under their own bound. A mirrored source's turn keeps its own state under its mirror
-    and source id, leaves only its request, status and time in the namespace row, spends
-    as the mirror, and reads the lists on from a cursor in that state, in at most half
-    of what is left of the mirrors' share when its turn reaches them, so its new and
+    and source id, leaving only its request, status and time in the namespace row. Its
+    model calls are attributed to the mirror. It reads the lists on from a cursor in
+    that state, in at most half of what is left of the mirrors' share when its turn
+    reaches them, so its new and
     changed files still get time, and a turn whose list reads stop there is still
     complete, so it retires gone files and keeps the full interval; a cycle's listing
     row carries the start of the turn that began it. N-1 runs a mirrored source under

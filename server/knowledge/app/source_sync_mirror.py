@@ -19,8 +19,8 @@ copy's list was brought up to date by a listing that searched everything.
 A source with more files lacking a list than a turn can read goes on from a cursor in the
 next turn, and the row of that cycle carries the start of the turn that began it. The
 turn's state (that cursor, its waits, counts and error) is under the mirror and the
-source's id, the namespace row keeping only the request, status and time, and what the
-turn spends is the mirror's."""
+source's id, the namespace row keeping only the request, status and time. Its model
+calls are attributed to the mirror."""
 
 from __future__ import annotations
 
