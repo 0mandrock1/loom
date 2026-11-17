@@ -424,10 +424,11 @@ An unknown field or a response missing the exact verified origin refuses; the cl
 does not retry without the field. A rerun preserves the exact registered origin,
 including refusing a registered later cell whose origin is blank. It never fills or
 moves that address. Surviving local state is not cleared to bypass this refusal.
-Registration makes this replica's credential and routing caches stale after any
-in-flight old routing read; its last routing table remains available during a directory
-outage. Other replicas retain their ordinary refresh bounds. Unknown commit or reply
-outcomes stop the invocation before local writes; a fresh normal prepare rerun reads
+Registration immediately invalidates this replica's credential and routing caches,
+even if the request is cancelled after commit. An in-flight older routing read cannot
+mark its table fresh after invalidation; the last table remains available during a
+directory outage. Other replicas retain their ordinary refresh bounds. Unknown commit or
+reply outcomes stop the invocation before local writes; a fresh normal prepare rerun reads
 and verifies the actual row.
 
 This preparation contract does not implement later-cell attach or a read-only attach

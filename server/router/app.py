@@ -222,6 +222,7 @@ class Router:
         # and the last one kept while the directory cannot be read.
         self._table: routing.Table | None = None
         self._table_at: float | None = None
+        self._table_gen = 0
         self._table_lock = asyncio.Lock()
         self._refreshing: asyncio.Task[None] | None = None
         self._http: httpx.AsyncClient | None = None
@@ -456,6 +457,7 @@ class Router:
                 )
                 if fresh:  # read by the request this one waited behind
                     return
+                generation = self._table_gen
                 try:
                     cells, aliases = await directory.routing()
                 except directory.DirectoryUnavailable as e:
@@ -467,7 +469,8 @@ class Router:
                         shared_host=settings.router_shared_host,
                         passthrough=settings.router_upstream_url,
                     )
-                self._table_at = self._clock()  # when the read ended, failed or not
+                if generation == self._table_gen:
+                    self._table_at = self._clock()  # Failed reads retain their retry window.
         finally:
             self._refreshing = None
 
@@ -638,11 +641,13 @@ class Router:
             self._forget_credentials()
         return response
 
-    async def _registration_changed(self) -> None:
+    def _forget_routing(self) -> None:
+        self._table_gen += 1
+        self._table_at = None
+
+    def _registration_changed(self) -> None:
         self._forget_credentials()
-        # An old refresh must finish before this write can make its table stale.
-        async with asyncio.timeout(directory.ROUTING_READ_MAX_S), self._table_lock:
-            self._table_at = None
+        self._forget_routing()
 
     async def register(self, request: Request) -> JSONResponse:
         """`loom cell prepare`: register the cell once its probe address shows the stores
@@ -665,7 +670,13 @@ class Router:
         if refusal := await _probe(reg, nonces, self._probe_transport):
             return refusal
         # Both addresses must name the nonce-verified deployment before any insert.
-        if reg.upstream_url and (refusal := await _upstream_check(reg, self._probe_transport)):
+        if reg.upstream_url and (
+            refusal := await _upstream_check(
+                reg,
+                self._probe_transport,
+                names=_REGISTERING if reg.is_first else ("upstream_url", "probe_url"),
+            )
+        ):
             return refusal
         try:
             row, written = await directory.register(reg)
@@ -673,14 +684,12 @@ class Router:
             return _refused(409, e.reason)
         except directory.DirectoryUnavailable as e:
             # Its commit may have landed: this replica reads the hashes again.
-            with contextlib.suppress(BaseException):
-                await self._registration_changed()
+            self._registration_changed()
             return _refused(503, e.reason, code="BACKEND_UNAVAILABLE")
         except BaseException:  # An interrupted commit may still have published the origin.
-            with contextlib.suppress(BaseException):
-                await self._registration_changed()
+            self._registration_changed()
             raise
-        await self._registration_changed()
+        self._registration_changed()
         return JSONResponse(
             {
                 "cell": row.cell,
@@ -812,7 +821,7 @@ class Router:
             _attach_answer,
         )
         if response.status_code in (200, 503):
-            self._table_at = None
+            self._forget_routing()
         return response
 
     async def configuration_placements(self, request: Request) -> JSONResponse:
@@ -872,7 +881,7 @@ class Router:
             _attach_answer,
         )
         if response.status_code in (200, 503):
-            self._table_at = None
+            self._forget_routing()
         return response
 
     async def attach_begin(self, request: Request) -> JSONResponse:
@@ -991,7 +1000,7 @@ class Router:
         # A 503's change may have committed: this replica reads the cell's issuers and state
         # on its next request either way.
         if response.status_code in (200, 503):
-            self._table_at = None
+            self._forget_routing()
             # Under the lock: a state read in flight stores its row first, then loses it.
             async with self._states_lock:
                 self._states.pop(name, None)
@@ -1018,7 +1027,7 @@ class Router:
         # A 503 is included: the removal may have committed (BACKEND_UNAVAILABLE).
         if response.status_code in (200, 503):
             self._forget_credentials()
-            self._table_at = None
+            self._forget_routing()
         return response
 
     async def _stores_check(
@@ -1113,12 +1122,9 @@ def _malformed_cell_refusal(request: Request) -> JSONResponse | None:
 PROBE_TIMEOUT = httpx.Timeout(10.0, connect=5.0)  # not a setting: the probe's shape bounds it
 PROBE_DEADLINE_S = 15.0  # not a setting: the whole probe, however slowly it answers
 # The longest a registration's answer can take: the read before the probe, the probe and
-# the main-port check, write and an in-flight routing read. The client waits this long.
+# the main-port check and write. The client waits at least this long.
 REGISTER_ANSWER_MAX_S = (  # not a setting: derived
-    directory.REFUSAL_READ_MAX_S
-    + 2 * PROBE_DEADLINE_S
-    + directory.REGISTER_MAX_S
-    + directory.ROUTING_READ_MAX_S
+    directory.REFUSAL_READ_MAX_S + 2 * PROBE_DEADLINE_S + directory.REGISTER_MAX_S
 )
 _SECONDS = re.compile(r"[0-9]{1,6}")  # ASCII digits: str.isdigit takes any script's
 _TEXT_MAX = 1024  # not a setting: a host, an id, a bucket name or prefix is far shorter
@@ -1508,8 +1514,8 @@ async def _upstream_check(
     *,
     names: tuple[str, str] = _REGISTERING,
 ) -> JSONResponse | None:
-    """None when the first cell's upstream (the deployment the shared host forwards to)
-    reports the deployment id its probe listener did, else the refusal, naming the upstream
+    """None when the main port reports the deployment id its probe listener did, else
+    the refusal, naming the upstream
     and probe addresses as `names` does: the row's upstream must be the deployment probed.
     The main port answers the id from memory and sets no rate of its own: a 429, 502, 503 or
     504 there is a proxy's in front of it, and is asked again."""

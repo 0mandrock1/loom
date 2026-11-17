@@ -162,6 +162,7 @@ async def test_registration_invalidates_after_an_inflight_old_routing_read(monke
 
     async def register(reg):
         committed.set()
+        await asyncio.sleep(0)
         if unknown:
             raise directory.DirectoryUnavailable("commit reply lost")
         return _row(reg), True
@@ -259,3 +260,100 @@ async def test_changed_registered_address_stops_before_local_claim_or_acknowledg
         )
     claim.assert_not_awaited()
     write.assert_not_awaited()
+
+
+@pytest.mark.parametrize("unknown", [False, True], ids=["acknowledged", "unknown-commit"])
+@pytest.mark.asyncio
+async def test_cancelled_registration_cannot_make_an_older_routing_snapshot_fresh(
+    monkeypatch, unknown
+):
+    monkeypatch.setattr(
+        settings, "router_operator_sha256", hashlib.sha256(OPERATOR.encode()).hexdigest()
+    )
+    monkeypatch.setattr(settings, "router_shared_host", "loom.example")
+    entered, release, committed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    old = _cells()
+    old[1].update(state="attaching", upstream_url="")
+    published = _cells()
+    published[1].update(state="attaching", upstream_url=ORIGIN)
+    reads, writes = [], []
+
+    async def routing():
+        snapshot = old if not reads else published
+        reads.append(True)
+        if len(reads) == 1:
+            entered.set()
+            await release.wait()
+        return snapshot, []
+
+    async def register(reg):
+        writes.append(reg.upstream_url)
+        committed.set()
+        if unknown:
+            raise directory.DirectoryUnavailable("commit reply lost")
+        return _row(reg), True
+
+    monkeypatch.setattr(directory, "routing", routing)
+    monkeypatch.setattr(directory, "refusal_before_probe", AsyncMock(return_value=""))
+    monkeypatch.setattr(directory, "register", register)
+    instance = router_app.Router(probe_transport=httpx.MockTransport(_Listener()))
+    refresh = asyncio.create_task(instance._refresh())
+    pending = None
+    try:
+        await entered.wait()
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=router_app.build_app(instance)),
+            base_url="http://router.internal",
+        ) as client:
+            pending = asyncio.create_task(
+                client.post(
+                    "/cells/v1/operator/cells/eu-2/register",
+                    json=_body(host="eu-2.loom.example", probe_url=PROBE, upstream_url=ORIGIN),
+                    headers={"Authorization": "Bearer " + OPERATOR},
+                )
+            )
+            await committed.wait()
+            assert writes == [ORIGIN]
+            pending.cancel()
+            try:
+                answer = await pending
+            except asyncio.CancelledError:
+                pass
+            else:
+                assert answer.status_code == (503 if unknown else 200)
+            release.set()
+            await refresh
+            await instance._routing_table()
+            if instance._refreshing:
+                await instance._refreshing
+            assert (
+                router_app.routing.decide(
+                    instance._table, host="eu-2.example", path="/oauth/token"
+                ).upstream
+                == ORIGIN
+            )
+            assert len(reads) == 2
+    finally:
+        release.set()
+        if pending is not None and not pending.done():
+            pending.cancel()
+        await asyncio.gather(
+            *(task for task in [pending, refresh] if task is not None), return_exceptions=True
+        )
+
+
+@pytest.mark.parametrize("unreachable", [False, True], ids=["wrong-deployment", "unreachable"])
+def test_later_main_origin_refusal_names_the_supplied_fields(router, unreachable):
+    client, listener, calls = router
+    listener.upstream_down = unreachable
+    listener.upstream_id = "another-deployment"
+    answer = _post(
+        client, _body(host="eu-2.loom.example", probe_url=PROBE, upstream_url=ORIGIN), cell="eu-2"
+    )
+    assert answer.status_code == (503 if unreachable else 409)
+    error = answer.json()["error"]
+    assert "upstream_url" in error
+    assert "LOOM_ROUTER_UPSTREAM_URL" not in error
+    if not unreachable:
+        assert "probe_url" in error
+    assert calls == []

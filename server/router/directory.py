@@ -78,7 +78,6 @@ OPERATOR_CHANGE_MAX_S = _bound_s(10)  # not a setting: derived from the bound ab
 REGISTER_STATEMENTS, REFUSAL_READ_STATEMENTS = 13, 6
 REGISTER_MAX_S = _bound_s(REGISTER_STATEMENTS)
 REFUSAL_READ_MAX_S = _bound_s(REFUSAL_READ_STATEMENTS)
-ROUTING_READ_MAX_S = _bound_s(2)  # connection, two reads and release in routing()
 # The attach calls' statements, which tests/unit/test_router_attach.py counts against the
 # code: the operator's read of a cell's row (the row, any other row, audit); the read before
 # `begin`'s and `serving`'s probe (the row, any other row); `begin`, `enforced` and
