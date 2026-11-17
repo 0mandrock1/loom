@@ -28,12 +28,20 @@ from server.workers.supervisor import get_supervisor
 log = logging.getLogger("loom.workers.child")
 
 
+async def _enroll() -> None:
+    from server.core.ch import query_tag
+    from server.insights.app.provider_barrier import register_process
+
+    with query_tag("boot.workers_child"):
+        retirement.get_gate().install("worker")
+        await register_process()
+
+
 async def _start_services(ch: Any) -> list[asyncio.Task[None]]:
     from server.code.app.index import repo_registry
     from server.core.background import register_buffer_drainer
     from server.core.ch import query_tag, set_query_tag
     from server.core.model_work_gate import get_model_work_gate
-    from server.insights.app.provider_barrier import register_process
     from server.insights.app.provider_runtime import load_active_configuration, refresh_loop
     from server.observability import get_emitter
     from server.tracker.app import registry_sources
@@ -47,8 +55,6 @@ async def _start_services(ch: Any) -> list[asyncio.Task[None]]:
     # `with`, not set_query_tag: the supervisor and the shutdown run in this context after.
     with query_tag("boot.workers_child"):
         register_buffer_drainer("boot-writes", boot.drain_writes)
-        retirement.get_gate().install("worker")
-        await register_process()
         await load_active_configuration()
         await get_emitter().start()
         await registry_sources.refresh_db_sources(force=True, ch=ch)
@@ -108,6 +114,7 @@ async def _serve(fd: int, alive_fd: int) -> None:
     await boot.open_storage_authority()
     services = []
     try:
+        await _enroll()
         if settings.cell:
             # The passes verify tokens and judge the gate as the parent does: the child
             # reads the cell's rows itself.

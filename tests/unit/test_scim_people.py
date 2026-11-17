@@ -309,6 +309,15 @@ async def test_outage_is_retryable_and_never_cached(people):
     assert not await scim.refuses_subject("alice@example.test", org="acme")
 
 
+@pytest.mark.parametrize("raw", ["", " ", " , ", ",,,"])
+async def test_empty_parsed_token_policy_keeps_retained_deactivations(people, monkeypatch, raw):
+    monkeypatch.setattr(settings, "scim_token", raw)
+    assert not scim.requires_provisioning()
+    people.provision("disabled@example.test", active=False)
+    assert not await scim.refuses_subject("missing@example.test", org="acme")
+    assert await scim.refuses_subject("disabled@example.test", org="acme")
+
+
 @pytest.mark.parametrize("scim_on", [False, True])
 async def test_standalone_keeps_existing_deactivation_behavior(people, monkeypatch, scim_on):
     monkeypatch.setattr(settings, "cell", "")

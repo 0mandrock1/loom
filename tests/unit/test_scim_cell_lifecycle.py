@@ -123,6 +123,7 @@ def test_worker_checks_cell_before_services_and_drains_before_leaving(
 ):
     from server import worker_main
     from server.core import ch
+    from server.insights.app import provider_barrier
     from server.workers import leader
 
     order = []
@@ -152,8 +153,67 @@ def test_worker_checks_cell_before_services_and_drains_before_leaving(
     monkeypatch.setattr(boot, "close_storage_authority", AsyncMock())
     monkeypatch.setattr(boot, "leave_deployment", leave)
     monkeypatch.setattr(boot, "start_cell_state", refuse)
+    monkeypatch.setattr(provider_barrier, "register_process", AsyncMock())
     monkeypatch.setattr(worker_main, "_start_services", services)
     with pytest.raises(RuntimeError, match="SCIM token policy|services refused"):
         asyncio.run(worker_main._serve(0, 0))
     assert order == (["cell"] if failure == "policy" else ["cell", "services"])
     assert closed == ([] if failure == "policy" else [True])
+
+
+@pytest.mark.parametrize("raw,valid", [(OWN, True), (LEGACY, False)])
+async def test_worker_enrolls_before_acceptance_and_checks_policy_before_business(
+    lifecycle, monkeypatch, raw, valid
+):
+    from server import worker_main
+    from server.core import ch, retirement
+    from server.insights.app import provider_barrier
+    from server.workers import leader
+
+    events = []
+    tasks = []
+    observations = []
+    gate = retirement.get_gate()
+    monkeypatch.setattr(settings, "scim_token", raw)
+    monkeypatch.setattr(provider_barrier, "_registered", False)
+    monkeypatch.setattr(provider_barrier, "_OWN", provider_barrier._Own())
+
+    class Heartbeat:
+        def start(self):
+            assert gate.role == "worker"
+            events.append("enroll")
+
+    async def acceptance(*_a, **_kwargs):
+        observations.append((gate.role, gate.enrolled, provider_barrier._registered))
+        events.append("acceptance")
+        return _row()
+
+    def refresh_loop():
+        tasks.append(asyncio.create_task(asyncio.Event().wait()))
+        return tasks[-1]
+
+    async def business(_ch):
+        assert cell.gate_reason() == ""
+        events.append("business")
+        raise RuntimeError("business refused")
+
+    async def leave(*_a, **_kwargs):
+        assert all(task.cancelled() for task in tasks)
+
+    monkeypatch.setattr(provider_barrier, "_HEARTBEAT", Heartbeat())
+    monkeypatch.setattr(pg, "fetchrow_reset", acceptance)
+    monkeypatch.setattr(cell, "start_refresh_loop", refresh_loop)
+    monkeypatch.setattr(worker_main.child, "read_deadlines", lambda *_a: None)
+    monkeypatch.setattr(worker_main.child, "exit_past_deadline", lambda *_a: None)
+    monkeypatch.setattr(worker_main.child, "beat", AsyncMock())
+    monkeypatch.setattr(leader, "_CURRENT", leader.current())
+    monkeypatch.setattr(ch, "get_client", lambda: type("Client", (), {"connect": AsyncMock()})())
+    monkeypatch.setattr(boot, "open_storage_authority", AsyncMock())
+    monkeypatch.setattr(boot, "close_storage_authority", AsyncMock())
+    monkeypatch.setattr(boot, "leave_deployment", leave)
+    monkeypatch.setattr(worker_main, "_start_services", business)
+    with pytest.raises(RuntimeError, match="business refused|SCIM|SCIM_TOKEN"):
+        await worker_main._serve(0, 0)
+    assert observations == [("worker", True, True)]
+    assert events == (["enroll", "acceptance", "business"] if valid else ["enroll", "acceptance"])
+    assert bool(tasks) is valid

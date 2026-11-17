@@ -12,6 +12,7 @@ from typing import Any
 from server.core import cell, ch
 from server.core.datetimes import as_aware_utc
 from server.core.grant_sql import VERIFIED_EMAIL_SQL
+from server.core.scim_tokens import tokens
 from server.settings import settings
 
 MAX_ITEMS = 1024  # not a setting: security work per complete decision
@@ -58,7 +59,7 @@ def _decision_seconds() -> float:
 
 
 def requires_provisioning() -> bool:
-    return bool(settings.cell and settings.scim_token and cell.mode() == "enforced")
+    return bool(settings.cell and tokens(settings.scim_token) and cell.mode() == "enforced")
 
 
 async def refuses_subject(
