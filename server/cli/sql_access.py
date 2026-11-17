@@ -82,7 +82,12 @@ def _connected(
                 await check_acceptance(orgs=orgs, org_free=org_free)
                 return await work(ch)
         finally:
-            await disconnect(ch)
+            first = sys.exception()
+            try:
+                await disconnect(ch)
+            except BaseException:  # a disconnect failure must not replace the command failure
+                if first is None:
+                    raise
 
     return asyncio.run(_go())
 

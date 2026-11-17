@@ -264,15 +264,8 @@ async def retire_at_shutdown(ch: Any, *, budget_s: float = SHUTDOWN_RETIRE_S) ->
     Every attempt, settle and pause ends by `budget_s` from now."""
     from server.core import rmt_carry
 
-    deadline = monotonic() + budget_s
     try:
-        async with asyncio.timeout(budget_s):
-            while True:
-                if await retire_process():
-                    return True
-                with contextlib.suppress(Exception):
-                    await rmt_carry.settle(ch)
-                await asyncio.sleep(min(1.0, max(0.0, deadline - monotonic())))
+        return await _retire_until(ch, monotonic() + budget_s)
     except TimeoutError:
         log.warning(
             "provider participant not retired at shutdown: %d carried write(s) unsettled "
@@ -284,6 +277,19 @@ async def retire_at_shutdown(ch: Any, *, budget_s: float = SHUTDOWN_RETIRE_S) ->
     except Exception as e:  # noqa: BLE001 — the row then expires; health names it
         log.warning("provider participant not retired at shutdown: %s", e)
     return False
+
+
+async def _retire_until(ch: Any, deadline: float) -> bool:
+    """Retry the existing settlement checks under the caller's absolute deadline."""
+    from server.core import rmt_carry
+
+    async with asyncio.timeout_at(deadline):
+        while True:
+            if await retire_process():
+                return True
+            with contextlib.suppress(Exception):
+                await rmt_carry.settle(ch)
+            await asyncio.sleep(min(1.0, max(0.0, deadline - monotonic())))
 
 
 def participant_lifespan[T](
@@ -314,8 +320,12 @@ def participant_lifespan[T](
 
 
 async def retire_participant(participant: UUID, *, ch: Any = None) -> str:
-    """`retired`, `absent` (no live row), or `live`: its heartbeat is fresh or a
-    query tagged with its id still runs."""
+    """`retired`, `absent` (no row), or `live` (not proved stopped).
+
+    Retirement needs the recorded identity proved absent in the same host, boot
+    and PID namespace, with tagged queries known zero. Unknown evidence blocks;
+    heartbeat expiry alone proves nothing.
+    """
     row = next(
         (r for r in await participants(ch=ch) if str(r["participant_id"]) == str(participant)),
         None,
@@ -342,9 +352,10 @@ HERE_S = 10.0
 
 
 async def retire_dead_here(*, now: float | None = None) -> int:
-    """Retire the participants this host proves stopped (`proves_stopped`: a
-    restarted container or a respawned worker) with no query of theirs left
-    running. Every process's job, every `HERE_S`; how many it retired."""
+    """Retire recorded process-start identities proved absent in this host,
+    boot and PID namespace, with tagged queries known zero. Unknown evidence
+    blocks. Run at most every `HERE_S`; return how many were retired.
+    """
     global _last_here
     t = monotonic() if now is None else now
     if t - _last_here < HERE_S:

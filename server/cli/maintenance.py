@@ -256,7 +256,12 @@ def _cmd_reextract(args: argparse.Namespace) -> int:
                 )
                 return 1 if rep.failed and rep.failed == rep.sessions else 0
         finally:
-            await disconnect(ch)
+            first = sys.exception()
+            try:
+                await disconnect(ch)
+            except BaseException:  # a disconnect failure must not replace the command failure
+                if first is None:
+                    raise
 
     return asyncio.run(_go())
 

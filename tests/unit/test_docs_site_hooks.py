@@ -23,6 +23,50 @@ _SPEC.loader.exec_module(hooks)
 _CONFIG = {"site_url": "https://example.com/loom/"}
 
 
+@pytest.mark.parametrize("homepage", [True, False])
+def test_page_metadata_identifies_the_software_or_document(homepage: bool) -> None:
+    config = {**_CONFIG, "site_name": "ClickHouse Loom", "site_description": "Agent memory."}
+    page = SimpleNamespace(
+        title="Memory &amp; <code>code</code>",
+        is_homepage=homepage,
+        meta={"description": "Memory &amp; code."},
+        canonical_url=_CONFIG["site_url"] + ("" if homepage else "concepts/memory/"),
+    )
+    context = hooks.on_page_context({"existing": True}, page, config, None)
+    assert context["existing"] is True
+    graph = context["loom_schema"]["@graph"]
+    assert graph[0]["description"] == "Memory & code."
+    if homepage:
+        assert context["loom_title"] == (
+            "ClickHouse Loom: agent memory, document search and code index"
+        )
+        assert graph[0]["@type"] == ["SoftwareApplication", "SoftwareSourceCode"]
+        assert graph[0]["codeRepository"] in graph[0]["sameAs"]
+        assert graph[0]["@id"] == _CONFIG["site_url"] + "#software"
+    else:
+        assert context["loom_title"] == "Memory & code - ClickHouse Loom"
+        assert graph[0]["headline"] == "Memory & code"
+        assert graph[0]["about"]["@id"] == _CONFIG["site_url"] + "#software"
+        assert graph[1]["@type"] == "BreadcrumbList"
+        assert [item["item"] for item in graph[1]["itemListElement"]] == [
+            _CONFIG["site_url"],
+            page.canonical_url,
+        ]
+
+
+def test_an_explicit_long_title_stays_intact_without_the_site_suffix() -> None:
+    heading = "A page title about " + "code " * 16
+    config = {**_CONFIG, "site_name": "ClickHouse Loom", "site_description": "Agent memory."}
+    page = SimpleNamespace(
+        title="Ignored",
+        is_homepage=False,
+        meta={"title": heading},
+        canonical_url=_CONFIG["site_url"] + "long/",
+    )
+    context = hooks.on_page_context({}, page, config, None)
+    assert context["loom_title"] == heading
+
+
 def _page(path: Path, src_uri: str, meta: dict[str, str] | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         file=SimpleNamespace(abs_src_path=str(path), src_uri=src_uri), meta=dict(meta or {})

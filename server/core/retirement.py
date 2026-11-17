@@ -31,6 +31,9 @@ class RetirementGate:
         self.enrolled = False
         self.producers_stopped = False
         self.producers: set[asyncio.Task[Any]] = set()
+        # Native completion needs the first failed producer after its Task is discarded.
+        # Fresh gates, including fork reset, discard this one command's outcome.
+        self.producer_failure: BaseException | None = None
 
     def install(self, role: str) -> None:
         if self.closed or self.role not in ("", role):
@@ -43,11 +46,18 @@ class RetirementGate:
     def track[T](self, task: asyncio.Task[T]) -> asyncio.Task[T]:
         """A process-lifetime producer must actually end, not merely be canceled."""
         self.producers.add(task)
-        task.add_done_callback(self.producers.discard)
+        task.add_done_callback(self._producer_done)
         if self.closed:
             task.cancel()
             raise ProcessStopping("Cannot start a producer during shutdown")
         return task
+
+    def _producer_done(self, task: asyncio.Task[Any]) -> None:
+        self.producers.discard(task)
+        if self.role == "command" and not task.cancelled():
+            error = task.exception()
+            if self.producer_failure is None:
+                self.producer_failure = error
 
     def stopped(self) -> None:
         """Composition calls this after stopping every role-specific producer."""

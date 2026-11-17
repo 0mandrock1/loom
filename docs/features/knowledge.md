@@ -6,6 +6,27 @@ is one claim under a key that Loom judges against its peers; a document is searc
 Put the document in knowledge and a short claim pointing at it in memory. A memory value over a couple of kilobytes
 belongs here ([writing memories](./memory/writing.md)).
 
+## How do agents search documents beside their code?
+
+Register a document source on the repository's trunk code namespace. Its synced documents
+carry the repository's `repo:<id>` tag, so repository-scoped searches can retrieve its
+runbooks and specifications. The source-sync worker must be enabled, and the caller must
+be allowed to read that namespace. See [document sources](#document-sources) and
+[repository scope in unified search](./unified-search.md#loom_search).
+
+This groups the repository's documents for retrieval. The
+[memory-to-symbol links](../concepts/memory.md#memories-linked-to-code) track memories
+against changing definitions; they do not turn every document into a symbol-linked memory.
+
+## How do agents connect a memory to a source document?
+
+Store the full text with `knowledge.add` and put a short claim with its `source_uri` in
+memory. The agent supplies that reference; a document and a memory remain separate records.
+Use [unified search](./unified-search.md) to retrieve both, then `knowledge.get` or
+`knowledge.outline` to open the cited document. A changed document needs its own update
+with `knowledge.upsert`; the memory claim is revised separately through the
+[memory write operations](./memory/writing.md).
+
 ## What Loom does with a document
 
 1. **Stores the text and, optionally, the original file.** `knowledge.add` takes

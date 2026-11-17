@@ -23,6 +23,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Awaitable, Callable, Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -227,7 +228,12 @@ async def check_setup_stores() -> None:
             pg.expect_deployment((str(recorded["deployment_id"]), int(recorded["epoch"])))
         await check_org_free(writes("ClickHouse users and grants, no tenant rows"))
     finally:
-        await disconnect(ch)
+        first = sys.exception()
+        try:
+            await disconnect(ch)
+        except BaseException:  # a close failure must not replace the store-check refusal
+            if first is None:
+                raise
 
 
 async def check_orgs(orgs: Iterable[str]) -> None:
@@ -299,7 +305,8 @@ async def connect_declared(
             await check_configured(ch)
         await check_acceptance(orgs=named, org_free=org_free)
     except BaseException:
-        await disconnect(ch)
+        with suppress(BaseException):
+            await disconnect(ch)
         raise
 
 
@@ -337,8 +344,9 @@ async def connect_verified(ch: CHClient) -> None:
         await ch.connect()
     try:
         await check_configured(ch)
-    except BaseException:
-        await disconnect(ch)
+    except BaseException:  # Keep the pairing failure while closing its clients.
+        with suppress(BaseException):
+            await disconnect(ch)
         raise
     from server import boot
     from server.core.background import register_buffer_drainer
@@ -362,7 +370,11 @@ async def disconnect(ch: CHClient) -> None:
     pg.expect_deployment(None)
     try:
         await pg.close_pool()
-    finally:
+    except BaseException:  # Keep the pool close failure while closing ClickHouse.
+        with suppress(BaseException):
+            await ch.disconnect()
+        raise
+    else:
         await ch.disconnect()
 
 
@@ -389,9 +401,14 @@ def run_connected[T](
         try:
             async with model_command():
                 await check_acceptance(orgs=named, org_free=org_free)
-                return await run(ch)
-        finally:
+                result = await run(ch)
+        except BaseException:  # Keep the command failure while disconnecting its clients.
+            with suppress(BaseException):
+                await disconnect(ch)
+            raise
+        else:
             await disconnect(ch)
+            return result
 
     return asyncio.run(_go())
 
@@ -411,8 +428,13 @@ def run_control_connected[T](run: Callable[[CHClient], Awaitable[T]], *, org_fre
         await connect_verified(ch)
         try:
             await check_acceptance(org_free=org_free)
-            return await run(ch)
-        finally:
+            result = await run(ch)
+        except BaseException:  # Keep the coordinator failure while closing its clients.
+            with suppress(BaseException):
+                await disconnect(ch)
+            raise
+        else:
             await disconnect(ch)
+            return result
 
     return asyncio.run(go())

@@ -94,3 +94,39 @@ def test_control_coordinator_verifies_and_gates_without_becoming_a_participant(
         "disconnect",
     ]
     forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("failure_at", ["acceptance", "body", None])
+def test_control_coordinator_preserves_failure_when_disconnect_fails(monkeypatch, failure_at):
+    from unittest.mock import AsyncMock
+
+    from server.cli import _ch
+
+    client = object()
+    first = ValueError("coordinator refused")
+    closing = RuntimeError("disconnect failed")
+    closed = []
+
+    async def acceptance(**kwargs):
+        if failure_at == "acceptance":
+            raise first
+
+    async def body(ch):
+        assert ch is client
+        if failure_at == "body":
+            raise first
+        return 7
+
+    async def close(ch):
+        closed.append(ch)
+        raise closing
+
+    monkeypatch.setattr("server.core.ch.get_client", lambda: client)
+    monkeypatch.setattr(_ch, "connect_verified", AsyncMock())
+    monkeypatch.setattr(_ch, "check_acceptance", acceptance)
+    monkeypatch.setattr(_ch, "disconnect", close)
+    expected = first if failure_at is not None else closing
+    with pytest.raises(type(expected)) as raised:
+        _ch.run_control_connected(body, org_free=_ch.writes("cell control"))
+    assert raised.value is expected
+    assert closed == [client]

@@ -15,6 +15,7 @@ deployment gate: a defect is named, graded WARN."""
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import Any
 
 from server.cli._ch import reads
@@ -216,7 +217,12 @@ def cell_checks(allowed_roles: tuple[str, ...] = ()) -> list[tuple[str, str, str
         except Exception as e:  # noqa: BLE001 — a ClickHouse that does not answer is named
             return [("cell_state", WARN, f"not read: {_reason(e)}")]
         finally:
-            await disconnect(ch)
+            first = sys.exception()
+            try:
+                await disconnect(ch)
+            except BaseException:  # keep the diagnostic failure when close also fails
+                if first is None:
+                    raise
 
     return asyncio.run(_go())
 
@@ -341,7 +347,12 @@ def stray_org_checks(budget_s: float) -> list[tuple[str, str, str]]:
         except Exception as e:  # noqa: BLE001 — an unread store is named, not a failed run
             return [("cell_stray_orgs", WARN, f"not read: {_reason(e)}")]
         finally:
-            await disconnect(ch)
+            first = sys.exception()
+            try:
+                await disconnect(ch)
+            except BaseException:  # keep the diagnostic failure when close also fails
+                if first is None:
+                    raise
 
     with statement_timeout(budget_s):
         return asyncio.run(_go())

@@ -349,7 +349,7 @@ def _cmd_remove(args: argparse.Namespace) -> int:
         print(f"loom cell remove: refusing: {reason}", file=sys.stderr)
         return 1
     try:
-        answer = asyncio.run(_remove_locked(args, router, row))
+        answer = asyncio.run(_remove_locked(args, router))
     except Exception as e:  # noqa: BLE001 — an unknown control outcome stops the run
         print(f"loom cell remove: {type(e).__name__}: {e}; stop and rerun", file=sys.stderr)
         return 1
@@ -360,7 +360,6 @@ def _cmd_remove(args: argparse.Namespace) -> int:
 async def _remove_locked(
     args: argparse.Namespace,
     router: httpx.URL,
-    row: dict[str, Any],
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, Any]:
     from server.cli import cell_control

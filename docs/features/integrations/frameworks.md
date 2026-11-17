@@ -10,23 +10,26 @@ data is stored in your Loom deployment (ClickHouse, and Postgres for live memory
 [Postgres memory authority](../../architecture/storage-authority.md)), and no adapter adds
 or needs another database, vector store or cache.
 
-| Framework                      | Adapter                                         | SDK                                                       | Framework interface                                      |
-| ------------------------------ | ----------------------------------------------- | --------------------------------------------------------- | -------------------------------------------------------- |
-| LangChain                      | `LoomKnowledgeRetriever`, `LoomMemoryRetriever` | Python, `loom.integrations.langchain`                     | `BaseRetriever`                                          |
-| LangChain.js                   | `LoomKnowledgeRetriever`, `LoomMemoryRetriever` | TypeScript, `@clickhouse/loom/integrations/langchain`     | `BaseRetriever` from `@langchain/core`                   |
-| LlamaIndex                     | `LoomRetriever`, `LoomMemoryBlock`              | Python, `loom.integrations.llamaindex`                    | `BaseRetriever`, `BaseMemoryBlock`                       |
-| OpenAI Agents SDK              | `loom_tools`                                    | Python, `loom.integrations.openai_agents`                 | `FunctionTool`                                           |
-| OpenAI Agents SDK (TypeScript) | `loomTools`                                     | TypeScript, `@clickhouse/loom/integrations/openai-agents` | `tool()` from `@openai/agents`                           |
-| CrewAI                         | `LoomCrewMemory`                                | Python, `loom.integrations.crewai`                        | `crewai.memory.Memory`                                   |
-| AutoGen                        | `LoomMemory`                                    | Python, `loom.integrations.autogen`                       | `autogen_core.memory.Memory`                             |
-| AG2                            | `LoomRecallPolicy`, `loom_tools`                | Python, `loom.integrations.ag2`                           | `ag2.assembly.AssemblyPolicy`, `tool()` from `ag2.tools` |
-| Microsoft Agent Framework      | `LoomContextProvider`                           | Python, `loom.integrations.agent_framework`               | `agent_framework.ContextProvider`                        |
-| Pydantic AI                    | `loom_toolset`                                  | Python, `loom.integrations.pydantic_ai`                   | `FunctionToolset`                                        |
-| Mastra                         | `loomTools`                                     | TypeScript, `@clickhouse/loom/integrations/mastra`        | `createTool` from `@mastra/core`                         |
-| AI SDK                         | `loomTools`                                     | TypeScript, `@clickhouse/loom/integrations/ai-sdk`        | `tool()` from `ai`                                       |
-| LangGraph                      | `LoomStore`                                     | Python, `loom.integrations.langgraph`                     | `BaseStore`                                              |
-| Strands Agents                 | `LoomMemoryStore`                               | Python, `loom.integrations.strands`                       | the `MemoryStore` protocol                               |
-| Strands Agents                 | `LoomMemoryStore`                               | TypeScript, `@clickhouse/loom/integrations/strands`       | the same protocol, structurally                          |
+| Framework                      | Adapter                                         | SDK                                                       | Framework interface                                                      |
+| ------------------------------ | ----------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------ |
+| LangChain                      | `LoomKnowledgeRetriever`, `LoomMemoryRetriever` | Python, `loom.integrations.langchain`                     | `BaseRetriever`                                                          |
+| LangChain.js                   | `LoomKnowledgeRetriever`, `LoomMemoryRetriever` | TypeScript, `@clickhouse/loom/integrations/langchain`     | `BaseRetriever` from `@langchain/core`                                   |
+| LlamaIndex                     | `LoomRetriever`, `LoomMemoryBlock`              | Python, `loom.integrations.llamaindex`                    | `BaseRetriever`, `BaseMemoryBlock`                                       |
+| OpenAI Agents SDK              | `loom_tools`, `LoomSession`                     | Python, `loom.integrations.openai_agents`                 | `FunctionTool`, the `Session` protocol                                   |
+| OpenAI Agents SDK (TypeScript) | `loomTools`, `LoomSession`                      | TypeScript, `@clickhouse/loom/integrations/openai-agents` | `tool()` from `@openai/agents`, `Session`                                |
+| CrewAI                         | `LoomCrewMemory`                                | Python, `loom.integrations.crewai`                        | `crewai.memory.Memory`                                                   |
+| AutoGen                        | `LoomMemory`                                    | Python, `loom.integrations.autogen`                       | `autogen_core.memory.Memory`                                             |
+| AG2                            | `LoomRecallPolicy`, `loom_tools`                | Python, `loom.integrations.ag2`                           | `ag2.assembly.AssemblyPolicy`, `tool()` from `ag2.tools`                 |
+| Claude API memory tool         | `LoomMemoryTool`, `AsyncLoomMemoryTool`         | Python, `loom.integrations.claude_memory`                 | `BetaAbstractMemoryTool`, `BetaAsyncAbstractMemoryTool` from `anthropic` |
+| Claude API memory tool         | `loomMemoryTool`                                | TypeScript, `@clickhouse/loom/integrations/claude-memory` | `betaMemoryTool` from `@anthropic-ai/sdk`                                |
+| Microsoft Agent Framework      | `LoomContextProvider`                           | Python, `loom.integrations.agent_framework`               | `agent_framework.ContextProvider`                                        |
+| Pydantic AI                    | `loom_toolset`                                  | Python, `loom.integrations.pydantic_ai`                   | `FunctionToolset`                                                        |
+| Mastra                         | `loomTools`                                     | TypeScript, `@clickhouse/loom/integrations/mastra`        | `createTool` from `@mastra/core`                                         |
+| AI SDK                         | `loomTools`                                     | TypeScript, `@clickhouse/loom/integrations/ai-sdk`        | `tool()` from `ai`                                                       |
+| n8n                            | Loom Chat Memory, Loom                          | `@clickhouse/n8n-nodes-loom`                              | AI Memory sub-node and action/tool node                                  |
+| LangGraph                      | `LoomStore`                                     | Python, `loom.integrations.langgraph`                     | `BaseStore`                                                              |
+| Strands Agents                 | `LoomMemoryStore`                               | Python, `loom.integrations.strands`                       | the `MemoryStore` protocol                                               |
+| Strands Agents                 | `LoomMemoryStore`                               | TypeScript, `@clickhouse/loom/integrations/strands`       | the same protocol, structurally                                          |
 
 Any other framework that can call an HTTP endpoint or an MCP server uses Loom directly:
 see [agent integration](../../guides/agent-integration.md) and
@@ -189,10 +192,46 @@ parameters, so the tools are not strict. A call Loom refuses (a missing argument
 rejected value, a server error) returns `<tool> failed: <message>` to the model, which can
 correct the call; the run goes on.
 
-Conversation history stays in the session store the run is given: the OpenAI Agents
-SDK's `Session` protocol removes and clears items, and Loom's conversations are
-append-only. To keep what a conversation established, give the model `loom_remember`, or
-send the turns to `memory.set_from_messages`.
+`LoomSession` is the OpenAI Agents SDK's `Session` over Loom: a run given it reads and
+extends the conversation history of one session there. Every process whose Loom agent has
+the same name reads the same Python history for the same session id and user, and a
+handoff between agents of one run keeps it. Python and TypeScript histories are separate
+because the frameworks use different item formats.
+
+```python
+from loom.integrations.openai_agents import LoomSession
+
+session = LoomSession(loom_agent, "trip-42", user_id="alice")
+result = await Runner.run(assistant, "Book my usual seat to Lisbon", session=session)
+```
+
+| `Session`       | Loom                                                                                                                                                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get_items`     | `memory.list` of the session's items, sorted by writer-generated key; `limit` (or `session_settings.limit`) keeps the latest after scanning the history; an item the list cuts at 2,048 characters, or sends without a value, is read whole with `memory.get` |
+| `add_items`     | one `memory.set` per item, an `episodic` memory under `<key_prefix>/<nanoseconds>-<random>`, the item's JSON its value                                                                                                                                        |
+| `pop_item`      | the latest item, read as `get_items(limit=1)` reads it, deleted with `memory.delete` and returned                                                                                                                                                             |
+| `clear_session` | `memory.delete` of every item of the session                                                                                                                                                                                                                  |
+
+An `episodic` memory is not embedded, so an item is never merged with or judged against
+another row, and a repeated item stays two items (one `memory.set` per item, bypassing SDK
+coalescing: a batch would fold a value identical to a live row). A read fails if an item
+disappears before its full value can be fetched. Items are stored under a Loom session derived from
+the user and the session id (`oai-py-` and a digest of the pair in Python, `oai-ts-`
+in TypeScript). Keys follow writer clocks; independent writers do not share a server
+sequence. Reads, `pop_item` and `clear_session` scan the whole history: server arrival
+times cannot bound keys from different writer clocks. The history is the user's:
+unset, `user_id` writes the namespace's shared
+rows; an empty or `-` user raises `ValueError`. To keep what a conversation
+established beyond its history, give the model `loom_remember`, or send the turns to
+`memory.set_from_messages`.
+
+| `LoomSession` argument | Default         | Effect                                                          |
+| ---------------------- | --------------- | --------------------------------------------------------------- |
+| `agent`                | required        | the `loom.Agent` the session calls                              |
+| `session_id`           | required        | the session's id                                                |
+| `user_id`              | none            | the end user the history belongs to                             |
+| `key_prefix`           | `openai-agents` | the items' key prefix                                           |
+| `session_settings`     | the SDK's       | `limit`: the default number of latest items `get_items` returns |
 
 In TypeScript, `loomTools(agent, scope)` from `@clickhouse/loom/integrations/openai-agents`
 returns the same tools built with `tool()` from `@openai/agents`, an optional peer
@@ -207,6 +246,18 @@ const assistant = new OpenAIAgent({
   tools: loomTools(agent, { userId: "alice" }),
 });
 const result = await run(assistant, "Book my usual seat to Lisbon");
+```
+
+`new LoomSession(agent, sessionId, { userId, keyPrefix })` is the TypeScript `Session`, over
+its native item format and separate session rows. The user is fixed when the session is
+constructed. Binary image and file tool results keep their bytes and media information
+when stored and read back:
+
+```ts
+import { LoomSession } from "@clickhouse/loom/integrations/openai-agents";
+
+const session = new LoomSession(agent, "trip-42", { userId: "alice" });
+const result = await run(assistant, "Book my usual seat to Lisbon", { session });
 ```
 
 ## CrewAI
@@ -394,6 +445,78 @@ a caller may choose its session ids.
 | `honour_abstain`               | `True`   | leave out memories below Loom's floor; nothing when Loom abstains                                                                                                                           |
 | `defer`                        | `True`   | queue the extraction on the server instead of waiting                                                                                                                                       |
 
+## Claude API memory tool
+
+The Claude API memory tool (`memory_20250818`) lets Claude keep files under `/memories`
+across conversations, and the application runs its commands. `AsyncLoomMemoryTool` (over a
+`loom.Agent`) and `LoomMemoryTool` (over a `loom.SyncAgent`) subclass the `anthropic` SDK's
+memory tool bases and run those commands against Loom: each file is a Loom document, so
+every agent of the namespace reads the same files, `knowledge.search` finds what they say,
+and the files stay in the Loom deployment. Install with
+`pip install 'clickhouse-loom[claude-memory]'` (`anthropic` 2.8.x).
+
+```python
+import anthropic
+from loom import Agent
+from loom.integrations.claude_memory import AsyncLoomMemoryTool
+
+client = anthropic.AsyncAnthropic()
+async with Agent(org="acme", namespace="support") as loom_agent:
+    memory = AsyncLoomMemoryTool(loom_agent, store="alice")
+    runner = client.beta.messages.tool_runner(
+        model="claude-opus-5-5",
+        max_tokens=16000,
+        tools=[memory],
+        messages=[{"role": "user", "content": "Remember that I prefer aisle seats"}],
+    )
+    async for message in runner:
+        ...
+```
+
+In TypeScript, `loomMemoryTool(agent, { store }, extras)` returns the SDK's `betaMemoryTool`
+(with `extras` such as `cache_control`) over the same documents (`@anthropic-ai/sdk` is an
+optional peer dependency, 1.8.x):
+
+```ts
+import { loomMemoryTool } from "@clickhouse/loom/integrations/claude-memory";
+
+const memory = loomMemoryTool(agent, { store: "alice" });
+// client.beta.messages.toolRunner({ model, max_tokens, tools: [memory], messages })
+```
+
+`loomMemoryHandlers(agent, { store })` returns the six command handlers alone, for a loop that
+dispatches the tool's calls itself.
+
+A file `/memories/<path>` is the document `loom-memory://<store>/memories/<path>`, tagged
+`claude-memory:<store>`; directories are the paths' prefixes. Both SDKs read and write the
+same documents and answer each command with the same text: the text the Python SDK's local
+memory tool answers, except that a directory view lists paths without sizes and that two
+refusals are Loom's own (an empty `old_str`, and a path under a file).
+
+| Command       | Loom                                                                                                                                                                              |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `view`        | a file: `knowledge.get`, its lines numbered, `view_range` honoured; a directory: `knowledge.list` of the store's tag, its files and directories two levels deep                   |
+| `create`      | `knowledge.upsert` of the text; refused when the file or a directory of that path exists                                                                                          |
+| `str_replace` | `knowledge.get`, then `knowledge.upsert` with the one occurrence replaced; refused when `old_str` is empty, does not appear, or appears more than once                            |
+| `insert`      | `knowledge.get`, then `knowledge.upsert` with the line inserted at `insert_line`                                                                                                  |
+| `delete`      | `knowledge.bulk_delete` of the file, or of every file under the directory, 500 a call                                                                                             |
+| `rename`      | each file under the old path copied to the new one, then `knowledge.bulk_delete` of the old; refused when the destination exists; a failure partway leaves the copies made so far |
+
+Every path must be `/memories` or under it, after `.` and `..` are resolved; any other path
+is refused before Loom is called. A refusal is a `ToolError`, which the tool runner returns
+to Claude as an error result. An edit reads the file and writes it back, so two agents that
+edit one file at once keep the later write, as with the SDK's local memory tool; a
+directory view, delete or rename that pages while another agent rewrites a file under it
+can miss that file.
+
+| Argument | Default   | Effect                                                                                                 |
+| -------- | --------- | ------------------------------------------------------------------------------------------------------ |
+| `agent`  | required  | a `loom.Agent` for `AsyncLoomMemoryTool` and `loomMemoryTool`, a `loom.SyncAgent` for `LoomMemoryTool` |
+| `store`  | `default` | the file tree, one path segment: one per application, or per user                                      |
+
+A store is not a boundary: every reader of the namespace can read every store's documents.
+Give each user their own namespace when users must not read each other's files.
+
 ## Pydantic AI
 
 Pydantic AI extends an agent through tools and toolsets. `loom_toolset` returns Loom's
@@ -479,6 +602,33 @@ caller's, and the tools give the model Loom's long-term memory. The AI SDK passe
 model's arguments through unchecked, and Loom checks them: it reads a quoted number as a
 number and ignores an extra key. A call Loom refuses reaches the model as the AI SDK's
 tool-error result with Loom's message, and the run goes on.
+
+## n8n
+
+The `@clickhouse/n8n-nodes-loom` community package gives self-hosted n8n a Loom Chat
+Memory sub-node for its AI Agent and a Loom action node for Remember, Recall and Search
+Knowledge. The action node can also connect as an agent tool. Both call your Loom
+server through the SDK; data stays in your Loom deployment.
+
+Install the package through n8n's Community Nodes settings after it is published, or
+build a tarball from [`integrations/n8n`](https://github.com/ClickHouse/loom/tree/main/integrations/n8n)
+and install it into the community nodes directory. Its README gives the checked build
+and installation commands. The package bundles its SDK and framework libraries and is
+not verified for n8n Cloud.
+
+Create a Loom API credential with the server URL and a namespace-scoped writer token.
+Set Organization, Namespace, Agent Name and User ID on each node. Connect Loom Chat
+Memory to the AI Agent's Memory input and set Session ID to the conversation identifier
+(such as the Chat Trigger's session ID). The workflow, user and session identify the
+history. Context Window Length limits the interactions sent to the agent; older
+messages stay in Loom until cleared. Remember stores durable facts separately from
+conversation history. Use separate namespaces and restricted tokens for mutually
+untrusted users.
+
+Without a community package, n8n's MCP Client Tool node can connect to Loom's MCP URL
+with `?toolset=core` and a bearer token, and expose `loom_memory_set` and `loom_search`
+to its AI Agent.
+[The MCP client setup](./mcp-clients.md#other-editors-and-agents) describes that route.
 
 ## LangGraph
 
@@ -626,4 +776,6 @@ client can speak for several agents.
 - [Writing memory](../memory/writing.md) and [search and ask](../memory/search-and-ask.md).
 - [Integrations overview](./index.md).
 
-[Context-provider architecture](../../architecture/agent-framework-adapter.md).
+- [Context-provider architecture](../../architecture/agent-framework-adapter.md).
+- [Memory-tool architecture](../../architecture/claude-memory-adapter.md).
+- [Session history architecture](../../architecture/openai-agents-sessions.md).

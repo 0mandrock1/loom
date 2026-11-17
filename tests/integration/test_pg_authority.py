@@ -4299,6 +4299,15 @@ async def test_a_redacted_head_is_not_served_until_a_new_value_is_written(
     search leaves it out and counts it. A new value written over it is served."""
     ns = f"pg-{uuid.uuid4().hex[:8]}"
     first = (await call("memory.set", _set(ns, "k", "the office is in Berlin"))).json()
+    # A first write answers at its commit; the old search document must exist before
+    # the head is scrubbed, or there is no stale hit for validation to count.
+    before = (
+        await call(
+            "memory.search", {"namespace": ns, "query": "office Berlin", "auto_touch": False}
+        )
+    ).json()
+    assert "k" in [h["memory_key"] for h in before["results"]], before
+    assert before["stale_dropped"] == 0, before
     # The head as a profile redaction leaves it: scrubbed in Postgres, its ClickHouse
     # document not yet.
     await pg_conn.execute(

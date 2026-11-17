@@ -869,9 +869,9 @@ read-only scope, lists any tenancy row the directory does not place.
   serves past a table whose lock it cannot take, logged with the holders of its locks, or
   one the role cannot alter, logged as such (the third exception under Invariants). A
   first cell is `recording` until attach sets `enforced` while it runs, so no boot can
-  have created them: attach creates them itself with the same pass
-  (`cell_triggers.ensure`) once it has set `enforced`, and the cell goes `serving` only
-  once `cell_triggers.missing` names no defect. A later cell is `enforced` from prepare
+  have created them: attach creates them with `cell_triggers.ensure_table`, passing
+  `recording_first=True`, before step 2 and again before setting `enforced`.
+  The cell goes `serving` only once `cell_triggers.missing` names no defect. A later cell is `enforced` from prepare
   and gets them at its first migrating boot after prepare, which its attach requires the
   same way. `loom doctor` names a disabled or altered one in any state, a missing one on
   an `enforced` cell, and a partitioned table with an `org` column as unsupported, since
@@ -1200,9 +1200,10 @@ before the wait is judged spent, so `--wait 0` is one try of each wait with no r
 `--scan-budget` (default 2 hours) bounds each full scan, which `--wait` does not count.
 `--dry-run` runs the refusals and the scan, prints what would be placed and skipped and the
 scan's time, and writes nothing; the router's checks at `attach/begin` do not run. On a
-`serving` row attach reads the cell's mode: `enforced` is done (exit 0), and any other mode
-refuses: the directory and the cell's Postgres disagree, as after a restore of one of them,
-and attach lowers and repairs neither.
+`serving` row attach first verifies that the connected authority, configured cell and
+bucket match the directory registration. It then reads the cell's mode: `enforced` is
+done (exit 0), and any other mode refuses: the directory and the cell's Postgres disagree,
+as after a restore of one of them, and attach lowers and repairs neither.
 
 A later cell is attached only once the first is `serving`. It must hold no org data
 (attach refuses otherwise) and starts in `enforced`. Its attach runs, in order: the

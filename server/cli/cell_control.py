@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -56,7 +58,7 @@ async def check_lock(conn: Any) -> None:
 
 
 async def paired(conn: Any, row: dict[str, Any]) -> None:
-    """The locked authority and configured bucket name the observed registration."""
+    """The connected authority and configured bucket name the observed registration."""
     recorded = await conn.fetchval("SELECT deployment_id FROM loom.authority")
     prefix = settings.document_s3_prefix if settings.document_s3_bucket else ""
     if (
@@ -66,7 +68,7 @@ async def paired(conn: Any, row: dict[str, Any]) -> None:
         or (settings.document_s3_bucket, prefix) != (row.get("bucket"), row.get("bucket_prefix"))
     ):
         raise _refused(
-            "this cell configuration and locked Postgres do not match the directory registration"
+            "this cell configuration and connected Postgres do not match the directory registration"
         )
 
 
@@ -144,7 +146,7 @@ class Owner:
         try:
             await pg._check_deployment(self.conn)
             await pg.init_connection(self.conn)
-        except Exception as error:
+        except Exception as error:  # Classify unavailable openings; keep other failures.
             pg._raise_if_unavailable(error)
             raise
         refused = await apg.direct_refusals(self.conn, what)
@@ -304,16 +306,22 @@ async def request(
 
     endpoint = cli.at(url, f"/cells/v1/operator/cells/{name}" + path)
     try:
-        async with (
-            asyncio.timeout(REQUEST_S),
-            httpx.AsyncClient(
+        async with asyncio.timeout(REQUEST_S):
+            manager = httpx.AsyncClient(
                 timeout=cli._OPERATOR_TIMEOUT,
                 trust_env=url.scheme == "https",
                 transport=transport,
                 headers={"Authorization": f"Bearer {settings.router_operator_token}"},
-            ) as client,
-        ):
-            response = await client.request(method, endpoint, json=body)
+            )
+            client = await manager.__aenter__()
+            try:
+                response = await client.request(method, endpoint, json=body)
+            except BaseException:  # Client exit preserves the request's first failure.
+                with contextlib.suppress(BaseException):
+                    await manager.__aexit__(*sys.exc_info())
+                raise
+            else:
+                await manager.__aexit__(None, None, None)
     except (httpx.HTTPError, TimeoutError) as e:
         raise _refused(f"router reply unknown ({type(e).__name__}): stop and rerun") from None
     answer = cli.router_answer(response, {"cell": name}, cli.OPERATOR_REFUSALS)

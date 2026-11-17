@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import secrets
@@ -304,9 +305,11 @@ async def _register(
     token = settings.router_operator_token
     url = cell_cli.at(router, f"/cells/v1/operator/cells/{args.cell}{path}")
     deadline = time.monotonic() + args.wait
-    async with httpx.AsyncClient(
+    manager = httpx.AsyncClient(
         timeout=_register_timeout(), trust_env=router.scheme == "https", transport=transport
-    ) as client:
+    )
+    client = await manager.__aenter__()
+    try:
         while True:
             try:
                 r = await client.post(url, json=body, headers={"Authorization": f"Bearer {token}"})
@@ -327,7 +330,7 @@ async def _register(
                     f"{cell_cli.not_the_router(r)}; run {command} again once the router answers"
                 )
             if r.status_code == 200:
-                return answer
+                break
             code = answer.get("code")
             if code == "BACKEND_UNAVAILABLE":
                 raise Refused(
@@ -348,6 +351,14 @@ async def _register(
                 )
             print(f"loom cell {command}: {answer['error']}; retrying", file=sys.stderr)
             await _sleep(pause)
+
+    except BaseException:  # Client exit preserves the first request or refusal.
+        with contextlib.suppress(BaseException):
+            await manager.__aexit__(*sys.exc_info())
+        raise
+    else:
+        await manager.__aexit__(None, None, None)
+    return answer
 
 
 def _own_rows(
@@ -511,7 +522,11 @@ async def _prepare_locked(
     try:
         await _write_nonces(ch, body["nonces"])
         answer = await _register(args, router, body, transport)
-    finally:
+    except BaseException:  # Nonce cleanup preserves the first failure or cancellation.
+        with contextlib.suppress(BaseException):
+            await _delete_nonces(ch, body["nonces"])
+        raise
+    else:
         await _delete_nonces(ch, body["nonces"])
     # The processes may have changed while the probe was retried: judge the ones live now.
     beats = await _read_beats(ch)

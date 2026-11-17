@@ -990,7 +990,7 @@ class _ControlOwner:
                 self.exit_task = self.start(lambda: self.context.__aexit__(None, None, None))
             try:
                 await self.wait(self.exit_task, self.end)
-            except BaseException:
+            except BaseException:  # An interrupted pool exit must not continue without its owner.
                 self.exit_task.cancel()
                 raise
 

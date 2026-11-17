@@ -389,6 +389,15 @@ const tools = loomTools(bot, { userId: "u-42" }); // generateText({ model, tools
 
 Loom's agent verbs (`AgentTools`) as an AI SDK `ToolSet` built with `tool()` and `jsonSchema()` from `ai`, an optional peer dependency (7.x, which needs Node 22.12 or later).
 
+## Claude API memory tool
+
+```ts
+import { loomMemoryTool } from "@clickhouse/loom/integrations/claude-memory";
+const memory = loomMemoryTool(bot, { store: "u-42" }); // client.beta.messages.toolRunner({ tools: [memory], ... })
+```
+
+The Claude API memory tool's commands (`view`, `create`, `str_replace`, `insert`, `delete`, `rename`) over Loom documents: each file under `/memories` is the document `loom-memory://<store>/memories/<path>`, the same documents the Python `loom.integrations.claude_memory` tools read. Built with `betaMemoryTool` from `@anthropic-ai/sdk`, an optional peer dependency (1.8.x). `loomMemoryHandlers(bot, { store })` returns the command handlers alone, for a loop that dispatches the calls itself.
+
 ## LangChain.js
 
 ```ts
@@ -421,6 +430,13 @@ const tools = loomTools(bot, { userId: "u-42" }); // new Agent({ name: "assistan
 ```
 
 Loom's agent verbs (`AgentTools`: `loom_remember`, `loom_recall`, `loom_ask`, `loom_offload`, `loom_fetch`, `loom_note`) as function tools built with `tool()` from `@openai/agents`, an optional peer dependency, bound to one user, session or run.
+
+```ts
+import { LoomSession } from "@clickhouse/loom/integrations/openai-agents";
+const session = new LoomSession(bot, "trip-42", { userId: "u-42" }); // run(assistant, input, { session })
+```
+
+`LoomSession` is the SDK's `Session` over loom: the conversation history of one session, as episodic memories of the user's loom session, separate rows from Python because the SDKs use different native item formats.
 
 ## Strands Agents
 

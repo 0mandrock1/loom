@@ -1222,17 +1222,11 @@ at most 10% slower) holds by a wide margin; the cost lands on scripts and older 
 writing a cell without the check. This measures the triggers on the statements, not a
 whole `memory.set` through a server on a cell; the end-to-end gate follows.
 
-`bench/cell_trigger_gate.py` measures the gate end to end, locally: a first cell attached
-by `loom cell attach` (two server processes, a router, Postgres 16 with a synchronous
-standby and ClickHouse in Docker on a shared host under other load), 400 sequential
-`memory.set` calls of a placed org through one server, and a delivery-sized 1,000-row insert
-of the held org from a marked and an unmarked session, the org triggers on and dropped in
-turn, three rounds each; the harness checks the triggers it asked for are enabled:
-
-```bash
-PYTHONPATH=$PWD .venv/bin/python bench/cell_trigger_gate.py --base-url <server> \
-  --pg-dsn <the cell's LOOM_PG_DSN> --token <writer token> --org <placed org> --namespace <ns>
-```
+A small local diagnostic on an attached first cell records 400 sequential `memory.set`
+calls per run and 1,000-row statement inserts from marked and unmarked sessions, three
+rounds with org triggers on and off. Its fixture has two server processes, a router,
+Postgres 16 with a synchronous standby and ClickHouse in Docker on a shared host under
+other load. These are diagnostic figures, not the end-to-end acceptance workload:
 
 | Local, three rounds                 | Triggers on            | Triggers off           |
 | ----------------------------------- | ---------------------- | ---------------------- |
@@ -1241,17 +1235,35 @@ PYTHONPATH=$PWD .venv/bin/python bench/cell_trigger_gate.py --base-url <server> 
 | 1,000-row insert, marked (median)   | 11.0, 9.2, 8.5 ms      | 9.7, 11.1, 10.6 ms     |
 | 1,000-row insert, unmarked (median) | 22.1, 21.4, 21.0 ms    | 10.9, 9.6, 11.0 ms     |
 
-The marked batch is what a delivery pass of a cell's own processes writes. On minus off
-within each round it moved +1.3, −1.9 and −2.1 ms (+13.4%, −17.1% and −19.8%); the means are
-9.6 ms on and 10.5 ms off, −0.9 ms (−8.6%). The delivery-pass gate (at most 10% slower) is
-met on the mean, but one round of three was 13% slower and three rounds give no paired bound
-(methodology's paired bootstrap is for per-item labels), so this run does not establish the
-gate on its own; the statement-level figures above do, at under a microsecond a row against
-about 10 µs a row of insert. The `memory.set` figures move by more between rounds of one
-configuration than any trigger cost: on this loaded host the p99 differences within a round
-(+214.8, +47.0, +24.3 ms here, and −71.7, −10.0, −42.4 ms in an earlier run of the same
-measurement) have no consistent sign: the `memory.set` p99 gate (a rise of at most 10 ms) is
-unresolved locally. An unmarked session pays about 11 µs a row, as above.
+The marked statement medians average 9.6 ms on and 10.5 ms off. A statement insert omits
+the delivery worker's claim, embedding, publication and settlement work, so these figures
+establish no delivery-throughput gate. The API p99 differences within each round are
++214.8, +47.0 and +24.3 ms; another small diagnostic has differences of −71.7, −10.0 and
+−42.4 ms. Their opposing signs on the loaded host leave the API gate unresolved. Neither
+end-to-end gate is established by these measurements.
+
+`bench/cell_trigger_gate.py` measures the acceptance workload on an independently owned,
+attached scratch fixture with explicit fake providers, enforced mode and an already held
+org. Each API run has 50 unmeasured warmups and 2,000 sequential measured requests with
+4,096-byte values, with five runs per arm in counterbalanced order. Each delivery block
+times five complete `pg_delivery.run_pass` calls at the unchanged configured batch size,
+with five blocks per arm. The latency gate is `median(p99_on) - median(p99_off) <= 10 ms`;
+the throughput gate is `1 - median(rows_per_second_on) / median(rows_per_second_off) <= 0.10`.
+The driver retains every run and raw outcome; it does not substitute statement timings.
+
+```bash
+PYTHONPATH=$PWD .venv/bin/python bench/cell_trigger_gate.py \
+  --base-url <loopback-server-url> --pg-dsn <cell-dsn> --token <writer-token> \
+  --org <held-org> --namespace <namespace> --fixture-manifest <fixture-manifest.json> \
+  --launch-manifest <launch-manifest.json> --output <result.jsonl>
+```
+
+The fixture owner supplies the exact source, launch, configuration and ownership receipts,
+excludes competing controllers and workers, and stops its processes before deleting its
+exact scratch databases. The output path must not exist. The driver verifies those
+receipts and the live fixture before native setup and every arm, restores the org triggers
+within its cleanup bound and emits a final verdict only after cleanup and artifact sync.
+Source tests and the diagnostic figures above are not evidence that this workload passes.
 
 ## Reference computations
 

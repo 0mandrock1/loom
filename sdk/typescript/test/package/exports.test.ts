@@ -143,7 +143,7 @@ describe("dist", () => {
     const esm = (await import(join(dist, "integrations/openai-agents.mjs"))) as object;
     const cjs = require(join(dist, "integrations/openai-agents.cjs")) as object;
     expect(names(esm)).toEqual(names(cjs));
-    expect(names(esm)).toEqual(["loomTools"]);
+    expect(names(esm)).toEqual(["LoomSession", "loomTools"]);
     expect(readFileSync(join(dist, "integrations/openai-agents.mjs"), "utf8")).toMatch(/from "@openai\/agents"/);
   }, 30_000); // loading @openai/agents in both module formats takes seconds
 
@@ -162,6 +162,14 @@ describe("dist", () => {
     expect(names(esm)).toEqual(["loomTools"]);
     expect(readFileSync(join(dist, "integrations/ai-sdk.mjs"), "utf8")).toMatch(/from "ai"/);
   }, 30_000); // loading ai in both module formats takes seconds
+
+  it("the claude-memory subpath loads in both formats and leaves @anthropic-ai/sdk to the app", async () => {
+    const esm = (await import(join(dist, "integrations/claude-memory.mjs"))) as object;
+    const cjs = require(join(dist, "integrations/claude-memory.cjs")) as object;
+    expect(names(esm)).toEqual(names(cjs));
+    expect(names(esm)).toEqual(["loomMemoryHandlers", "loomMemoryTool"]);
+    expect(readFileSync(join(dist, "integrations/claude-memory.mjs"), "utf8")).toMatch(/from "@anthropic-ai\/sdk/);
+  });
 
   it("no bundle imports a Node built-in", () => {
     const files = readdirSync(dist, { recursive: true }) as string[];
