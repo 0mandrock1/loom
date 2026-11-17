@@ -83,7 +83,12 @@ outcome (refusal, 4xx `rejected`, or `error`) and to attach value-shape advisori
    (423, `refused_action` `expire`), as in `memory.bulk_set`.
 6. **Proposals and preconditions.** `proposed=true` may not overwrite an established
    fact (`_refuse_proposal_over_fact`). `if_match_sha256` must match the live hash (409
-   `PRECONDITION_FAILED`).
+   `PRECONDITION_FAILED`). `if_match_sha256='absent'` instead requires no unexpired
+   row at the exact identity and key; a concrete agent is required. It uses the strong
+   head already checked by the guards under the key's write lock. An expired physical
+   row stays attached to the write, so its locks and pin still hold and Postgres
+   admission checks that row's exact version before replacing it. Lifecycle status and
+   `valid_to` do not make an exact-key-readable row absent.
 7. **Build the version row** (`_set_build_memory_row`). Over a live row,
    `build_revision_row` carries the other columns forward and resets those that describe
    the old value (`REVISION_RESETS` in `memory/store/rows.py`). `actor` comes from the

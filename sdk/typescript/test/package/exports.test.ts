@@ -159,8 +159,9 @@ describe("dist", () => {
     const esm = (await import(join(dist, "integrations/mastra.mjs"))) as object;
     const cjs = require(join(dist, "integrations/mastra.cjs")) as object;
     expect(names(esm)).toEqual(names(cjs));
-    expect(names(esm)).toEqual(["loomTools"]);
+    expect(names(esm)).toEqual(["LoomMemoryStorage", "loomTools"]);
     expect(readFileSync(join(dist, "integrations/mastra.mjs"), "utf8")).toMatch(/from "@mastra\/core\/tools"/);
+    expect(readFileSync(join(dist, "integrations/mastra.mjs"), "utf8")).toMatch(/from "@mastra\/core\/storage"/);
   }, 30_000); // loading @mastra/core in both module formats takes seconds
 
   it("the ai-sdk subpath loads in both formats and leaves ai to the app", async () => {

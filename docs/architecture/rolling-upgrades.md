@@ -172,6 +172,11 @@ schema. These rules keep that safe. The operator procedure is in
     N-1's `knowledge.list` rows carry no `namespace`, on any list; one naming `namespaces`
     lists `namespace` alone there, and each build refuses the cursor the other wrote for
     such a list, so a client paging it starts again.
+    `memory.set`'s `if_match_sha256='absent'` uses an existing, nonempty precondition
+    field. A build without this meaning refuses it as a hash mismatch, including on a
+    missing key, instead of storing an unconditional write. First creation may therefore
+    answer 409 while such a build serves; clients must not retry without the condition.
+    Ordinary content hashes still work across builds, and rollback needs no data change.
 13. **A name N spells differently is a different node.** N keeps combining marks and
     NFKC-normalises an entity's name (`दिल्ली`, `İstanbul` as `istanbul`); N-1 split them
     into fragments (`द ल ल`, `i stanbul`). ASCII names spell the same in both, and so do
