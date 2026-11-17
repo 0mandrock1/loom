@@ -1456,8 +1456,9 @@ async def test_a_pinned_tokens_stack_serves_its_signed_bots_rules(
 ) -> None:
     from server.knowledge.app import search as knowledge_store
     from server.knowledge.app.search import ChunkHit
+    from server.knowledge.app.source_access import ReadPlan
     from server.memory.api.models_lifecycle import MemoryStackInput
-    from server.memory.app import stack
+    from server.memory.app import stack, stack_knowledge
 
     class _Embedder:
         model_name = "fake"
@@ -1479,17 +1480,22 @@ async def test_a_pinned_tokens_stack_serves_its_signed_bots_rules(
     monkeypatch.setattr("server.embedding.get_embedder", lambda: _Embedder())
     monkeypatch.setattr(knowledge_store, "hybrid_search", search)
     fill = stack._StackFill(budget=10_000)
-    await stack._stack_knowledge(
-        MemoryStackInput(
-            org="o",
-            namespace="ns",
-            agent="sales-bot",
-            include_knowledge=True,
-            knowledge_top_k=2,
-        ),
-        fill,
-        "refund",
+    knowledge_input = MemoryStackInput(
+        org="o",
+        namespace="ns",
+        agent="sales-bot",
+        include_knowledge=True,
+        knowledge_top_k=2,
     )
+    knowledge = await stack_knowledge.collect(
+        knowledge_input.org,
+        knowledge_input.namespace,
+        knowledge_input.agent,
+        "refund",
+        int(knowledge_input.knowledge_top_k),
+        ReadPlan(knowledge_input.org),
+    )
+    fill = stack._render(fill, knowledge.hits)
 
     assert [e.memory_key for e in fill.entries] == ["support-rule", "refunds.md"]
     assert asked == asked_for

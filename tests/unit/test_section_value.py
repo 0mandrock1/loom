@@ -854,8 +854,9 @@ def test_a_memory_stack_leaves_noise_out_with_the_filter_on(
     # The stack reads chunks itself (and context.pack serves its knowledge entries).
     from server.knowledge.app import search as knowledge_store
     from server.knowledge.app.search import ChunkHit
+    from server.knowledge.app.source_access import ReadPlan
     from server.memory.api.models_lifecycle import MemoryStackInput
-    from server.memory.app import stack
+    from server.memory.app import stack, stack_knowledge
 
     class _Embedder:
         model_name = "m"
@@ -875,15 +876,20 @@ def test_a_memory_stack_leaves_noise_out_with_the_filter_on(
     monkeypatch.setattr(knowledge_store, "hybrid_search", _search)
     monkeypatch.setattr(settings, "knowledge_noise_filter", filter_on)
     fill = stack._StackFill(budget=10_000)
-    asyncio.run(
-        stack._stack_knowledge(
-            MemoryStackInput(
-                org="o", namespace="ns", agent="a", include_knowledge=True, knowledge_top_k=2
-            ),
-            fill,
+    knowledge_input = MemoryStackInput(
+        org="o", namespace="ns", agent="a", include_knowledge=True, knowledge_top_k=2
+    )
+    knowledge = asyncio.run(
+        stack_knowledge.collect(
+            knowledge_input.org,
+            knowledge_input.namespace,
+            knowledge_input.agent,
             "the cache",
+            int(knowledge_input.knowledge_top_k),
+            ReadPlan(knowledge_input.org),
         )
     )
+    fill = stack._render(fill, knowledge.hits)
     served = [e.memory_key for e in fill.entries]
     assert served == (["kb://a", "kb://b"] if filter_on else ["kb://sync", "kb://a"])
 
