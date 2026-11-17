@@ -213,10 +213,11 @@ repository. The requests below illustrate one draft; they are not recorded resul
    [version-window example](../code-index/history-and-prs.md#bisect-candidates-codebisect_candidates).
    Here, `before: "now"` sets the upper bound at request time; it is not an observed
    failure time. Prefer observed release bounds, an observed upper time bound in `before`
-   (and `after` when known), or a known-bad commit in `bad_sha`. With no release range,
-   time bound or issue observations supplying one, the result is `unknown` with
-   `no_failing_version`; no candidate scan runs. The operation does not discover the
-   last good version.
+   (and `after` when known), or a known-bad commit in `bad_sha`. For an unfiled draft
+   like this one, omitting every release and time bound gives `unknown` with
+   `no_failing_version`; no candidate scan runs. A tracker record that already names an
+   introducing commit or PR can instead answer without a scan. The operation does not
+   discover the last good version.
 
 4. Keep the evidence with the investigation. Read `candidates_from`, `epistemic`,
    `causes`, `tracker_unavailable` and any `partial` / `partial_reason` beside the
