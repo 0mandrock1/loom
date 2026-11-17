@@ -10,6 +10,7 @@ from typing import Any
 from server.core import leases
 from server.core.datetimes import naive_utc_now_seconds
 from server.core.errors import OverloadedError, ValidationError
+from server.memory.app.definition_queue import persist
 from server.memory.app.definition_review import require_draft_fleet
 from server.memory.domain.definition_drafts import DefinitionDraft
 from server.memory.store import learnings
@@ -41,6 +42,7 @@ async def draft(
     from server.llm import customer
     from server.llm.client import get_llm_client
 
+    proposed_at = naive_utc_now_seconds()
     if not await still_valid():
         raise ValidationError("the draft evidence is no longer available")
     await require_draft_fleet()
@@ -56,7 +58,6 @@ async def draft(
         # Check the org switch before persisting a claim that would never call the model.
         with customer.for_org(org, namespace=namespace):
             await customer.require()
-        now = naive_utc_now_seconds()
         row: dict[str, Any] = {
             "candidate_id": cid,
             "org": org,
@@ -75,13 +76,13 @@ async def draft(
             "source_resource_id": resource_id,
             "agent": "",
             "status": "pending",
-            "proposed_at": now,
+            "proposed_at": proposed_at,
             "decided_at": None,
             "decided_by": "",
             "decision_reason": "",
             "version": next_version(),
         }
-        await learnings.insert_row(row)
+        await persist(row)
     if not await still_valid():
         await learnings.delete_candidate_through(org, namespace, cid, int(row["version"]))
         return cid
@@ -128,7 +129,7 @@ async def draft(
                 ),
                 "version": version_over(int(current["version"])),
             }
-            await learnings.insert_row(row)
+            await persist(row)
     if not await still_valid():
         await learnings.delete_candidate_through(org, namespace, cid, int(row["version"]))
     return cid

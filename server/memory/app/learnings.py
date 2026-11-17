@@ -22,6 +22,7 @@ from server.memory.api.models_learnings import (
 )
 from server.memory.api.models_lifecycle import MemoryPromoteInput
 from server.memory.app import blacklist_guard
+from server.memory.app.definition_queue import persist
 from server.memory.app.learning_access import private_candidates_visible
 from server.memory.app.provenance import writer_actor
 from server.memory.domain import assistant_rules
@@ -242,6 +243,7 @@ async def _review(input: LearningsReviewInput, row: dict[str, Any] | None) -> Le
             },
         )
 
+    private_definition = row.get("source_kind") in DEFINITION_DRAFT_KINDS
     now = naive_utc_now()
     target_status: Literal["promoted", "rejected"] = (
         "promoted" if input.decision == "promote" else "rejected"
@@ -273,7 +275,6 @@ async def _review(input: LearningsReviewInput, row: dict[str, Any] | None) -> Le
             )
         wants_memory = destination in ("memory", "both")
         wants_knowledge = destination in ("knowledge", "both")
-        private_definition = row.get("source_kind") in DEFINITION_DRAFT_KINDS
         if private_definition:
             if destination != "memory":
                 raise ValidationError("a definition draft is promoted only to memory")
@@ -311,7 +312,7 @@ async def _review(input: LearningsReviewInput, row: dict[str, Any] | None) -> Le
     # column is carried from the candidate — `seeded_from_*` keeps its conversation
     # back-pointer (read by memory.lineage), and the support counts and proposal time
     # stay what learnings.list and the lineage's candidate report.
-    await learnings_repo.insert_row(
+    await persist(
         {
             "candidate_id": str(row["candidate_id"]),
             "org": input.org,
@@ -329,7 +330,9 @@ async def _review(input: LearningsReviewInput, row: dict[str, Any] | None) -> Le
             "seeded_from_thread_id": row.get("seeded_from_thread_id"),
             "seeded_from_msg_id": row.get("seeded_from_msg_id"),
             "status": target_status,
-            "proposed_at": row.get("proposed_at") or now,
+            "proposed_at": row.get("proposed_at")
+            if private_definition
+            else row.get("proposed_at") or now,
             "decided_at": now,
             "decided_by": (
                 writer_actor("learnings-reviewer")

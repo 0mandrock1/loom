@@ -1449,6 +1449,17 @@ carries no `user_id`, and once a user's supporter rows are gone nothing ties an
 unsupported candidate to that user, so the census counts every unsupported candidate that
 still holds its rule in the org, whichever erasure left it.
 
+Private definition candidates retain their original proposal time in every version.
+Claim, model-completion and review writes share an org lease with the namespace queue
+erasure step. Before each insert, the writer reads the erasure ledger under that lease;
+an erasure that may cover the evidence and was unfinished at the proposal time refuses
+the write, including one completed since then. User erasures count conservatively because
+the candidate holds no user identities. An unreadable ledger refuses the write. A send
+whose completion is unknown retains the lease until its server deadline has passed, so
+erasure cannot finish while the insert may still land. The lease covers persistence only;
+model generation runs outside it. Private writes in one org serialize with its queue
+erasure, including erasure of a namespace list.
+
 ## Audit rows
 
 Every write that creates or changes memory leaves one hash-only row in `loom.audit_log`

@@ -14,6 +14,7 @@ from server.core.errors import DefinitionPromotionRefusedError, PreconditionFail
 from server.memory.api.models_learnings import LearningsReviewInput
 from server.memory.app import definition_review, learnings, promote, write
 from server.memory.store.rows import MemoryRow
+from tests.unit.definition_queue_fake import install
 
 VALUE = {"term": "ARR", "aliases": [], "body": "Annual revenue."}
 KEY = "definition/draft"
@@ -21,6 +22,7 @@ KEY = "definition/draft"
 
 @pytest.fixture
 def review(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    install(monkeypatch)
     state: dict[str, Any] = {
         "candidate": {
             "candidate_id": "c",
@@ -30,6 +32,7 @@ def review(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             "source_kind": "query_history",
             "status": "pending",
             "version": 10**19,
+            "proposed_at": datetime(2026, 1, 1),
             "supporters": [],
             "rationale": "SQL",
         },

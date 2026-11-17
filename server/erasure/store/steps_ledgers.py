@@ -10,6 +10,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
+from server.core import lease_writes
 from server.core.ch_params import chunks
 from server.core.repo_base import _CHClient, _default_client, query_all_sliced
 from server.erasure.store import mutations as erasure_mutations
@@ -387,7 +388,11 @@ async def delete_learnings_queue_by_namespace(
     org: str, namespace: str | Sequence[str], *, ch: _CHClient | None = None
 ) -> int:
     """Promotion candidates quote the proposed value; their supporters name users."""
-    return await _delete_many(_LEARNINGS_TABLES, org, NS_EQ, {"ns": namespace}, ch)
+    async with lease_writes.fenced(f"definition.writer/{org}", ch=ch) as uncertain:
+        uncertain(True)
+        count = await _delete_many(_LEARNINGS_TABLES, org, NS_EQ, {"ns": namespace}, ch)
+        uncertain(False)
+        return count
 
 
 async def delete_learnings_queue_by_user(
