@@ -1,5 +1,6 @@
 """Record writers retain their explicit target across reconnects."""
 
+import time
 from datetime import UTC
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -51,3 +52,27 @@ async def test_external_failed_connect_keeps_existing_client(monkeypatch):
         await client._reconnect(0)
     assert client.client is driver and driver.close.await_count == 0
     await client.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deployment, external", [(1000.0, 1300.0), (1300.0, 1000.0)])
+async def test_leased_insert_measures_its_own_target_clock(monkeypatch, deployment, external):
+    from server.core import rmt_carry
+
+    monkeypatch.setattr(rmt_carry, "_server_anchor", (deployment, time.monotonic()))
+    monkeypatch.setattr(rmt_carry, "_skew_at", time.monotonic())
+    client = ch.CHClient()
+    client.query_one = AsyncMock(return_value={"ms": int(external * 1000)})
+    client._column_type_names = AsyncMock(return_value=None)
+    client._fenced_insert = AsyncMock()
+
+    async def run(name, call, **kwargs):
+        return await call()
+
+    monkeypatch.setattr(client, "_with_retry", run)
+    with rmt_carry.under_lease(time.monotonic() + 60):
+        await client._insert_rows("feed_issues", [{"number": 1}], None)
+    client.query_one.assert_awaited_once()
+    deadline = client._fenced_insert.call_args.args[-1]
+    assert external + 14 <= deadline <= external + 16
+    assert rmt_carry._server_anchor[0] == deployment

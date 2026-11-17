@@ -1281,6 +1281,7 @@
 96f6898359c7	SELECT c.session_id AS session_id, c.chunk_index AS chunk_index, c.parent_memory_key AS parent_memory_key, cosineDistance(c.embedding, {q:Array(Float32)}) AS distance FROM loom.memory_chunks AS c WHER
 971a9c534152	SELECT entity, substring(summary_text, ?, ?) AS content_excerpt, cosineDistance(summary_embedding, {q:Array(Float32)}) AS distance, -- alias must NOT be `valid_from`: it would shadow the base column -
 9761b739c189	SELECT m.org AS org, m.namespace AS namespace, m.user_id AS user_id, count() AS n FROM loom.memory AS m FINAL INNER JOIN loom.namespaces AS n FINAL ON m.org = n.org AND m.namespace = n.namespace WHERE
+976a3206306b	SELECT toUInt64(toUnixTimestamp64Milli(now64(?))) AS ms
 979ee17b2127	SELECT memory_key, toString(memory_id) AS id, version, memory_type, toString(status) AS status, source_class, agent, user_id, session_id, actor, updated_at, sensitivity, org, namespace, redacted_at FR
 97b465efed16	SELECT source_uri, count() AS live, countIf(embedding_model = {model:String} AND embedding_dim > ?) AS searchable, countIf(embedding_dim = ?) AS unembedded, countIf(embedding_model != {model:String})
 97f1fa79ed2d	SELECT concat(?, toString(c.session_id), ?, toString(c.chunk_index)) AS memory_key, ? AS memory_type, substring(c.content, ?, ?) AS content_excerpt, c.content AS content_full, c.agent AS agent, c.user
@@ -1759,6 +1760,7 @@ ca5008422344	SELECT e.memory_key AS memory_key, e.memory_type AS memory_type, e.
 ca58f3affe58	ALTER TABLE loom.conversation_threads UPDATE tombstoned_at = {now:DateTime} WHERE org = {org:String} AND namespace = {ns:String} AND agent = {agent:String} AND thread_id = {tid:String} AND tombstoned_
 ca924a95865f	SELECT e.memory_key AS memory_key, e.memory_type AS memory_type, e.content_excerpt AS content_excerpt, e.status AS status, e.version AS version, -- Multi-vector axis: min(value_dist, key_dist). CH?t g
 ca9ec9e5facb	SELECT count() AS c FROM ( SELECT evidence_id, argMax(tombstoned_at, created_at) AS tomb_latest FROM loom.memory_belief_sources WHERE org = {o:String} AND namespace = {n:String} AND memory_key = {k:St
+caa73a929cde	SELECT toUnixTimestamp64Milli(now64(?)) AS ms
 cabd0fc4905d	ALTER TABLE loom.consolidation_runs DELETE WHERE (org = {org:String} AND user_id = {uid:String}) AND ({erasure_mutation_tag:String} = {erasure_mutation_tag:String}) SETTINGS mutations_sync = ?
 cacd77ea0602	SELECT count() AS n FROM loom.code_search_trace WHERE org = {org:String} AND user_id = {uid:String}
 cad920c3af77	SELECT org, code_namespace, branch_namespace, pr_number, branch, verdict, epistemic, basis, reason, cherry_pick_pr, cherry_pick_sha, backport_pr, label_wanted, wanted_branch, wanted_source, settled, p

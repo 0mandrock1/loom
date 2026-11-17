@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from datetime import UTC, datetime
 from typing import Any
 
 from server.core.repo_base import _CHClient
@@ -29,6 +31,7 @@ REPOSITORY_COLUMNS = {
     "visible_until": "DateTime64(3, 'UTC')",
     "cursors": "String",
     "max_pages": "UInt64",
+    "revision": "UUID",
 }
 COMMENT_COLUMNS = {
     **IDENTITY,
@@ -43,6 +46,25 @@ COMMENT_COLUMNS = {
 }
 TABLES = ("feed_owner", "feed_repositories", "feed_issues", "feed_prs", "feed_comments")
 VIEWS = ("github_issues", "github_prs", "edges")
+
+
+def owner_tag(org: str, owner_uuid: str) -> str:
+    return "loom-github-feed:" + hashlib.sha256(f"{org}\0{owner_uuid}".encode()).hexdigest()
+
+
+async def claim_owner(ch: _CHClient, org: str, owner_uuid: str) -> None:
+    # CREATE's COMMENT grammar requires a literal. The generated tag contains
+    # only a fixed prefix and hexadecimal digest, never caller-provided SQL.
+    tag = owner_tag(org, owner_uuid)
+    await ch.execute(statements()[0] + f" COMMENT '{tag}'")
+
+
+async def owner_marker(ch: _CHClient) -> str:
+    row = await ch.query_one(
+        "SELECT comment FROM system.tables WHERE database = currentDatabase() "
+        "AND name = 'feed_owner' LIMIT 1"
+    )
+    return str(row["comment"]) if row else ""
 
 
 def create_table(name: str, columns: dict[str, str], key: str) -> str:
@@ -60,7 +82,12 @@ def item_columns(table: str) -> dict[str, str]:
     return {
         **IDENTITY,
         "repository": "String",
-        **{name: concrete_type(kind) for name, kind in COLUMNS_READ[table].items()},
+        **{
+            name: "Nullable(UInt64)"
+            if name in {"has_test", "review_requests_test"}
+            else concrete_type(kind)
+            for name, kind in COLUMNS_READ[table].items()
+        },
     }
 
 
@@ -78,16 +105,19 @@ def item_view(table: str) -> str:
         elif column == "is_private":
             expression = "r.is_private"
         elif column == "body":
-            expression = "concat(substring(i.body, 1, 32768), '\\n', ifNull(c.comments, ''))"
+            expression = "concat(substringUTF8(i.body, 1, 32768), '\\n', ifNull(c.comments, ''))"
         columns.append(f"{expression} AS `{column}`")
-    return f"""CREATE VIEW IF NOT EXISTS {table} SQL SECURITY DEFINER AS
+    return f"""CREATE VIEW IF NOT EXISTS {table} DEFINER = CURRENT_USER SQL SECURITY DEFINER AS
 SELECT {", ".join(columns)}
-FROM {raw} FINAL AS i
-INNER JOIN feed_repositories FINAL AS r ON i.org = r.org AND i.repository = r.repository
-INNER JOIN feed_owner FINAL AS o ON i.org = o.org AND r.owner_uuid = o.owner_uuid
+FROM {raw} AS i FINAL
+INNER JOIN feed_repositories AS r FINAL ON i.org = r.org AND i.repository = r.repository
+INNER JOIN feed_owner AS o FINAL ON i.org = o.org AND r.owner_uuid = o.owner_uuid
 LEFT JOIN (
     SELECT org, repository, item_number,
-           arrayStringConcat(groupArray(64)(substring(body, 1, 2048)), '\\n') AS comments
+           arrayStringConcat(arrayMap(x -> x.4, groupArraySorted(64)(
+               tuple(-toUnixTimestamp64Milli(updated_at), -toInt16(review),
+                     -toInt128(comment_id), substringUTF8(body, 1, 2048))
+           )), '\\n') AS comments
     FROM feed_comments FINAL GROUP BY org, repository, item_number
 ) AS c ON i.org = c.org AND i.repository = c.repository AND i.number = c.item_number
 WHERE r.available = 1 AND r.visible_until > now64(3)"""
@@ -102,11 +132,18 @@ def statements() -> list[str]:
         create_table("feed_comments", COMMENT_COLUMNS, "org, repository, review, comment_id"),
         item_view("github_issues"),
         item_view("github_prs"),
-        """CREATE VIEW IF NOT EXISTS edges SQL SECURITY DEFINER AS
+        """CREATE VIEW IF NOT EXISTS edges DEFINER = CURRENT_USER SQL SECURITY DEFINER AS
 SELECT toUUID('00000000-0000-0000-0000-000000000000') AS from_id,
        '' AS from_type, from_id AS to_id, '' AS to_type, '' AS rel_type,
        toDateTime(0) AS created_at WHERE 0""",
     ]
+
+
+async def clock(ch: _CHClient) -> datetime:
+    row = await ch.query_one("SELECT toUInt64(toUnixTimestamp64Milli(now64(3))) AS ms")
+    if not row:
+        raise ValueError("record clock is unavailable")
+    return datetime.fromtimestamp(int(row["ms"]) / 1000, UTC)
 
 
 async def database_uuid(ch: _CHClient) -> str:
@@ -128,16 +165,16 @@ async def objects(ch: _CHClient) -> list[dict[str, Any]]:
     )
 
 
-async def repositories(ch: _CHClient, org: str) -> list[dict[str, Any]]:
-    return await ch.query_all(
-        "SELECT * FROM feed_repositories FINAL WHERE org = {org:String} "
-        "ORDER BY repository LIMIT 101",
-        {"org": org},
-    )
-
-
 async def put_repository(ch: _CHClient, row: dict[str, Any]) -> None:
     await ch.insert("feed_repositories", [{key: row[key] for key in REPOSITORY_COLUMNS}])
+
+
+async def repository(ch: _CHClient, org: str, repo: str) -> dict[str, Any] | None:
+    return await ch.query_one(
+        "SELECT * FROM feed_repositories FINAL "
+        "WHERE org = {org:String} AND lower(repository) = lower({repo:String}) LIMIT 1",
+        {"org": org, "repo": repo},
+    )
 
 
 async def put_items(

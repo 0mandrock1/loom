@@ -13,7 +13,7 @@ import httpx
 from server.clients._http import get_client
 from server.clients._vendor import read_capped
 from server.clients.github import _headers
-from server.core.github_values import PAGE_SIZE, repository, since_parameter
+from server.core.github_values import PAGE_SIZE, positive_id, repository, since_parameter
 
 API = "https://api.github.com"
 PAGE_MAX_BYTES = 4 * 1024 * 1024
@@ -55,8 +55,7 @@ async def metadata(repo: str, token: str) -> dict[str, Any]:
 
 
 async def pull_request(repo: str, token: str, number: int) -> dict[str, Any]:
-    if number <= 0:
-        raise FeedProviderError("GitHub feed invalid pull request number")
+    number = positive_id(number)
     data, _ = await _get(f"/repos/{repository(repo)}/pulls/{number}", token)
     if not isinstance(data, dict) or data.get("number") != number:
         raise FeedProviderError("GitHub feed mismatched pull request")

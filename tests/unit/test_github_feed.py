@@ -32,9 +32,10 @@ def test_copied_item_matches_contract_identity_and_defaults():
     assert row["labels"] == [] and row["is_private"] == 0
     assert row["triage_clean_on"] == [] and row["triage_component"] == ""
     assert row["updated_at"] == NOW
+    assert row["has_test"] is None
 
 
-def test_pr_keeps_merge_state_files_and_reviewers():
+def test_pr_keeps_merge_metadata_and_leaves_review_evidence_unknown():
     row = feed.item_row(
         "widgets/repo",
         item(
@@ -49,7 +50,8 @@ def test_pr_keeps_merge_state_files_and_reviewers():
         is_pr=True,
     )
     assert row["state"] == "merged" and row["is_merged"] == 1
-    assert row["reviewers"] == ["maintainer"] and row["base_branch"] == "main"
+    assert row["reviewers"] == [] and row["base_branch"] == "main"
+    assert row["review_requests_test"] is None and row["has_test"] is None
     assert row["additions"] == 8 and row["deletions"] == 2
 
 
@@ -97,3 +99,37 @@ def test_comment_parent_url_is_validated_without_following_it():
 def test_invalid_update_time_refuses_checkpoint_and_content():
     with pytest.raises(feed.FeedInputError):
         feed.item_row("widgets/repo", item(1, updated_at="bad-time"), is_pr=False)
+
+
+@pytest.mark.parametrize("scope", ["team_feed.*", "`team_feed`.*"])
+def test_writer_grants_accept_only_direct_record_and_metadata_authority(scope):
+    feed.writer_grants(
+        [
+            f"GRANT SELECT, INSERT, CREATE TABLE, CREATE VIEW ON {scope} TO writer",
+            "GRANT SELECT ON system.columns TO writer",
+        ],
+        "team_feed",
+    )
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [],
+        ["GRANT ALL ON team_feed.* TO writer"],
+        ["GRANT SELECT ON system.* TO writer"],
+        ["GRANT SELECT ON other.* TO writer"],
+        ["GRANT SELECT ON team_feed.* TO writer WITH GRANT OPTION"],
+        ["GRANT reader_role TO writer"],
+        ["GRANT SELECT ON team_feed.* TO writer", "GRANT ALL ON *.* TO writer"],
+    ],
+)
+def test_writer_grants_refuse_unverifiable_or_excess_authority(lines):
+    with pytest.raises(feed.FeedInputError, match="writer grants"):
+        feed.writer_grants(lines, "team_feed")
+
+
+@pytest.mark.parametrize("number", [True, 1.5, "1", -1, 2**64])
+def test_item_identity_rejects_coercion_and_uint64_overflow(number):
+    with pytest.raises(feed.FeedInputError, match="number"):
+        feed.item_row("widgets/repo", item(1) | {"number": number}, is_pr=False)

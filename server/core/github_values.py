@@ -10,6 +10,12 @@ class FeedInputError(ValueError):
     """A source value cannot be represented without guessing its identity."""
 
 
+def positive_id(value: object) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 < value < 2**64:
+        raise FeedInputError("invalid upstream number or id")
+    return value
+
+
 def repository(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9_.-]{1,100}", value):
         raise FeedInputError("repository must be owner/name")

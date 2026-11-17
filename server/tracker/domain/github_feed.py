@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from server.core.github_values import PAGE_SIZE
 from server.core.github_values import FeedInputError as FeedInputError
+from server.core.github_values import positive_id as positive_id
 from server.core.github_values import repository as repository
 from server.core.github_values import since_parameter as since_parameter
 from server.tracker.domain.columns import COLUMNS_READ
@@ -19,6 +20,39 @@ SECRET_PURPOSE = "tracker-github-feed"
 
 class FeedCapacityError(RuntimeError):
     """The bounded scan cannot complete its current timestamp boundary."""
+
+
+def writer_grants(lines: list[str], database: str) -> None:
+    """Accept dedicated direct grants, refusing unknown or role-derived authority."""
+    quoted = "`" + database.replace("\\", "\\\\").replace("`", "\\`") + "`"
+    record_scopes = {database + ".*", quoted + ".*"}
+    metadata_scopes = {
+        f"{db}.{table}"
+        for db in ("system", "`system`")
+        for name in ("columns", "tables", "databases")
+        for table in (name, f"`{name}`")
+    }
+    allowed = {"SELECT", "INSERT", "CREATE TABLE", "CREATE VIEW", "SHOW TABLES", "SHOW COLUMNS"}
+    if not lines:
+        raise FeedInputError("writer grants could not be verified")
+    for line in lines:
+        types, on, rest = line.removeprefix("GRANT ").partition(" ON ")
+        scope, to, recipient = rest.rpartition(" TO ")
+        access = {name.strip().upper() for name in types.split(",")}
+        if (
+            not line.startswith("GRANT ")
+            or not on
+            or not to
+            or not recipient
+            or " WITH " in recipient.upper()
+            or not (
+                scope in record_scopes
+                and access <= allowed
+                or scope in metadata_scopes
+                and access == {"SELECT"}
+            )
+        ):
+            raise FeedInputError("writer grants must be direct and limited to the feed database")
 
 
 def timestamp(value: Any, *, optional: bool = False) -> datetime:
@@ -67,9 +101,7 @@ def _names(value: Any, key: str) -> list[str]:
 
 def item_row(repo: str, data: dict[str, Any], *, is_pr: bool) -> dict[str, Any]:
     repo = repository(repo)
-    number = int(data.get("number") or 0)
-    if number <= 0:
-        raise FeedInputError("invalid upstream item number")
+    number = positive_id(data.get("number"))
     kind = "github_pr" if is_pr else "github_issue"
     row = {name: _default(family) for name, family in COLUMNS_READ[kind + "s"].items()}
     source_id = f"{repo}#{number}"
@@ -85,6 +117,7 @@ def item_row(repo: str, data: dict[str, Any], *, is_pr: bool) -> dict[str, Any]:
         created_at=timestamp(data.get("created_at")),
         updated_at=timestamp(data.get("updated_at")),
         closed_at=timestamp(data.get("closed_at"), optional=True),
+        has_test=None,
     )
     if is_pr:
         merged = timestamp(data.get("merged_at"), optional=True)
@@ -93,7 +126,7 @@ def item_row(repo: str, data: dict[str, Any], *, is_pr: bool) -> dict[str, Any]:
             state="merged" if merged != EPOCH else str(data.get("state") or ""),
             is_merged=int(merged != EPOCH),
             merged_at=merged,
-            reviewers=_names(data.get("requested_reviewers"), "login"),
+            review_requests_test=None,
             base_branch=str((data.get("base") or {}).get("ref") or "")[:256],
             additions=max(0, int(data.get("additions") or 0)),
             deletions=max(0, int(data.get("deletions") or 0)),
@@ -123,12 +156,10 @@ def comment_row(repo: str, data: dict[str, Any], *, review: bool) -> dict[str, A
         or parsed.fragment
     ):
         raise FeedInputError("comment parent does not match the configured repository")
-    ident = int(data.get("id") or 0)
-    if ident <= 0:
-        raise FeedInputError("invalid upstream comment id")
+    ident = positive_id(data.get("id"))
     return dict(
         comment_id=ident,
-        item_number=int(suffix),
+        item_number=positive_id(int(suffix)),
         review=int(review),
         body=str(data.get("body") or "")[:65536],
         author=str((data.get("user") or {}).get("login") or "")[:256],

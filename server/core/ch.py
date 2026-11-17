@@ -1382,10 +1382,11 @@ class CHClient:
         settings = dedup_settings(token, settings)
         from server.core import rmt_carry
 
+        send_clock = None
         if rmt_carry.sent_under_lease() and not rmt_carry.carries(table):
-            # Its start deadline is on the server's clock, which a carried insert's
-            # admission measures: measured here, before the send holds a slot.
-            await rmt_carry.measure_server_clock(self)
+            # An external record can have a different server clock from the
+            # deployment. Measure its receiver before the send holds a slot.
+            send_clock = await rmt_carry.measure_send_clock(self)
 
         async def _q() -> None:
             attempt = query_settings(settings)
@@ -1414,7 +1415,11 @@ class CHClient:
                 fenced["query_id"] = rmt_carry.carry_query_id(
                     str(fenced.get("query_id") or uuid.uuid4().hex)
                 )
-                deadline = rmt_carry.send_deadline()
+                deadline = (
+                    rmt_carry.clock_send_deadline(send_clock)
+                    if send_clock is not None
+                    else rmt_carry.send_deadline()
+                )
                 rmt_carry.note_send(
                     str(fenced["query_id"]), deadline, float(fenced["max_execution_time"])
                 )
@@ -1573,11 +1578,20 @@ class ExternalCHClient(CHClient):
     """The statement wrapper for an operator's separately owned record database."""
 
     def __init__(
-        self, *, host: str, port: int, secure: bool, database: str, username: str, password: str
+        self,
+        *,
+        host: str,
+        port: int,
+        secure: bool,
+        database: str,
+        username: str,
+        password: str,
+        address: str = "",
     ) -> None:
         super().__init__()
-        self._connection = dict(
-            host=host,
+        self._connection: dict[str, Any] = dict(
+            host=address or host,
+            server_host_name=host if address else None,
             port=port,
             secure=secure,
             database=database,

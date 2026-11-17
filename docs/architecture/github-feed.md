@@ -68,14 +68,20 @@ updates the record's repository metadata before item writes; views derive `is_pr
 from that metadata, including existing rows. A private repository is therefore excluded
 by the standard tracker's existing predicate. Restricted namespaces retain their live
 direct-grant check. Visibility is a polling observation, not an instant permission mirror.
+A validated identity mismatch or private observation can hide the current record even
+when another turn changed its revision; this preserves current credentials and cursors.
+Generic failures from an older credential retain the revision check. Stale public
+observations cannot widen access.
 
 Incremental API lists do not report deleted issues or comments. The team handles those
 erasures explicitly; the feed does not claim deletion detection. Configuration, sealed
 credentials and cursors stay with the team's record, so CLI restarts do not depend on
 local files. Initialization binds the record to one Loom deployment's database UUID;
 configuration and sync refuse any other deployment. Concurrent jobs in that deployment
-use a lease keyed by the record database UUID and immutable repository id, independent
-of source aliases. An uncertain database write retains its claim through the bounded
+use one publication lease keyed by the record database UUID, independent of source
+aliases and repository renames. Provider fetches happen outside that lease; initialization,
+configuration and publication share it so concurrent first-time identity observations
+cannot bypass serialization. An uncertain database write retains its claim through the bounded
 server send window. Record erasure requires the team to stop all writers first.
 
 ## Validation and rollout
