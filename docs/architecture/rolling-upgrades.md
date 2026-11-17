@@ -870,7 +870,7 @@ schema. These rules keep that safe. The operator procedure is in
     after its timeout does not prove a sent insert has completed.
 
 59. **Personal-agent reader claims and verified directory evidence** (migration
-    `102_sso_domain_evidence.sql`): N adds empty-default `hosted_domain` and `issuer`
+    `103_sso_domain_evidence.sql`): N adds empty-default `hosted_domain` and `issuer`
     String columns to `sso_links`. Direct verified sign-in writes them only for a fresh
     active passwordless account under its ownership lock, after the SCIM check. N-1
     ignores them and its ordinary link writes clear them to defaults; missing evidence
@@ -886,7 +886,7 @@ schema. These rules keep that safe. The operator procedure is in
     checks the claim and delegation boundaries.
 
 60. **Checked mirror reads use source-scoped group evidence** (migration
-    `103_knowledge_group_members.sql`): N reads each membership snapshot by org,
+    `104_knowledge_group_members.sql`): N reads each membership snapshot by org,
     mirror, source id and group, and admits only a nondeleted snapshot within
     `LOOM_KNOWLEDGE_SOURCE_ACL_STALE_SECONDS`. An empty table admits no group. N-1
     ignores the table; namespace erasure removes its rows with the mirror. Mirrored
@@ -894,7 +894,7 @@ schema. These rules keep that safe. The operator procedure is in
     request, session and enablement protections.
 
 61. **Coarse permission keys and private lexical statistics** (migration
-    `104_mirror_access_candidates.sql`): `documents.access_keys` is materialized from
+    `105_mirror_access_candidates.sql`): `documents.access_keys` is materialized from
     the existing permission JSON; N-1 writers need no new field. N still checks the
     strict current list, and Postgres heads do not depend on published keys. Each
     chunk-frequency view changes its query in place, retaining the input, target and
