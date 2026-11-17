@@ -5594,6 +5594,8 @@ async def test_a_revision_past_the_horizon_that_clickhouse_holds_loses_its_paylo
 
     ns = f"pg-{uuid.uuid4().hex[:8]}"
     first = (await call("memory.set", _set(ns, "k", "the token is hunter2"))).json()
+    # Publish the initial head before revisions can hand its delivery to the worker.
+    await _published(pg_conn, org)
     second = (await call("memory.set", _set(ns, "k", "the token was rotated"))).json()
     assert (await call("memory.set", _set(ns, "k", "the token is in the vault"))).status_code == 200
     for key in ("k2", "kp", "ko", "kd"):
