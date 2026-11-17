@@ -39,6 +39,7 @@ COMMENT_COLUMNS = {
     "comment_id": "UInt64",
     "item_number": "UInt64",
     "review": "UInt8",
+    "is_private": "UInt8",
     "body": "String",
     "author": "String",
     "created_at": "DateTime64(3, 'UTC')",
@@ -96,14 +97,15 @@ def item_view(table: str) -> str:
         raise ValueError("unknown feed view")
     raw = "feed_issues" if table == "github_issues" else "feed_prs"
     kind = "github_issue" if table == "github_issues" else "github_pr"
-    ident = uuid5_sql(f"concat('{kind}', if(r.is_private, '_private', ''), ':', i.source_id)")
+    private = "greatest(r.is_private, i.is_private, ifNull(c.is_private, 0))"
+    ident = uuid5_sql(f"concat('{kind}', if({private}, '_private', ''), ':', i.source_id)")
     columns = []
     for column in COLUMNS_READ[table]:
         expression = f"i.`{column}`"
         if column == "id":
             expression = ident
         elif column == "is_private":
-            expression = "r.is_private"
+            expression = private
         elif column == "body":
             expression = "concat(substringUTF8(i.body, 1, 32768), '\\n', ifNull(c.comments, ''))"
         elif column == "updated_at":
@@ -116,6 +118,7 @@ INNER JOIN feed_repositories AS r FINAL ON i.org = r.org AND i.repository = r.re
 INNER JOIN feed_owner AS o FINAL ON i.org = o.org AND r.owner_uuid = o.owner_uuid
 LEFT JOIN (
     SELECT org, repository, item_number, max(version) AS published_at,
+           max(is_private) AS is_private,
            arrayStringConcat(arrayMap(x -> x.4, groupArraySorted(64)(
                tuple(-toUnixTimestamp64Milli(updated_at), -toInt16(review),
                      -toInt128(comment_id), substringUTF8(body, 1, 2048))

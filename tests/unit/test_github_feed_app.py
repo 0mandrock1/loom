@@ -458,3 +458,70 @@ async def test_configure_refuses_one_page_before_any_provider_request(env, monke
         )
     app.provider.metadata.assert_not_awaited()
     assert not env.writes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "before_private,after_private", [(True, False), (False, False), (True, True)]
+)
+async def test_visibility_transition_replays_streams_only_when_repository_becomes_public(
+    env, monkeypatch, before_private, after_private
+):
+    cursors = {stream: NOW.isoformat() for stream in app.provider.STREAMS}
+    env.row.update(is_private=int(before_private), cursors=app.json.dumps(cursors))
+    monkeypatch.setattr(
+        app.provider,
+        "metadata",
+        AsyncMock(return_value=dict(id=7, full_name="widgets/repo", private=after_private)),
+    )
+    await sync()
+    replay = before_private and not after_private
+    assert [call.args[3] for call in app.provider.pages.await_args_list] == [
+        None if replay else NOW
+    ] * len(app.provider.STREAMS)
+    assert app.json.loads(env.row["cursors"]) == ({} if replay else cursors)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "before_private,after_private", [(True, False), (False, False), (True, True)]
+)
+async def test_configure_replays_content_only_when_repository_becomes_public(
+    env, monkeypatch, before_private, after_private
+):
+    cursors = {stream: NOW.isoformat() for stream in app.provider.STREAMS}
+    env.row.update(is_private=int(before_private), cursors=app.json.dumps(cursors))
+    monkeypatch.setattr(app, "seal", lambda *args: "sealed-secret")
+    monkeypatch.setattr(
+        app.provider,
+        "metadata",
+        AsyncMock(return_value=dict(id=7, full_name="widgets/repo", private=after_private)),
+    )
+    await app.configure(
+        object(),
+        org="team",
+        owner_uuid=OWNER,
+        repo="widgets/repo",
+        token="read-only-secret",
+        allowed_repos={"widgets/repo"},
+    )
+    replay = before_private and not after_private
+    assert app.json.loads(env.row["cursors"]) == ({} if replay else cursors)
+
+
+@pytest.mark.asyncio
+async def test_interrupted_public_replay_retains_reset_cursors(env, monkeypatch):
+    env.row.update(
+        is_private=1,
+        cursors=app.json.dumps({stream: NOW.isoformat() for stream in app.provider.STREAMS}),
+    )
+    data = dict(number=1, created_at=NOW.isoformat(), updated_at=NOW.isoformat())
+    monkeypatch.setattr(
+        app.provider, "pages", AsyncMock(return_value=app.provider.Batch([data], True))
+    )
+    monkeypatch.setattr(app.store, "put_items", AsyncMock(side_effect=TimeoutError("uncertain")))
+    with pytest.raises(TimeoutError):
+        await sync()
+    assert env.row["is_private"] == 0
+    assert app.json.loads(env.row["cursors"]) == {}
+    assert app.provider.pages.await_args.args[3] is None

@@ -218,15 +218,22 @@ async def test_contract_reader_keeps_publication_privacy_when_repository_metadat
     ordinary.cfg = SimpleNamespace(restricted=False)
     rows = run(
         setup,
-        f"SELECT 'ordinary' AS reach, body, is_private FROM {view} FINAL "
+        f"SELECT 'ordinary' AS reach, body, is_private, toString(id) AS id FROM {view} FINAL "
         f"WHERE {ordinary._privacy()}1 UNION ALL "
-        f"SELECT 'restricted' AS reach, body, is_private FROM {view} FINAL",
+        f"SELECT 'restricted' AS reach, body, is_private, toString(id) AS id FROM {view} FINAL",
     )
     body = "Item body\n" + ("New reply" if publication == "comment" else "")
     effective_private = int(bool(metadata_private or published_private))
+    kind = "github_issue" if view == "github_issues" else "github_pr"
+    identity = f"{kind}{'_private' if effective_private else ''}:widgets/repo#1"
+    expected = {
+        "body": body,
+        "is_private": effective_private,
+        "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, identity)),
+    }
     assert [row for row in rows if row["reach"] == "ordinary"] == (
-        [] if effective_private else [{"reach": "ordinary", "body": body, "is_private": 0}]
+        [] if effective_private else [{"reach": "ordinary", **expected}]
     )
     assert [row for row in rows if row["reach"] == "restricted"] == [
-        {"reach": "restricted", "body": body, "is_private": effective_private}
+        {"reach": "restricted", **expected}
     ]

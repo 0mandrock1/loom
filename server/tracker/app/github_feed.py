@@ -180,7 +180,9 @@ async def configure(
             is_private=int(proof.private),
             available=1,
             visible_until=proof.observed + timedelta(seconds=VISIBILITY_TTL_S),
-            cursors=existing["cursors"] if existing else "{}",
+            cursors=existing["cursors"]
+            if existing and (proof.private or not existing["is_private"])
+            else "{}",
             max_pages=max_pages,
         )
         uncertain(True)
@@ -247,7 +249,9 @@ async def _publish(
             if _restricts(current, proof):
                 await _invalidate(ch, current, uncertain)
             return False
-        # Publish visibility before content, including a public-to-private change.
+        # Reset before the first public write so an interrupted replay resumes.
+        if current["is_private"] and not proof.private:
+            current["cursors"] = "{}"
         current |= dict(
             is_private=int(proof.private),
             available=1,
@@ -256,7 +260,9 @@ async def _publish(
         uncertain(True)
         await _put(ch, current)
         for table, items in records.items():
-            await store.put_items(ch, table, items, identity(row["org"]), row["repository"])
+            # Readers can learn this table's part before repository metadata.
+            stamped = [item | {"is_private": int(proof.private)} for item in items]
+            await store.put_items(ch, table, stamped, identity(row["org"]), row["repository"])
         cursors = json.loads(current["cursors"])
         if cursor is not None:
             cursors[stream] = cursor.isoformat()
@@ -290,6 +296,8 @@ async def sync(
                 proof = await _observe(ch, repo, token)
                 if proof.repository_id != row["repository_id"]:
                     raise domain.FeedInputError("repository identity changed")
+                if row["is_private"] and not proof.private:
+                    since = None
                 batch, records = await _fetch(row, stream, since, token)
                 cursor = domain.next_cursor(batch.items, complete=batch.complete, previous=since)
             except (Exception, asyncio.CancelledError):  # rejected scans invalidate visibility

@@ -90,10 +90,17 @@ on standard output report processed rows, including replayed rows.
 ## Visibility and erasure
 
 Every stream verifies the repository's immutable identity and current visibility.
-Failed checks hide its views; a private observation changes existing rows' privacy
-before copied content is published. This is a polling observation with a bounded
-expiry, rather than an instant permission mirror. Normal tracker privacy and direct
-grant checks still apply.
+Failed checks hide its views. Each item and comment keeps the observation's privacy
+classification with its content. The views use the most restrictive classification
+from the repository, item and stored comments, including when those tables reach a
+replica at different times. This is a polling observation with a bounded expiry,
+rather than an instant permission mirror. Normal tracker privacy and direct grant
+checks still apply.
+
+When a repository becomes public, configuration or sync resets its cursors and
+scheduled turns replay all streams within the same page budget. An item becomes public
+after its row and stored comments have been refreshed under public observations.
+Deleted upstream rows require erasure of the retained copies; replay cannot refresh them.
 
 Bodies include up to 32,768 item characters and the 64 most recently updated comments,
 with up to 2,048 characters per comment. Review requests and test evidence remain

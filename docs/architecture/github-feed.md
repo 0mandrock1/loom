@@ -39,7 +39,7 @@ content is never written there. Only the existing deployment-store lease is loca
 
 Raw items and comments are versioned in the team's database with the identity tuple,
 process actor and imported source class. Contract views expose the latest item version,
-stable contract UUIDs and repository visibility. Issue and pull-request comments are
+contract UUIDs and effective visibility. Issue and pull-request comments are
 kept separately and included in the corresponding item's searchable body. Unsupported
 triage fields use the contract's typed defaults; edges are empty until evidence exists.
 Contract `updated_at` is the latest persisted publication timestamp across the item
@@ -82,15 +82,26 @@ overlapping scans reduce pagination races without claiming transactional upstrea
 Every turn verifies repository identity and visibility before copying content. An
 unavailable, moved or mismatched repository first hides that repository's contract rows
 and then refuses the turn. Contract views also require a recent successful visibility
-observation, expiring after a bounded interval if the scheduler stops. A visibility observation
-updates the record's repository metadata before item writes; views derive `is_private`
-from that metadata, including existing rows. A private repository is therefore excluded
-by the standard tracker's existing predicate. Restricted namespaces retain their live
-direct-grant check. Visibility is a polling observation, not an instant permission mirror.
+observation, expiring after a bounded interval if the scheduler stops. Each item and
+comment publication stores the observation's privacy classification in the same row as
+its content. Views use the most restrictive classification from the repository, item
+and stored comments for both `is_private` and the contract UUID. A replica that learns
+new content before repository metadata therefore cannot label a private publication
+public. The standard tracker's existing predicate excludes those rows. Restricted
+namespaces retain their live direct-grant check. Visibility is a polling observation,
+not an instant permission mirror.
 A validated identity mismatch or private observation can hide the current record even
 when another turn changed its revision; this preserves current credentials and cursors.
 Generic failures from an older credential retain the revision check. Stale public
 observations cannot widen access.
+
+When a repository becomes public, configuration or sync resets its existing stream
+cursors before publishing public metadata. Bounded scans replay the items and comments
+and stamp each with the public observation. An item remains restricted until its own
+row and its stored comments have been replayed. Repeated scheduled turns continue a
+backlog under the same page and timestamp-boundary limits. Deleted upstream rows cannot
+be replayed; the team must erase those retained copies to clear their private
+classification.
 
 Incremental API lists do not report deleted issues or comments. The team handles those
 erasures explicitly; the feed does not claim deletion detection. Configuration, sealed
@@ -117,8 +128,8 @@ registered trackers are unchanged until an operator initializes and schedules a 
 - [CLI](../../server/cli/tracker_feed.py): `register_tracker_feed` and `_run` select the
   owned record and its separate writer credential; `_validate_writer` checks grants
   and supported table engines.
-- [Feed application](../../server/tracker/app/github_feed.py): `initialize`, `configure`
-  and `sync` enforce ownership, visibility and publication fencing.
+- [Feed application](../../server/tracker/app/github_feed.py): `initialize`, `configure`,
+  `sync` and `_publish` enforce ownership, stamp publication privacy and fence writes.
 - [Record store](../../server/tracker/store/github_feed.py): `statements` defines the
   contract views; `repository` and `put_items` read publication state consistently.
 - [API client](../../server/clients/github_feed.py): `pages` bounds upstream scans;
@@ -130,6 +141,11 @@ registered trackers are unchanged until an operator initializes and schedules a 
 - Copied content stays in the team's registered record, with team-owned erasure.
 - Repository identity, visibility and revision checks precede content publication;
   control reads include acknowledged record writes on the supported storage topology.
+- Content and its privacy classification share one raw row version. Contract privacy
+  and UUIDs include every stored component's classification, even when tables lag
+  independently.
+- A private-to-public transition resets cursors before public publication, so retries
+  replay retained content without dropping its private classification prematurely.
 - The record-wide writer lease covers publication and checkpoint writes. An uncertain
   send retains its claim until it settles; a cursor advances only after acknowledged writes.
 - Whole-millisecond content versions increase across every repository in the record,
