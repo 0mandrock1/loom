@@ -859,12 +859,14 @@ def _fingerprint_refusal(found: Attaching, name: str, value: dict[str, Any]) -> 
 _PLACEMENT_ORG_MAX = 6 * cell_state.ORG_MAX_BYTES  # not a setting: derived
 
 
-def _placement_refusal(cell: str, name: str, value: dict[str, Any]) -> str:
-    """Why a fingerprint is too large for the cell's live placements ('' when it is not): a
-    placement body (`{org, cell, fingerprint}`, the org at its longest) past the router's
-    MAX_BODY_BYTES would refuse every new org; the largest fields are named."""
+def _placement_refusal(cell: str, deployment_id: str, name: str, value: dict[str, Any]) -> str:
+    """Reserve both live and operator placement bodies with the longest escaped org."""
     # The default encoding is the longest: spaces after separators, non-ASCII escaped.
-    size = len(json.dumps({"org": "", "cell": cell, "fingerprint": value})) + _PLACEMENT_ORG_MAX
+    envelopes = (
+        {"org": "", "cell": cell, "fingerprint": value},
+        {"org": "", "deployment_id": deployment_id, "fingerprint": value},
+    )
+    size = max(len(json.dumps(body)) for body in envelopes) + _PLACEMENT_ORG_MAX
     if size <= MAX_BODY_BYTES:
         return ""
     sizes = sorted(((len(json.dumps(v)), k) for k, v in value["fields"].items()), reverse=True)
@@ -890,7 +892,7 @@ def begin_refusal(found: Attaching, begin: Begin) -> str:
         if value is None:
             continue
         if reason := _fingerprint_refusal(found, name, value) or _placement_refusal(
-            row.cell, name, value
+            row.cell, row.deployment_id, name, value
         ):
             return reason
     # Compared as JSON, not as Python values, where `false == 0` and `1 == 1.0`: a rerun

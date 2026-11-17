@@ -486,13 +486,13 @@ async def test_local_phases_remain_separate_from_directory_and_exit(local, monke
         return await actual_call(self, work, total_s=total_s)
 
     async def directory_call(*args):
-        # HTTP owns its existing independent transport limit, not a local phase cap.
+        # The complete HTTP exchange has its independent directory-derived phase.
         await asyncio.sleep(0.06)
 
     monkeypatch.setattr(cell_control.Owner, "call", timed)
     monkeypatch.setattr(cell_place, "_directory", directory_call)
     await invoke_place()
-    assert observed == [0.03, 0.03, 0.03]
+    assert observed == [0.03, 0.03, cell_place.REQUEST_S, 0.03]
     conn, _ = local
     assert conn.committed and conn.closed and not conn.terminated
 

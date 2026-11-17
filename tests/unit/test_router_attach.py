@@ -1456,3 +1456,28 @@ def test_native_compact_batch_with_control_envelope_fits_public_handler(client, 
     assert response.status_code == 200, response.text
     assert response.json()["placed"] == len(batch)
     assert set(store.placements) == set(batch)
+
+
+@pytest.mark.parametrize("position", ["current_fp", "next_fp"])
+def test_begin_refuses_operator_envelope_overflow_before_probe_or_writes(
+    client: TestClient, store: _Store, listener: _Listener, position: str
+) -> None:
+    deployment = str(UUID(int=1))
+    store.cells["eu-1"]["deployment_id"] = deployment
+    current = cell.as_value({**FIELDS, "deployment_id": deployment})
+    grown = cell.as_value({**FIELDS, "deployment_id": deployment, "oidc_client_id": ""})
+    live = {"org": "", "cell": "eu-1", "fingerprint": grown}
+    available = MAX_BODY_BYTES - len(json.dumps(live)) - 6 * cell.ORG_MAX_BYTES
+    grown["fields"]["oidc_client_id"] = "x" * available
+    body = (
+        _begin(deployment_id=deployment, current_fp=current, **{position: grown})
+        if position == "next_fp"
+        else _begin(deployment_id=deployment, current_fp=grown)
+    )
+    response = _call(client, "POST", "attach/begin", body)
+    assert response.status_code == 409
+    assert position in response.json()["error"]
+    assert "oidc_client_id" in response.json()["error"]
+    assert store.statements == directory.ATTACH_READ_STATEMENTS
+    assert listener.asked == [] and store.audit == []
+    assert store.cells["eu-1"]["attach_started_at"] is None
