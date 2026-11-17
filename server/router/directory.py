@@ -299,7 +299,8 @@ def _administration_projection(selection: str) -> str:
     return (
         "SELECT CASE WHEN octet_length(row_to_json(selected)::text) <= 1024 "
         "THEN row_to_json(selected)::text END AS payload FROM ("
-        f"SELECT {_ADMIN_TARGET} FROM loom_router.cells {selection}) AS selected ORDER BY selected.cell"
+        f"SELECT {_ADMIN_TARGET} FROM loom_router.cells {selection}) AS selected "
+        "ORDER BY selected.cell"
     )
 
 
@@ -356,6 +357,27 @@ async def administration_cells(name: str | None = None) -> dict[str, Any]:
                 raise cell_admin.InvalidAdministration("Administration census is too large")
             cells.append(target)
         return cell_admin.census_targets(cells)
+
+
+async def set_administration(
+    cell_name: str, bots: list[dict[str, str]], *, expected: Control
+) -> dict[str, Any]:
+    """Record only the public pair under the existing directory claim and audit."""
+    encoded = json.dumps(bots, ensure_ascii=True, separators=(",", ":"))
+    public = cell_admin.public_pair(encoded)
+
+    async def change_locked(conn: Any, found: Attaching) -> dict[str, Any]:
+        if found.row.state != "serving" or found.row.mode != "enforced":
+            raise OperatorRefused("automation provisioning requires a serving, enforced cell")
+        await conn.execute(
+            "UPDATE loom_router.cells SET break_glass = $2, updated_at = now() WHERE cell = $1",
+            cell_name,
+            bots,
+        )
+        await _audit(conn, "administration", {"cell": cell_name, "bots": bots})
+        return {"version": 1, "cell": cell_name, "deployment_id": found.row.deployment_id, **public}
+
+    return await _attach_change(cell_name, expected, change_locked)
 
 
 _WINNER = (

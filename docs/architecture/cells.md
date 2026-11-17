@@ -116,6 +116,12 @@ router credential supplies the authoritative public pair; request text cannot se
 an automation identity. Empty or malformed directory metadata refuses. This is a fresh
 admission check, not an atomic transaction with later directory changes.
 
+`loom cell automation` provisions the public pair after proving both explicit keys
+against that cell's current bot registrations. It uses the existing native cell
+control owner, registration comparison and directory generation claim. The directory
+stores only the two purposes, names and public thumbprints in `break_glass`, with an
+operator audit in the same transaction. Registration reruns preserve this pair.
+
 Each action awaits a strict started audit, its owning business helper, and a strict
 completed audit. Correlation fields do not provide idempotency. Before a mutating
 request can leave the coordinator, its private durable state records `dispatching`.
@@ -1397,6 +1403,7 @@ entry points and the named exceptions:
 | `cell_prepare._write_rows`                                                              | Fresh claim, observed local rows, exact lock backend                                               |
 | `cell_attach_pg._mode_transaction`                                                      | Attach's claim, supervised mode try, recording/first/fingerprint comparison, exact lock backend    |
 | `cell_control.backout`                                                                  | Fresh claim, fenced close and zero-placement read, observed local rows, exact lock backend         |
+| `cell_automation.provision`, `directory.set_administration`                             | Fresh claim, paired authority, two live bot proofs, fenced public metadata and operator audit     |
 | `directory.attach_begin`, `attach_place`, `attach_enforced`, `attach_serving`, `remove` | Claimed generation, full registration and exact pair, including retries/no-ops                     |
 | `directory.set_limit`, `rotate_credential`                                              | Read and compare the current generation/registration/pair; do not claim or rotate                  |
 | `directory.register`                                                                    | Bootstrap default or immutable rerun lookup; never replaces existing acceptance or generation      |

@@ -14,7 +14,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 import jwt
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 
 from server.auth import keyring, machines, revocation
 from server.auth.jwt import AuthInfo
@@ -62,10 +62,23 @@ def _principal(auth: AuthInfo | None) -> AuthInfo:
         or auth.is_service_account is not True
         or not auth.has_role(Role.PLATFORM_ADMIN)
         or auth.namespaces not in ((), ("*",))
-        or any((auth.ns_roles, auth.write_namespaces, auth.impersonated_by, auth.read_scope,
-                auth.read_user_id, auth.parents, auth.parent_subjects, auth.parent_iats,
-                auth.creator, auth.session_id, auth.first_party, auth.agent_principal,
-                auth.saves_to))
+        or any(
+            (
+                auth.ns_roles,
+                auth.write_namespaces,
+                auth.impersonated_by,
+                auth.read_scope,
+                auth.read_user_id,
+                auth.parents,
+                auth.parent_subjects,
+                auth.parent_iats,
+                auth.creator,
+                auth.session_id,
+                auth.first_party,
+                auth.agent_principal,
+                auth.saves_to,
+            )
+        )
     ):
         raise _refuse("automation_required")
     if not auth.subject.startswith("sa:") or not auth.subject[3:] or not auth.token_id:
@@ -74,17 +87,28 @@ def _principal(auth: AuthInfo | None) -> AuthInfo:
 
 
 async def require_cell_admin(
+    request: Request,
     auth: Annotated[AuthInfo | None, Depends(require_admin)],
 ) -> AuthInfo:
-    """Reject non-bots before parsing a feature body, including when auth is off."""
-    return _principal(auth)
+    """Require a bot and strict JSON before a cell action can do business work."""
+    principal = _principal(auth)
+    # The front-door middleware caps bytes; retain raw fields for duplicate detection.
+    try:
+        decode_json((await request.body()).decode("utf-8"))
+    except (BoundedReadError, UnicodeError):
+        raise _refuse("invalid_arguments", 400) from None
+    return principal
 
 
 def _security_fresh(auth: AuthInfo) -> None:
     ages = (keyring.snapshot_age_seconds(), revocation.snapshot_age_seconds())
-    if not keyring.loaded() or not revocation.loaded() or any(
-        not math.isfinite(age) or age < 0 or age > settings.jwt_revocation_max_stale_seconds
-        for age in ages
+    if (
+        not keyring.loaded()
+        or not revocation.loaded()
+        or any(
+            not math.isfinite(age) or age < 0 or age > settings.jwt_revocation_max_stale_seconds
+            for age in ages
+        )
     ):
         raise _refuse("security_unavailable", 503)
     now = time.time()
@@ -114,10 +138,16 @@ def _router_origin() -> str:
     try:
         parsed = urlsplit(raw)
         valid = (
-            parsed.scheme == "https" and parsed.hostname and parsed.port != 0
-            and parsed.username is None and parsed.password is None
-            and not parsed.query and not parsed.fragment and parsed.path in ("", "/")
-            and raw == raw.strip() and "\\" not in raw
+            parsed.scheme == "https"
+            and parsed.hostname
+            and parsed.port != 0
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.query
+            and not parsed.fragment
+            and parsed.path in ("", "/")
+            and raw == raw.strip()
+            and "\\" not in raw
             and not any(ord(char) < 33 or ord(char) == 127 for char in raw)
         )
     except ValueError:
@@ -132,7 +162,9 @@ def _pair(value: Any) -> tuple[str, str]:
         raise BoundedReadError("Invalid automation metadata")
     name, thumbprint = value["name"], value["thumbprint"]
     if (
-        not isinstance(name, str) or not name or len(name.encode("utf-8")) > 256
+        not isinstance(name, str)
+        or not name
+        or len(name.encode("utf-8")) > 256
         or any(ord(char) < 32 or ord(char) == 127 for char in name)
         or not isinstance(thumbprint, str)
         or re.fullmatch(r"[A-Za-z0-9_-]{43}", thumbprint) is None
@@ -143,15 +175,20 @@ def _pair(value: Any) -> tuple[str, str]:
 
 def _binding(payload: bytes, context: CellTargetContext) -> AutomationBinding:
     value = decode_json(payload.decode("utf-8"))
-    if not isinstance(value, dict) or set(value) != {
-        "version", "cell", "deployment_id", "automation", "recovery"
-    } or type(value["version"]) is not int or value["version"] != 1:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"version", "cell", "deployment_id", "automation", "recovery"}
+        or type(value["version"]) is not int
+        or value["version"] != 1
+    ):
         raise BoundedReadError("Invalid automation metadata")
     automation, recovery = _pair(value["automation"]), _pair(value["recovery"])
     if automation[0] == recovery[0] or automation[1] == recovery[1]:
         raise BoundedReadError("Automation and recovery must be distinct")
     if (value["cell"], value["deployment_id"], automation[0]) != (
-        context.expected_cell, context.expected_deployment_id, context.expected_bot
+        context.expected_cell,
+        context.expected_deployment_id,
+        context.expected_bot,
     ):
         raise _refuse("automation_identity_changed")
     return AutomationBinding(value["cell"], value["deployment_id"], *automation)
@@ -162,17 +199,20 @@ async def _authority(context: CellTargetContext, deadline: float) -> AutomationB
     remaining = min(2.0, deadline - time.monotonic())
     if remaining <= 0:
         raise _refuse("security_unavailable", 503)
-    headers = {"Authorization": f"Bearer {settings.cell_router_token}",
-               "Accept-Encoding": "identity"}
+    headers = {
+        "Authorization": f"Bearer {settings.cell_router_token}",
+        "Accept-Encoding": "identity",
+    }
     url = f"{origin}/cells/v1/cells/{quote(settings.cell, safe='')}/administration"
     async with asyncio.timeout(remaining):
         async with httpx.AsyncClient(
             trust_env=False, follow_redirects=False, timeout=remaining
         ) as client:
             async with client.stream("GET", url, headers=headers) as response:
-                if response.status_code != 200 or response.headers.get(
-                    "content-encoding", "identity"
-                ).lower() != "identity":
+                if (
+                    response.status_code != 200
+                    or response.headers.get("content-encoding", "identity").lower() != "identity"
+                ):
                     raise _refuse("automation_unprovisioned", 503)
                 data = bytearray()
                 async for chunk in response.aiter_raw():
@@ -203,13 +243,14 @@ def _public_thumbprint(raw: Any) -> str:
 
 def _registered(row: dict[str, Any] | None, name: str, auth: AuthInfo) -> str:
     if row is None or (
-        row.get("name") != name or row.get("org") != auth.org
-        or type(row.get("active")) is not int or row["active"] != 1
-        or type(row.get("platform_admin")) is not int or row["platform_admin"] != 1
+        row.get("name") != name
+        or row.get("org") != auth.org
+        or type(row.get("active")) is not int
+        or row["active"] != 1
+        or type(row.get("platform_admin")) is not int
+        or row["platform_admin"] != 1
         or row.get("claims") != {}
-        or any(row.get(field) != "" for field in (
-            "issuer", "audience", "agent_claim", "jwks_uri"
-        ))
+        or any(row.get(field) != "" for field in ("issuer", "audience", "agent_claim", "jwks_uri"))
     ):
         raise _refuse("automation_required")
     maximum = row.get("max_access_token_s")
@@ -240,14 +281,30 @@ async def verify_registered_bot(
     try:
         row = await repository.machine(name, deadline=deadline, ch=ch)
         thumbprint = _registered(row, name, auth)
-        keys = sorted({key for subject in (auth.subject, auth.token_id)
-                       for key in (subject, revocation.CUTOFF_PREFIX + subject,
-                                   revocation.SCIM_PREFIX + subject)})
+        keys = sorted(
+            {
+                key
+                for subject in (auth.subject, auth.token_id)
+                for key in (
+                    subject,
+                    revocation.CUTOFF_PREFIX + subject,
+                    revocation.SCIM_PREFIX + subject,
+                )
+            }
+        )
         rows = await repository.revocations(keys, deadline=deadline, ch=ch)
         if _revoked(rows, cast(int, auth.issued_at)):
             raise _refuse("automation_revoked")
-    except (BoundedReadError, UnicodeError, ValueError, TypeError, AttributeError,
-            jwt.PyJWTError, httpx.HTTPError, TimeoutError):
+    except (
+        BoundedReadError,
+        UnicodeError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        jwt.PyJWTError,
+        httpx.HTTPError,
+        TimeoutError,
+    ):
         raise _refuse("security_unavailable", 503) from None
     _security_fresh(auth)
     if _live_cell() != identity:
@@ -260,9 +317,14 @@ async def registered_bot_identity(auth: AuthInfo | None) -> dict[str, Any]:
     async with asyncio.timeout(30):
         bot = await verify_registered_bot(auth, deadline=time.monotonic() + 30)
         answer = {
-            "version": 1, "cell": bot.cell, "deployment_id": bot.deployment_id,
-            "name": bot.name, "org": bot.auth.org, "thumbprint": bot.thumbprint,
-            "active": True, "platform_admin": True,
+            "version": 1,
+            "cell": bot.cell,
+            "deployment_id": bot.deployment_id,
+            "name": bot.name,
+            "org": bot.auth.org,
+            "thumbprint": bot.thumbprint,
+            "active": True,
+            "platform_admin": True,
         }
         if len(json.dumps(answer, allow_nan=False).encode()) > 2048:
             raise _refuse("security_unavailable", 503)

@@ -18,10 +18,14 @@ class InvalidAdministration(ValueError):
 
 
 def _text(value: Any, maximum: int) -> str:
+    try:
+        size = len(value.encode("utf-8")) if type(value) is str else 0
+    except UnicodeError as error:
+        raise InvalidAdministration("Invalid administration identity") from error
     if (
         type(value) is not str
         or not value
-        or len(value.encode("utf-8")) > maximum
+        or size > maximum
         or any(ord(char) < 32 or ord(char) == 127 for char in value)
     ):
         raise InvalidAdministration("Invalid administration identity")

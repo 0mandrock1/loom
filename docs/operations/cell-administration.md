@@ -18,6 +18,14 @@ public key and has no alternate workload trust. This restriction lets the cell m
 short-lived access token's bot to the one approved key without inventing an assertion
 key claim in the token.
 
+Register both purposes only after each bot has its own approved key and platform-admin
+grant. On the configured cell operator profile, run `loom cell automation --cell CELL
+--automation-bot NAME --automation-thumbprint THUMBPRINT --automation-key PRIVATE_FILE
+--recovery-bot NAME --recovery-thumbprint THUMBPRINT --recovery-key PRIVATE_FILE`.
+The command holds the cell's control lock, claims its current directory registration,
+and proves both keys through the cell's public authentication and bot-registration
+endpoints before writing the public pair. Neither private key is sent to the router.
+
 Create a private credential manifest with these fields:
 
 | Field | Value |
@@ -55,12 +63,14 @@ The supported command families are closed:
 | `revoke-token` | One exact global subject |
 | `ratelimit` | Namespace-name limit, shared across orgs with that name |
 | `budget` | Operation budget or consumer multiplier |
-| `blacklist` | Global `add`, `list`, `remove` |
+| `blacklist` | Global `add`, `list` |
 
 Tenant policy, org-limit sweeps, arbitrary commands and native store operations are
 not supported. Use `loom cell each --help` for coordinator options. A server lacking
 the capability contract or requested action refuses before business work; the command
 does not fall back to an older API.
+Global blacklist removal is unavailable while its bounded storage operation awaits
+native validation. A parsed removal command receives no advertised capability.
 
 The command runs one cell at a time. It reads the directory before the run, again for
 each target, and once after all attempts. Exit zero requires every target to have a

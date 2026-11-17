@@ -28,6 +28,7 @@ from server.insights.api.models_cell_admin import (
     CellSigningKeysListInput,
     CellSigningKeysRetireInput,
     CellSigningKeysRotateInput,
+    CellSubjectRevokeInput,
 )
 from server.insights.app import cell_admin_actions as actions
 from server.insights.app import cell_admin_security_actions as security_actions
@@ -40,15 +41,33 @@ cell_admin_router = APIRouter(
 )
 
 AVAILABLE_ACTIONS = (
-    "settings_list", "settings_set", "settings_history", "ratelimit_namespace_set", "budget_set",
-    "signing_keys_list", "signing_keys_rotate", "signing_keys_retire",
-    "blacklist_global_add", "blacklist_global_list",
+    "settings_list",
+    "settings_set",
+    "settings_history",
+    "ratelimit_namespace_set",
+    "budget_set",
+    "signing_keys_list",
+    "signing_keys_rotate",
+    "signing_keys_retire",
+    "subject_revoke",
+    "blacklist_global_add",
+    "blacklist_global_list",
 )
-_REFUSALS = frozenset({
-    "automation_required", "security_unavailable", "short_token_required", "cell_unavailable",
-    "cell_identity_changed", "automation_unprovisioned", "automation_identity_changed",
-    "automation_key_changed", "automation_revoked", "invalid_arguments", "action_unavailable",
-})
+_REFUSALS = frozenset(
+    {
+        "automation_required",
+        "security_unavailable",
+        "short_token_required",
+        "cell_unavailable",
+        "cell_identity_changed",
+        "automation_unprovisioned",
+        "automation_identity_changed",
+        "automation_key_changed",
+        "automation_revoked",
+        "invalid_arguments",
+        "action_unavailable",
+    }
+)
 
 
 def _encode(value: Any, maximum: int) -> bytes:
@@ -86,19 +105,30 @@ async def _audit(event: str, actor: str, subject: dict[str, Any], deadline: floa
 
 
 def _refusal(body: CellActionInput, action: str, error: Exception) -> Response:
-    code = error.detail.get("code") if isinstance(error, HTTPException) and isinstance(
-        error.detail, dict
-    ) else "security_unavailable"
+    code = (
+        error.detail.get("code")
+        if isinstance(error, HTTPException) and isinstance(error.detail, dict)
+        else "security_unavailable"
+    )
     if not isinstance(code, str) or code not in _REFUSALS:
         code = "invalid_arguments"
-    value = {"version": 1, "status": "refused", "phase": "before_business",
-             "context": body.context.model_dump(), "action": action, "code": code}
+    value = {
+        "version": 1,
+        "status": "refused",
+        "phase": "before_business",
+        "context": body.context.model_dump(),
+        "action": action,
+        "code": code,
+    }
     status = error.status_code if isinstance(error, HTTPException) else 503
     return Response(_encode(value, 2048), status_code=status, media_type="application/json")
 
 
 async def _perform(
-    request: Request, body: CellActionInput, auth: AuthInfo, action: str,
+    request: Request,
+    body: CellActionInput,
+    auth: AuthInfo,
+    action: str,
     handler: Callable[..., Awaitable[dict[str, Any]]],
 ) -> Response:
     deadline = time.monotonic() + 30.0
@@ -125,11 +155,19 @@ async def _perform(
             _encode(result, 2 * 1024**2)
             digest = sha256_value(result)
             completed = await _audit(
-                "cell.each_completed", verified.auth.subject,
-                {**subject, "started_audit": started, "result_digest": digest}, deadline,
+                "cell.each_completed",
+                verified.auth.subject,
+                {**subject, "started_audit": started, "result_digest": digest},
+                deadline,
             )
-            metadata = {"version": 1, "status": "completed", "context": body.context.model_dump(),
-                        "action": action, "started_audit": started, "completed_audit": completed}
+            metadata = {
+                "version": 1,
+                "status": "completed",
+                "context": body.context.model_dump(),
+                "action": action,
+                "started_audit": started,
+                "completed_audit": completed,
+            }
             _encode(metadata, 2048)
             return Response(
                 _encode({**metadata, "result": result}, 2 * 1024**2),
@@ -163,7 +201,8 @@ async def cell_capabilities(
 
 @cell_admin_router.post("/cell.settings_list")
 async def cell_settings_list(
-    request: Request, body: CellSettingsListInput,
+    request: Request,
+    body: CellSettingsListInput,
     auth: Annotated[AuthInfo, Depends(require_cell_admin)],
 ) -> Response:
     """List non-secret settings after fresh cell and automation authorization."""
@@ -172,7 +211,8 @@ async def cell_settings_list(
 
 @cell_admin_router.post("/cell.settings_set")
 async def cell_settings_set(
-    request: Request, body: CellSettingsSetInput,
+    request: Request,
+    body: CellSettingsSetInput,
     auth: Annotated[AuthInfo, Depends(require_cell_admin)],
 ) -> Response:
     """Change one live setting and confirm its completed cell administration audits."""
@@ -181,7 +221,8 @@ async def cell_settings_set(
 
 @cell_admin_router.post("/cell.settings_history")
 async def cell_settings_history(
-    request: Request, body: CellSettingsHistoryInput,
+    request: Request,
+    body: CellSettingsHistoryInput,
     auth: Annotated[AuthInfo, Depends(require_cell_admin)],
 ) -> Response:
     """Read the bounded change history of one live setting in this verified cell."""
@@ -190,7 +231,8 @@ async def cell_settings_history(
 
 @cell_admin_router.post("/cell.ratelimit_namespace_set")
 async def cell_ratelimit_namespace_set(
-    request: Request, body: CellRatelimitNamespaceSetInput,
+    request: Request,
+    body: CellRatelimitNamespaceSetInput,
     auth: Annotated[AuthInfo, Depends(require_cell_admin)],
 ) -> Response:
     """Change a namespace-label rate override through the cell's ordinary limiter."""
@@ -201,7 +243,8 @@ async def cell_ratelimit_namespace_set(
 
 @cell_admin_router.post("/cell.budget_set")
 async def cell_budget_set(
-    request: Request, body: CellBudgetSetInput,
+    request: Request,
+    body: CellBudgetSetInput,
     auth: Annotated[AuthInfo, Depends(require_cell_admin)],
 ) -> Response:
     """Change one latency budget through this verified cell's ordinary budget owner."""
@@ -210,7 +253,8 @@ async def cell_budget_set(
 
 @cell_admin_router.post("/cell.signing_keys_list")
 async def cell_signing_keys_list(
-    request: Request, body: CellSigningKeysListInput,
+    request: Request,
+    body: CellSigningKeysListInput,
     auth: Annotated[AuthInfo, Depends(require_cell_admin)],
 ) -> Response:
     """List public signing-key metadata after fresh cell and automation authorization."""
@@ -221,7 +265,8 @@ async def cell_signing_keys_list(
 
 @cell_admin_router.post("/cell.signing_keys_rotate")
 async def cell_signing_keys_rotate(
-    request: Request, body: CellSigningKeysRotateInput,
+    request: Request,
+    body: CellSigningKeysRotateInput,
     auth: Annotated[AuthInfo, Depends(require_cell_admin)],
 ) -> Response:
     """Rotate a signing key through the ordinary cell owner and return public metadata."""
@@ -232,7 +277,8 @@ async def cell_signing_keys_rotate(
 
 @cell_admin_router.post("/cell.signing_keys_retire")
 async def cell_signing_keys_retire(
-    request: Request, body: CellSigningKeysRetireInput,
+    request: Request,
+    body: CellSigningKeysRetireInput,
     auth: Annotated[AuthInfo, Depends(require_cell_admin)],
 ) -> Response:
     """Retire one signing key through this verified cell's ordinary retirement checks."""
@@ -243,7 +289,8 @@ async def cell_signing_keys_retire(
 
 @cell_admin_router.post("/cell.blacklist_global_add")
 async def cell_blacklist_global_add(
-    request: Request, body: CellBlacklistGlobalAddInput,
+    request: Request,
+    body: CellBlacklistGlobalAddInput,
     auth: Annotated[AuthInfo, Depends(require_cell_admin)],
 ) -> Response:
     """Add one exact global blacklist pattern with the verified bot as its author."""
@@ -252,9 +299,20 @@ async def cell_blacklist_global_add(
     )
 
 
+@cell_admin_router.post("/cell.subject_revoke")
+async def cell_subject_revoke(
+    request: Request,
+    body: CellSubjectRevokeInput,
+    auth: Annotated[AuthInfo, Depends(require_cell_admin)],
+) -> Response:
+    """Revoke one exact global subject through the bounded ordinary security owner."""
+    return await _perform(request, body, auth, "subject_revoke", security_actions.subject_revoke)
+
+
 @cell_admin_router.post("/cell.blacklist_global_list")
 async def cell_blacklist_global_list(
-    request: Request, body: CellBlacklistGlobalListInput,
+    request: Request,
+    body: CellBlacklistGlobalListInput,
     auth: Annotated[AuthInfo, Depends(require_cell_admin)],
 ) -> Response:
     """List bounded exact-global blacklist rows and report whether more rows exist."""

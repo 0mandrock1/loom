@@ -721,6 +721,31 @@ class Router:
             lambda found: {**_attach_answer(found), "other": found.other},
         )
 
+    async def set_administration(self, request: Request) -> JSONResponse:
+        """Record the operator's two proved public identities with a current claim."""
+        body = await self._operator_body(request)
+        if isinstance(body, JSONResponse):
+            return body
+        expected = _control(body)
+        if isinstance(expected, JSONResponse):
+            return expected
+        if set(body) != {"bots"} or not isinstance(body["bots"], list):
+            return _refused(400, "administration contains only the two public bots")
+        try:
+            cell_admin.public_pair(
+                json.dumps(body["bots"], ensure_ascii=True, separators=(",", ":"))
+            )
+        except cell_admin.InvalidAdministration:
+            return _refused(
+                400, "administration requires distinct automation and recovery public identities"
+            )
+        return await _answered(
+            lambda: directory.set_administration(
+                request.path_params["cell"], body["bots"], expected=expected
+            ),
+            lambda answer: answer,
+        )
+
     async def claim(self, request: Request) -> JSONResponse:
         body = await self._operator_body(request, ATTACH_BEGIN_MAX_BYTES)
         if isinstance(body, JSONResponse):
@@ -1521,6 +1546,11 @@ def build_app(router: Router | None = None) -> Starlette:
                 methods=["GET"],
             ),
             Route("/cells/v1/operator/cells/{cell}/limit", router.set_limit, methods=["POST"]),
+            Route(
+                "/cells/v1/operator/cells/{cell}/administration",
+                router.set_administration,
+                methods=["POST"],
+            ),
             Route("/cells/v1/operator/cells/{cell}/register", router.register, methods=["POST"]),
             Route(
                 "/cells/v1/operator/cells/{cell}/credential",

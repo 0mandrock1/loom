@@ -424,9 +424,11 @@ def _add_cell_parser(sub: Any) -> None:
     p = sub.add_parser("cell", help="Operate a deployment's cells through the router's directory.")
     csub = p.add_subparsers(dest="cell_cmd", required=True)
 
+    from server.cli.cell_automation import add_automation_parser
     from server.cli.cell_each_run import add_each_parser
 
     add_each_parser(csub)
+    add_automation_parser(csub)
 
     cred = csub.add_parser("credential", help="Make a router credential, or rotate a cell's.")
     cred.add_argument("action", nargs="?", choices=["new"], help="new: make one offline")
