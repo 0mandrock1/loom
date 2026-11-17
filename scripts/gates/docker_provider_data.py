@@ -160,8 +160,13 @@ def _kill_worker(worker: dict, parent: dict) -> None:
         os.close(fd)
 
 
-async def retired(client, captured: list[dict]) -> bool:
+async def retired(client, captured: list[dict], *, observation: dict | None = None) -> bool:
     from server.insights.store.provider_participants import running_queries
+
+    def result(reason: str) -> bool:
+        if observation is not None:
+            observation["retirement"] = reason
+        return reason == "proved"
 
     rows = await client.query_all(
         "SELECT toString(participant_id) AS participant_id, state, version, host_proof "
@@ -169,19 +174,22 @@ async def retired(client, captured: list[dict]) -> bool:
         {"ids": [row["participant_id"] for row in captured]},
     )
     if len(rows) != len(captured):
-        return False
+        return result("row_count")
     expected = {row["participant_id"]: row for row in captured}
     for row in rows:
         old = expected[row["participant_id"]]
-        if (
-            row["state"] != "retired"
-            or int(row["version"]) <= int(old["version"])
-            or row["host_proof"] != old["host_proof"]
-            or not provider_process.has_certificate(row["host_proof"])
-            or await running_queries(row["participant_id"], ch=client) != 0
-        ):
-            return False
-    return True
+        if row["state"] != "retired":
+            return result("state")
+        if int(row["version"]) <= int(old["version"]):
+            return result("version")
+        if row["host_proof"] != old["host_proof"]:
+            return result("host_proof")
+        if not provider_process.has_certificate(row["host_proof"]):
+            return result("certificate")
+        running = await running_queries(row["participant_id"], ch=client)
+        if running != 0:
+            return result("queries_unknown" if running is None else "queries_running")
+    return result("proved")
 
 
 async def crash_worker(client) -> None:
@@ -190,18 +198,27 @@ async def crash_worker(client) -> None:
     victim = before[0]
     _kill_worker(victim, parent)
     deadline = time.monotonic() + 240
+    observation: dict = {"death": "not_checked", "retirement": "not_checked"}
     while time.monotonic() < deadline:
         assert _supervisor() == parent
-        if provider_process.proves_stopped(victim["host_proof"]) and await retired(
-            client, [victim]
-        ):
+        stopped = provider_process.proves_stopped(victim["host_proof"])
+        observation = {"death": "proved" if stopped else "unproved", "retirement": "not_checked"}
+        if stopped and await retired(client, [victim], observation=observation):
             after = _workers(await _worker_rows(client), parent)
             old = {row["participant_id"] for row in before}
             new = {row["participant_id"] for row in after}
+            observation.update(
+                replacement_count=len(new),
+                survivors=len(old & new),
+                victim_absent=victim["participant_id"] not in new,
+            )
             if len(new) == 2 and len(old & new) == 1 and victim["participant_id"] not in new:
                 return
         await asyncio.sleep(1)
-    raise AssertionError("Crashed worker retirement or supervised replacement was not proved")
+    raise AssertionError(
+        "Crashed worker retirement or supervised replacement was not proved: "
+        + json.dumps(observation, sort_keys=True)
+    )
 
 
 async def seed() -> None:

@@ -402,3 +402,53 @@ async def test_retirement_requires_exact_newer_certificate_and_known_zero_querie
     monkeypatch.setattr(provider_participants, "running_queries", AsyncMock(return_value=count))
     assert await data.retired(client, [rows[0]]) is (fault == "none")
     assert client.query_all.await_args.args[1] == {"ids": [rows[0]["participant_id"]]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault,reason",
+    [
+        ("death_unknown", '"death": "unproved"'),
+        ("missing_rows", '"retirement": "row_count"'),
+        ("queries_unknown", '"retirement": "queries_unknown"'),
+        ("replacement_mismatch", '"victim_absent": false'),
+        ("none", None),
+    ],
+)
+async def test_crash_observation_distinguishes_unproved_predicates(monkeypatch, fault, reason):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from server.insights.store import provider_participants
+
+    parent, _processes, rows = _process_fixture(monkeypatch)
+    monkeypatch.setattr(data, "_supervisor", lambda: parent)
+    monkeypatch.setattr(data, "workers", AsyncMock(return_value=rows))
+    signals = []
+    monkeypatch.setattr(data, "_kill_worker", lambda victim, _: signals.append(victim))
+    monkeypatch.setattr(data.provider_process, "proves_stopped", lambda _: fault != "death_unknown")
+    victim = rows[0]
+    replacement = {**victim, "participant_id": "replacement"}
+    after = rows if fault == "replacement_mismatch" else [rows[1], replacement]
+    monkeypatch.setattr(data, "_workers", lambda *_: after)
+    client = AsyncMock()
+    client.query_all.return_value = (
+        [] if fault == "missing_rows" else [{**victim, "state": "retired", "version": 6}]
+    )
+    monkeypatch.setattr(
+        provider_participants,
+        "running_queries",
+        AsyncMock(return_value=None if fault == "queries_unknown" else 0),
+    )
+    ticks = iter([0, 0, 241])
+    monkeypatch.setattr(data, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    monkeypatch.setattr(data.asyncio, "sleep", AsyncMock())
+    if reason is None:
+        await data.crash_worker(client)
+    else:
+        with pytest.raises(AssertionError) as failure:
+            await data.crash_worker(client)
+        assert reason in str(failure.value)
+        assert victim["host_proof"] not in str(failure.value)
+        assert victim["participant_id"] not in str(failure.value)
+    assert signals == [victim]
