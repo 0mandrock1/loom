@@ -243,6 +243,47 @@ def test_replication_waits_for_primary_tcp_after_temporary_socket_ready(tmp_path
     assert stores.tcp_attempts == 2 and stores.tcp_ready
 
 
+@pytest.mark.parametrize("setting", ["config_mount", "database"])
+def test_clickhouse_creation_uses_ci_server_configuration(tmp_path, monkeypatch, setting):
+    from scripts.gates import cell_trigger_acceptance as creator
+
+    monkeypatch.setattr(creator, "ports", lambda count: list(range(18000, 18000 + count)))
+
+    class CapturedCreation(Exception):
+        pass
+
+    class CapturingStores(Stores):
+        def command(self, *argv, timeout=120, cleanup=False):
+            return "network-id"
+
+        def create(self, role, args):
+            assert role == "clickhouse"
+            self.creation_args = args
+            raise CapturedCreation
+
+    stores = CapturingStores(tmp_path, tmp_path, "fixture", {"run_id": "123"})
+    with pytest.raises(CapturedCreation):
+        stores.start("test-image")
+    args = stores.creation_args
+    if setting == "config_mount":
+        mounts = [args[index + 1] for index, value in enumerate(args) if value == "-v"]
+        for filename, section in (
+            ("custom_settings_prefixes.xml", "config.d"),
+            ("log_queries_readonly.xml", "users.d"),
+        ):
+            assert (
+                str(tmp_path / "dev/clickhouse-ci" / filename)
+                + ":/etc/clickhouse-server/"
+                + section
+                + "/"
+                + filename
+                + ":ro"
+            ) in mounts
+    else:
+        environment = [args[index + 1] for index, value in enumerate(args) if value == "-e"]
+        assert "CLICKHOUSE_DB=loom" in environment
+
+
 def test_failure_diagnostics_expose_only_allowlisted_owned_state(tmp_path):
     import json
 

@@ -348,11 +348,14 @@ class Stores:
                     True,
                 )
             )
-        for filename in ("log_queries_readonly.xml", "custom_settings_prefixes.xml"):
+        for filename, section in (
+            ("log_queries_readonly.xml", "users.d"),
+            ("custom_settings_prefixes.xml", "config.d"),
+        ):
             mounts.append(
                 (
                     self.root / "dev/clickhouse-ci" / filename,
-                    "/etc/clickhouse-server/users.d/" + filename,
+                    "/etc/clickhouse-server/" + section + "/" + filename,
                     True,
                 )
             )
@@ -365,6 +368,8 @@ class Stores:
             f"127.0.0.1:{ch_port}:8123",
             "-p",
             f"127.0.0.1:{native_port}:9000",
+            "-e",
+            "CLICKHOUSE_DB=loom",
             "-e",
             "CLICKHOUSE_USER=loom",
             "-e",
