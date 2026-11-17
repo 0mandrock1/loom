@@ -5,15 +5,15 @@ returned."""
 
 from __future__ import annotations
 
-import base64
 import json
-import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 from tests.integration._eventually import eventually
+from tests.integration._resources import minted_identity
 
 # An SDK extra, outside the server's environment: install google-adk to run these.
 pytest.importorskip("google.adk")
@@ -27,8 +27,28 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools import preload_memory
 from google.genai import types
+from loom import Agent
 from loom.integrations.google_adk import LoomMemoryService
 from pydantic import Field
+
+
+@pytest.fixture
+def adk_identity(mint_test_token) -> dict[str, str]:
+    return minted_identity(mint_test_token, "google-adk")
+
+
+@pytest_asyncio.fixture
+async def agent(
+    control_plane_url: str, adk_identity: dict[str, str]
+) -> AsyncGenerator[Agent, None]:
+    async with Agent(
+        org=adk_identity["org"],
+        namespace=adk_identity["namespace"],
+        agent="adk-bot",
+        base_url=control_plane_url,
+        api_key=adk_identity["token"],
+    ) as client:
+        yield client
 
 
 class _EchoLlm(BaseLlm):
@@ -93,7 +113,7 @@ async def test_a_saved_turn_reaches_a_later_prompt(agent) -> None:
     assert not {m.id for m in found.memories} & facts
 
 
-async def test_add_memory_then_delete_by_id(agent) -> None:
+async def test_add_memory_then_delete_by_id(agent, adk_identity: dict[str, str]) -> None:
     service = LoomMemoryService(agent, app_name="travel", honour_abstain=False)
     entry = MemoryEntry(
         content=types.Content(parts=[types.Part(text="Alice prefers aisle seats")]),
@@ -123,9 +143,7 @@ async def test_add_memory_then_delete_by_id(agent) -> None:
     ]
     assert row["valid_at"].startswith("2026-03-01")
     # The server stamps the actor from the token: its subject, as `<kind>:<subject>`.
-    claims = os.environ["LOOM_API_KEY"].split(".")[1]
-    subject = json.loads(base64.urlsafe_b64decode(claims + "=" * (-len(claims) % 4)))["sub"]
-    assert row["actor"].endswith(f":{subject}")
+    assert row["actor"].endswith(f":{adk_identity['subject']}")
     await service.delete_memory(app_name="travel", user_id="bob", memory_id=memory_id)
     assert await ids("alice") == [memory_id]  # another user's delete reaches nothing
     await service.delete_memory(app_name="travel", user_id="alice", memory_id=memory_id)
