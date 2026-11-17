@@ -161,3 +161,30 @@ def test_pagination_without_limit_is_refused_before_read(method):
     with pytest.raises(ValueError, match="without.*limit"):
         getattr(db, method)(page=2)
     assert not agent.calls
+
+
+@pytest.mark.parametrize(
+    ("method", "kwargs"),
+    [
+        ("get_run", {"run_id": "run"}),
+        ("get_runs", {}),
+        ("get_runs", {"deserialize": False}),
+        ("delete_run", {"run_id": "run"}),
+        ("delete_runs", {"run_ids": ["run"]}),
+    ],
+)
+def test_inherited_run_operations_refuse_without_another_store(method, kwargs):
+    agent = FakeAgent()
+    db = LoomMemoryDb(agent, user_id="alice")
+    with pytest.raises(NotImplementedError, match="user memories only"):
+        getattr(db, method)(**kwargs)
+    assert not agent.calls
+
+
+@pytest.mark.parametrize("method", ["get_user_memories", "get_user_memory_stats"])
+def test_negative_limit_is_refused_before_read(method):
+    agent = FakeAgent()
+    db = LoomMemoryDb(agent, user_id="alice")
+    with pytest.raises(ValueError, match="limit.*non-negative"):
+        getattr(db, method)(limit=-1)
+    assert not agent.calls

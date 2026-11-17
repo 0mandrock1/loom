@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+from dataclasses import asdict
 
 import pytest
 
@@ -53,6 +54,21 @@ def test_agno_manager_persists_resumes_and_clears_its_user(control_plane_url):
         assert row["actor"].endswith(f":{subject}")
         # Native epoch timestamps match Loom's contact-number detector.
         assert row["tags"] == ["sensitivity:medium"]
+        complete = UserMemory(
+            memory="Tea with the meal",
+            memory_id="details",
+            user_id="alice",
+            topics=["food", "travel"],
+            input="What would you like with the meal?",
+            feedback="Keep this preference",
+            agent_id="planner",
+            team_id="travel",
+            created_at=10,
+            updated_at=20,
+        )
+        alice.upsert_memories([complete], preserve_updated_at=True)
+        restored = LoomMemoryDb(agent, user_id="alice").get_user_memory("details")
+        assert asdict(restored) == asdict(complete)
         manager.clear_user_memories(user_id="alice")
         assert alice.get_user_memories() == []
         assert bob.get_user_memory("same").memory == "Window seats"
