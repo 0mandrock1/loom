@@ -865,3 +865,23 @@ async def test_term_budget_serves_the_definition_ceiling_with_normal_aliases(
         _row(f"definition/metric-{i}", f"Metric{i}X", [f"metric number {i}"]) for i in range(500)
     ]
     assert await _keys(query) == ("complete", expected)
+
+
+@pytest.mark.parametrize("mentioned", [False, True], ids=["absent", "over-budget"])
+async def test_an_expanding_alias_needs_a_matching_work_budget_before_preparation(
+    store: dict[str, Any], monkeypatch: pytest.MonkeyPatch, mentioned: bool
+) -> None:
+    alias = "\ufdfa" * (3000 if mentioned else 12000)
+    store["rows"] = [_row("definition/arr", "ARR", [alias])]
+    original = term_leg.Name.of
+    prepared: list[str] = []
+
+    def prepare(cls: type, name: str) -> Any:
+        prepared.append(name)
+        return original(name)
+
+    monkeypatch.setattr(term_leg.Name, "of", classmethod(prepare))
+    expected = ("timed_out", []) if mentioned else ("complete", ["definition/arr"])
+    assert await _keys(alias if mentioned else "what is ARR") == expected
+    # Normalization expands the alias eighteenfold; its pattern needs an admitted match.
+    assert alias not in prepared

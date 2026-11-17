@@ -175,10 +175,16 @@ class _Work:
                 await asyncio.sleep(0)
                 read = 0
 
-    def first_name(self, query: list[str], folded: str, names: list[Name]) -> _Match | None:
-        names = [n for n in names if n.folded in folded]
-        self.charge(sum(len(c) for c in query) * sum(len(n.folded) for n in names))
-        return _first_name(query, folded, names)
+    def first_name(self, query: list[str], folded: str, names: list[str]) -> _Match | None:
+        query_size = sum(len(c) for c in query)
+        prepared = []
+        for name in names:
+            folded_name = query_text(name).casefold()
+            if folded_name and folded_name in folded:
+                # Normalization can expand a name: charge before building its pattern.
+                self.charge(query_size * len(folded_name))
+                prepared.append(Name.of(name))
+        return _first_name(query, folded, prepared)
 
 
 async def _read(
@@ -227,9 +233,7 @@ async def _read_bounded(
         candidates.append(c)
         if c.definition.memory_key in excluded:
             continue
-        # Only a name whose folded text is in the folded query can match: prepare no other.
-        prepared = [Name.of(n) for n in c.names if query_text(n).casefold() in folded_query]
-        if prepared and work.first_name(query_chars, folded_query, prepared) is not None:
+        if work.first_name(query_chars, folded_query, c.names) is not None:
             named.append(c)
     if not named:
         return TermLeg(status)
@@ -250,7 +254,7 @@ async def _read_bounded(
         lost_folds = {fold_name(n) for n, _ in lost.get(d.memory_key, [])}
         # The names the served value holds, which a re-promotion since the first read may
         # have changed.
-        kept = [Name.of(n) for n in written_names(d.value) if fold_name(n) not in lost_folds]
+        kept = [n for n in written_names(d.value) if fold_name(n) not in lost_folds]
         if (m := work.first_name(query_chars, folded_query, kept)) is not None:
             matches.append((m, d))
     # Query order; at one start the longer name, then the latest promotion.
