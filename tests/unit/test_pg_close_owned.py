@@ -142,3 +142,78 @@ async def test_migration_failure_survives_cleanup_failure(monkeypatch, tmp_path)
     with pytest.raises(ValueError, match="migration failed"):
         await pg_migrate.migrate(tmp_path, connect=connect, schema="test")
     assert conn.aborted
+
+
+async def test_successful_migration_still_reports_context_exit_failure(
+    monkeypatch, tmp_path
+) -> None:
+    import contextlib
+
+    from server.core.schema import pg_migrate
+
+    original = ValueError("context exit failed")
+
+    @contextlib.asynccontextmanager
+    async def connect():
+        yield Connection()
+        raise original
+
+    async def applied(*_: Any) -> list[str]:
+        return ["001.sql"]
+
+    monkeypatch.setattr(pg_migrate, "_migrate", applied)
+    with pytest.raises(ValueError) as error:
+        await pg_migrate.migrate(tmp_path, connect=connect, schema="test")
+    assert error.value is original
+
+
+@pytest.mark.parametrize("cancel_work", [False, True])
+async def test_second_cancellation_during_migration_context_exit_keeps_first_failure(
+    monkeypatch, tmp_path, cancel_work
+) -> None:
+    import contextlib
+
+    from server.core.schema import pg_migrate
+
+    conn = Connection()
+    conn.finished.set()
+    started, exiting = asyncio.Event(), asyncio.Event()
+    observed: list[BaseException] = []
+    original = ValueError("migration failed")
+
+    @contextlib.asynccontextmanager
+    async def connect():
+        try:
+            yield conn
+        except BaseException as error:
+            observed.append(error)
+            exiting.set()
+            await asyncio.Future()
+            raise
+
+    async def work(*_: Any) -> list[str]:
+        started.set()
+        if cancel_work:
+            await asyncio.Future()
+        raise original
+
+    monkeypatch.setattr(pg_migrate, "_migrate", work)
+    monkeypatch.setattr(pg, "_RELEASE_TIMEOUT_S", 0.1)
+    task = asyncio.create_task(pg_migrate.migrate(tmp_path, connect=connect, schema="test"))
+    await asyncio.wait_for(started.wait(), 1)
+    before = time.monotonic()
+    if cancel_work:
+        task.cancel("first cancellation")
+    await asyncio.wait_for(exiting.wait(), 1)
+    task.cancel("second cancellation")
+    with pytest.raises(BaseException) as result:
+        await asyncio.wait_for(task, 0.3)
+    assert time.monotonic() - before < 0.3
+    assert result.value is observed[0]
+    assert (
+        isinstance(result.value, asyncio.CancelledError)
+        if cancel_work
+        else result.value is original
+    )
+    assert len(conn.timeouts) == 1
+    assert conn.aborted
