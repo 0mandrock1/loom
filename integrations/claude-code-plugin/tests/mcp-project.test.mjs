@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import vm from "node:vm";
+import { fileURLToPath } from "node:url";
 import { processIdentity, publishProject, sessionProject } from "../lib/mcp-project.mjs";
 
 test("the native platform supplies this live process's creation identity", () => {
@@ -36,28 +38,25 @@ test("macOS and Windows process queries parse creation identities without shell 
     ],
     [
       "win32",
-      "powershell.exe",
-      '\ufeff{"name":"claude.exe","parent":20,"born":"639041004620000000"}',
-      { pid: 30, parent: 20, born: "639041004620000000", name: "claude.exe" },
+      "cscript.exe",
+      "claude.exe\t20\t134129772620000000\r\n",
+      { pid: 30, parent: 20, born: "134129772620000000", name: "claude.exe" },
     ],
   ]) {
     const run = (bin, args, options) => {
       assert.equal(bin, command);
       assert.equal(options.timeout, 1000);
       assert.equal(options.windowsHide, true);
+      assert.equal(options.maxBuffer, 16384);
       if (platform === "darwin") assert.deepEqual(args, ["-p", "30", "-o", "ppid=", "-o", "lstart=", "-o", "ucomm="]);
       else {
-        assert.deepEqual(args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
-        assert.match(args[3], /ProcessId=30/);
-        assert.match(
-          args[3],
-          /\[wmisearcher\]'SELECT Name,ParentProcessId,CreationDate FROM Win32_Process WHERE ProcessId=30'/,
-        );
-        assert.match(
-          args[3],
-          /\[System\.Management\.ManagementDateTimeConverter\]::ToDateTime\(\$p\.CreationDate\)\.ToUniversalTime\(\)\.Ticks\.ToString\(\)/,
-        );
-        assert.doesNotMatch(args[3], /CommandLine|Environment/);
+        assert.deepEqual(args, [
+          "//nologo",
+          "//E:JScript",
+          "//B",
+          fileURLToPath(new URL("../assets/mcp-project-win32.js", import.meta.url)),
+          "30",
+        ]);
       }
       return output;
     };
@@ -74,6 +73,94 @@ test("macOS and Windows process queries parse creation identities without shell 
     );
     assert.equal(processIdentity("30; echo unsafe", { platform, run }), null);
   }
+});
+
+test("the Windows helper projects identity metadata and preserves its UTC creation string", () => {
+  const source = fs.readFileSync(new URL("../assets/mcp-project-win32.js", import.meta.url), "utf8");
+  const output = [];
+  const date = "20261117190000.123456+000";
+  const processRow = { Name: "客户端.exe", ParentProcessId: 20, CreationDate: date };
+  let candidates = [processRow];
+  const clock = {
+    GetFileTime(local) {
+      assert.equal(local, false);
+      assert.equal(this.Value, date);
+      return "134129772621234560";
+    },
+  };
+  const context = {
+    WScript: {
+      Arguments: { length: 1, Item: () => "30" },
+      StdOut: { WriteLine: (v) => output.push(v) },
+      Quit: () => {
+        throw new Error("identity unavailable");
+      },
+    },
+    GetObject(uri) {
+      assert.equal(uri, "winmgmts:\\\\.\\root\\cimv2");
+      return {
+        ExecQuery(query, language, flags) {
+          assert.equal(query, "SELECT Name,ParentProcessId,CreationDate FROM Win32_Process WHERE ProcessId=30");
+          assert.equal(language, "WQL");
+          assert.equal(flags, 48);
+          return candidates;
+        },
+      };
+    },
+    Enumerator: function (rows) {
+      let i = 0;
+      this.atEnd = () => i >= rows.length;
+      this.item = () => rows[i];
+      this.moveNext = () => i++;
+    },
+    ActiveXObject: function (name) {
+      assert.equal(name, "WbemScripting.SWbemDateTime");
+      return clock;
+    },
+  };
+  vm.runInNewContext(source, context);
+  assert.deepEqual(output, ["%E5%AE%A2%E6%88%B7%E7%AB%AF.exe\t20\t134129772621234560"]);
+  assert.deepEqual(processIdentity(30, { platform: "win32", run: () => output[0] + "\r\n" }), {
+    pid: 30,
+    parent: 20,
+    born: "134129772621234560",
+    name: "客户端.exe",
+  });
+  for (const rows of [[], [processRow, processRow]]) {
+    candidates = rows;
+    output.length = 0;
+    assert.throws(() => vm.runInNewContext(source, context), /identity unavailable/);
+    assert.equal(output.length, 0);
+  }
+  context.WScript.Arguments.Item = () => "30; unsafe";
+  assert.throws(() => vm.runInNewContext(source, context), /identity unavailable/);
+  assert.equal(output.length, 0);
+});
+
+test("Windows identity rejects malformed or multiple records and out-of-range PIDs", () => {
+  for (const output of [
+    "",
+    "node.exe\t20\t123\n\n",
+    "node.exe\t20\t123\nnode.exe\t20\t123",
+    "node.exe\t4294967296\t123",
+    "node.exe\t-1\t123",
+    "node.exe\t20\t0",
+    "%FF.exe\t20\t123",
+    "%ZZ.exe\t20\t123",
+    "node.exe\t20\t123\textra",
+  ])
+    assert.equal(processIdentity(30, { platform: "win32", run: () => output }), null);
+  let ran = false;
+  assert.equal(
+    processIdentity(4294967296, {
+      platform: "win32",
+      run: () => {
+        ran = true;
+      },
+    }),
+    null,
+  );
+  assert.equal(ran, false);
 });
 
 test("concurrent clients retain exact quote/dollar paths and separate sessions", async () => {

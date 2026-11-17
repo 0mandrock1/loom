@@ -113,12 +113,12 @@ To match that native client identity, Claude Code reads `/proc/<pid>/stat` and
 ps -p <pid> -o ppid= -o lstart= -o ucomm=
 ```
 
-On Windows it runs `powershell.exe -NoProfile -NonInteractive -Command` with this
-script, substituting a validated integer for `<pid>`:
-
-```powershell
-$ErrorActionPreference='Stop'; $s=[wmisearcher]'SELECT Name,ParentProcessId,CreationDate FROM Win32_Process WHERE ProcessId=<pid>'; foreach($p in $s.Get()){[PSCustomObject]@{name=$p.Name;parent=$p.ParentProcessId;born=[System.Management.ManagementDateTimeConverter]::ToDateTime($p.CreationDate).ToUniversalTime().Ticks.ToString()}|ConvertTo-Json -Compress}
-```
+On Windows it runs `cscript.exe //nologo //E:JScript //B` with the plugin's
+`assets/mcp-project-win32.js` file and the validated PID as separate arguments.
+That static helper queries local WMI for `Name`, `ParentProcessId` and `CreationDate`.
+It requires exactly one result and returns the name, parent PID and an exact UTC
+FILETIME creation marker. A blocked script host or WMI query supplies no checkout
+scope; the plugin does not enable components or change scripting policy.
 
 Each subprocess has a one-second timeout and a 16 KiB output limit. These queries
 read the process name, parent PID and creation marker, without collecting process

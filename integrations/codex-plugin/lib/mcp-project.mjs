@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { readJsonFile, tmpStatePath, writeJsonFile } from "./tmp-state.mjs";
 
 const SHELLS = new Set(["sh", "dash", "bash", "zsh", "busybox", "cmd.exe", "powershell.exe", "pwsh.exe", "pwsh"]);
@@ -42,13 +43,17 @@ export function processIdentity(pid, { platform = process.platform, run = execFi
       return match ? { pid, parent: Number(match[1]), born: match[2], name: match[3] } : null;
     }
     if (platform === "win32") {
-      const command = `$ErrorActionPreference='Stop'; $s=[wmisearcher]'SELECT Name,ParentProcessId,CreationDate FROM Win32_Process WHERE ProcessId=${pid}'; foreach($p in $s.Get()){[PSCustomObject]@{name=$p.Name;parent=$p.ParentProcessId;born=[System.Management.ManagementDateTimeConverter]::ToDateTime($p.CreationDate).ToUniversalTime().Ticks.ToString()}|ConvertTo-Json -Compress}`;
-      const p = JSON.parse(
-        run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], opts).replace(/^\uFEFF/, ""),
+      if (pid > 4294967295) return null;
+      const helper = fileURLToPath(new URL("../assets/mcp-project-win32.js", import.meta.url));
+      const output = run("cscript.exe", ["//nologo", "//E:JScript", "//B", helper, String(pid)], opts);
+      const match = /^((?:[A-Za-z0-9_.!~*'()-]|%[0-9A-F]{2})+)\t(0|[1-9][0-9]{0,9})\t([1-9][0-9]{0,19})\r?\n?$/.exec(
+        output,
       );
-      return Number.isSafeInteger(p.parent) && /^\d+$/.test(p.born)
-        ? { pid, parent: p.parent, born: p.born, name: p.name }
-        : null;
+      if (!match || match[0] !== output) return null;
+      const parent = Number(match[2]);
+      if (!Number.isSafeInteger(parent) || parent > 4294967295) return null;
+      const name = decodeURIComponent(match[1]);
+      return name ? { pid, parent, born: match[3], name } : null;
     }
   } catch {
     // Missing OS tooling or an exited process must not select another session.
