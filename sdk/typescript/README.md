@@ -389,6 +389,15 @@ const tools = loomTools(bot, { userId: "u-42" }); // generateText({ model, tools
 
 Loom's agent verbs (`AgentTools`) as an AI SDK `ToolSet` built with `tool()` and `jsonSchema()` from `ai`, an optional peer dependency (7.x, which needs Node 22.12 or later).
 
+## Claude API memory tool
+
+```ts
+import { loomMemoryTool } from "@clickhouse/loom/integrations/claude-memory";
+const memory = loomMemoryTool(bot, { store: "u-42" }); // client.beta.messages.toolRunner({ tools: [memory], ... })
+```
+
+The Claude API memory tool's commands (`view`, `create`, `str_replace`, `insert`, `delete`, `rename`) over Loom documents: each file under `/memories` is the document `loom-memory://<store>/memories/<path>`, the same documents the Python `loom.integrations.claude_memory` tools read. Built with `betaMemoryTool` from `@anthropic-ai/sdk`, an optional peer dependency (1.8.x). `loomMemoryHandlers(bot, { store })` returns the command handlers alone, for a loop that dispatches the calls itself.
+
 ## LangChain.js
 
 ```ts
