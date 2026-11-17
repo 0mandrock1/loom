@@ -29,8 +29,8 @@ _STAMP = re.compile(r"<!-- i18n: source=(\S+) blob=([0-9a-f]{40}) model=\S+ -->"
 
 
 def localized_uri(language: str, source: str) -> str:
-    """The translated use-case index is the language's landing page."""
-    return f"{language}/index.md" if source == "use-cases/index.md" else f"{language}/{source}"
+    """Preserve each source path under its language prefix."""
+    return f"{language}/{source}"
 
 
 def localized_page_path(path: str) -> str | None:
@@ -106,6 +106,19 @@ def alternates(source: str, pages: dict, site_url: str) -> list[dict[str, str]]:
     return [english, *available, {**english, "lang": "x-default"}]
 
 
+def language_landings(pages: dict, site_url: str) -> list[dict[str, str]]:
+    landings = []
+    for language, name in LANGUAGES.items():
+        for source in ("index.md", "use-cases/index.md"):
+            uri = localized_uri(language, source)
+            if uri in pages and not pages[uri]["obsolete"]:
+                landings.append(
+                    {"lang": language, "name": name, "url": site_url + page_path(f"docs/{uri}")}
+                )
+                break
+    return landings
+
+
 def _link_target(target: str, entry: dict, pages: dict, site_url: str, *, banner: bool) -> str:
     language = entry["language"]
     if target.startswith(BLOB + "docs/"):
@@ -173,11 +186,7 @@ def on_page_markdown(markdown, page, config, files):
     page.meta["og_locale"] = _OG_LOCALES.get(page.meta["language"])
     page.meta["alternates"] = alternates(source, pages, config.site_url)
     if uri == "index.md":
-        page.meta["language_landings"] = [
-            {"lang": language, "name": name, "url": config.site_url + language + "/"}
-            for language, name in LANGUAGES.items()
-            if f"{language}/index.md" in pages and not pages[f"{language}/index.md"]["obsolete"]
-        ]
+        page.meta["language_landings"] = language_landings(pages, config.site_url)
     if not entry:
         return markdown
     page.edit_url = None
