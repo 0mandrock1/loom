@@ -82,7 +82,7 @@ expiry and validity bounds. An exact, active, unexpired head needs no write, eve
 pinned or locked. A changed value refuses a pinned or locked head. A revision requires
 the current source text to match the shared copy; a writer's intervening edit refuses.
 Retained expired heads use their hash for a conditional rewrite, and an absent head uses
-`if_absent`. Conditional callers serialize on the key; ordinary concurrent ClickHouse
+`if_match_sha256="absent"`. Conditional callers serialize on the key; ordinary concurrent ClickHouse
 writes resolve by version. These checks do not make writing and promotion atomic.
 
 The review calls `memory.promote` with the approved canonical-value hash. The server

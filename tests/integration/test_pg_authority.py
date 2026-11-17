@@ -3748,7 +3748,10 @@ async def test_a_write_made_unembedded_over_an_embedded_key_retires_its_vectors(
         body = {"namespace": ns, "agent": "a", "entries": [body]}
     elif op == "memory.update":
         body = {"namespace": ns, "memory_key": "k", "value": value}
-    assert (await call(op, body)).status_code == 200
+    response = await call(op, body)
+    assert response.status_code == 200
+    if op == "memory.update":
+        assert response.json()["updated"] is True
     # The retirement rides the write's publication, after its commit answered.
     await _published(pg_conn, org)
     live = ch_client.query(

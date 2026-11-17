@@ -115,7 +115,7 @@ async def test_new_term_is_created_conditionally_and_decision_is_token_stamped(r
     result = await learnings.handle_learnings_review(request(approver="forged"))
     assert result.promoted_to_shared
     source = review["writes"][0]
-    assert source.if_absent and source.if_match_sha256 == ""
+    assert source.if_match_sha256 == "absent"
     assert source.value == VALUE and source.clear_expiry and source.source_class == "derived"
     assert (source.agent, source.user_id, source.session_id) == ("-", "-", "-")
     decision = review["decisions"][0]

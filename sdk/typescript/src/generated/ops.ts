@@ -4400,7 +4400,7 @@ export interface KnowledgeSourceRemoveInput {
   name: string;
   /** Type the source name to confirm. */
   confirm: string;
-  /** Record a request to retire the source's documents (default keep them). */
+  /** Retire a namespace source's documents (default keep); implied for mirrored sources. */
   delete_documents?: boolean;
 }
 
@@ -6446,7 +6446,6 @@ export interface MemorySetInput {
   pinned?: boolean;
   classify?: boolean;
   if_match_sha256?: string;
-  if_absent?: boolean;
   char_limit?: number | null;
   sensitivity?: "" | "low" | "medium" | "high";
   dry_run?: boolean;
