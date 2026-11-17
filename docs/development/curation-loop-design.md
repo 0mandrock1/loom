@@ -99,7 +99,8 @@ relabel does. The admin brings it back by the way it lapsed:
   the row's pin and lock), a writer's explicit act like an edit: written again;
 - past its `expires_at` or `valid_to` (a row written before this design, or by a writer):
   written again with `clear_expiry` and no `valid_to`, or by reviewing a pending draft of
-  the term, which treats such a head as no head.
+  the term. Review uses the retained source's content hash as a write precondition;
+  unpin or unlock the source before review if needed.
 
 It is governed again when its text is the approved one, and is promoted again otherwise.
 
