@@ -11,6 +11,7 @@ import {
 } from "../api/queryHistory";
 import { BusyButton } from "../components/ui/BusyButton";
 import { ListState } from "../components/ui/ListState";
+import { Loading } from "../components/ui/Loading";
 import { RowMenu } from "../components/ui/RowMenu";
 import { humanizeError } from "../lib/errorWords";
 import { useAbortableEffect, useMounted } from "../lib/hooks";
@@ -42,6 +43,7 @@ function SourceList({ org, namespace, focusDisclosure }: Scope & { focusDisclosu
   const mounted = useMounted();
   const [data, setData] = useState<Sources | null>(null);
   const [readError, setReadError] = useState<unknown>(null);
+  const [loading, setLoading] = useState(true);
   const [writeError, setWriteError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [form, setForm] = useState(false);
@@ -62,11 +64,14 @@ function SourceList({ org, namespace, focusDisclosure }: Scope & { focusDisclosu
   useAbortableEffect(
     async (signal, live) => {
       setReadError(null);
+      setLoading(true);
       try {
         const response = await listQueryHistory({ org, namespace }, { signal });
         if (live()) setData(response);
       } catch (e) {
         if (live()) setReadError(e);
+      } finally {
+        if (live()) setLoading(false);
       }
     },
     [org, namespace, revision],
@@ -89,7 +94,7 @@ function SourceList({ org, namespace, focusDisclosure }: Scope & { focusDisclosu
     }
   }
   return (
-    <div className="mt-2 rounded-lg border border-border p-3">
+    <div className="mt-2 rounded-lg border border-border p-3" aria-busy={data !== null && loading}>
       <p className="text-sm text-text-muted">
         Frequently used SELECT queries become private definition drafts. An admin approves each draft before it is
         published.
@@ -97,7 +102,7 @@ function SourceList({ org, namespace, focusDisclosure }: Scope & { focusDisclosu
       {readError ? (
         <ListState kind="error" things="query-history sources" error={readError} onRetry={reload} />
       ) : !data ? (
-        <p role="status">Loading query-history sources…</p>
+        <Loading label="Loading query-history sources" />
       ) : (
         <>
           {!data.enabled && (

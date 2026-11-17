@@ -887,8 +887,9 @@ describe("ReviewQueue", () => {
     async (source_kind) => {
       const body = "Count only completed orders. ".repeat(20) + "Do not count refunded orders.";
       const evidence = {
-        queries: ["SELECT count() FROM orders WHERE status = ?", "SELECT sum(total) FROM orders"],
-        questions: ["How many orders completed?", "Which orders contribute to revenue?"],
+        ...(source_kind === "knowledge_gap"
+          ? { gap_id: "gap-orders" }
+          : { sql: "SELECT count() FROM orders WHERE status = ?" }),
         tables: ["orders", "refunds"],
         columns: ["orders.status", "orders.total", "refunds.order_id"],
       };

@@ -36,9 +36,9 @@ several accounts count separately. This floor provides no anonymity guarantee. A
 threshold increase or history-window change invalidates an in-flight result. Source
 removal, a changed source UUID, feature disablement and namespace erasure also invalidate it.
 
-Candidates use `source_kind = knowledge_gap` or `query_history`. Their questions and SQL
-remain private to namespace admins in `learnings.list`, quality counts and both explicit
-and inferred lineage. Filtering precedes pagination and aggregation, including org-wide
+Candidates use `source_kind = knowledge_gap` or `query_history`. Their model-written
+text and query-history SQL remain private to namespace admins in `learnings.list`,
+quality counts and both explicit and inferred lineage. Filtering precedes pagination and aggregation, including org-wide
 quality reads. Read-narrowed tokens cannot call either operation prefix.
 
 ## One model attempt
@@ -53,8 +53,12 @@ generation removes only the unspent claim's versions so a retry can proceed when
 
 The org's model-call switch and namespace daily cap are checked before claiming work;
 an unreadable cap refuses it. Each attempt permits one bounded JSON completion. The
-result validates term, aliases, body and table/column list sizes. SQL or questions and the
-model's table/column lists become `rests_on`. A final candidate lease rereads status so
+result validates term, aliases, body and table/column list sizes. Gap provenance in
+`rests_on` holds the gap ID and the model's table/column lists. Eligible questions reach
+only the model input; the application does not copy them into the candidate. The model
+may repeat a question in its drafted text. After generation, the draft and gap ID can
+outlive a user erasure of the source questions. Query-history provenance retains its
+normalized SQL and the model's table/column lists. A final candidate lease rereads status so
 completion cannot replace a rejection or restore scrubbed text. Evidence fences run
 before and after model work and after insertion.
 

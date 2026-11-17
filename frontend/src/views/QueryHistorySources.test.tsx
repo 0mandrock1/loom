@@ -1,6 +1,6 @@
 import userEvent from "@testing-library/user-event";
-import { beforeEach, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "../test/rtl";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "../test/rtl";
 import { axeViolations } from "../test/axe";
 import { addQueryHistory, listQueryHistory, removeQueryHistory, type QueryHistorySource } from "../api/queryHistory";
 import { QueryHistorySources } from "./QueryHistorySources";
@@ -94,4 +94,63 @@ it("does not show the old namespace's late source response", async () => {
   await screen.findByText("No query-history sources");
   finish({ enabled: true, sources: [source] });
   await waitFor(() => expect(screen.queryByText("metrics")).toBeNull());
+});
+
+it("delays its initial loading label for 300 ms and removes it when sources arrive", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => vi.useRealTimers());
+  let finish!: (value: { enabled: boolean; sources: QueryHistorySource[] }) => void;
+  vi.mocked(listQueryHistory).mockReturnValue(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  render(<QueryHistorySources org="o" namespace="n" />);
+  fireEvent.click(screen.getByRole("button", { name: "Query history" }));
+  expect(screen.queryByText(/Loading query-history sources/)).toBeNull();
+  act(() => vi.advanceTimersByTime(299));
+  expect(screen.queryByText(/Loading query-history sources/)).toBeNull();
+  act(() => vi.advanceTimersByTime(1));
+  expect(screen.getByText(/Loading query-history sources/)).toBeVisible();
+  await act(async () => finish({ enabled: true, sources: [source] }));
+  expect(screen.queryByText(/Loading query-history sources/)).toBeNull();
+  expect(screen.getByText("metrics")).toBeVisible();
+});
+
+it("never flashes a loading label for a fast source response", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => vi.useRealTimers());
+  vi.mocked(listQueryHistory).mockResolvedValue({ enabled: true, sources: [source] });
+  render(<QueryHistorySources org="o" namespace="n" />);
+  fireEvent.click(screen.getByRole("button", { name: "Query history" }));
+  expect(screen.queryByText(/Loading query-history sources/)).toBeNull();
+  await act(async () => {});
+  act(() => vi.advanceTimersByTime(300));
+  expect(screen.queryByText(/Loading query-history sources/)).toBeNull();
+  expect(screen.getByText("metrics")).toBeVisible();
+});
+
+it("keeps displayed sources busy until a refresh settles", async () => {
+  let refresh!: (value: { enabled: boolean; sources: QueryHistorySource[] }) => void;
+  vi.mocked(listQueryHistory)
+    .mockResolvedValueOnce({ enabled: false, sources: [source] })
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        refresh = resolve;
+      }),
+    );
+  vi.mocked(removeQueryHistory).mockResolvedValue({ removed: true });
+  const { container } = render(<QueryHistorySources org="o" namespace="n" />);
+  fireEvent.click(screen.getByRole("button", { name: "Query history" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Actions for metrics" }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: "Disconnect" }));
+  await waitFor(() => expect(listQueryHistory).toHaveBeenCalledTimes(2));
+  expect(screen.getByText("metrics")).toBeVisible();
+  const retained = screen.getByText("metrics").closest("[aria-busy]");
+  expect(retained).toHaveAttribute("aria-busy", "true");
+  expect(screen.queryByText(/Loading query-history sources/)).toBeNull();
+  await act(async () => refresh({ enabled: false, sources: [] }));
+  expect(screen.getByText("No query-history sources")).toBeVisible();
+  expect(retained).toHaveAttribute("aria-busy", "false");
+  expect(await axeViolations(container)).toEqual([]);
 });

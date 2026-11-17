@@ -106,11 +106,12 @@ async def draft(
         return cid
     await require_draft_fleet()
     value = DefinitionDraft.model_validate_json(result.text)
+    provenance = {"gap_id": resource_id} if kind == "knowledge_gap" else evidence
     proposal = {
         "term": value.term,
         "aliases": value.aliases,
         "body": value.body,
-        "rests_on": {**evidence, "tables": value.tables, "columns": value.columns},
+        "rests_on": {**provenance, "tables": value.tables, "columns": value.columns},
     }
     async with leases.holding(claim, ttl_s=30) as held:
         if not held:

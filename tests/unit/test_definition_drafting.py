@@ -257,3 +257,57 @@ async def test_uncertain_generation_send_keeps_namespace_eraser_out(
         await steps_ledgers.delete_learnings_queue_by_namespace("o", "n")
     deleted.assert_not_awaited()
     assert state["fence"].holders and state["calls"] == send - 1
+
+
+@pytest.mark.parametrize("repeat_question", [False, True])
+async def test_gap_model_receives_questions_without_automatic_persisted_copy(
+    state: Any, monkeypatch: pytest.MonkeyPatch, repeat_question: bool
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from server.knowledge.api.models_gaps import KnowledgeGapsDraftInput
+    from server.knowledge.app import gap_drafts
+    from server.llm import client
+
+    question = "private-question-canary revenue by account"
+    gap_id = "gap-resource"
+    body = question if repeat_question else "Revenue is the sum of completed sales."
+    completion = AsyncMock(
+        return_value=LLMResult(
+            text=json.dumps(
+                {"term": "Revenue", "body": body, "tables": ["sales"], "columns": ["sales.amount"]}
+            ),
+            tokens_in=10,
+            tokens_out=10,
+            provider="fake",
+            model="fake",
+        )
+    )
+    monkeypatch.setattr(client, "get_llm_client", lambda: SimpleNamespace(complete=completion))
+    monkeypatch.setattr(gap_drafts.settings, "knowledge_gaps_enabled", True)
+    monkeypatch.setattr(gap_drafts.settings, "knowledge_gaps_min_askers", 3)
+    monkeypatch.setattr(
+        gap_drafts.capture_consent, "level_uncached", AsyncMock(return_value="full")
+    )
+    monkeypatch.setattr(gap_drafts.gaps, "erasure_since", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        gap_drafts.repo, "gap_for_draft", AsyncMock(return_value={"head": question, "samples": []})
+    )
+    monkeypatch.setattr(gap_drafts.repo, "draft_queries", AsyncMock(return_value=[question]))
+    result = await gap_drafts.handle_gap_draft(
+        KnowledgeGapsDraftInput(org="o", namespace="n", gap_id=gap_id)
+    )
+    assert json.loads(completion.await_args.args[1]) == {"queries": [question]}
+    assert completion.await_count == 1
+    assert state["row"]["candidate_id"] == result.candidate_id
+    assert state["row"]["source_resource_id"] == gap_id
+    proposal = json.loads(state["row"]["proposed_value"])
+    assert proposal["term"] == "Revenue" and proposal["body"] == body
+    assert proposal["rests_on"] == {
+        "gap_id": gap_id,
+        "tables": ["sales"],
+        "columns": ["sales.amount"],
+    }
+    if not repeat_question:
+        assert question not in state["row"]["proposed_value"]

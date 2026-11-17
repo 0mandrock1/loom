@@ -120,7 +120,9 @@ async def test_gap_draft_rereads_eligible_questions_and_claims_one_model_attempt
     assert calls == [{"queries": ["what is arr"]}]
     row = await learnings.find_candidate(org, NS, first.candidate_id)
     assert row is not None and row["source_kind"] == "knowledge_gap"
-    assert json.loads(row["proposed_value"])["rests_on"]["queries"] == ["what is arr"]
+    provenance = json.loads(row["proposed_value"])["rests_on"]
+    assert provenance["gap_id"] == gap["gap_id"]
+    assert set(provenance) == {"gap_id", "tables", "columns"}
     monkeypatch.setattr(settings, "knowledge_gaps_min_askers", 4)
     from fastapi import HTTPException
 
