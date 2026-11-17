@@ -805,13 +805,26 @@ read-only scope, lists any tenancy row the directory does not place.
   it, unless the cell is the first and its mode reads `recording`, and an org-free command
   never uses it; a leaked one is stopped by `loom cell limit --closed`, which needs none of
   the cell's stores, and replaced by `loom cell credential` (below).
-  `loom cell place --org <org>` (declared org-free: it writes the org's placement and
-  tenancy row, which is how an org comes to be held), with the router's operator credential,
+  `loom cell place --cell <cell> --org <org>` (declared org-free: it writes the org's
+  placement and tenancy row, which is how an org comes to be held), with the router's operator credential,
   places an org for a command that writes a new one (a bot, an import), through the router's
   placement API and in its order, as attach's placement of configured orgs does: it inserts
   the placement and reads back the winner, writes the cell's tenancy row only if the winner
   is this cell (otherwise it refuses and writes nothing), and reports success only once the
-  row is written, so a rerun is idempotent. For an org the directory does not place yet it
+  row commits synchronously. The CLI holds the attach lock on a direct marked Postgres
+  session, requires a full enforced local cell state and the full accepted configuration
+  fingerprint, and checks both again before inserting. A transactional durability message
+  makes even a no-op insert flush an earlier primary-only tenancy row to the standby.
+  Opening the session, initial checks and the local transaction through COMMIT each have
+  a separate client deadline derived from `LOOM_PG_STATEMENT_TIMEOUT_MS`; the directory
+  request keeps its own transport timeout. Each local phase reserves cleanup inside its
+  original deadline. On failure the shared control owner closes the exact backend before
+  cancelling or reaping its work, deferring repeated signals within that same deadline.
+  Successful exit and failures outside a local phase have a separate cleanup allowance
+  derived from the same setting. An unknown outcome names rerunning the same command;
+  the permanent directory winner and idempotent local insert let that rerun finish. The
+  route checks directory state; a direct operator API caller is trusted to check local
+  Postgres mode as the CLI does. For an org the directory does not place yet it
   passes the placement API's gate (below): refused while the directory is unavailable, for a
   cell the gate does not accept, closed, or when the fingerprint of the CLI's own
   configuration of the cell (with the deployment id read from the stores it connects to)
@@ -910,9 +923,12 @@ read-only scope, lists any tenancy row the directory does not place.
   safe, since the read-back makes it idempotent. For an org the directory already
   places, a cell's call is checked only for its credential (against the cells' hashes
   the router caches for `LOOM_ROUTER_DIRECTORY_CACHE_S`, default 5 s) and the cell's
-  rate, and a `loom cell place` only for the operator credential; both answer the winner
-  whatever the cell's state, quota or fingerprint, adding no placement (the winner is
-  public through the lookup anyway); a request refused past its cell's rate answers 503
+  rate. An operator's `loom cell place` checks its deployment id and fingerprint against
+  the requested cell's locked row even for an org already placed there; an org placed
+  elsewhere answers that winner and the CLI refuses without inserting local tenancy.
+  Existing placements bypass closed and quota checks. Every successful call writes an
+  audit row before its synchronous commit, including a retry of an existing winner, so
+  the returned winner survives failover. A request refused past its cell's rate answers 503
   with `Retry-After` (at most a minute), and its retry is admitted by the replica that
   answers it once the cell's calls there are under the rate. An org the cell already
   holds needs no call, so serving it never depends on the router.
