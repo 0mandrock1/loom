@@ -112,7 +112,9 @@ async def migrate(
     files, indexes = _validated(mig_dir, schema)
     cm = (connect or pg.dedicated)()
     conn = await cm.__aenter__()
-    task = asyncio.create_task(_owned_result(_migrate(conn, files, indexes, schema, lock_key)))
+    task = asyncio.create_task(
+        _owned_result(lambda: _migrate(conn, files, indexes, schema, lock_key))
+    )
     try:
         result = await asyncio.shield(task)
         if isinstance(result, (SystemExit, KeyboardInterrupt)):
@@ -125,9 +127,9 @@ async def migrate(
     return result
 
 
-async def _owned_result[T](work: Awaitable[T]) -> T | SystemExit | KeyboardInterrupt:
+async def _owned_result[T](work: Callable[[], Awaitable[T]]) -> T | SystemExit | KeyboardInterrupt:
     try:
-        return await work
+        return await work()
     except (SystemExit, KeyboardInterrupt) as error:
         # Transport native failures through child Tasks without stopping their supervisor.
         return error
@@ -152,7 +154,7 @@ async def _failed_migration(
     except BaseException:  # noqa: BLE001 — preserve the first failure on repeated cancellation.
         pg._terminate(conn)
     release = asyncio.create_task(
-        _owned_result(cm.__aexit__(type(error), error, error.__traceback__))
+        _owned_result(lambda: cm.__aexit__(type(error), error, error.__traceback__))
     )
     try:
         done, _ = await asyncio.wait({release}, timeout=max(0, end - time.monotonic()))

@@ -170,3 +170,58 @@ def test_actual_connection_context_keeps_first_failure_and_cleanup_end(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "first-failure-and-original-end-preserved" in result.stdout
+
+
+@pytest.mark.parametrize("exit_error", ["RuntimeError", "SystemExit", "KeyboardInterrupt"])
+def test_synchronous_context_exit_failure_keeps_original_migration_error(
+    exit_error: str, tmp_path
+) -> None:
+    program = textwrap.dedent(
+        """
+        import asyncio
+        import sys
+        from pathlib import Path
+        from server.core.schema import pg_migrate
+
+        kind, path = sys.argv[1:]
+        original = ValueError('original migration error')
+        secondary = {'RuntimeError': RuntimeError, 'SystemExit': SystemExit,
+                     'KeyboardInterrupt': KeyboardInterrupt}[kind]('context factory failed')
+        events = []
+        class Connection:
+            async def close(self, **kwargs):
+                events.append('close')
+            def terminate(self):
+                events.append('abort')
+        class Context:
+            async def __aenter__(self):
+                return Connection()
+            def __aexit__(self, kind, value, traceback):
+                assert value is original
+                events.append('exit')
+                raise secondary
+        async def fail(*args):
+            raise original
+        async def main():
+            pg_migrate._migrate = fail
+            try:
+                await pg_migrate.migrate(Path(path), connect=Context, schema='test')
+            except BaseException as error:
+                assert error is original, (type(error).__name__, events)
+                assert events[:2] == ['close', 'exit'], events
+                await asyncio.sleep(0)
+                print('synchronous-context-failure-contained')
+                return
+            raise AssertionError('migration failure was swallowed')
+        asyncio.run(main())
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program, exit_error, str(tmp_path)],
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "synchronous-context-failure-contained" in result.stdout
