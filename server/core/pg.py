@@ -380,6 +380,65 @@ def _terminate(conn: Any) -> None:
         conn.terminate()
 
 
+def _retrieve_task(task: asyncio.Task[Any]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def close_owned(conn: Any, *, end: float) -> None:
+    """Close an owned session by an absolute time.monotonic deadline.
+
+    Public close sends cancellation before transport cleanup can discard it. Abort
+    is a bounded fallback, not evidence that the backend has released its locks.
+    The owner preserves an earlier operation failure when this cleanup fails.
+    """
+
+    async def close() -> SystemExit | KeyboardInterrupt | None:
+        try:
+            await conn.close(timeout=max(0, end - time.monotonic()))
+        except (SystemExit, KeyboardInterrupt) as error:
+            # A native fatal in a child Task stops the loop before its owner can clean up.
+            return error
+        return None
+
+    task: asyncio.Task[Any] | None = None
+    interrupted: asyncio.CancelledError | None = None
+    try:
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Postgres owned-session cleanup deadline expired")
+        task = asyncio.create_task(close())
+        while True:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Postgres owned-session cleanup deadline expired")
+            try:
+                done, _ = await asyncio.wait({task}, timeout=remaining)
+            except asyncio.CancelledError as error:
+                # Keep cancellation delivery alive; another signal cannot reset its end.
+                interrupted = interrupted or error
+                continue
+            if not done:
+                raise TimeoutError("Postgres owned-session cleanup deadline expired")
+            break
+        if isinstance(result := task.result(), (SystemExit, KeyboardInterrupt)):
+            raise result
+    except BaseException:
+        try:
+            _terminate(conn)
+        except BaseException:  # noqa: BLE001 — abort cannot replace the first cleanup failure.
+            pass
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            task.add_done_callback(_retrieve_task)
+        if interrupted is not None:
+            raise interrupted from None
+        raise
+    if interrupted is not None:
+        raise interrupted
+
+
 async def _release(pool: Any, conn: Any) -> None:
     """Back to the pool within a bound: a statement still in flight (a client timeout, a
     cancelled request) has its cancel sent and acknowledged and the connection reset;
@@ -431,20 +490,13 @@ def may_have_committed(e: BaseException) -> bool:
     return isinstance(e, PostgresUnavailableError) and bool(e.extra.get("outcome_unknown"))
 
 
-@asynccontextmanager
-async def dedicated(*, statement_timeout_ms: int = 0, marked: bool = True) -> AsyncIterator[Any]:
-    """A connection of its own, outside the pool, with no client timeout and no server
-    statement timeout unless `statement_timeout_ms` asks for one: for work that runs as
-    long as it takes (migrations, an erasure's deletes).
-    A CLI process's first one checks the deployment (`expect_deployment`).
-    `statement_timeout_ms` bounds its statements as a startup value (a RESET ALL keeps
-    it); `marked` False leaves the tenancy marker out (`loom doctor` reads a session
-    without it)."""
+async def _connect_dedicated(*, statement_timeout_ms: int = 0, marked: bool = True) -> Any:
+    """Return the raw dedicated session before its owner initializes it."""
     import asyncpg
 
     _require_dsn()
     try:
-        conn = await asyncpg.connect(
+        return await asyncpg.connect(
             settings.pg_dsn,
             command_timeout=None,
             server_settings={
@@ -461,6 +513,20 @@ async def dedicated(*, statement_timeout_ms: int = 0, marked: bool = True) -> As
     except Exception as e:
         _raise_if_unavailable(e)
         raise
+
+
+@asynccontextmanager
+async def dedicated(*, statement_timeout_ms: int = 0, marked: bool = True) -> AsyncIterator[Any]:
+    """A connection of its own, outside the pool, with no client timeout and no server
+    statement timeout unless `statement_timeout_ms` asks for one: for work that runs as
+    long as it takes (migrations, an erasure's deletes).
+    A CLI process's first one checks the deployment (`expect_deployment`).
+    `statement_timeout_ms` bounds its statements as a startup value (a RESET ALL keeps
+    it); `marked` False leaves the tenancy marker out (`loom doctor` reads a session
+    without it)."""
+    import asyncpg
+
+    conn = await _connect_dedicated(statement_timeout_ms=statement_timeout_ms, marked=marked)
     # Opening includes the deployment check and the codecs (jsonb reads back as a dict, as
     # the pool's): an outage there is the 503; the block's own errors pass through as
     # they are (an erasure's deadlock reaches its retry).

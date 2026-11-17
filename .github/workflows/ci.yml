@@ -388,6 +388,8 @@ jobs:
           on=(--set analyticsExport.enabled=true --set analyticsExport.bucket=ci --set analyticsExport.nameKeySecret.name=ci)
           extractor=(--set extractor.enabled=true --set secrets.extractorToken="$(openssl rand -hex 24)")
           assistant=(--set assistant.enabled=true --set assistant.existingSecret=ci)
+          # TLS on Loom's port, which the assistant (in "all") cannot reach: its own render.
+          tls=(--set tls.secretName=ci --set 'ingress.annotations.alb\.ingress\.kubernetes\.io/backend-protocol=HTTPS' --set workers.enabled=true --set networkPolicy.enabled=true "${on[@]}" "${extractor[@]}")
           all=(--set workers.enabled=true --set workers.replicaCount=2 --set autoscaling.enabled=true --set networkPolicy.enabled=true --set alerts.prometheusRule.enabled=true --set mustMatchChange.publish=ci --set settingsFile.memory_ask_recency_weight=0.3 "${on[@]}" "${extractor[@]}" "${assistant[@]}")
           # The PrometheusRule's schema: the CRD catalog at a pinned commit.
           crd='https://raw.githubusercontent.com/datreeio/CRDs-catalog/c86448cbf1a840ca62d119259864863897c8748a/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
@@ -400,6 +402,8 @@ jobs:
             helm lint --strict "$chart" "${args[@]}" "${all[@]}"
             helm template loom "$chart" "${args[@]}" | kubeconform -strict -summary -kubernetes-version 1.30.0
             helm template loom "$chart" "${args[@]}" "${all[@]}" | kubeconform -strict -summary -kubernetes-version 1.30.0 -schema-location default -schema-location "$crd"
+            helm lint --strict "$chart" "${args[@]}" "${tls[@]}"
+            helm template loom "$chart" "${args[@]}" "${tls[@]}" | kubeconform -strict -summary -kubernetes-version 1.30.0
           done
           kubeconform -strict -summary -kubernetes-version 1.30.0 deploy/okf-sync/cronjob.yaml
           # Values the chart must refuse, each with its own message. A refused render
@@ -422,6 +426,8 @@ jobs:
           refused "needs analyticsExport.nameKeySecret.name" "${on[@]}" --set analyticsExport.nameKeySecret.name=
           refused "expectedBucketOwner must be a quoted string" "${on[@]}" --set analyticsExport.expectedBucketOwner=123456789012
           refused "assistant.existingSecret is required" --set assistant.enabled=true
+          refused "assistant.enabled calls Loom's port over plain HTTP" "${assistant[@]}" --set tls.secretName=ci
+          refused 'set ingress.annotations."alb.ingress.kubernetes.io/backend-protocol" to HTTPS' -f "$chart/values-eks.yaml" --set tls.secretName=ci
           # The release Secret (named after the release here) and envFrom Secrets reach every pod.
           shared="is a Secret every web and workers pod loads"
           refused "$shared" "${on[@]}" --set analyticsExport.nameKeySecret.name=loom
@@ -456,6 +462,9 @@ jobs:
       # The Postgres authority's DSN, password, CA mount and egress, and its refusals.
       - name: postgres
         run: python3 -m scripts.gates.helm_postgres
+      # TLS on Loom's port: the Secret's mount, the settings, HTTPS probes, and the refusals.
+      - name: tls
+        run: python3 -m scripts.gates.helm_tls
 
   agent-plugins:
     name: coding-agent plugins (node --test)
@@ -896,9 +905,44 @@ jobs:
           tests/integration/test_pg_clickhouse_live_ch.py
           tests/integration/test_cell_tenancy_pg.py
           tests/integration/test_router_directory_pg.py
+          tests/integration/test_pg_online_index.py
+          tests/integration/test_pg_owned_cleanup.py
           tests/integration/test_cell_unset_gate_pg.py
           tests/integration/test_cell_prepare.py
+          tests/integration/test_cell_attach.py
+          tests/integration/test_cell_attach_cleanup.py
+          tests/integration/test_cell_control_cleanup.py
+          tests/integration/test_cell_control_fence.py
+          tests/integration/test_directory_control_cleanup.py
           tests/integration/test_cell_org_triggers_pg.py
+      - name: pytest online-index durability on a private physical standby
+        timeout-minutes: 8
+        env:
+          LOOM_PG_IMAGE: postgres:${{ matrix.postgres }}
+          LOOM_PG_CONTAINER: loom-scale-index-drill-pg
+          LOOM_PG_HOST_PORT: "55432"
+          LOOM_PG_INDEX_DRILL: "1"
+          LOOM_PG_INDEX_DRILL_DSN: postgres://loom:loomdev@localhost:55432/loom
+        run: |
+          set -euo pipefail
+          for name in loom-scale-index-drill-pg loom-scale-index-drill-pg-standby; do
+            if docker container inspect "$name" >/dev/null 2>&1; then
+              echo "drill container already exists: $name" >&2
+              exit 1
+            fi
+          done
+          if docker network inspect loom-scale-index-drill-pg-net >/dev/null 2>&1; then
+            echo "drill network already exists" >&2
+            exit 1
+          fi
+          cleanup() {
+            docker rm -f -v loom-scale-index-drill-pg loom-scale-index-drill-pg-standby || true
+            docker network rm loom-scale-index-drill-pg-net || true
+          }
+          trap cleanup EXIT
+          bash dev/ci_start_postgres.sh
+          docker update --memory 1g --memory-swap 1g loom-scale-index-drill-pg loom-scale-index-drill-pg-standby
+          pytest -q tests/integration/test_pg_online_index_durability.py
       # The tenant-isolation gates again, against a second server that enforces auth:
       # the Postgres read paths (heads by key and by id, narrowed scopes) see real tokens.
       # They run whether or not the memory suites passed (`!cancelled()`).

@@ -189,17 +189,19 @@ graceful stop, and within the 30 s lease TTL when a pod or node dies. Every pod 
 labelled `deploy:k8s:<pod>`, so a new leader runs the workers whose last pass is
 overdue rather than waiting out their interval again.
 
-A pod that dies without stopping (node loss, eviction past the grace period) leaves its
-provider participant row, which would hold the next embedding or model change from the
-dashboard. With `retireLostPods` (the default) the workers leader retires it once its
-heartbeat expired, no query of it runs and Kubernetes says the pod is gone: its object
-deleted or replaced, or the pod `Failed` (evicted). That is a minute or two after a
-deletion or an eviction, and after a node loss once Kubernetes deletes the node's pods
-(five minutes of `NotReady` by default). It needs `get` on pods in the namespace (a Role
-the chart creates for the release's service account) and that account's token, which only
-the pods that may hold the workers lease mount. Without it, `/v1/health` names the row;
-once the pod is gone, retire it with
-`loom participant retire --participant <id> --yes` ([replicas](./replicas.md#stopping-a-replica)).
+A pod that dies without stopping leaves its provider participant row. A missing
+or replaced pod object, a Failed/Succeeded API phase and a completed rollout do
+not prove that an old process on a partitioned node stopped. Such rows remain
+blockers until guarded shutdown or verified exact physical death with settled
+queries. Loom requests no pod-read permission or service-account token for
+participant retirement. The explicit `serviceAccount.automountToken` value stays
+available for workloads that need a token for another integration.
+
+Use `loom participant retire --participant <id>` on the trusted host where its
+exact PID/namespace/start identity is verifiable. If that evidence is unavailable,
+use the [quiescent lifecycle recovery](../architecture/cells.md#participant-lifecycle-baseline)
+after positively terminating or fencing every relevant runtime. API object
+cleanup alone cannot authorize retirement.
 
 There is no migration Job. Every pod migrates at boot under a ClickHouse lease, so a
 Job would only repeat that step, and a pre-upgrade hook would run the new schema while
@@ -388,13 +390,48 @@ NetworkPolicy whose one rule allows every pod and every address but those (none 
   release: Helm refuses to take over an object it does not own, so the upgrade fails.
 - An engine that keeps address ranges off node IPs (Cilium's default) blocks host-network
   endpoints and the nodes' own addresses: NodeLocal DNSCache (so DNS), the EKS Pod
-  Identity agent, and the API server (which `retireLostPods` calls) where the engine
+  Identity agent, where the engine
   gives it an identity of its own. Turn on the engine's node matching, or set
   `guardMetadata: false` and allow them in your own policy.
 
 A `helm upgrade --reuse-values` from a chart with a shorter `egressExcept` keeps that
 list: set `networkPolicy.egressExcept` again, or upgrade with `--reset-then-reuse-values`
 (Helm 3.14 or later).
+
+## TLS on the Loom port
+
+`tls.secretName` names a `kubernetes.io/tls` Secret in the release's namespace. Every web
+and workers pod mounts its `tls.crt` and `tls.key` (mode 0440, group
+`podSecurityContext.fsGroup`), serves them on port 7777 with HTTPS only and probes over
+HTTPS; the Service marks the port `appProtocol: https`. `tls.minVersion` sets
+`LOOM_TLS_MIN_VERSION`. The chart refuses the `LOOM_TLS_*` settings anywhere else: the
+mount and the HTTPS probes come with `tls.secretName`.
+
+A controller that renews the Secret in place needs no restart. The kubelet updates the
+mount within its sync period, and each web process serves the new pair from its next
+handshake ([TLS on the Loom port](deployment.md#tls-on-the-loom-port)). The Secret must
+exist before the pods start.
+
+The Ingress or proxy in front then connects over HTTPS. On EKS, add
+`alb.ingress.kubernetes.io/backend-protocol: HTTPS` to `ingress.annotations`: the chart
+refuses an `alb` Ingress without it, or with another `backend-protocol` or
+`healthcheck-protocol` in `ingress.annotations` or `service.annotations` (the controller
+reads both, the Service's first). With ingress-nginx, set
+`nginx.ingress.kubernetes.io/backend-protocol: HTTPS`; other controllers have their own
+setting, which the chart does not check. Setting or
+clearing `tls.secretName` on a running release breaks requests until the rollout ends:
+the balancer and in-cluster clients switch scheme for every pod at once, while the pods
+restart one at a time. Plan a window, or install a second release with TLS and move the
+clients to it. A client in the cluster that calls the Service by URL, such as
+`deploy/okf-sync/cronjob.yaml` (`PRIVATE_URL`), switches to `https://` and trusts the CA
+that issued the certificate. For the `loom` CLI, `SSL_CERT_FILE` names that CA and
+replaces the system roots, so set it on the command that calls the Service only, or point
+it at a bundle of the system roots and the CA. The assistant calls the port
+over plain HTTP, so the chart refuses `assistant.enabled` with `tls.secretName`. The hop
+from Loom to the release's extractor (`extractor.enabled`) stays plain HTTP. Keep
+`tls.minVersion` at `"1.2"` unless every client of the port, the balancer included,
+speaks TLS 1.3. `helm test` calls the Service over HTTPS without verifying the
+certificate.
 
 ## Separate workers
 
