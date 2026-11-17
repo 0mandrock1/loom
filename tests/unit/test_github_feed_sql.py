@@ -1,11 +1,19 @@
 """Feed publication timestamps keep late comments in incremental tracker reads."""
 
+import json
+import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
+from server.tracker.app import github_feed as app
+from server.tracker.domain import github_feed as domain
 from server.tracker.store import github_feed as store
+from server.tracker.store.source.base import SourceBase
 from server.tracker.store.source.embed import EmbedReads
+from tests.unit.ch_fake import RecordingCH
 from tests.unit.clickhouse_local import CLICKHOUSE, run
 
 pytestmark = pytest.mark.skipif(CLICKHOUSE is None, reason="clickhouse binary not installed")
@@ -118,3 +126,107 @@ def test_millisecond_reader_resumes_after_two_thousand_rows_from_one_publication
     assert len(second) == 1
     assert second[0]["source_id"] not in {row["source_id"] for row in first}
     assert cursor["updated_at"] == datetime(2025, 1, 2, microsecond=123000)
+
+
+def _insert_recorded(table, row):
+    def value(item):
+        if isinstance(item, datetime):
+            return item.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
+        return str(item)
+
+    columns = ", ".join(row)
+    data = json.dumps(row, default=value)
+    return f"INSERT INTO {table} ({columns}) SELECT {columns} FROM format(JSONEachRow, $${data}$$)"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view,raw", [("github_issues", "feed_issues"), ("github_prs", "feed_prs")])
+@pytest.mark.parametrize("publication", ["item", "comment"])
+@pytest.mark.parametrize("metadata_private,published_private", [(0, 1), (0, 0), (1, 0), (1, 1)])
+async def test_contract_reader_keeps_publication_privacy_when_repository_metadata_lags(
+    monkeypatch, view, raw, publication, metadata_private, published_private
+):
+    owner = "00000000-0000-0000-0000-000000000001"
+    now = datetime(2025, 1, 2, tzinfo=UTC)
+    current = app.identity("team") | dict(
+        repository="widgets/repo",
+        repository_id=7,
+        owner_uuid=uuid.UUID(owner),
+        token_enc="",
+        is_private=metadata_private,
+        available=1,
+        visible_until=datetime(2100, 1, 1, tzinfo=UTC),
+        cursors="{}",
+        max_pages=2,
+        revision=uuid.UUID(int=3),
+    )
+    ch = (
+        RecordingCH()
+        .on("FROM feed_owner", [{"org": "team", "owner_uuid": owner, "schema_version": 1}])
+        .on("FROM feed_repositories", [current])
+        .on("AS now_ms", [{"now_ms": int(now.timestamp()) * 1000, "prior_ms": 0}])
+    )
+
+    @asynccontextmanager
+    async def fence(*args, **kwargs):
+        yield lambda uncertain: None
+
+    monkeypatch.setattr(app, "fenced", fence)
+    monkeypatch.setattr(app, "resealed", lambda *args: None)
+    item = domain.item_row(
+        "widgets/repo",
+        dict(number=1, body="Item body", created_at=now.isoformat(), updated_at=now.isoformat()),
+        is_pr=view == "github_prs",
+    )
+    comment = domain.comment_row(
+        "widgets/repo",
+        dict(
+            id=1,
+            issue_url="https://api.github.com/repos/widgets/repo/issues/1",
+            pull_request_url="https://api.github.com/repos/widgets/repo/pulls/1",
+            body="New reply",
+            created_at=now.isoformat(),
+            updated_at=now.isoformat(),
+        ),
+        review=view == "github_prs",
+    )
+    table = raw if publication == "item" else "feed_comments"
+    stream = (
+        "items"
+        if publication == "item"
+        else ("review_comments" if view == "github_prs" else "comments")
+    )
+    assert await app._publish(
+        ch,
+        current,
+        owner,
+        "00000000-0000-0000-0000-000000000002",
+        stream,
+        now,
+        {table: [item if publication == "item" else comment]},
+        app._Observation(7, bool(published_private), now),
+    )
+    # One replica has learned the raw publication but still holds the previous
+    # unexpired repository part. Keep actual writer rows and omit its metadata writes.
+    setup = [*_record()[:-1], _insert_recorded("feed_repositories", current)]
+    if publication == "comment":
+        setup.append(
+            _insert_recorded(raw, item | app.identity("team") | {"repository": "widgets/repo"})
+        )
+    setup.extend(_insert_recorded(table, row) for row in ch.inserted(table))
+    ordinary = object.__new__(SourceBase)
+    ordinary.cfg = SimpleNamespace(restricted=False)
+    rows = run(
+        setup,
+        f"SELECT 'ordinary' AS reach, body, is_private FROM {view} FINAL "
+        f"WHERE {ordinary._privacy()}1 UNION ALL "
+        f"SELECT 'restricted' AS reach, body, is_private FROM {view} FINAL",
+    )
+    body = "Item body\n" + ("New reply" if publication == "comment" else "")
+    effective_private = int(bool(metadata_private or published_private))
+    assert [row for row in rows if row["reach"] == "ordinary"] == (
+        [] if effective_private else [{"reach": "ordinary", "body": body, "is_private": 0}]
+    )
+    assert [row for row in rows if row["reach"] == "restricted"] == [
+        {"reach": "restricted", "body": body, "is_private": effective_private}
+    ]
