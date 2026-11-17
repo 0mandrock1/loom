@@ -9,14 +9,18 @@ the assembled translation before writing it. English remains the source of truth
 second-level heading cuts and packs oversized sections into source slices of at most
 16 KiB. The slices reconstruct the anchored English exactly when joined with newlines.
 
-The planner uses Markdown token source ranges for list items and table rows. Fenced code,
-inline code, complete HTML elements and comments remain together. A table header stays
-with its delimiter. An indivisible oversized unit refuses before the page's first model
-call. Cost estimation uses the same request list as translation.
+The planner uses CommonMark token source ranges for list items, code blocks and table rows.
+Fenced and indented code, inline code, complete HTML elements and comments remain together.
+A table header stays with its delimiter. An indivisible oversized unit refuses before the
+page's first model call. Cost estimation uses the same request list as translation.
 
 The site's list extension accepts two-space continuations, including ordered items.
 Its parser has no source maps, so an indentation scan protects those items alongside
 the CommonMark ranges. Both dialects' items remain indivisible.
+
+Some site-extension tables are indented code in CommonMark. The code range remains
+indivisible, so an oversized block with that ambiguity refuses before provider admission.
+Moving the table outside its extension container resolves the ambiguity in English.
 
 ## Assembled validation
 
@@ -25,6 +29,8 @@ output directory or file is created. Table checks use both the documentation sit
 Markdown parser and CommonMark with its table extension: their container rules differ.
 They retain table groups, rows, cells, alignment and whether a cell is empty. Site list,
 admonition and code extensions participate in the check.
+Cell text is measured after serialization and raw HTML restoration so empty markup cannot
+hide missing text and escaped literal tags remain text.
 
 The parser packages are pinned in the translation requirements and development extra.
 The site parser pin matches the documentation builder. A source-byte limit does not

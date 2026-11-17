@@ -46,6 +46,21 @@ def test_slices_keep_code_html_and_anchor_heading_pairs_together() -> None:
     assert any('<a id="next"></a>\n\n## Next' in part for part in requests)
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        "    <div>\n    content\n",
+        "    </div>\n    content\n",
+        "    ```python\n    <div>\n",
+        "- ```python\n  <div>\n  ```\n",
+    ],
+    ids=["opening-tag", "closing-tag", "literal-fence", "nested-fence"],
+)
+def test_html_literals_inside_code_remain_one_request(code):
+    requests = assert_bounded("Loom\n\n" * 3000 + code)
+    assert any(code.rstrip("\n") in request for request in requests)
+
+
 @pytest.mark.parametrize("marker", ["-", "1."])
 def test_multiline_list_continuation_never_becomes_a_separate_request(marker) -> None:
     item = marker + " Loom " + "x" * 4000 + "\n\n  continued " + "y" * 4000 + "\n"
@@ -218,10 +233,14 @@ def test_assembled_tables_inside_site_containers_reject_row_loss(monkeypatch, tm
 
 @pytest.mark.parametrize("cell", ["header", "body"])
 @pytest.mark.parametrize("markup", [False, True])
-def test_commonmark_only_table_rejects_emptying_a_cell(monkeypatch, tmp_path, cell, markup):
+@pytest.mark.parametrize("container", ["commonmark-list", "admonition"])
+def test_assembled_tables_reject_emptying_a_cell(monkeypatch, tmp_path, cell, markup, container):
     value, empty = ("<em>Loom</em>", "<em></em>") if markup else ("Loom", "")
-    row = f"      | Loom | {value} |\n"
-    source = "1. Loom\n\n" + row + "      | --- | --- |\n" + row
+    prefix, indent = (
+        ("1. Loom\n\n", "      ") if container == "commonmark-list" else ("!!! note\n\n", "    ")
+    )
+    row = f"{indent}| Loom | {value} |\n"
+    source = prefix + row + indent + "| --- | --- |\n" + row
     lines = source.splitlines(keepends=True)
     index = 2 if cell == "header" else 4
     lines[index] = lines[index].replace(f"| {value} |\n", f"| {empty} |\n")
@@ -235,10 +254,14 @@ def test_commonmark_only_table_rejects_emptying_a_cell(monkeypatch, tmp_path, ce
 
 
 @pytest.mark.parametrize("container", ["plain", "quote", "list", "admonition", "commonmark-list"])
+@pytest.mark.parametrize("markup", [False, True])
 def test_valid_table_reflow_is_written_in_each_supported_container(
-    monkeypatch, tmp_path, container
+    monkeypatch, tmp_path, container, markup
 ):
-    table = "| Memory | Memory |\n| --- | --- |\n| Memory | Memory |\n"
+    value = "<em>Memory</em>" if markup else "Memory"
+    translated = value.replace("Memory", "记忆")
+    row = f"| {value} | {value} |\n"
+    table = row + "| --- | --- |\n" + row
     prefix, indent = {
         "plain": ("", ""),
         "quote": ("", "> "),
@@ -253,12 +276,12 @@ def test_valid_table_reflow_is_written_in_each_supported_container(
     monkeypatch.setattr(
         t,
         "translate_text",
-        lambda part, *args: part.replace("| Memory | Memory |", "记忆 | 记忆").replace(
-            "| --- | --- |", "--- | ---"
-        ),
+        lambda part, *args: part.replace(
+            f"| {value} | {value} |", f"{translated} | {translated}"
+        ).replace("| --- | --- |", "--- | ---"),
     )
     t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert (
-        "记忆 | 记忆"
+        f"{translated} | {translated}"
         in (tmp_path / t.target_path(t.LANGUAGES[0].code, "docs/example.md")).read_text()
     )

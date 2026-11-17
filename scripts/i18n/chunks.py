@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 from itertools import pairwise
 from xml.etree.ElementTree import Element
 
@@ -51,19 +52,19 @@ _BLOCK = frozenset(
 _VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
 
 
-def _fences(text: str) -> list[tuple[int, int]]:
-    spans = []
-    fence, start, offset = None, 0, 0
-    for line in text.splitlines(keepends=True):
-        mark = FENCE.match(line.lstrip())
-        if fence is None and mark:
-            fence, start = mark[1], offset
-        elif fence and line.strip().startswith(fence) and not line.strip().strip(fence[0]):
-            spans.append((start, offset + len(line)))
-            fence = None
-        offset += len(line)
-    if fence is not None:
-        raise ValueError("cannot split an unclosed fenced code block")
+def _code_blocks(text: str) -> list[tuple[int, int]]:
+    lines, starts, spans = text.splitlines(), _line_starts(text), []
+    for token in MarkdownIt("commonmark").parse(text):
+        if token.type not in {"fence", "code_block"} or token.map is None:
+            continue
+        first, end = token.map
+        if token.type == "fence":
+            closing = _site_line(lines[end - 1])[1].strip()
+            if end <= first + 1 or not re.fullmatch(
+                re.escape(token.markup[0]) + "{" + str(len(token.markup)) + ",}", closing
+            ):
+                raise ValueError("cannot split an unclosed fenced code block")
+        spans.append((starts[first], starts[end]))
     return spans
 
 
@@ -153,7 +154,7 @@ def _site_lists(text: str, protected: list[tuple[int, int]]) -> list[tuple[int, 
 
 
 def _protected(text: str) -> list[tuple[int, int]]:
-    spans = _fences(text)
+    spans = _code_blocks(text)
     masked = list(text)
     for a, b in spans:
         masked[a:b] = ["\n" if c == "\n" else " " for c in text[a:b]]
@@ -229,21 +230,32 @@ def split(text: str) -> list[str]:
     return [part.removesuffix("\n") for part in parts[:-1]] + parts[-1:]
 
 
-def _layout(element: Element) -> object:
+def _layout(element: Element, cell_text: dict[Element, bool]) -> object:
     tags = {"thead", "tbody", "tr", "th", "td"}
     return (
         element.tag,
         tuple(sorted(element.attrib.items())),
-        bool("".join(element.itertext()).strip()) if element.tag in {"th", "td"} else None,
-        tuple(_layout(child) for child in element if child.tag in tags),
+        cell_text.get(element),
+        tuple(_layout(child, cell_text) for child in element if child.tag in tags),
     )
 
 
-def _tables(element: Element, parents: tuple[object, ...] = ()) -> list[object]:
+def _tables(
+    element: Element, cell_text: dict[Element, bool], parents: tuple[object, ...] = ()
+) -> list[object]:
     if element.tag == "table":
-        return [(parents, _layout(element))]
+        return [(parents, _layout(element, cell_text))]
     context = (*parents, (element.tag, tuple(sorted(element.attrib.items()))))
-    return [table for child in element for table in _tables(child, context)]
+    return [table for child in element for table in _tables(child, cell_text, context)]
+
+
+class _CellText(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.text: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.text.append(data)
 
 
 class _TableShape(Treeprocessor):
@@ -252,7 +264,18 @@ class _TableShape(Treeprocessor):
         self.tables: list[object] = []
 
     def run(self, root: Element) -> None:
-        self.tables = _tables(root)
+        cell_text = {}
+        for cell in root.iter():
+            if cell.tag not in {"th", "td"}:
+                continue
+            # Resolve raw HTML stashes after escaping ordinary text through the serializer.
+            html = self.md.serializer(cell)
+            for name in ("raw_html", "amp_substitute"):
+                html = self.md.postprocessors[name].run(html)
+            parser = _CellText()
+            parser.feed(html)
+            cell_text[cell] = bool("".join(parser.text).strip())
+        self.tables = _tables(root, cell_text)
 
 
 def _github_tables(text: str) -> list[object]:
