@@ -409,10 +409,10 @@ def sync_site(repository: str) -> None:
 def finalize() -> None:
     """Merge only an exact successful hosted CI head, with repository protections."""
     repository = os.environ["GITHUB_REPOSITORY"]
+    sync_site(repository)
     owner = repository.split("/")[0]
     prs = api(f"repos/{repository}/pulls?state=open&head={owner}:i18n/update&base=main&per_page=2")
     if len(prs) != 1:
-        sync_site(repository)
         return
     pr = prs[0]
     sha = pr["head"]["sha"]

@@ -326,3 +326,28 @@ def test_merged_receipt_projection_matches_reservation_and_mutation_after_source
     calls.clear()
     t.update(every=True, codes=["ja"])
     assert calls == [source for source, _ in reserved]
+
+
+def test_generated_refresh_tree_satisfies_repository_ownership_contract(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.unit.test_i18n import test_every_output_has_generator_ownership as contract
+
+    monkeypatch.setattr(t, "translate_page", translator([]))
+    t.update(every=True, codes=["ja"])
+    assert (repo / r.PATH).exists()
+    contract()
+    put(repo, "i18n/.pending/personal.json", "{}")
+    with pytest.raises(AssertionError):
+        contract()
+
+
+def test_invalid_model_refuses_before_mutating_existing_refresh_receipt(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r.save(r.plan(True, ["ja"]))
+    before = (repo / r.PATH).read_text()
+    monkeypatch.setenv("LOOM_I18N_MODEL", "unpriced-model")
+    with pytest.raises(SystemExit, match="no price"):
+        t.update(codes=["ja"])
+    assert (repo / r.PATH).read_text() == before

@@ -62,7 +62,29 @@ def test_anchors_match_the_ones_the_english_links_are_checked_against(source: st
     assert set(ids) == markdown_links.anchors(ROOT / source) | explicit
 
 
-def test_links_point_at_translations_or_the_english_files() -> None:
+@pytest.fixture
+def link_repository(update_repository: None) -> None:
+    for source in (
+        "docs/use-cases/agent-memory.md",
+        "docs/use-cases/multi-agent.md",
+        "docs/operations/deployment.md",
+        "docs/concepts/memory.md",
+    ):
+        path = t.ROOT / source
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Source\n")
+    subprocess.run(["git", "add", "docs"], cwd=t.ROOT, check=True)
+    for code, source in (
+        ("ja", "docs/use-cases/agent-memory.md"),
+        ("ko", "docs/use-cases/agent-memory.md"),
+        ("ko", "docs/use-cases/multi-agent.md"),
+    ):
+        path = t.ROOT / t.target_path(code, source)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('<a id="measured"></a>\n# Translated\n')
+
+
+def test_links_point_at_translations_or_the_english_files(link_repository: None) -> None:
     page = (
         "[uc](../use-cases/agent-memory.md#measured) [ops](../operations/deployment.md) "
         "![shot](../images/a.png) [web](https://example.com/x) [here](#local)"
@@ -74,7 +96,7 @@ def test_links_point_at_translations_or_the_english_files() -> None:
     assert "[web](https://example.com/x)" in out and "[here](#local)" in out
 
 
-def test_html_links_badges_and_reference_definitions_are_rewritten() -> None:
+def test_html_links_badges_and_reference_definitions_are_rewritten(link_repository: None) -> None:
     page = (
         '[![badge](b.svg)](agent-memory.md) ![i](a.png) <a href="multi-agent.md">m</a> '
         '<a href="../x.md">x</a> <img src="c.png">\n\n[ref]: ../concepts/memory.md\n'
@@ -87,7 +109,7 @@ def test_html_links_badges_and_reference_definitions_are_rewritten() -> None:
     assert f"[ref]: {blob}/concepts/memory.md" in out
 
 
-def test_links_inside_code_are_left_alone() -> None:
+def test_links_inside_code_are_left_alone(link_repository: None) -> None:
     page = 'See `[a](b.md)` and:\n\n```md\n[a](b.md) <a href="c.md">\n```\n\n[a](b.md)\n'
     out = t.rewrite_links(page, "docs/use-cases/index.md", "ja")
     assert out.count("[a](b.md)") == 2 and '<a href="c.md">' in out
@@ -307,20 +329,29 @@ def test_each_command_refuses_the_other_ones_flags(args: list[str]) -> None:
         t.main(args)
 
 
-def test_another_model_or_banner_makes_every_page_stale() -> None:
+def test_another_model_or_banner_makes_every_page_stale(update_repository: None) -> None:
     ja = t.LANGUAGES[1]
+    for source in t.sources():
+        path = t.ROOT / t.target_path(ja.code, source)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(t.header(source, ja, t.DEFAULT_MODEL, t.blob(source)) + "# Inicio\n")
+    assert t.stale((ja,), model=t.DEFAULT_MODEL) == []
     assert t.stale((ja,), model="claude-opus-5-5") == [(s, ja) for s in t.sources()]
     edited = t.Language(ja.code, ja.name, ja.english, ja.banner + "!", ja.style)
     assert len(t.stale((edited,))) == len(t.sources())
 
 
-def test_an_unpriced_model_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unpriced_model_is_refused(
+    monkeypatch: pytest.MonkeyPatch, update_repository: None
+) -> None:
     monkeypatch.setenv("LOOM_I18N_MODEL", "some-model")
     with pytest.raises(SystemExit, match="no price"):
         t.update()
 
 
-def test_the_estimate_defers_pages_outside_the_batch_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_estimate_defers_pages_outside_the_batch_cap(
+    monkeypatch: pytest.MonkeyPatch, update_repository: None
+) -> None:
     monkeypatch.setattr(
         t, "bedrock_client", lambda: pytest.fail("deferred pages must not call Bedrock")
     )
@@ -397,7 +428,7 @@ def _translations() -> list[tuple[str, t.Language]]:
     ]
 
 
-def test_every_use_case_page_is_translated() -> None:
+def test_every_use_case_page_is_in_source_inventory() -> None:
     pages = {p.relative_to(ROOT).as_posix() for p in (ROOT / "docs/use-cases").glob("*.md")}
     assert pages <= set(t.sources())
 
@@ -405,7 +436,10 @@ def test_every_use_case_page_is_translated() -> None:
 def test_every_output_has_generator_ownership() -> None:
     for path in t.lifecycle.all_files():
         assert t.lifecycle.regular(path)
-        assert t.lifecycle.owner(path, (ROOT / path).read_text()) is not None, path
+        if path == t.refresh.PATH:
+            assert t.refresh.read() is not None
+        else:
+            assert t.lifecycle.owner(path, (t.ROOT / path).read_text()) is not None, path
 
 
 def test_every_translation_exists_with_its_stamp_and_banner() -> None:

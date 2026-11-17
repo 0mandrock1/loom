@@ -708,10 +708,7 @@ def check(skip_stale: bool = False) -> int:
     return 1 if problems else 0
 
 
-def batch(
-    every: bool, codes: list[str] | None, cap: float
-) -> tuple[list[tuple[str, Language]], int]:
-    """Select a stable whole-page batch; stale present pages precede missing pages."""
+def batch_model(cap: float) -> str:
     if not math.isfinite(cap) or cap < 0:
         raise SystemExit("LOOM_I18N_MAX_USD must be finite and nonnegative")
     model = os.environ.get("LOOM_I18N_MODEL", DEFAULT_MODEL)
@@ -719,6 +716,14 @@ def batch(
         raise SystemExit(
             f"LOOM_I18N_MODEL={model!r} has no price in PRICES; the cost cap needs one"
         )
+    return model
+
+
+def batch(
+    every: bool, codes: list[str] | None, cap: float
+) -> tuple[list[tuple[str, Language]], int]:
+    """Select a stable whole-page batch; stale present pages precede missing pages."""
+    model = batch_model(cap)
     languages = tuple(lg for lg in LANGUAGES if codes is None or lg.code in codes)
     job = refresh.plan(every, codes)
     forced = refresh.work(job, include_blocked=True)
@@ -772,12 +777,12 @@ def import_pending(ref: str, codes: list[str] | None = None) -> int:
 
 def update(every: bool = False, codes: list[str] | None = None) -> int:
     cap = float(os.environ.get("LOOM_I18N_MAX_USD", "5"))
+    model = batch_model(cap)
     lifecycle.require_owned_outputs()
     refresh.clear_merged()
     if job := refresh.plan(every, codes):
         refresh.save(job)
     work, deferred = batch(every, codes, cap)
-    model = os.environ.get("LOOM_I18N_MODEL", DEFAULT_MODEL)
     spend = Spend(model, cap)
     written = 0
     failed: list[str] = []

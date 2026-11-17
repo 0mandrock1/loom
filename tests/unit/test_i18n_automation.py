@@ -365,6 +365,8 @@ def test_hosted_finalizer_respects_reviews_and_merges_only_exact_successful_head
     }
 
     def api(path: str) -> Any:
+        if "state=closed" in path:
+            return []
         if "state=open" in path:
             return [pr]
         if "actions/workflows/ci.yml/runs" in path:
@@ -574,3 +576,28 @@ def test_unapproved_or_unknown_languages_refuse_before_budget_reservation(
     monkeypatch.setattr(a, "reserve", lambda *args: pytest.fail("unapproved reservation"))
     with pytest.raises(ValueError, match="language"):
         a.update(False, requested)
+
+
+def test_finalize_retries_merged_site_while_next_translation_pr_waits_for_ci(
+    repository: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ClickHouse/loom")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    sha = a.git("rev-parse", "HEAD")
+    calls: list[tuple[str, ...]] = []
+
+    def api(path: str) -> Any:
+        if "/pulls?state=closed" in path:
+            return [{"merged_at": "one", "merge_commit_sha": sha}]
+        if "/pulls?state=open" in path:
+            return [
+                {"draft": False, "head": {"sha": sha, "repo": {"full_name": "ClickHouse/loom"}}}
+            ]
+        if "/actions/workflows/" in path:
+            return {"workflow_runs": []}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(a, "api", api)
+    monkeypatch.setattr(a, "command", lambda *args: calls.append(args) or "")
+    a.finalize()
+    assert calls == [("gh", "workflow", "run", "docs-site.yml", "--ref", "main")]
