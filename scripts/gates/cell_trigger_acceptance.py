@@ -144,6 +144,7 @@ class Stores:
         self.prefix = "loom-trigger-" + fixture_id[:12]
         self.cancelled = 0
         self.terminal = False
+        self.phase = "store_creation"
         self.creation_deadline = time.monotonic() + 900
         self.env = {
             "PATH": os.environ["PATH"],
@@ -229,7 +230,11 @@ class Stores:
         self.command("docker", "start", identity)
         return intent
 
-    def wait(self, probe, seconds: int = 120) -> None:
+    def wait(self, phase: str, probe, seconds: int = 120) -> None:
+        require(
+            phase in {"primary_tcp", "standby_sync", "clickhouse_query"}, "Known readiness phase"
+        )
+        self.phase = phase
         end = time.monotonic() + seconds
         while True:
             require(not self.cancelled, "Owned store readiness cancelled")
@@ -240,6 +245,65 @@ class Stores:
                 pass
             require(time.monotonic() < end, "Owned store readiness deadline")
             time.sleep(1)
+
+    def failure_diagnostics(self) -> dict:
+        observations = []
+        statuses = {"created", "running", "paused", "restarting", "removing", "exited", "dead"}
+        for item in self.items:
+            row = {"role": item["role"], "available": False}
+            observations.append(row)
+            if item["id"] is None:
+                continue
+            try:
+                records = json.loads(
+                    self.command("docker", "inspect", item["id"], timeout=5, cleanup=True)
+                )
+                require(
+                    len(records) == 1 and container_matches(records[0], item, self.fixture_id),
+                    "Diagnostic container ownership changed",
+                )
+                state = records[0]["State"]
+                row.update(
+                    available=True,
+                    status=state["Status"] if state["Status"] in statuses else "unknown",
+                    exit_code=state["ExitCode"] if type(state["ExitCode"]) is int else None,
+                    oom_killed=state["OOMKilled"] if type(state["OOMKilled"]) is bool else None,
+                )
+                if item["role"] in {"pg-primary", "pg-standby"} and state["Running"] is True:
+                    value = self.command(
+                        "docker",
+                        "exec",
+                        item["id"],
+                        "psql",
+                        "-U",
+                        "loom",
+                        "-d",
+                        "loom",
+                        "-Atc",
+                        "SELECT CASE WHEN pg_is_in_recovery() THEN 'standby' ELSE 'primary' END "
+                        "|| ':' || COALESCE((SELECT sync_state FROM pg_stat_replication "
+                        "WHERE application_name='loom_standby'), 'absent')",
+                        timeout=5,
+                        cleanup=True,
+                    )
+                    recovery, sync = value.split(":")
+                    if recovery in {"primary", "standby"} and sync in {
+                        "sync",
+                        "async",
+                        "potential",
+                        "quorum",
+                        "absent",
+                    }:
+                        row["pg_state"] = {"recovery": recovery == "standby", "standby_sync": sync}
+            except (
+                OSError,
+                RuntimeError,
+                subprocess.SubprocessError,
+                ValueError,
+                KeyError,
+            ) as error:
+                row["diagnostic_error_type"] = type(error).__name__
+        return {"phase": self.phase, "containers": observations}
 
     def start(self, ch_image: str) -> tuple[dict, dict, dict, list[int]]:
         selected = ports(8)
@@ -349,8 +413,33 @@ class Stores:
                 "shared_buffers=128MB",
             ],
         )
-        psql = ["docker", "exec", pg["id"], "psql", "-U", "loom", "-d", "loom", "-Atc"]
-        self.wait(lambda: self.command(*psql, "SELECT 1") == "1")
+        psql = [
+            "docker",
+            "exec",
+            pg["id"],
+            "psql",
+            "-U",
+            "loom",
+            "-d",
+            "loom",
+            "-Atc",
+        ]
+        self.wait(
+            "primary_tcp",
+            lambda: self.command(
+                "docker",
+                "exec",
+                pg["id"],
+                "pg_isready",
+                "-U",
+                "loom",
+                "-d",
+                "loom",
+                "-h",
+                "127.0.0.1",
+            ),
+        )
+        self.phase = "replication_configuration"
         self.command(*psql, "CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD 'replicator'")
         self.command(
             "docker",
@@ -405,6 +494,7 @@ exec postgres -D "$PGDATA" -c shared_buffers=128MB
             ],
         )
         self.wait(
+            "standby_sync",
             lambda: (
                 self.command(
                     *psql,
@@ -414,9 +504,10 @@ exec postgres -D "$PGDATA" -c shared_buffers=128MB
                     ),
                 )
                 == "sync"
-            )
+            ),
         )
         self.wait(
+            "clickhouse_query",
             lambda: (
                 self.command(
                     "docker",
@@ -431,7 +522,7 @@ exec postgres -D "$PGDATA" -c shared_buffers=128MB
                     "SELECT 1",
                 )
                 == "1"
-            )
+            ),
         )
         return ch, pg, standby, selected
 
@@ -640,7 +731,14 @@ def dependency_receipt(root: Path, output: Path) -> dict:
     return {"path": str(output), "sha256": sha(output)}
 
 
-def publish(folder: Path, destination: Path, error: BaseException | None) -> None:
+def publish(
+    folder: Path,
+    destination: Path,
+    error: BaseException | None,
+    *,
+    phase: str,
+    diagnostic_error_type: str | None,
+) -> None:
     destination.mkdir(mode=0o700)
     # Raw native logs/settings contain bearer and bootstrap credentials: never upload them.
     fixture = folder / "fixture"
@@ -654,7 +752,7 @@ def publish(folder: Path, destination: Path, error: BaseException | None) -> Non
         path = fixture / name
         if path.is_file():
             shutil.copyfile(path, destination / name)
-    for name in ("source-before.json", "source-after.json"):
+    for name in ("source-before.json", "source-after.json", "startup-diagnostics.json"):
         if (folder / name).is_file():
             shutil.copyfile(folder / name, destination / name)
     intent_output = destination / "delivery-intent"
@@ -672,6 +770,8 @@ def publish(folder: Path, destination: Path, error: BaseException | None) -> Non
             "accepted": error is None,
             "error_type": type(error).__name__ if error is not None else "",
             "failure": failure_site(error),
+            "phase": phase,
+            "diagnostic_error_type": diagnostic_error_type,
             "utc": datetime.datetime.now(datetime.UTC).isoformat(),
         },
     )
@@ -768,9 +868,11 @@ def main() -> int:
     for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(signum, stores.interrupted)
     error = None
+    diagnostic_error_type = None
     cleanup_complete = False
     try:
         ch, primary, standby, selected = stores.start(args.clickhouse_image)
+        stores.phase = "dependency_metadata"
         resources(folder)
         dependencies = dependency_receipt(root, folder / "dependencies.json")
         from fixture import runtime
@@ -815,10 +917,15 @@ def main() -> int:
         }
         write(folder / "spec.json", spec)
         require(not stores.cancelled, "Cancelled before native acceptance")
+        stores.phase = "native"
         require(runtime(spec) == 0, "Trigger acceptance did not pass")
         require(source(root) == before, "Acceptance source changed")
     except BaseException as caught:  # noqa: BLE001 — owned cleanup must finish while retaining the first failure.
         error = caught
+        try:
+            write(folder / "startup-diagnostics.json", stores.failure_diagnostics())
+        except BaseException as diagnostic_error:  # noqa: BLE001 — diagnostic failure cannot replace the selected first error.
+            diagnostic_error_type = type(diagnostic_error).__name__
     finally:
         # Native ownership closes first; exact created containers are removed even on failure.
         for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
@@ -846,7 +953,13 @@ def main() -> int:
         except BaseException as caught:  # noqa: BLE001 — owned cleanup must finish while retaining the first failure.
             error = caught if error is None else error
         try:
-            publish(folder, Path(os.environ["RUNNER_TEMP"]) / "cell-trigger-artifacts", error)
+            publish(
+                folder,
+                Path(os.environ["RUNNER_TEMP"]) / "cell-trigger-artifacts",
+                error,
+                phase=stores.phase,
+                diagnostic_error_type=diagnostic_error_type,
+            )
         except BaseException as caught:  # noqa: BLE001 — owned cleanup must finish while retaining the first failure.
             error = caught if error is None else error
     stores.terminal = cleanup_complete
@@ -858,6 +971,8 @@ def main() -> int:
                 "accepted": error is None,
                 "error_type": type(error).__name__ if error is not None else "",
                 "failure": failure_site(error),
+                "phase": stores.phase,
+                "diagnostic_error_type": diagnostic_error_type,
             }
         )
     )

@@ -11,6 +11,7 @@ import math
 import os
 import re
 import socket
+import stat
 import struct
 import sys
 import uuid
@@ -42,7 +43,22 @@ SUBJECT = "process:benchmark"
 
 
 def protocol() -> dict:
-    return read(HERE / PROTOCOL, expected_sha256=PROTOCOL_SHA)
+    descriptor = os.open(HERE / PROTOCOL, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        need(
+            stat.S_ISREG(info.st_mode)
+            and info.st_uid == os.geteuid()
+            and info.st_mode & 0o022 == 0
+            and info.st_size <= 65536,
+            "owned fixed protocol constant",
+        )
+        raw = stream.read(65537)
+    need(
+        len(raw) <= 65536 and hashlib.sha256(raw).hexdigest() == PROTOCOL_SHA,
+        "fixed protocol bytes",
+    )
+    return json_object(raw)
 
 
 def integer(value, low=0, high=2**32 - 1):
