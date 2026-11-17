@@ -129,7 +129,10 @@ async def supervise[T](conn: Any, work: Coroutine[Any, Any, T], *, end: float) -
         try:
             await asyncio.wait({task}, timeout=max(0.0, end - time.monotonic()))
         except BaseException:  # noqa: BLE001 — repeated cancellation preserves the first failure.
-            pg._terminate(conn)
+            try:
+                pg._terminate(conn)
+            except BaseException:  # noqa: BLE001 — abort cannot replace the work failure.
+                pass
         raise
 
 
@@ -169,9 +172,12 @@ async def close_context(
         if isinstance(result := task.result(), _Interrupted):
             raise result.error
     except BaseException as caught:  # noqa: BLE001 — exit cannot replace the first failure.
-        pg._terminate(conn)
         if failure is None:
             failure = caught
+        try:
+            pg._terminate(conn)
+        except BaseException:  # noqa: BLE001 — abort cannot replace the selected failure.
+            pass
     finally:
         if not task.done():
             task.cancel()

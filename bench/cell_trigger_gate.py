@@ -18,6 +18,7 @@ import re
 import socket
 import stat
 import statistics
+import struct
 import subprocess
 import sys
 import time
@@ -1035,20 +1036,31 @@ def _normal(value: Any) -> Any:
     return value
 
 
+def _stored_vector(value: Any) -> list[float]:
+    _require(
+        isinstance(value, list)
+        and all(isinstance(x, (int, float)) and math.isfinite(x) for x in value),
+        "finite vector",
+    )
+    try:
+        # The insert driver stores the high 16 bits of each Float32 component.
+        return [struct.unpack("<f", b"\x00\x00" + struct.pack("<f", x)[2:])[0] for x in value]
+    except OverflowError as error:
+        raise Invalid("BFloat16 vector range") from error
+
+
 def _compare(
     expected: Mapping[str, Any], actual: Mapping[str, Any], fields: Sequence[str], phase: str
 ) -> None:
     for field_name in fields:
         left, right = expected.get(field_name), actual.get(field_name)
         if field_name in ("embedding", "memory_key_embedding"):
+            left = _stored_vector(left)
             _require(
-                isinstance(left, list)
-                and isinstance(right, list)
+                isinstance(right, list)
                 and len(left) == len(right)
-                and all(
-                    math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-7)
-                    for a, b in zip(left, right, strict=True)
-                ),
+                and all(isinstance(x, (int, float)) and math.isfinite(x) for x in right)
+                and left == right,
                 phase + " vector",
             )
         else:
@@ -1350,7 +1362,10 @@ async def _cleanup(triggers: Triggers | None, conn: Any, artifact: Artifact) -> 
         except BaseException:
             if prior is None:
                 raise
-            artifact.emit("connection_cleanup_error", error_type=type(sys.exception()).__name__)
+            try:
+                artifact.emit("connection_cleanup_error", error_type=type(sys.exception()).__name__)
+            except BaseException:  # noqa: BLE001 — diagnostics cannot replace restoration failure.
+                pass
 
 
 async def _restore(triggers: Triggers, conn: Any, end: float) -> None:

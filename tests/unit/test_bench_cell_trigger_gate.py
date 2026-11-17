@@ -461,6 +461,52 @@ def test_stored_payload_vector_version_and_audit_mismatch_refuse(field, expected
         gate._compare({field: expected}, {field: actual}, [field], "stored")
 
 
+def stored_bfloat16(vector):
+    """Exercise the installed insert writer and query reader without a server."""
+    import array
+
+    from clickhouse_connect.datatypes.base import TypeDef
+    from clickhouse_connect.datatypes.numeric import BFloat16
+
+    class Encoded:
+        def __init__(self, raw):
+            self.raw = raw
+
+        def read_array(self, kind, count):
+            result = array.array(kind)
+            result.frombytes(self.raw)
+            assert len(result) == count
+            return result
+
+    kind = BFloat16(TypeDef())
+    raw = bytearray()
+    kind._write_column_binary(vector, raw, SimpleNamespace(column_name="embedding"))
+    return kind._read_column_binary(
+        Encoded(raw), len(vector), SimpleNamespace(use_numpy=False), None
+    )
+
+
+@pytest.mark.parametrize("field", ["embedding", "memory_key_embedding"])
+def test_storage_vector_matches_installed_bfloat16_and_rejects_corrupted_neighbor(field):
+    from server.embedding.fake import FakeNGramEmbedder
+
+    vector = FakeNGramEmbedder(dim=1024)._embed_raw(gate._payload("gate-review-owned-1"))
+    stored = stored_bfloat16(vector)
+    assert sum(a != b for a, b in zip(vector, stored, strict=True)) > 0
+    gate._compare({field: vector}, {field: stored}, [field], "stored")
+    import struct
+
+    corrupted = list(stored)
+    index = next(i for i, value in enumerate(stored) if value > 0)
+    bits = struct.unpack("<I", struct.pack("<f", stored[index]))[0]
+    corrupted[index] = struct.unpack("<f", struct.pack("<I", bits + (1 << 16)))[0]
+    for invalid in (corrupted, stored[:-1], [float("nan")] * 1024, [float("inf")] * 1024):
+        with pytest.raises(gate.Invalid):
+            gate._compare({field: vector}, {field: invalid}, [field], "stored")
+    with pytest.raises(gate.Invalid):
+        gate._compare({field: [float("nan")]}, {field: [float("nan")]}, [field], "stored")
+
+
 class TriggerConn:
     def __init__(self):
         self.on = True
@@ -851,6 +897,9 @@ async def test_composed_stored_verification_compares_authority_projection_vector
     ]
     projections = [dict(row) for row in block.rows]
     documents = [dict(row) for row in block.documents]
+    for document in documents:
+        for field in ("embedding", "memory_key_embedding"):
+            document[field] = stored_bfloat16(document[field])
     audits = [dict(row) for row in block.audits]
     if fault == "projection_value":
         projections[0]["value"] = '"wrong"'
@@ -1583,3 +1632,61 @@ def test_driver_cleanup_native_failure_stays_inside_its_owner(kind, phase):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "original-after-driver-cleanup" in result.stdout
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_kind", [ValueError, asyncio.CancelledError, SystemExit, KeyboardInterrupt]
+)
+@pytest.mark.parametrize(
+    "close_kind", [RuntimeError, asyncio.CancelledError, SystemExit, KeyboardInterrupt]
+)
+@pytest.mark.parametrize("diagnostic_kind", [OSError, SystemExit, KeyboardInterrupt])
+async def test_cleanup_diagnostic_cannot_replace_restoration_error(
+    first_kind, close_kind, diagnostic_kind
+):
+    from server.cli import cell_attach_pg as apg
+
+    first = first_kind("restoration failed first")
+    events = []
+
+    class Triggers:
+        async def restore(self, conn):
+            raise first
+
+    class Conn:
+        async def close(self, **kwargs):
+            events.append("close")
+            raise close_kind("close failed second")
+
+        def terminate(self):
+            events.append("abort")
+
+    class Artifact:
+        def emit(self, event, **kwargs):
+            events.append(event)
+            raise diagnostic_kind("diagnostic failed third")
+
+    async def owner():
+        try:
+            await gate._cleanup(Triggers(), Conn(), Artifact())
+        except BaseException as error:  # noqa: BLE001 — assert the actual owner failure.
+            assert error is first
+            assert "connection_cleanup_error" in events
+            return
+        raise AssertionError("restoration failure was swallowed")
+
+    result = await apg._work_result(owner)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_successful_restoration_still_fails_when_artifact_write_fails():
+    first = OSError("artifact failed")
+    conn = SimpleNamespace(close=AsyncMock(), terminate=lambda: None)
+    artifact = SimpleNamespace(emit=lambda *a, **k: (_ for _ in ()).throw(first))
+    triggers = SimpleNamespace(restore=AsyncMock())
+    with pytest.raises(OSError) as observed:
+        await gate._cleanup(triggers, conn, artifact)
+    assert observed.value is first
+    conn.close.assert_awaited_once()
