@@ -106,6 +106,8 @@ def item_view(table: str) -> str:
             expression = "r.is_private"
         elif column == "body":
             expression = "concat(substringUTF8(i.body, 1, 32768), '\\n', ifNull(c.comments, ''))"
+        elif column == "updated_at":
+            expression = "greatest(i.version, ifNull(c.published_at, i.version))"
         columns.append(f"{expression} AS `{column}`")
     return f"""CREATE VIEW IF NOT EXISTS {table} DEFINER = CURRENT_USER SQL SECURITY DEFINER AS
 SELECT {", ".join(columns)}
@@ -113,7 +115,7 @@ FROM {raw} AS i FINAL
 INNER JOIN feed_repositories AS r FINAL ON i.org = r.org AND i.repository = r.repository
 INNER JOIN feed_owner AS o FINAL ON i.org = o.org AND r.owner_uuid = o.owner_uuid
 LEFT JOIN (
-    SELECT org, repository, item_number,
+    SELECT org, repository, item_number, max(version) AS published_at,
            arrayStringConcat(arrayMap(x -> x.4, groupArraySorted(64)(
                tuple(-toUnixTimestamp64Milli(updated_at), -toInt16(review),
                      -toInt128(comment_id), substringUTF8(body, 1, 2048))

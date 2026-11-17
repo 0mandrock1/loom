@@ -144,11 +144,14 @@ def comment_row(repo: str, data: dict[str, Any], *, review: bool) -> dict[str, A
     repo = repository(repo)
     url = str(data.get("pull_request_url" if review else "issue_url") or "")
     parsed = urlsplit(url)
-    prefix = f"/repos/{repo}/{'pulls' if review else 'issues'}/"
+    owner, _, path = parsed.path.removeprefix("/repos/").partition("/")
+    name, _, _ = path.partition("/")
+    prefix = f"/repos/{owner}/{name}/{'pulls' if review else 'issues'}/"
     suffix = parsed.path.removeprefix(prefix)
     if (
         parsed.scheme != "https"
         or parsed.netloc != "api.github.com"
+        or f"{owner}/{name}".lower() != repo.lower()
         or not parsed.path.startswith(prefix)
         or not suffix.isdecimal()
         or int(suffix) <= 0

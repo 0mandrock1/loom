@@ -42,7 +42,11 @@ process actor and imported source class. Contract views expose the latest item v
 stable contract UUIDs and repository visibility. Issue and pull-request comments are
 kept separately and included in the corresponding item's searchable body. Unsupported
 triage fields use the contract's typed defaults; edges are empty until evidence exists.
-No model or embedding call is required.
+Contract `updated_at` is the latest persisted publication timestamp across the item
+and its comments, so late imports and comment edits advance incremental tracker reads.
+Raw upstream timestamps remain separate and drive API cursors. No model or embedding
+call is required. Repository identities retain the registered allowlist's spelling,
+including when the API returns different capitalization.
 
 Each repository has independent item, issue-comment and review-comment cursors. The
 [issues endpoint](https://docs.github.com/en/rest/issues/issues#list-repository-issues)
@@ -53,8 +57,10 @@ and [review comments endpoint](https://docs.github.com/en/rest/pulls/comments#li
 have separate updated-time scans. Each uses ascending `updated_at`, bounded pages,
 response bytes and request time. Cursor advancement follows acknowledged writes only,
 through a complete timestamp boundary. Requests lower the saved timestamp by one second
-because `since` is exclusive. The last timestamp of a full page budget is not committed;
-the next turn replays it. If one timestamp fills the entire configured page budget,
+because `since` is exclusive. A full page budget saves the earliest timestamp on its
+final page; the next turn replays that boundary. The budget is 2 to 100 pages: a preceding
+page permits progress while the final page retains an incomplete timestamp boundary.
+If one timestamp fills the entire configured page budget,
 the job reports a capacity error and keeps the checkpoint rather than skipping rows or
 claiming progress. The operator can raise the bounded page budget for that repository.
 Replayed rows replace the same identity. The API is a changing collection, not a snapshot;

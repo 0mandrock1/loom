@@ -74,6 +74,14 @@ def test_complete_scan_advances_and_empty_scan_preserves_checkpoint():
     assert feed.next_cursor([], complete=True, previous=NOW) == NOW
 
 
+def test_two_page_budget_progresses_while_replaying_the_final_page():
+    backlog = [item(n, n) for n in range(1, 301)]
+    first = feed.next_cursor(backlog[:200], complete=False, previous=NOW)
+    assert first == NOW + timedelta(seconds=101)
+    replay = [row for row in backlog if feed.timestamp(row["updated_at"]) >= first][:200]
+    assert feed.next_cursor(replay, complete=False, previous=first) == NOW + timedelta(seconds=201)
+
+
 @pytest.mark.parametrize("repo", ["../secret", "a/b/c", "a/%2f", "a/b?token=secret", "a/b\n"])
 def test_repository_path_cannot_change_origin_or_endpoint(repo):
     with pytest.raises(feed.FeedInputError):
@@ -90,10 +98,32 @@ def test_comment_parent_url_is_validated_without_following_it():
         review=False,
     )
     assert row["item_number"] == 7 and row["comment_id"] == 101
-    with pytest.raises(feed.FeedInputError):
-        feed.comment_row(
-            "widgets/repo", {**item(1), "issue_url": "https://evil.example/issues/7"}, review=False
-        )
+    for url in (
+        "https://evil.example/issues/7",
+        "https://api.github.com/repos/widgets/other/issues/7",
+        "https://api.github.com/REPOS/widgets/repo/issues/7",
+        "https://api.github.com/repos/widgets/repo/ISSUES/7",
+        "https://api.github.com/repos/widgets/repo/issues/7?secret=1",
+        "https://api.github.com/repos/widgets/repo/issues/7#fragment",
+        "https://api.github.com/repos/widgets/repo/issues/0",
+    ):
+        with pytest.raises(feed.FeedInputError):
+            feed.comment_row("widgets/repo", {**item(1), "issue_url": url}, review=False)
+
+
+@pytest.mark.parametrize("review", [False, True])
+def test_comment_parent_accepts_registered_repository_case_difference(review):
+    parent = "pull_request_url" if review else "issue_url"
+    path = "pulls" if review else "issues"
+    row = feed.comment_row(
+        "Widgets/Repo",
+        {
+            **item(1),
+            parent: f"https://api.github.com/repos/WIDGETS/REPO/{path}/7",
+        },
+        review=review,
+    )
+    assert row["item_number"] == 7 and row["comment_id"] == 101
 
 
 def test_invalid_update_time_refuses_checkpoint_and_content():

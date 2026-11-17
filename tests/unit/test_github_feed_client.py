@@ -48,10 +48,13 @@ async def test_pages_use_separate_streams_and_exclusive_since_overlap(transport)
 @pytest.mark.asyncio
 async def test_full_page_reports_incomplete_boundary(transport):
     calls, replies, http = transport
-    replies.append(httpx.Response(200, json=[{"id": n} for n in range(100)]))
+    replies.extend(
+        httpx.Response(200, json=[{"id": n} for n in range(start, start + 100)])
+        for start in (0, 100)
+    )
     try:
-        batch = await client.pages("widgets/repo", "secret", "items", None, max_pages=1)
-        assert not batch.complete and len(batch.items) == 100
+        batch = await client.pages("widgets/repo", "secret", "items", None, max_pages=2)
+        assert not batch.complete and len(batch.items) == 200
         assert calls[0].url.params["state"] == "all"
     finally:
         await http.aclose()
@@ -81,7 +84,7 @@ async def test_bad_list_entry_refuses_whole_page(transport):
     replies.append(httpx.Response(200, json=[{"id": 1}, "bad"]))
     try:
         with pytest.raises(client.FeedProviderError):
-            await client.pages("widgets/repo", "secret", "items", None, max_pages=1)
+            await client.pages("widgets/repo", "secret", "items", None, max_pages=2)
     finally:
         await http.aclose()
 
@@ -94,5 +97,16 @@ async def test_size_bound_is_not_bypassed_by_json(transport, monkeypatch):
     try:
         with pytest.raises(client.FeedProviderError):
             await client.metadata("widgets/repo", "secret")
+    finally:
+        await http.aclose()
+
+
+@pytest.mark.asyncio
+async def test_one_page_budget_refuses_before_request(transport):
+    calls, _, http = transport
+    try:
+        with pytest.raises(client.FeedProviderError, match="2..100 max-pages"):
+            await client.pages("widgets/repo", "secret", "items", None, max_pages=1)
+        assert not calls
     finally:
         await http.aclose()

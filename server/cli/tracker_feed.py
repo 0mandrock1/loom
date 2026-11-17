@@ -192,4 +192,6 @@ def register_tracker_feed(sub: Any) -> None:
                 action="store_true",
                 help="Attest the token has only read permissions",
             )
-            command.add_argument("--max-pages", type=int, default=5)
+            command.add_argument(
+                "--max-pages", type=int, default=5, help="Pages per stream, from 2 to 100"
+            )

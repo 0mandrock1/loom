@@ -24,7 +24,6 @@ TURN_TIMEOUT_S = 120
 
 @dataclass(frozen=True)
 class _Observation:
-    repository: str
     repository_id: int
     private: bool
     observed: datetime
@@ -50,7 +49,7 @@ async def _observe(ch: _CHClient, repo: str, token: str) -> _Observation:
     observed = await store.clock(ch)
     data = await provider.metadata(repo, token)
     ident, private = _metadata(repo, data)
-    return _Observation(str(data["full_name"]), ident, private, observed)
+    return _Observation(ident, private, observed)
 
 
 def identity(org: str) -> dict[str, str]:
@@ -144,10 +143,14 @@ async def configure(
     max_pages: int = 5,
 ) -> None:
     repo = domain.repository(repo)
-    if repo.lower() not in {name.lower() for name in allowed_repos}:
+    registered = {name for name in allowed_repos if name.lower() == repo.lower()}
+    if not registered:
         raise domain.FeedInputError("repository is outside the registered source allowlist")
-    if not token or not 1 <= max_pages <= 100:
-        raise domain.FeedInputError("a read-only token and 1..100 max-pages are required")
+    if len(registered) > 1:
+        raise domain.FeedInputError("source allowlist must use one spelling per repository")
+    repo = registered.pop()
+    if not token or not 2 <= max_pages <= 100:
+        raise domain.FeedInputError("a read-only token and 2..100 max-pages are required")
     await require_owner(ch, org, owner_uuid)
     target = await store.database_uuid(ch)
     snapshot = await store.repository(ch, org, repo)
@@ -157,7 +160,6 @@ async def configure(
         if snapshot:
             await _hide(ch, snapshot, target, owner_uuid)
         raise
-    repo = proof.repository
     async with fenced(_key(target)) as uncertain:
         await require_owner(ch, org, owner_uuid)
         existing = await store.repository(ch, org, repo)

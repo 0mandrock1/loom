@@ -486,7 +486,7 @@
  ],
  "loom tracker-feed configure": [
   "usage: loom tracker-feed configure [-h] --org ORG --writer-user WRITER_USER [--writer-password-env WRITER_PASSWORD_ENV] --source SOURCE --repo REPO [--token-env TOKEN_ENV] [--read-only-token] [--max-pages MAX_PAGES]",
-  "options: -h, --help show this help message and exit --org ORG --writer-user WRITER_USER --writer-password-env WRITER_PASSWORD_ENV --source SOURCE --repo REPO A repository in the source's allowlist --token-env TOKEN_ENV --read-only-token Attest the token has only read permissions --max-pages MAX_PAGES"
+  "options: -h, --help show this help message and exit --org ORG --writer-user WRITER_USER --writer-password-env WRITER_PASSWORD_ENV --source SOURCE --repo REPO A repository in the source's allowlist --token-env TOKEN_ENV --read-only-token Attest the token has only read permissions --max-pages MAX_PAGES Pages per stream, from 2 to 100"
  ],
  "loom tracker-feed sync": [
   "usage: loom tracker-feed sync [-h] --org ORG --writer-user WRITER_USER [--writer-password-env WRITER_PASSWORD_ENV] --source SOURCE --repo REPO",

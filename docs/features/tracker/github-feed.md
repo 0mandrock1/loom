@@ -69,6 +69,8 @@ loom tracker-feed sync --org acme --source widgets --repo acme/widgets \
 
 Configuration seals the token in the team's feed database. Sync needs the writer
 password and deployment secret root; it does not need the token environment variable.
+Copied repository identities keep the spelling in the registered source's allowlist,
+so namespace filters match even if API capitalization differs.
 App installation tokens [expire after one hour](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation).
 An external secret process must refresh the installation token and rerun `configure`
 before expiry. The feed does not issue or refresh installation tokens.
@@ -79,7 +81,9 @@ During a root-secret rotation, successful metadata writes reseal credentials ope
 Schedule `sync` every five minutes or more frequently. Visibility observations expire
 after 15 minutes, hiding the repository if checks stop succeeding. Each job has a
 120-second limit and reads at most `--max-pages` pages per stream, with 100 items per
-page and a maximum of 100 pages. A capacity error leaves the cursor unchanged; raise
+page and a budget of 2 to 100 pages. The final page's timestamp boundary is replayed;
+the minimum leaves a preceding page from which to make progress.
+A capacity error leaves the cursor unchanged; raise
 the bounded page budget or shorten the repository's backlog before retrying. Counts
 on standard output report processed rows, including replayed rows.
 
@@ -94,6 +98,8 @@ grant checks still apply.
 Bodies include up to 32,768 item characters and the 64 most recently updated comments,
 with up to 2,048 characters per comment. Review requests and test evidence remain
 unknown when the source does not provide that evidence.
+The views' `updated_at` tracks item and comment publication in the record, so a comment
+imported after its item remains visible to incremental tracker reads.
 
 Incremental lists do not report deletions. To erase copied content, stop every scheduled
 writer, erase the affected raw rows, comments and repository configuration or cursors,

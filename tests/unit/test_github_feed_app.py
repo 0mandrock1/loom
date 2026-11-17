@@ -405,3 +405,56 @@ async def test_failed_old_credential_cannot_hide_rotated_configuration(env, monk
     with pytest.raises(app.provider.FeedProviderError):
         await sync()
     assert env.row["available"] == 1 and env.row["token_enc"] == "rotated-secret"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("registered", ["widgets/repo", "Widgets/Repo"])
+async def test_configure_preserves_registered_repository_spelling(env, monkeypatch, registered):
+    env.row["repository"] = registered
+    monkeypatch.setattr(app, "seal", lambda *args: "sealed-secret")
+    monkeypatch.setattr(
+        app.provider,
+        "metadata",
+        AsyncMock(return_value=dict(id=7, full_name="WIDGETS/REPO", private=False)),
+    )
+    await app.configure(
+        object(),
+        org="team",
+        owner_uuid=OWNER,
+        repo="widgets/REPO",
+        token="read-only-secret",
+        allowed_repos={registered},
+    )
+    assert env.row["repository"] == registered
+    data = dict(number=1, created_at=NOW.isoformat(), updated_at=NOW.isoformat())
+    monkeypatch.setattr(
+        app.provider,
+        "pages",
+        AsyncMock(
+            side_effect=[
+                app.provider.Batch([data], True),
+                app.provider.Batch([], True),
+                app.provider.Batch([], True),
+            ]
+        ),
+    )
+    await sync()
+    assert env.records[0][3] == registered
+    assert env.records[0][1][0]["source_id"] == registered + "#1"
+
+
+@pytest.mark.asyncio
+async def test_configure_refuses_one_page_before_any_provider_request(env, monkeypatch):
+    monkeypatch.setattr(app, "seal", lambda *args: "sealed-secret")
+    with pytest.raises(FeedInputError, match="2..100 max-pages"):
+        await app.configure(
+            object(),
+            org="team",
+            owner_uuid=OWNER,
+            repo="widgets/repo",
+            token="read-only-secret",
+            allowed_repos={"widgets/repo"},
+            max_pages=1,
+        )
+    app.provider.metadata.assert_not_awaited()
+    assert not env.writes

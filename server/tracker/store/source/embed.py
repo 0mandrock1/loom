@@ -133,9 +133,9 @@ class EmbedReads(SourceBase):
         cursor = ""
         if since is not None:
             cursor = (
-                "AND updated_at > {since:DateTime64(3)}"
+                "AND updated_at > {since:DateTime64(6)}"
                 if since_id is None
-                else "AND (updated_at, source_id) > ({since:DateTime64(3)}, {since_id:String})"
+                else "AND (updated_at, source_id) > ({since:DateTime64(6)}, {since_id:String})"
             )
         params: dict[str, Any] = {
             "repos": repos,

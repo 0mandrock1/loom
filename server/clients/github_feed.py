@@ -65,8 +65,8 @@ async def pull_request(repo: str, token: str, number: int) -> dict[str, Any]:
 async def pages(
     repo: str, token: str, stream: str, since: datetime | None, *, max_pages: int
 ) -> Batch:
-    if stream not in STREAMS or not 1 <= max_pages <= 100:
-        raise FeedProviderError("GitHub feed invalid scan bounds")
+    if stream not in STREAMS or not 2 <= max_pages <= 100:
+        raise FeedProviderError("GitHub feed requires a known stream and 2..100 max-pages")
     path = f"/repos/{repository(repo)}/{STREAMS[stream]}"
     params: dict[str, Any] = dict(sort="updated", direction="asc", per_page=PAGE_SIZE)
     if stream == "items":

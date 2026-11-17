@@ -13721,7 +13721,7 @@
            "nargs": null,
            "type": "builtins:int",
            "required": false,
-           "help": null,
+           "help": "Pages per stream, from 2 to 100",
            "metavar": null
           }
          ]
