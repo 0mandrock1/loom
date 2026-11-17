@@ -393,3 +393,22 @@ def test_cursor_wrap_survives_the_actual_supervisor_handoff(
     _put(work, stopped, "removed")
     asyncio.run(run())
     assert [uri for _, uri in work.retired] == ["removed"]
+
+
+@pytest.mark.parametrize("sync_enabled", [False, True])
+@pytest.mark.parametrize("auth_required", [False, True])
+def test_retirement_worker_runs_independently_of_content_sync_and_auth(
+    monkeypatch: pytest.MonkeyPatch, sync_enabled: bool, auth_required: bool
+) -> None:
+    from server.knowledge.workers import source_retirements
+    from server.workers import registry
+
+    monkeypatch.setattr(cleanup.settings, "knowledge_source_sync_enabled", sync_enabled)
+    monkeypatch.setattr(cleanup.settings, "auth_required", auth_required)
+    worker = next(w for w in registry.enabled_workers() if w.name == "knowledge_source_retire")
+    assert worker.pass_callable is source_retirements.run_pass
+    assert worker.deadline_seconds() == 60
+    assert worker.interval_seconds == cleanup.settings.knowledge_source_sync_interval_seconds
+    assert (
+        worker.idle_interval_seconds == cleanup.settings.knowledge_source_sync_idle_interval_seconds
+    )
