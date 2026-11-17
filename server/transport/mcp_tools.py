@@ -172,10 +172,9 @@ def _synthetic_tool_descriptors_core() -> list[dict[str, Any]]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": (
-                            "Keep only rows carrying ANY of these tags. A coding session's "
-                            "rows carry `project:<folder>` and `repo:<id>` (the id the "
-                            "session primer names); pass the repo tag to "
-                            "stay within this repository."
+                            "Filter memory and knowledge by ANY supplied tag; profile, "
+                            "conversations and tracker search ignore tags. Coding rows carry "
+                            "`project:<folder>` and `repo:<id>` (the id in the session primer)."
                         ),
                     },
                     "recipe": {

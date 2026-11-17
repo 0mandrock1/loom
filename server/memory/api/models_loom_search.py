@@ -66,8 +66,9 @@ class SearchOutput(BaseModel):
                 data.pop(key, None)
         return data
 
-    # Cited issue/PR matches, or a duplicate-check verdict for a scoped defect report;
-    # absent when there are no matches or that leg failed or timed out.
+    # Cited issue/PR matches, or a duplicate-check verdict for a scoped defect report
+    # even with no matches; absent for empty general search or an unavailable, failed
+    # or timed-out tracker leg.
     tracker: dict[str, Any] | None = None
     # The `memory.search` result plus the scoped repository's decisions, rendered as a
     # reader block, without the hits the calibration flagged below its threshold

@@ -41,7 +41,7 @@ A leg that fails returns `{"error": ...}` under its own key; the other sections 
 | --------- | ---------------------------------------------------------------------------------------------------- |
 | `query`   | Required.                                                                                            |
 | `top_k`   | Default 5, 1–100.                                                                                    |
-| `tags`    | Keep rows carrying any of them; a coding session's rows carry `project:<folder>` and `repo:<id>`.    |
+| `tags`    | Filter memory and knowledge rows carrying any of them; profile, conversations and tracker search ignore tags. Coding-session rows carry `project:<folder>` and `repo:<id>`.    |
 | `recipe`  | `fast`, `balanced`, `quality`, `verbatim`, `code`, `temporal`, `graph`.                              |
 | `bodies`  | `excerpt` (default, 200 characters; a decision or constraint row as stored), `full`, `unit`, `none`. |
 | `page`    | A `memory.next_page` handle from an earlier response.                                                |
