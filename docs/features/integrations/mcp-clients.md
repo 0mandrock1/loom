@@ -374,16 +374,6 @@ same network. On the same machine, `loom install --client claude-desktop` writes
 - **n8n**: the MCP Client Tool node, as in the table above.
 - **Dify**: Integrations → Tools → MCP, with the URL, and `Authorization: Bearer <JWT>`
   under the custom headers in Advanced Options.
-- **Flowise**: a Custom MCP tool on an Agent node, with
-  `{"url": "URL", "headers": {"Authorization": "Bearer <JWT>"}}` as its MCP Server Config.
-- **Langflow**: Settings → MCP Servers → Add MCP Server, HTTP/SSE mode, with an
-  `Authorization` header whose value names a Credential global variable holding
-  `Bearer <JWT>`.
-- **Zapier**: the MCP Client app, transport Streamable HTTP, OAuth No, and the token in the
-  Bearer Token field ([telling which](#bearer-or-bare-token)).
-- **Make**: the MCP Client app, a new MCP server with the URL and `Bearer <JWT>` in the
-  API Key / Access token field; Make's docs do not say whether it adds `Bearer`
-  ([telling which](#bearer-or-bare-token)).
 - **Microsoft Copilot Studio**: Tools → Add a tool → New tool → Model Context Protocol,
   authentication API key, type Header, header name `Authorization`; Microsoft's docs do
   not say whether the key needs the `Bearer ` prefix, so enter `Bearer <JWT>`
