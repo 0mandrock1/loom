@@ -29,18 +29,24 @@ def request(
             "Loom URL must be an HTTP(S) endpoint without embedded credentials or query"
         )
 
-    def call() -> dict[str, Any]:
-        with SyncAgent(
-            **fields,
-            timeout_s=15,
-            call_timeout_s=30,
-            retry={"max_attempts": 1},
-            pacing=False,
-            consumer="dify-plugin",
-        ) as agent:
-            return agent.call(op, body, **identity)
+    def call() -> dict[str, Any] | Exception:
+        try:
+            with SyncAgent(
+                **fields,
+                timeout_s=15,
+                call_timeout_s=30,
+                retry={"max_attempts": 1},
+                pacing=False,
+                consumer="dify-plugin",
+            ) as agent:
+                return agent.call(op, body, **identity)
+        except Exception as error:  # noqa: BLE001 — Return failures without hub credential logging.
+            return error
 
-    return get_hub().threadpool.apply(call)
+    result = get_hub().threadpool.apply(call)
+    if isinstance(result, Exception):
+        raise result
+    return result
 
 
 def user(parameters: dict[str, Any]) -> str:
