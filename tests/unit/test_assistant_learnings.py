@@ -21,6 +21,7 @@ from server.memory.domain.extraction_prompts import AGENT_LEARNINGS_ANCHOR
 from server.memory.domain.provenance import pipeline_actor
 from server.memory.store import learnings as learnings_repo
 from server.settings import settings
+from tests.unit.checked_pack_fakes import install_pack_knowledge
 from tests.unit.checked_repo_search_fakes import install_repo_search
 from tests.unit.clickhouse_local import CLICKHOUSE, ddl, run
 from tests.unit.llm_fake import ScriptedLLM
@@ -1317,7 +1318,6 @@ async def test_other_bots_rules_ranked_first_leave_the_knowledge_section_full(
     """Three support-bot rules outrank one plain document: sales-bot's pack drops
     the rules and still packs the document."""
     from server.knowledge.api.models_knowledge import KnowledgeSearchOutput, _SearchHit
-    from server.knowledge.app import knowledge_search
     from server.memory.api.models_context import ContextPackInput
     from server.memory.app import context_pack
 
@@ -1349,7 +1349,7 @@ async def test_other_bots_rules_ranked_first_leave_the_knowledge_section_full(
         reranks.append(input.rerank)
         return KnowledgeSearchOutput(results=ranked[: input.top_k], embedding_model="fake")
 
-    monkeypatch.setattr(knowledge_search, "handle_knowledge_search", search)
+    install_pack_knowledge(monkeypatch, search)
     st = context_pack._PackState(
         input=ContextPackInput(
             org="o",
@@ -1361,7 +1361,10 @@ async def test_other_bots_rules_ranked_first_leave_the_knowledge_section_full(
         ),
         default_section_tokens={},
     )
-    await context_pack._pack_knowledge(st)
+    out = await context_pack.handle_context_pack(
+        st.input.model_copy(update={"only_sections": ["knowledge"]})
+    )
+    st.sections = out.sections
 
     assert "Refunds take five days." in st.sections["knowledge"]
     assert "rule 0" not in st.sections["knowledge"]
@@ -1418,7 +1421,6 @@ def _knowledge_hits(ranked: list[Any], top_k: int) -> Any:
 async def test_a_pinned_tokens_pack_serves_its_signed_bots_rules(
     monkeypatch: pytest.MonkeyPatch, ranked: list[Any], asked_for: list[int]
 ) -> None:
-    from server.knowledge.app import knowledge_search
     from server.memory.api.models_context import ContextPackInput
     from server.memory.app import context_pack
 
@@ -1428,7 +1430,7 @@ async def test_a_pinned_tokens_pack_serves_its_signed_bots_rules(
         asked.append(input.top_k)
         return _knowledge_hits(ranked, input.top_k)
 
-    monkeypatch.setattr(knowledge_search, "handle_knowledge_search", search)
+    install_pack_knowledge(monkeypatch, search)
     st = context_pack._PackState(
         input=ContextPackInput(
             org="o",
@@ -1440,7 +1442,10 @@ async def test_a_pinned_tokens_pack_serves_its_signed_bots_rules(
         ),
         default_section_tokens={},
     )
-    await context_pack._pack_knowledge(st)
+    out = await context_pack.handle_context_pack(
+        st.input.model_copy(update={"only_sections": ["knowledge"]})
+    )
+    st.sections = out.sections
 
     section = st.sections["knowledge"]
     assert "support rule" in section and "Refunds take five days." in section
