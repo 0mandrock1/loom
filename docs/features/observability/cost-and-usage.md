@@ -103,6 +103,13 @@ cost without a named user remain namespace-only. These are soft spend controls:
 concurrent calls can overshoot, and the logical user is the request's cost attribution,
 not the authenticated account or a billing identity.
 
+Activate user caps and budget warnings only after every serving build supports
+migration 102. Keep the global and namespace user caps at zero and alert inboxes empty
+while any build is older or unknown. Before rollback, follow the [maintenance and
+warning cleanup procedure](../../architecture/cost-budgets.md#activation-and-rollback);
+older builds cannot enforce user caps or protect stored private warnings. Save the
+policies and reapply them after upgrading the whole fleet again.
+
 The guard (`namespace_over_cap` / `namespaces_over_cap` in
 `server/observability/budget.py`) gates LLM work. Over the cap, each of these skips its
 paid step:

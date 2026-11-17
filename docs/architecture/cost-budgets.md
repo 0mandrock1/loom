@@ -46,6 +46,44 @@ writers. Warning production waits for every live replica to support the migratio
 an older erasure implementation cannot miss user-bearing warning rows during a rolling
 upgrade. Unknown fleet state defers publication until a later check.
 
+## Activation and rollback
+
+User caps and budget warnings require every serving build to support migration 102.
+Keep `LOOM_DEFAULT_DAILY_USER_COST_CAP_USD` and every namespace's
+`daily_user_cost_cap_usd` at zero, and `budget_alert_inbox` empty, while any deployment
+sharing the stores runs an older build or its version is unknown. Do not rely on user
+caps during that interval. Apply the migration and upgrade every serving process before
+setting these policies. The warning fleet check defers production on an old or unknown
+fleet; it does not remove warnings already stored.
+
+Save the global user-cap default and each namespace's user cap and alert inbox before
+rollback. Rollback requires a maintenance interval:
+
+1. Stop all request-serving and background processes that can check budgets or schedule
+   warnings, across every deployment sharing the stores. Stop status polling too.
+   Turning off background workers or clearing an inbox policy alone does not stop
+   deliveries already scheduled with that inbox.
+2. Drain scheduled deliveries and settle every in-flight or uncertain write before
+   cleanup. Wait for warning-writer leases to be released or expire and for their
+   bounded late-start and server execution windows to end. An interrupted drain or an
+   empty running-query list does not prove that a delayed send cannot still arrive.
+3. Erase only `loom.task_events` rows whose `event` is `budget.warning`. Wait for the
+   deletion to complete on every storage replica and verify that no warning rows remain
+   on any of them before starting the first older process. An unreadable replica or an
+   unsettled write blocks rollback. Namespace or user erasure is not a substitute: it
+   also deletes unrelated data.
+4. Keep user caps and warnings disabled while older builds serve. After every serving
+   process supports migration 102 again, restore the saved global default and reapply
+   the namespace user caps and alert inboxes with `namespace.register`. Read the
+   namespace policies and check the effective caps before resuming warning production.
+
+This limits activation during mixed-version operation and trades availability for
+privacy during rollback. Older task readers do not filter private warnings, and older
+user erasure does not delete them. Older namespace registrations also omit the user-cap
+and alert-inbox columns; their replacement rows reset these policies to their defaults.
+The namespace registry does not carry those columns through older writes. The operator
+must therefore preserve and restore policy rather than rely on it surviving rollback.
+
 ## Source entry points
 
 - `server/observability/budget.py`: `budget_snapshot` reads policy and rolling spend for the guards and status.

@@ -843,6 +843,22 @@ schema. These rules keep that safe. The operator procedure is in
     marked receipts and audit counts while preserving their mark and version priority;
     a schema downgrade alone provides no privacy protection.
 
+55. **User cost caps and private budget warnings** (migration
+    `102_user_cost_budgets.sql`): activate the global and namespace user caps and alert
+    inboxes only after every serving build supports the migration; keep them disabled
+    and do not rely on user caps while any build is older or unknown. N-1 cannot enforce
+    user caps, filters no private warning events, and has no user-erasure step for those
+    events. Before the first N-1 process starts, the operator stops all warning producers
+    for maintenance, settles scheduled and uncertain writes and their writer leases,
+    deletes only `budget.warning` task events, and verifies completed deletion and zero
+    warning rows on every storage replica. There is no interval in which N-1 serves
+    with private warnings stored. Save policy before rollback: N-1 namespace writes omit
+    the user-cap and alert-inbox columns, so their defaults replace the saved values.
+    Restore and verify the global default and namespace policies only after every
+    serving build supports the migration again. The [activation and rollback
+    procedure](cost-budgets.md#activation-and-rollback) defines the maintenance boundary;
+    the warning fleet check alone does not make a downgrade safe.
+
 ## What checks them
 
 `scripts/gates/mixed_version.py` (`make test-mixed-version`, the `mixed-version` CI job,
