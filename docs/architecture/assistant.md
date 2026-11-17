@@ -856,19 +856,22 @@ A replica probes the analyst user at boot and then every `ch_analysis_probe_inte
 (a minute by default), in the background, as the analyst itself, so the probe needs no
 access management:
 
-- a signed read of `loom.analysis_canary`, whose one row sits in a reserved scope (the
-  empty org and namespace, which `insights.query` refuses as a request's scope) under a
-  policy with the same key, must return that row: the policies accept the key;
+A signed read of `loom.analysis_canary`, whose one row sits in a reserved scope (the
+empty org and namespace, which `insights.query` refuses as a request's scope) under a
+policy with the same key, must return that row: the policies accept the key.
+
+After that check, a stored entity version newer than this build's skips the remaining
+catalog and grant checks: the newer build checks its own entities. A current, older or
+absent version continues with these checks:
+
 - a signed read of each allowlisted table in that reserved scope must count no rows: no
   extra policy widens what the analyst reads (under the server default a table with no
   analyst policy counts rows too, which a write repairs; a write is never made over a
   permissive policy Loom did not write, which is named instead);
 - a `system` table, and a column outside the allowlist (`memory.value`), must be refused;
-- unless the stored version is newer than this build's: an unsigned read of each
-  allowlisted table and of the canary must fail for want of the scope settings (the
-  table has a policy that reads them), and the analyst's own `SHOW GRANTS` must name
-  nothing but the allowlist and the canary. A newer build's entities are its own to
-  check.
+- an unsigned read of each allowlisted table and of the canary must fail for want of
+  the scope settings (the table has a policy that reads them), and the analyst's own
+  `SHOW GRANTS` must name nothing but the allowlist and the canary.
 
 A failed check answers `ANALYSIS_UNAVAILABLE`, which no client resends, and is a
 `loom doctor` problem. Every ClickHouse answer that is not a clean probe is a finding, a

@@ -9,7 +9,7 @@ import time
 from server.code.app.index.pass_budget import PassBudget
 from server.core import leases
 from server.core.ch import sequential_reads
-from server.knowledge.app import source_sync
+from server.knowledge.app import private_sync, source_sync
 from server.knowledge.app import sources as source_ops
 from server.knowledge.domain.sources import (
     SYNC_WORKER_ACTOR,
@@ -45,6 +45,11 @@ def _failure() -> None:
 
 
 async def run_once() -> None:
+    with private_sync.scope():
+        await _run_once()
+
+
+async def _run_once() -> None:
     started = time.monotonic()
     run = source_sync.Pass(
         PassBudget(started, started + MAX_PASS_SECONDS * 0.75),

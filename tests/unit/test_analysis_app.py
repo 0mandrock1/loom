@@ -48,6 +48,7 @@ def ready(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(app, "_fix", "")
     monkeypatch.setattr(app, "_running", {})
     monkeypatch.setattr(app.store, "target_database", lambda: "`loom`")
+    monkeypatch.setattr(app.store, "own_version", _returns(boundary.ENTITY_VERSION))
 
 
 def _failing(message: str):
@@ -1161,3 +1162,30 @@ def test_a_server_that_takes_neither_prefix_is_refused(monkeypatch: pytest.Monke
     monkeypatch.setattr(app.store, "setting_prefix", _returns(None))
     with pytest.raises(app.SetupRefused, match="custom_settings_prefixes"):
         asyncio.run(app.load_secrets(may_draw=True))
+
+
+@pytest.mark.parametrize("canary", [False, True])
+def test_a_newer_boundary_is_trusted_only_after_its_key_canary(
+    monkeypatch: pytest.MonkeyPatch, ready: None, canary: bool
+) -> None:
+    seen = []
+
+    async def own_version(*args: Any, **kwargs: Any) -> int:
+        seen.append("version")
+        return boundary.ENTITY_VERSION + 1
+
+    async def obsolete(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("an older replica must not probe a newer catalog's retired grants")
+
+    monkeypatch.setattr(app, "_canary_reads", _returns(canary))
+    monkeypatch.setattr(app.store, "own_version", own_version)
+    monkeypatch.setattr(app.store, "count_rows", obsolete)
+    monkeypatch.setattr(app.store, "read_refused", obsolete)
+    monkeypatch.setattr(app, "_signed_only", obsolete)
+    monkeypatch.setattr(app.store, "own_grants", obsolete)
+    result = asyncio.run(app._probe())
+    if canary:
+        assert result == ("", False, "") and seen == ["version"]
+    else:
+        assert result == ("the analyst's policies do not accept this replica's key", True, "")
+        assert seen == []
