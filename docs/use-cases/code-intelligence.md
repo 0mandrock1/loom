@@ -9,8 +9,8 @@ what it gives in each language is in [code index by language](code-intelligence-
 ## What you get
 
 - **Definitions, callers and impact.** `code.symbol`, `code.callers` and `code.impact`
-  answer with the file and line, and each answer names the commit and index tier behind
-  it. [Code operations](../features/code-index/operations.md)
+  locate code with file and line references. `code.index_status` reports the indexed
+  commit. [Code operations](../features/code-index/operations.md)
 - **Search by meaning and by exact string.** `code.search` finds where a mechanism lives;
   `code.grep` finds an exact message or identifier.
 - **History and pull requests.** Merged-PR history with review comments, a pre-PR
