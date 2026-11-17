@@ -174,3 +174,51 @@ def test_limits_are_refused_before_request(fake, top_k):
     retriever = LoomRetriever(store())
     with pytest.raises(ValueError):
         retriever.run("q", top_k=top_k)
+
+
+@pytest.mark.parametrize(
+    ("component_type", "options", "inputs"),
+    [
+        (LoomRetriever, {"top_k": 1, "search_mode": "lexical"}, {"query": "seat"}),
+        (
+            FilterRetriever,
+            {},
+            {"filters": {"field": "meta.category", "operator": "==", "value": "travel"}},
+        ),
+        (
+            DocumentWriter,
+            {"policy": DuplicatePolicy.OVERWRITE},
+            {"documents": [Document(id="written", content="Tea")]},
+        ),
+    ],
+)
+def test_explicitly_trusted_pipeline_restores_connection_and_runs(
+    fake, monkeypatch, component_type, options, inputs
+):
+    from haystack.core.errors import DeserializationError
+
+    monkeypatch.setenv("HAYSTACK_TEST_TOKEN", "offline-test-token")
+    db = LoomDocumentStore(
+        "saved-org",
+        "saved-namespace",
+        agent="saved-agent",
+        base_url="https://loom.example",
+        api_key=Secret.from_env_var("HAYSTACK_TEST_TOKEN"),
+        store="travel",
+    )
+    db.write_documents([Document(id="one", content="Aisle", meta={"category": "travel"})])
+    component = component_type(db, **options)
+    pipeline = Pipeline()
+    pipeline.add_component("node", component)
+    serialized = pipeline.dumps()
+    assert "HAYSTACK_TEST_TOKEN" in serialized and "offline-test-token" not in serialized
+    restored = Pipeline.loads(serialized, allowed_modules=["loom.integrations.haystack"])
+    assert restored.get_component("node").to_dict() == component.to_dict()
+    result = restored.run({"node": inputs})["node"]
+    if component_type is DocumentWriter:
+        assert result == {"documents_written": 1}
+        assert {doc.id for doc in db.filter_documents()} == {"one", "written"}
+    else:
+        assert [doc.id for doc in result["documents"]] == ["one"]
+    with pytest.raises(DeserializationError, match="trusted-module allowlist"):
+        Pipeline.loads(serialized)
