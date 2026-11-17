@@ -86,7 +86,7 @@ class ActedForRefused(PermissionError):
 
 async def _check_provisioning(auth: AuthInfo | None, org: str | None) -> None:
     from server.auth import login, scim
-    from server.core.errors import BackendUnavailableError
+    from server.core.errors import BackendUnavailableError, LoomServerError
 
     if auth is None:
         return
@@ -96,6 +96,8 @@ async def _check_provisioning(auth: AuthInfo | None, org: str | None) -> None:
     try:
         refused = await scim.refuses_auth(auth, org=scope_org)
     except login.SignInUnavailable as e:
+        if isinstance(e.__cause__, LoomServerError):
+            raise e.__cause__ from None
         raise BackendUnavailableError("SCIM provisioning cannot be checked yet") from e
     if refused:
         raise ActedForRefused(_ACTED_FOR_REVOKED)
@@ -131,36 +133,7 @@ async def check_acted_for(auth: AuthInfo | None, org: str | None) -> None:
     for email in {s.lower() for s in spellings if "@" in s}:
         if await _remembered(("scim", email), _scim_deactivated):
             raise ActedForRefused(_ACTED_FOR_REVOKED)
-    from server.auth import scim
-
-    if bot and not scim.requires_provisioning() and await _remembered(("bot", bot), _bot_ended):
-        await _check_personal_acted_for(org or auth.org, auth.subject, bot)
-
-
-async def _check_personal_acted_for(org: str, subject: str, bot: str) -> None:
-    from server.auth import service_accounts
-    from server.core.ch import get_client, own_write_reads
-    from server.core.datetimes import as_aware_utc
-    from server.core.errors import BackendUnavailableError
-
-    try:
-        with own_write_reads():
-            machine = await get_client().query_one(
-                "SELECT active FROM loom.machine_identities FINAL "
-                "WHERE name = {name:String} LIMIT 1",
-                params={"name": bot},
-            )
-            row = None if machine is not None else await service_accounts._creator_row(org, subject)
-    except Exception as e:  # unread status grants no acted-for authority
-        raise BackendUnavailableError("cannot read the acted-for service account") from e
-    if machine is not None:
-        if machine["active"]:
-            return
-        raise ActedForRefused(_ACTED_FOR_NO_BOT)
-    if row is None or not row["created_by"] or row["revoked_at"] is not None:
-        raise ActedForRefused(_ACTED_FOR_NO_BOT)
-    expiry = row.get("expires_at")
-    if expiry is not None and as_aware_utc(expiry).timestamp() <= time.time():
+    if bot and await _remembered(("bot", bot), _bot_ended):
         raise ActedForRefused(_ACTED_FOR_NO_BOT)
 
 

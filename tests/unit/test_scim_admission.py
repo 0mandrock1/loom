@@ -114,6 +114,80 @@ async def test_a_real_personal_service_account_uses_its_creator(people, token):
     ).subject == "sa:personal:one"
 
 
+@pytest.mark.parametrize("required", [False, True])
+async def test_revoked_personal_credential_cannot_be_replaced_by_impersonation(
+    people, monkeypatch, required
+):
+    from server.auth import gateway
+    from server.core import grant_cache
+
+    subject = "sa:personal:one"
+    people.provision("alice@example.test")
+    people.services[subject] = {"created_by": "alice@example.test", "lineage": []}
+    people.bots["gateway"] = True
+    if not required:
+        monkeypatch.setattr(settings, "scim_token", "")
+    monkeypatch.setattr(settings, "trusted_callers", "sa:gateway")
+    rows = []
+    identity_read = people.query_one
+
+    async def query_one(sql, params=None):
+        if "loom.revoked_tokens" in sql:
+            assert params == {"k0": credential.token_id}
+            return {"v": 1}
+        return await identity_read(sql, params)
+
+    async def insert(table, written):
+        assert table == "loom.revoked_tokens"
+        rows.extend(written)
+
+    async def grant_map(org, held):
+        assert org == "acme"
+        return grant_cache.GrantMap(ranks={}, held=(held,))
+
+    monkeypatch.setattr(people, "query_one", query_one)
+    monkeypatch.setattr(people, "insert", insert, raising=False)
+    monkeypatch.setattr(grant_cache, "grant_map", grant_map)
+    raw = jwt.mint_token(
+        subject,
+        "acme",
+        ["*"],
+        ["writer"],
+        secret=SECRET,
+        is_service_account=True,
+        creator="alice@example.test",
+        ttl_seconds=60,
+    )
+    credential = await jwt.authenticate_token(raw, secret=SECRET)
+    await authz.check_acted_for(credential, "acme")
+    live_row = dict(people.services[subject])
+    await revocation.revoke(credential.token_id, reason="end the personal credential")
+    assert [row["jti"] for row in rows] == [credential.token_id]
+    assert revocation.is_revoked(credential.token_id)
+    assert not revocation.is_revoked(subject)
+    with pytest.raises(jwt.TokenError, match="revoked"):
+        jwt.verify_token(raw, secret=SECRET)
+    assert people.services[subject] == live_row
+    assert live_row.get("revoked_at") is live_row.get("expires_at") is None
+
+    gateway_raw = jwt.mint_token(
+        "sa:gateway",
+        "acme",
+        ["*"],
+        ["writer"],
+        secret=SECRET,
+        is_service_account=True,
+        ttl_seconds=60,
+    )
+    caller = await jwt.authenticate_token(gateway_raw, secret=SECRET)
+    effective = gateway.effective_auth(caller, subject)
+    assert effective.subject == subject
+    assert effective.token_id == caller.token_id != credential.token_id
+    assert effective.impersonated_by == caller.subject
+    with pytest.raises(authz.ActedForRefused, match="active bot"):
+        await authz.check_acted_for(effective, "acme")
+
+
 async def test_admission_outage_is_retryable_auth_unavailability(people, token):
     people.unavailable = True
     with pytest.raises(jwt.AuthUnavailable):

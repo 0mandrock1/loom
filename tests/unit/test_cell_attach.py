@@ -1055,8 +1055,8 @@ async def test_doctor_names_both_catalog_checks_when_the_catalog_is_unread(
     async def before(_ch: Any) -> str:
         return ""
 
-    async def marked() -> tuple[str, bool, list[Any]]:
-        return "enforced", True, []
+    async def marked() -> tuple[str, tuple[bool, str], bool, list[Any]]:
+        return "enforced", (True, "first"), True, []
 
     async def unmarked() -> bool:
         return False

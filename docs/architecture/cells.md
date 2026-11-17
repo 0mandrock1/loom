@@ -294,11 +294,13 @@ ancestor.
 Exemptions are closed: an active registered bot and its agents, including machine or
 workload exchanges backed by that registration, and a signed end user whose issuer
 and end-user metadata were verified. A prefix, an admin role or the absence of email
-creates no exemption. Other `sa:` subjects use the current personal service-account
-row: it must exist, remain unrevoked and unexpired, and have a creator. Its creator
+creates no exemption. An actual bearer naming another `sa:` subject uses the current
+personal service-account row: it must exist, remain unrevoked and unexpired, and have a creator. Its creator
 and every persisted lineage subject must qualify, even when grant inheritance is
 disabled. This security read bypasses the grant-inheritance metadata cache. Cycles
-refuse; a shared ancestor completed on another path is checked once.
+refuse; a shared ancestor completed on another path is checked once. A trusted caller
+acts for an `sa:` subject only when it names an active registered bot or its agent;
+a personal row cannot prove the token's, session's or parent credentials' liveness.
 
 One decision allows at most 1,024 supplied roots, distinct subjects, examined lineage
 edges, account rows and distinct emails in each dimension. Repeated root entries

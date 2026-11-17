@@ -164,7 +164,7 @@ def test_agent_event_carries_impersonated_by() -> None:
 # ── the subject a trusted caller acts for ─────────────────────────────────
 
 
-def _acting(subject: str, org: str = "clickhouse") -> AuthInfo:
+def _acting(subject: str, org: str = "acme") -> AuthInfo:
     from server.auth.jwt import AuthInfo, Role
 
     return AuthInfo(
@@ -203,7 +203,7 @@ def test_a_revoked_subject_is_not_acted_for(
     monkeypatch.setattr(grant_cache, "grant_map", grant_map)
     monkeypatch.setattr(revocation, "_revoked_folded", frozenset({revoked.lower()}))
     with pytest.raises(PermissionError, match="acts for is revoked"):
-        asyncio.run(authz.check_acted_for(_acting(header, org), "acme"))
+        asyncio.run(authz.check_acted_for(_acting(header, org), "acme" if org == "*" else org))
 
 
 def test_an_unreadable_grant_map_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -298,8 +298,11 @@ def test_a_cutoff_revocation_does_not_refuse_acting_for_the_subject(
 def test_the_tokens_own_org_is_checked_too(monkeypatch: pytest.MonkeyPatch) -> None:
     """A personal namespace is provisioned in the token's org: a spelling tied to a
     revoked subject there refuses, though the target org ties nothing."""
+    from dataclasses import replace
+
     from server.auth import authz, revocation
     from server.core import grant_cache
+    from server.operations.base import Role
 
     async def grant_map(org: str, subject: str) -> grant_cache.GrantMap:
         tied = {"bob@corp.com", "bob"} if org == "clickhouse" else {subject}
@@ -309,7 +312,12 @@ def test_the_tokens_own_org_is_checked_too(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(revocation, "_revoked_folded", frozenset({"bob"}))
     # its own refusal, so the HTTP 403 adds no code-index reason to it
     with pytest.raises(authz.ActedForRefused, match="acts for is revoked"):
-        asyncio.run(authz.check_acted_for(_acting("bob@corp.com", "clickhouse"), "acme"))
+        asyncio.run(
+            authz.check_acted_for(
+                replace(_acting("bob@corp.com", "clickhouse"), roles=(Role.PLATFORM_ADMIN,)),
+                "acme",
+            )
+        )
 
 
 def test_an_end_user_token_is_not_checked_as_acted_for(monkeypatch: pytest.MonkeyPatch) -> None:
