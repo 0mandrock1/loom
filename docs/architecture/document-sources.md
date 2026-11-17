@@ -349,7 +349,7 @@ The model has four parts: mirrored documents live in a companion namespace no gr
 opens; each document carries its permission list; every read through that namespace
 checks the list and fails closed; and every complete listing reads the lists again. One
 rule holds them together: nothing derived from a mirrored document (its address, title,
-text, counts or existence) is written outside the mirror or answered to a caller. An op
+text, counts or existence) enters a Loom record outside the mirror or an answer to a caller. An op
 that is not a checked leg (a source's probe, status or `remove`, an erasure's receipt)
 therefore answers codes for what a mirror holds, never a count, title, file id or
 address, and a code that depends on the mirror's rows (a residue failure) reads as the
@@ -380,6 +380,18 @@ same code for any cause. The exceptions are these:
    probe's sampled items and their codes, and the oldest listing start), its sync and
    spend, and its erasure counts, as codes and counts, through `loom doctor`,
    `knowledge.source.inspect` and the erasure ops.
+
+The rule covers Loom's records, application logs, spans, metrics and caller-visible
+answers. Database-native query, error, mutation, text, profile and trace logs remain
+privileged deployment infrastructure, under the same trust as the plaintext tables
+and backups. They can retain mirrored addresses, counts and values quoted in errors
+after erasure; the database operator controls their access and retention, and any
+export of them keeps that privileged boundary. This is the existing
+[database-log boundary](assistant.md#stored-data-and-erasure) and
+[erasure limit](../features/memory/retention-and-erasure.md#checking-an-erasure-yourself).
+The SQL surface and analyst must refuse access to these logs. Loom's statement-capture
+files, provider and extractor telemetry, and caller-readable exports remain subject to
+the mirror rule.
 
 A deployment with auth off (`LOOM_AUTH_REQUIRED=false`) has no reader identity to check.
 It refuses to add a mirrored source with `AUTH_REQUIRED`, which wins over
@@ -498,11 +510,6 @@ that for collections, since one missed path leaks.
   advance a later ordinary pass's diagnostic streak. Ordinary work keeps its own cost
   accumulator; private spend is written directly under the mirror, without entering
   the shared event queue or its statistics.
-  Enablement also requires a database diagnostic policy that leaves no private query
-  text, work figures or exception payload in server logs or system log tables. A
-  deployment that pins query logging on cannot meet this requirement and must refuse
-  mirror work. Per-query controls do not prove the server's text and exception-log
-  policy; an unverified policy cannot admit a mirror.
 - **No scope reaches a mirror.** Every statement a request runs that reads a table
   holding mirror rows other than by a namespace the caller names leaves out the
   `acl-[0-9a-f]{24}` form; the workers named here are the exception, since they must

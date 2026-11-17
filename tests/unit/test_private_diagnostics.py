@@ -278,7 +278,9 @@ def test_private_pricing_does_not_consume_an_ordinary_unpriced_model_warning(
     assert len([r for r in caplog.records if "no price for model" in r.message]) == 1
 
 
-def test_private_sql_settings_override_logging_and_skip_capture(monkeypatch, tmp_path):
+def test_private_sql_omits_application_capture_without_changing_database_policy(
+    monkeypatch, tmp_path
+):
     from server.core import ch
 
     captures = []
@@ -295,16 +297,11 @@ def test_private_sql_settings_override_logging_and_skip_capture(monkeypatch, tmp
             )
             insert = ch.query_settings({"log_queries": 1, "log_comment": "private-title"})
         for actual in (private, insert):
-            assert actual["log_queries"] == 0
+            assert actual["log_queries"] == 1
             assert actual.get("log_comment", "") == ""
-            assert actual["log_query_views"] == 0
-            assert actual["log_processors_profiles"] == 0
-            assert actual["query_metric_log_interval"] == 0
-            assert actual["query_profiler_real_time_period_ns"] == 0
-            assert actual["query_profiler_cpu_time_period_ns"] == 0
-            assert actual["memory_profiler_step"] == 0
-            assert actual["memory_profiler_sample_probability"] == 0
-            assert actual["trace_profile_events"] == 0
+            assert set(actual).isdisjoint(
+                {"log_query_views", "log_processors_profiles", "query_metric_log_interval"}
+            )
         assert len(captures) == 1
         assert "synthetic-address" in ch.statement_settings("SELECT 1")["log_comment"]
     finally:

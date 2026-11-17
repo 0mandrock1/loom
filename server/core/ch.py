@@ -587,21 +587,7 @@ def query_settings(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     if key:
         out["quota_key"] = key
     if diagnostics.codes_only():
-        # Query settings cover SELECTs and both ordinary and carried inserts.
-        # These override a caller's diagnostic options; functional fences remain.
-        out.update(
-            log_comment="",
-            log_queries=0,
-            log_query_threads=0,
-            log_query_views=0,
-            log_processors_profiles=0,
-            query_metric_log_interval=0,
-            query_profiler_real_time_period_ns=0,
-            query_profiler_cpu_time_period_ns=0,
-            memory_profiler_step=0,
-            memory_profiler_sample_probability=0,
-            trace_profile_events=0,
-        )
+        out["log_comment"] = ""
     return out
 
 
