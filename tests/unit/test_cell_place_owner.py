@@ -239,7 +239,6 @@ async def test_placement_fatal_stays_inside_owner_until_public_close(stage, kind
     assert "original-after-public-close" in result.stdout
 
 
-
 async def test_repeated_signals_cannot_extend_an_expired_public_close(monkeypatch):
     clock = ManualClock(t=100.0)
     local_time = SimpleNamespace(monotonic=clock.monotonic)
