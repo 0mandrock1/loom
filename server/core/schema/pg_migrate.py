@@ -152,7 +152,10 @@ async def _failed_migration(
     try:
         await asyncio.wait({task}, timeout=max(0, end - time.monotonic()))
     except BaseException:  # noqa: BLE001 — preserve the first failure on repeated cancellation.
-        pg._terminate(conn)
+        try:
+            pg._terminate(conn)
+        except BaseException:  # noqa: BLE001 — fallback abort cannot replace the migration failure.
+            pass
     release = asyncio.create_task(
         _owned_result(lambda: cm.__aexit__(type(error), error, error.__traceback__))
     )
@@ -162,7 +165,10 @@ async def _failed_migration(
             raise TimeoutError("migration context cleanup deadline expired")
         release.result()
     except BaseException:  # noqa: BLE001 — a context exit cannot replace the migration failure.
-        pg._terminate(conn)
+        try:
+            pg._terminate(conn)
+        except BaseException:  # noqa: BLE001 — fallback abort cannot replace the migration failure.
+            pass
     finally:
         if not release.done():
             release.cancel()
