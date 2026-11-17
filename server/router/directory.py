@@ -1050,12 +1050,29 @@ class _ControlOwner:
             return
         if self.close_task is None:
             self.close_task = self.start(lambda: pg.close_owned(self.conn, end=self.end))
+        interrupted: asyncio.CancelledError | None = None
         try:
-            await self.wait(self.close_task, self.end)
+            while not self.close_task.done():
+                remaining = self.end - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("directory control deadline expired; outcome unknown")
+                try:
+                    await asyncio.wait({self.close_task}, timeout=remaining)
+                except asyncio.CancelledError as error:
+                    # Another signal cannot abandon the public cancellation in flight.
+                    interrupted = interrupted or error
+            result = self.close_task.result()
+            if isinstance(result, _ControlFatal):
+                raise _ControlInterrupted(result)
         except BaseException:
             pg._terminate(self.conn)
-            self.close_task.cancel()
+            if not self.close_task.done():
+                self.close_task.cancel()
+            if interrupted is not None:
+                raise interrupted from None
             raise
+        if interrupted is not None:
+            raise interrupted
 
     async def release(self) -> None:
         if self.entered:

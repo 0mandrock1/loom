@@ -13,13 +13,14 @@ from server.router import directory
 @pytest.mark.parametrize(
     "error", [ValueError("codec failure"), asyncio.CancelledError("codec cancelled")]
 )
-async def test_every_failed_initialization_quarantines_its_exact_raw_session(error):
-    conn = Mock(set_type_codec=AsyncMock(side_effect=error))
+@pytest.mark.parametrize("position", [0, 1])
+async def test_every_failed_initialization_quarantines_its_exact_raw_session(error, position):
+    conn = Mock(set_type_codec=AsyncMock(side_effect=[None] * position + [error]))
     with pytest.raises(type(error)) as caught:
         await directory._init(conn)
     assert caught.value is error
     conn.terminate.assert_called_once_with()
-    conn.set_type_codec.assert_awaited_once()
+    assert conn.set_type_codec.await_count == position + 1
 
 
 async def test_fixed_builtin_codecs_do_not_execute_sql():

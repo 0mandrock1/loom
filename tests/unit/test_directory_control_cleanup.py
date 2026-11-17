@@ -166,3 +166,96 @@ async def test_restore_uses_its_separate_runtime_budget(owned, monkeypatch):
     monkeypatch.setattr(directory, "RESTORE_READ_MAX_S", 0.037)
     assert await directory.restore_read("first", "dep-first", None, None) == answer
     assert seen == [0.037]
+
+
+@pytest.mark.parametrize(
+    "ending", ["success", "failure", "self_cancel", "exit", "keyboard", "deadline"]
+)
+@pytest.mark.parametrize("locally_closed", [False, True])
+async def test_outer_signals_wait_for_the_same_close_and_keep_first(
+    owned, monkeypatch, ending, locally_closed
+):
+    conn, _ = owned
+    owner = directory._ControlOwner(0.08 if ending == "deadline" else 10)
+    conn.is_closed.return_value = locally_closed
+    conn._lost = locally_closed
+    owner.conn = conn
+    end = owner.end
+    started, allow = asyncio.Event(), asyncio.Event()
+    first = asyncio.CancelledError("first outer signal")
+    failure = ValueError("close failure")
+    real_wait = asyncio.wait
+    waits = 0
+    close_cancelled = []
+    calls = []
+    began = time.monotonic()
+
+    async def close(_conn, *, end):
+        calls.append(_conn)
+        assert _conn is conn and end == owner.end
+        started.set()
+        try:
+            await allow.wait()
+        except asyncio.CancelledError:
+            close_cancelled.append(True)
+            raise
+        if ending == "failure":
+            raise failure
+        if ending == "self_cancel":
+            raise asyncio.CancelledError("close child cancelled itself")
+        if ending == "exit":
+            raise SystemExit(17)
+        if ending == "keyboard":
+            raise KeyboardInterrupt("close child interrupted")
+
+    async def interrupted_wait(tasks, **kwargs):
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            await started.wait()
+            raise first
+        return await real_wait(tasks, **kwargs)
+
+    monkeypatch.setattr(directory.pg, "close_owned", close)
+    monkeypatch.setattr(asyncio, "wait", interrupted_wait)
+    task = asyncio.create_task(owner.close())
+    await started.wait()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert not task.done(), "an outer signal cancelled independent close before its end"
+    conn.terminate.assert_not_called()
+    assert not close_cancelled and owner.end == end
+    if ending != "deadline":
+        allow.set()
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+    assert caught.value is first and owner.end == end
+    assert time.monotonic() - began < 0.2
+    assert calls == [conn] and waits < 5
+    if ending == "success":
+        conn.terminate.assert_not_called()
+    else:
+        conn.terminate.assert_called_once_with()
+
+
+@pytest.mark.parametrize("already_done", [False, True])
+async def test_self_cancelled_close_is_terminal_before_a_long_end(owned, monkeypatch, already_done):
+    conn, _ = owned
+    owner = directory._ControlOwner(10)
+    owner.conn = conn
+    original = asyncio.CancelledError("close child self-cancelled")
+
+    async def close(_conn, *, end):
+        raise original
+
+    monkeypatch.setattr(directory.pg, "close_owned", close)
+    if already_done:
+        owner.close_task = owner.start(lambda: close(conn, end=owner.end))
+        await asyncio.sleep(0)
+        assert owner.close_task.done()
+    began = time.monotonic()
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await owner.close()
+    assert caught.value is original
+    assert time.monotonic() - began < 0.2
+    conn.terminate.assert_called_once_with()

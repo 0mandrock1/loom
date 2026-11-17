@@ -127,6 +127,7 @@ async def test_directory_second_cancel_keeps_first_and_close_precedes_worker_can
 ):
     import asyncpg
 
+    monkeypatch.setattr(directory, "CONTROL_MAX_S", 0.4)
     real_close = asyncpg.Connection.close
     seen, closing, allow_close = asyncio.Event(), asyncio.Event(), asyncio.Event()
     backend = {}
@@ -423,3 +424,82 @@ async def test_codec_quarantine_failure_keeps_native_original_and_unknown_diagno
         raw = failed.get("raw")
         if raw is not None:
             real_terminate(raw)
+
+
+@pytest.mark.parametrize("signal_count", [1, 2])
+async def test_directory_signals_keep_real_cancel_request_alive_until_original_end(
+    directory_database, monkeypatch, signal_count
+):
+    from asyncpg import connect_utils
+
+    seen, cancelling, allow_cancel = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    backend = {}
+    first_signal = {}
+    real_wait = directory._ControlOwner.wait
+    real_cancel = connect_utils._cancel
+    seconds = 0.5
+
+    async def cancel(**kwargs):
+        if kwargs["backend_pid"] == backend.get("pid"):
+            cancelling.set()
+            await allow_cancel.wait()
+        return await real_cancel(**kwargs)
+
+    async def work(conn):
+        backend["pid"] = conn.get_server_pid()
+        await locked(conn)
+        seen.set()
+        await conn.execute("SELECT pg_sleep(10)")
+
+    async def remember(self, task, end):
+        try:
+            return await real_wait(self, task, end)
+        except asyncio.CancelledError as error:
+            first_signal.setdefault("error", error)
+            raise
+
+    monkeypatch.setattr(directory._ControlOwner, "wait", remember)
+    monkeypatch.setattr(connect_utils, "_cancel", cancel)
+    began = time.monotonic()
+    task = asyncio.create_task(directory._control_transaction(work, seconds=seconds))
+    try:
+        await asyncio.wait_for(seen.wait(), 2)
+        await sleeping(directory_database, backend["pid"])
+        task.cancel("first directory signal")
+        await asyncio.wait_for(cancelling.wait(), 2)
+        if signal_count == 2:
+            task.cancel("second directory signal")
+        await asyncio.sleep(0.03)
+        assert not task.done(), "second signal abandoned a live server cancel request"
+        assert await directory_database.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event='PgSleep')",
+            backend["pid"],
+        )
+        assert (
+            await directory_database.fetchval(
+                "SELECT count(*) FROM pg_locks WHERE pid=$1", backend["pid"]
+            )
+            > 0
+        )
+        allow_cancel.set()
+        with pytest.raises(asyncio.CancelledError, match="first directory signal") as caught:
+            await asyncio.wait_for(task, seconds)
+        assert caught.value is first_signal["error"]
+        assert time.monotonic() - began <= seconds + 0.1
+        await released(directory_database, backend["pid"])
+    finally:
+        allow_cancel.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if backend:
+            await directory_database.execute("SELECT pg_cancel_backend($1)", backend["pid"])
+            async with asyncio.timeout(2):
+                for _ in range(200):
+                    if not await directory_database.fetchval(
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", backend["pid"]
+                    ):
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    pytest.fail("test-owned backend remained after exact cancellation")
