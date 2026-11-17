@@ -3741,6 +3741,15 @@ async def test_a_write_made_unembedded_over_an_embedded_key_retires_its_vectors(
     after."""
     ns = f"pg-{uuid.uuid4().hex[:8]}"
     assert (await call("memory.set", _set(ns, "k", "an embedded fact"))).status_code == 200
+    # Establish the embedded head: the first write answers before its publication.
+    await _published(pg_conn, org)
+    initial_live = ch_client.query(
+        "SELECT count() FROM loom.memory_embeddings FINAL WHERE org = {o:String} "
+        "AND namespace = {n:String} AND memory_key = 'k' AND tombstoned_at IS NULL",
+        settings=_SEQUENTIAL,
+        parameters={"o": org, "n": ns},
+    ).result_rows[0][0]
+    assert initial_live > 0
     # memory.update takes no level: the detector makes its new value 'high'.
     value = "the ssn is 123-45-6789" if op == "memory.update" else "the same fact, changed"
     body: dict[str, Any] = {**_set(ns, "k", value), **change}
