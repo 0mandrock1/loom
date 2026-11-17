@@ -46,6 +46,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from scripts.i18n import chunks
+from scripts.i18n.chunks import ANCHOR, CODE_SPAN, HTML_TAG, outside_fences
+
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = "i18n"
 REPO_URL = "https://github.com/ClickHouse/loom"
@@ -138,7 +141,6 @@ MAX_TOKENS = 32000
 
 LANGUAGE_LINE = re.compile(r"<!-- languages -->.*?<!-- /languages -->", re.DOTALL)
 STAMP = re.compile(r"\A<!-- i18n: source=(\S+) blob=([0-9a-f]{40}) model=(\S+) -->\n")
-FENCE = re.compile(r"^(`{3,}|~{3,})")
 # A Markdown link or image target, an HTML href or src, or a reference definition.
 LINK = re.compile(r"(\]\(|(?:href|src)=\"|^\[(?!\^)[^\]\n]+\]:[ \t]+)([^)\"\s]+)", re.MULTILINE)
 # A Markdown link's text (not an image's).
@@ -146,13 +148,6 @@ LINK_TEXT = re.compile(r"(?<!!)\[([^\[\]\n]+)\]\([^)\s]+")
 # An HTML link's inner text; `<code>` inside it is dropped with its content, other tags
 # (`<b>`) without theirs, before checking.
 HTML_LINK_TEXT = re.compile(r"<a\s[^>]*>(.*?)</a>", re.DOTALL)
-# A literal comparison is prose; quoted delimiters and comments belong to their tag.
-HTML_TAG = re.compile(
-    r"<!--.*?-->|<\?.*?\?>|<!\[CDATA\[.*?\]\]>"
-    r"|<(?:/?[A-Za-z][^\s/<>\"']*(?=[\s/>])|![A-Za-z])"
-    r"(?:[^<>\"']|\"[^\"]*\"|'[^']*')*>",
-    re.DOTALL,
-)
 HTML_CODE = re.compile(r"<code>.*?</code>", re.DOTALL)
 IMAGE_ALT = re.compile(r"!\[([^\]\n]+)\]\(")
 HTML_ALT = re.compile(r'\balt="([^"]+)"')
@@ -165,10 +160,7 @@ KEPT_WORDS = frozenset(
     cline pypi npm apache ci url id token namespace go rust java javascript c""".split()
 )
 URL = re.compile(r"https?://[^\s<>()\"'`*\]]+")
-# A code span may wrap across lines; Markdown renders the break as a space.
-CODE_SPAN = re.compile(r"(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.DOTALL)
 HEADING = re.compile(r"^(#{1,6}) +(.+?) *$")
-ANCHOR = re.compile(r'^<a id="([^"]+)"></a>$')
 NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 
 SYSTEM = """You translate a Markdown page of Loom's documentation, or one section of it, into
@@ -189,23 +181,6 @@ Reply with the translated text only, with no preamble and no code fence around i
 
 
 # ---- page structure -------------------------------------------------------------------
-
-
-def outside_fences(text: str) -> list[tuple[str, bool]]:
-    """The page's lines, each with whether it is inside a fenced code block."""
-    lines, fence = [], None
-    for line in text.split("\n"):
-        mark = FENCE.match(line.lstrip())
-        if fence is None and mark:
-            fence = mark.group(1)
-            lines.append((line, True))
-        elif fence is not None:
-            lines.append((line, True))
-            if line.strip().startswith(fence) and line.strip().strip(fence[0]) == "":
-                fence = None
-        else:
-            lines.append((line, False))
-    return lines
 
 
 def slug(heading: str, seen: Counter[str]) -> str:
@@ -682,18 +657,20 @@ def render(source: str, lang: Language, body: str, line: str, model: str) -> str
     return header(source, lang, model, blob(source)) + body
 
 
-# A page up to this size goes in one call, so its terms stay the same from section to
-# section; a longer one goes a section at a time, within what one reply holds.
+# Keep short pages together for consistent terms; larger requests also have a byte bound.
 WHOLE_PAGE_CHARS = 8000
 
 
 def english_requests(text: str) -> list[str]:
-    """The page's requests as sent, each heading with its page-wide anchor: the whole page
-    when it is short, else one `## ` section each."""
+    """The bounded requests used by both translation and its cost/reservation planners."""
     seen: Counter[str] = Counter()
     parts = [anchor_headings(s, seen) for s in sections(text)]
     whole = "\n".join(parts)
-    return [whole] if len(whole) <= WHOLE_PAGE_CHARS else parts
+    groups = [whole] if len(whole) <= WHOLE_PAGE_CHARS else parts
+    try:
+        return [piece for section in groups for piece in chunks.split(section)]
+    except ValueError as error:
+        raise TranslationDiffers(str(error)) from error
 
 
 def translate_page(source: str, lang: Language, client: Any, spend: Spend) -> None:
@@ -702,9 +679,12 @@ def translate_page(source: str, lang: Language, client: Any, spend: Spend) -> No
     body = "\n".join(translate_text(s, lang, client, spend) for s in requests)
     # A section can borrow an English label from another part of the page; `check` reads the
     # whole page, so the page is held to the same rule before it is written.
-    kept = labels("\n".join(requests)) & labels(body)
-    if kept:
-        raise TranslationDiffers(f"keeps in English: {sorted(kept)[:4]}")
+    english = "\n".join(requests)
+    problems = differences(english, body)
+    if chunks.table_shape(english) != chunks.table_shape(body):
+        problems.append("table row/cell layout differs after request assembly")
+    if problems:
+        raise TranslationDiffers(f"assembled page differs: {problems}")
     path = ROOT / target_path(lang.code, source)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render(source, lang, body, line, spend.model))
