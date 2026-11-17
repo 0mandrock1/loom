@@ -566,7 +566,11 @@ def test_a_real_agent_posts_the_service_calls() -> None:
     )
 
 
-@pytest.mark.parametrize("user", ["", "-", " ", "\t", " - ", " alice", "alice ", "\u00a0alice"])
+@pytest.mark.parametrize(
+    "user",
+    ["", "-", "*", " ", "\t", " - ", " alice", "alice ", "\u00a0alice"]
+    + [user for char in "\x1c\x1d\x1e\x1f\x85" for user in (char, char + "alice", "alice" + char)],
+)
 def test_a_user_id_that_names_no_loom_user_is_refused(user: str) -> None:
     fake = _FakeMemory()
     service = _service(fake)

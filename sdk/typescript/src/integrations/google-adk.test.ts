@@ -71,6 +71,18 @@ describe("Google ADK LoomMemoryService", () => {
     expect((await h.service.searchMemory({ appName: "app", userId: "alice", query: "travel" })).memories).toEqual([]);
   });
 
+  it.each(["*", ...["\u001c", "\u001d", "\u001e", "\u001f", "\u0085"].flatMap((c) => [c, `${c}alice`, `alice${c}`])])(
+    "refuses a noncanonical or wildcard user %j before calling Loom",
+    async (userId) => {
+      const { service, calls } = harness();
+      await expect(service.searchMemory({ appName: "app", userId, query: "seat" })).rejects.toThrow("userId");
+      await expect(
+        service.addSessionToMemory({ appName: "app", userId, id: "s", events: [], state: {}, lastUpdateTime: 0 }),
+      ).rejects.toThrow("userId");
+      expect(calls).toHaveLength(0);
+    },
+  );
+
   it("refuses app/user scope mistakes before calling Loom and skips blank queries", async () => {
     const { service, calls } = harness();
     for (const userId of ["", " ", "-", " - ", " alice", "alice ", "\u00a0alice"])

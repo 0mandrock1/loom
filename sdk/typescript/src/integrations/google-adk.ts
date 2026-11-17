@@ -2,6 +2,7 @@
 import type { BaseMemoryService, SearchMemoryRequest, SearchMemoryResponse, Session } from "@google/adk";
 import type { Agent } from "../agent.js";
 import { LoomError } from "../errors.js";
+import { hasIdentityWhitespace } from "../whitespace.js";
 
 export interface LoomMemoryServiceOptions {
   /** The ADK app this namespace serves. Give each app its own namespace. */
@@ -36,7 +37,7 @@ export class LoomMemoryService implements BaseMemoryService {
     if (appName !== this.opts.appName) {
       throw new Error("Give each ADK app its own Loom namespace and memory service");
     }
-    if (!userId || userId === "-" || userId !== userId.trim()) {
+    if (!userId || userId === "-" || userId === "*" || hasIdentityWhitespace(userId)) {
       throw new Error("userId must name a Loom user without surrounding whitespace");
     }
   }

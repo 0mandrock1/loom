@@ -232,7 +232,7 @@ class LoomMemoryService(BaseMemoryService):
                 f"{app_name!r}: give each app its own Loom namespace and service"
             )
         # Reads trim user ids; refusing noncanonical ids keeps writes and reads on one user.
-        if user_id in ("", "-") or user_id != user_id.strip():
+        if user_id in ("", "-", "*") or user_id != user_id.strip():
             raise ValueError("user_id must name a Loom user without surrounding whitespace")
 
     async def _extract(self, user_id: str, session_id: str, events: Sequence[Event]) -> None:
