@@ -58,7 +58,7 @@ async def check_lock(conn: Any) -> None:
 
 
 async def paired(conn: Any, row: dict[str, Any]) -> None:
-    """The locked authority and configured bucket name the observed registration."""
+    """The connected authority and configured bucket name the observed registration."""
     recorded = await conn.fetchval("SELECT deployment_id FROM loom.authority")
     prefix = settings.document_s3_prefix if settings.document_s3_bucket else ""
     if (
@@ -68,7 +68,7 @@ async def paired(conn: Any, row: dict[str, Any]) -> None:
         or (settings.document_s3_bucket, prefix) != (row.get("bucket"), row.get("bucket_prefix"))
     ):
         raise _refused(
-            "this cell configuration and locked Postgres do not match the directory registration"
+            "this cell configuration and connected Postgres do not match the directory registration"
         )
 
 

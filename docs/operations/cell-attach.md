@@ -99,8 +99,9 @@ does not establish that server locks or an unacknowledged commit have disappeare
 Retry the command to resolve an unknown commit through its durable state checks.
 
 A refusal names what to fix. Rerun attach after fixing it: every step is idempotent, and a
-rerun resumes by the directory row and the cell's mode. On a `serving` row it prints that it
-is done.
+rerun resumes by the directory row and the cell's mode. On a `serving` row it verifies
+that the connected authority, configured cell and bucket match the directory registration,
+then requires `enforced` mode before printing that it is done.
 
 ## The point of no return
 

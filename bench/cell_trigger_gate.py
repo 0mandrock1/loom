@@ -957,7 +957,7 @@ async def _memory_set(
                 if response is not None:
                     try:
                         envelope = response.json()
-                        candidate = envelope.get("error", {}).get("code", "")
+                        candidate = envelope.get("detail", {}).get("code", "")
                         if isinstance(candidate, str) and re.fullmatch(
                             r"[A-Z][A-Z0-9_]{0,63}", candidate
                         ):

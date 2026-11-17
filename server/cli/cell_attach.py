@@ -6,7 +6,8 @@ A run holds the attach lock on a direct session of the cell's Postgres for its l
 goes, each step idempotent, so a rerun resumes by the directory row and the cell's mode.
 Steps 1 to 4 are the design's, as cells.md numbers them:
 
-- the directory row: on `serving` it is done (exit 0) once the cell reads `enforced`;
+- the directory row: on `serving` it is done (exit 0) once the connected authority and
+  configured cell and bucket match the registration and the cell reads `enforced`;
 - the refusals, before any write: the stores are the registered ones, the session is
   direct and marked, the cell's processes (their heartbeats), the roles, settings and
   subscriptions that would let an unchecked writer through, the ClickHouse writers, the
@@ -560,10 +561,11 @@ class Run:
     # -- the run -----------------------------------------------------------------------
 
     async def done(self) -> bool:
-        """On a `serving` row: True once the cell reads `enforced`; Refused otherwise."""
+        """Require matching Postgres and cell settings, then `enforced` mode."""
         from server.core import pg
 
         async with pg.dedicated(statement_timeout_ms=_LOCK_STATEMENT_MS) as conn:
+            await cell_control.paired(conn, self.row)
             state, _ = await apg.read_mode(conn)
         if state != "enforced":
             raise _refused(
