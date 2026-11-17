@@ -51,7 +51,14 @@ async def chunks():
         "team",
         {k: row[k] for k in ("namespace", "source_uri", "chunk_idx", "doc_version")}
         | {"revision": 0},
-        {"version": 10, "revision": 0, "ingested_at": now},
+        {
+            "namespace": namespace,
+            "source_uri": uri,
+            "tags": ["source-id:" + uri.rsplit("#", 1)[1]],
+            "version": 10,
+            "revision": 0,
+            "ingested_at": now,
+        },
     )
     plan = SimpleNamespace(
         org=org,

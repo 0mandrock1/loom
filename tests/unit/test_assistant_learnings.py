@@ -21,6 +21,7 @@ from server.memory.domain.extraction_prompts import AGENT_LEARNINGS_ANCHOR
 from server.memory.domain.provenance import pipeline_actor
 from server.memory.store import learnings as learnings_repo
 from server.settings import settings
+from tests.unit.ask_knowledge_fake import route_scope
 from tests.unit.checked_pack_fakes import install_pack_knowledge
 from tests.unit.checked_repo_search_fakes import install_repo_search
 from tests.unit.clickhouse_local import CLICKHOUSE, ddl, run
@@ -1567,7 +1568,6 @@ async def test_a_pinned_tokens_loom_search_serves_its_signed_bots_rules(
 async def test_a_pinned_tokens_ask_passages_serve_its_signed_bots_rules(
     monkeypatch: pytest.MonkeyPatch, ranked: list[Any], asked_for: list[int]
 ) -> None:
-    from server.knowledge.app import knowledge_search
     from server.memory.api.models_search import MemorySearchInput
     from server.memory.app.ask.context_blocks import knowledge_passages
 
@@ -1577,13 +1577,14 @@ async def test_a_pinned_tokens_ask_passages_serve_its_signed_bots_rules(
         asked.append(input.top_k)
         return _knowledge_hits(ranked, input.top_k)
 
-    monkeypatch.setattr(knowledge_search, "handle_knowledge_search", search)
+    install_pack_knowledge(monkeypatch, search)
     monkeypatch.setattr(settings, "memory_ask_knowledge_top_k", 2)
-    block, n = await knowledge_passages(
+    context = await knowledge_passages(
         MemorySearchInput(org="o", namespace="ns", agent="sales-bot", query="refund"),
         "refund",
         enabled=True,
     )
+    block, n = await context.current()
 
     assert n == 2 and "support rule" in block and "Refunds take five days." in block
     assert "sales rule" not in block
@@ -1595,7 +1596,6 @@ async def test_a_pinned_tokens_ask_passages_serve_its_signed_bots_rules(
 async def test_a_pinned_tokens_ask_synthesis_serves_its_signed_bots_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from server.knowledge.app import knowledge_search
     from server.memory.api.models_ask import MemoryAskInput
     from server.memory.app.ask import handler
     from server.memory.domain import ask_routing
@@ -1609,12 +1609,12 @@ async def test_a_pinned_tokens_ask_synthesis_serves_its_signed_bots_rules(
         picked.append([h.source_uri for h in hits])
         return []
 
-    monkeypatch.setattr(knowledge_search, "handle_knowledge_search", search)
+    install_pack_knowledge(monkeypatch, search)
     monkeypatch.setattr(ask_routing, "is_corpus_task", lambda _q: True)
     monkeypatch.setattr(ask_routing, "pick_documents", pick)
     ask = MemoryAskInput(org="o", namespace="ns", agent="sales-bot", query="summarise refunds")
 
-    assert await handler._maybe_route_to_synthesize(ask) is None
+    assert await handler._maybe_route_to_synthesize(ask, await route_scope(ask)) is None
     assert picked == [["support-rule", "refunds.md"]]
 
 
@@ -1635,7 +1635,6 @@ async def test_an_unpinned_ask_under_the_default_agent_serves_every_bots_rules(
 ) -> None:
     """memory.ask defaults to agent `*`, a namespace-wide read: support-bot asking
     with its server token is served its own rule, in one knowledge search per leg."""
-    from server.knowledge.app import knowledge_search
     from server.memory.api.models_ask import MemoryAskInput
     from server.memory.api.models_search import MemorySearchInput
     from server.memory.app.ask import handler
@@ -1654,20 +1653,21 @@ async def test_an_unpinned_ask_under_the_default_agent_serves_every_bots_rules(
         picked.append([h.source_uri for h in hits])
         return []
 
-    monkeypatch.setattr(knowledge_search, "handle_knowledge_search", search)
+    install_pack_knowledge(monkeypatch, search)
     monkeypatch.setattr(settings, "memory_ask_knowledge_top_k", 5)
     monkeypatch.setattr(ask_routing, "is_corpus_task", lambda _q: True)
     monkeypatch.setattr(ask_routing, "pick_documents", pick)
     ask = MemoryAskInput(org="o", namespace="ns", query="refund policy?")
     assert ask.agent == "*"
 
-    block, n = await knowledge_passages(
+    context = await knowledge_passages(
         MemorySearchInput(org="o", namespace="ns", agent=ask.agent, query=ask.query),
         ask.query,
         enabled=True,
     )
+    block, n = await context.current()
     assert n == 5 and "support rule" in block
-    assert await handler._maybe_route_to_synthesize(ask) is None
+    assert await handler._maybe_route_to_synthesize(ask, await route_scope(ask)) is None
     assert picked == [[uri for uri, _text, _tags in _RANKED]]
     assert asked == [5, 20]
 

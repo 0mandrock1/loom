@@ -35,6 +35,13 @@ class CheckedPassages:
     def marked(self) -> bool:
         return self._first.marked
 
+    @property
+    def mirrored(self) -> bool:
+        children = (self._first,) if self._wide is None else (self._first, self._wide)
+        return not self.lost and any(
+            child.proofs is not None and child.proofs.mirrored for child in children
+        )
+
     def fresh(self) -> bool:
         if self._failed:
             return False
