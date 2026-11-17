@@ -411,7 +411,7 @@ def function(path: str, name: str) -> ast.AST:
             "server/router/directory.py",
             "_attach_change",
             [
-                "_control_transaction(locked)",
+                "_control_transaction(locked, seconds=CONTROL_MAX_S)",
                 "control_refusal(attaching, expected, claim=claim)",
                 "change(conn, attaching)",
             ],

@@ -402,23 +402,41 @@ async def close_owned(conn: Any, *, end: float) -> None:
         return None
 
     task: asyncio.Task[Any] | None = None
+    interrupted: asyncio.CancelledError | None = None
     try:
         remaining = end - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("Postgres owned-session cleanup deadline expired")
         task = asyncio.create_task(close())
-        done, _ = await asyncio.wait({task}, timeout=max(0, end - time.monotonic()))
-        if not done:
-            raise TimeoutError("Postgres owned-session cleanup deadline expired")
+        while True:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("Postgres owned-session cleanup deadline expired")
+            try:
+                done, _ = await asyncio.wait({task}, timeout=remaining)
+            except asyncio.CancelledError as error:
+                # Keep cancellation delivery alive; another signal cannot reset its end.
+                interrupted = interrupted or error
+                continue
+            if not done:
+                raise TimeoutError("Postgres owned-session cleanup deadline expired")
+            break
         if isinstance(result := task.result(), (SystemExit, KeyboardInterrupt)):
             raise result
     except BaseException:
-        _terminate(conn)
+        try:
+            _terminate(conn)
+        except BaseException:  # noqa: BLE001 — abort cannot replace the first cleanup failure.
+            pass
         if task is not None:
             if not task.done():
                 task.cancel()
             task.add_done_callback(_retrieve_task)
+        if interrupted is not None:
+            raise interrupted from None
         raise
+    if interrupted is not None:
+        raise interrupted
 
 
 async def _release(pool: Any, conn: Any) -> None:

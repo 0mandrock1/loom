@@ -157,13 +157,37 @@ def _require_dsn() -> str:
     return settings.router_pg_dsn
 
 
+class _PoolInitFailure(Exception):
+    """Carry native control intent through the driver's ordinary-error cleanup."""
+
+    def __init__(self, error: SystemExit | KeyboardInterrupt) -> None:
+        super().__init__("directory codec initialization interrupted")
+        self.error = error
+
+
 async def _init(conn: Any) -> None:
-    for typ in ("json", "jsonb"):
-        await conn.set_type_codec(typ, encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+    try:
+        for typ in ("json", "jsonb"):
+            await conn.set_type_codec(
+                typ, encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
+    except BaseException as original:
+        # Only builtin codecs run here: this raw session has never been borrowed or
+        # held command locks. Quarantine before the driver can lose its ownership.
+        try:
+            conn.terminate()
+        except BaseException:  # noqa: BLE001 — disposal must preserve the first init failure.
+            try:
+                original.add_note("directory initialization session closure is unknown")
+            except BaseException:  # noqa: BLE001 — diagnostics must preserve the first failure.
+                pass
+        if isinstance(original, (SystemExit, KeyboardInterrupt)):
+            raise _PoolInitFailure(original) from None
+        raise
 
 
 async def pool() -> Any:
-    """The directory's pool, opened on first use."""
+    """The directory's pool; physical sessions open only for foreground consumers."""
     global _pool
     if _pool is not None:
         return _pool
@@ -171,19 +195,22 @@ async def pool() -> Any:
 
     async with _opening:
         if _pool is None:
-            _pool = await asyncpg.create_pool(
-                _require_dsn(),
-                min_size=1,
-                max_size=POOL_MAX,
-                init=_init,
-                server_settings={
-                    **_SESSION,
-                    "statement_timeout": str(STATEMENT_TIMEOUT_S * 1000),
-                    "idle_in_transaction_session_timeout": str(STATEMENT_TIMEOUT_S * 2000),
-                },
-                command_timeout=STATEMENT_TIMEOUT_S + 1,
-                timeout=STATEMENT_TIMEOUT_S,
-            )
+            try:
+                _pool = await asyncpg.create_pool(
+                    _require_dsn(),
+                    min_size=0,
+                    max_size=POOL_MAX,
+                    init=_init,
+                    server_settings={
+                        **_SESSION,
+                        "statement_timeout": str(STATEMENT_TIMEOUT_S * 1000),
+                        "idle_in_transaction_session_timeout": str(STATEMENT_TIMEOUT_S * 2000),
+                    },
+                    command_timeout=STATEMENT_TIMEOUT_S + 1,
+                    timeout=STATEMENT_TIMEOUT_S,
+                )
+            except _PoolInitFailure as failed:
+                raise failed.error from None
     return _pool
 
 
@@ -200,13 +227,17 @@ async def _connection(*, lookup: bool = False) -> AsyncIterator[Any]:
     slot, the pool's opening and the connection); a lookup's also takes one of
     LOOKUP_SLOTS. A wait past the bound raises TimeoutError, an OSError, which `_reading`
     answers as the directory unavailable."""
-    async with AsyncExitStack() as stack:
-        async with asyncio.timeout(STATEMENT_TIMEOUT_S):
-            if lookup:
-                await _lookups.acquire()
-                stack.callback(_lookups.release)
-            conn = await stack.enter_async_context((await pool()).acquire())
-        yield conn
+    try:
+        async with AsyncExitStack() as stack:
+            async with asyncio.timeout(STATEMENT_TIMEOUT_S):
+                if lookup:
+                    await _lookups.acquire()
+                    stack.callback(_lookups.release)
+                conn = await stack.enter_async_context((await pool()).acquire())
+            yield conn
+    except _PoolInitFailure as failed:
+        # Driver acquisition and context cleanup finish before control intent returns.
+        raise failed.error from None
 
 
 @asynccontextmanager
@@ -929,9 +960,9 @@ async def _control_result[T](work: Callable[[], Awaitable[T]]) -> T | _ControlFa
 class _ControlOwner:
     """Own only this operator attempt's proxy, through close and pool release."""
 
-    def __init__(self) -> None:
-        self.end = time.monotonic() + CONTROL_MAX_S
-        self.work_end = self.end - min(1.0, CONTROL_MAX_S / 4)
+    def __init__(self, seconds: float) -> None:
+        self.end = time.monotonic() + seconds
+        self.work_end = self.end - min(1.0, seconds / 4)
         self.context = _connection()
         self.conn: Any = None
         self.entered = False
@@ -959,12 +990,33 @@ class _ControlOwner:
             return
         if self.close_task is None:
             self.close_task = self.start(lambda: pg.close_owned(self.conn, end=self.end))
+        interrupted: asyncio.CancelledError | None = None
         try:
-            await self.wait(self.close_task, self.end)
+            while not self.close_task.done():
+                remaining = self.end - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("directory control deadline expired; outcome unknown")
+                try:
+                    await asyncio.wait({self.close_task}, timeout=remaining)
+                except asyncio.CancelledError as error:
+                    # Another signal cannot abandon the public cancellation in flight.
+                    interrupted = interrupted or error
+            result = self.close_task.result()
+            if isinstance(result, _ControlFatal):
+                raise _ControlInterrupted(result)
         except BaseException:
-            pg._terminate(self.conn)
-            self.close_task.cancel()
+            try:
+                pg._terminate(self.conn)
+            except BaseException:  # noqa: BLE001 — abort must preserve the first cleanup failure.
+                pass
+            finally:
+                if not self.close_task.done():
+                    self.close_task.cancel()
+            if interrupted is not None:
+                raise interrupted from None
             raise
+        if interrupted is not None:
+            raise interrupted
 
     async def release(self) -> None:
         if self.entered:
@@ -1018,10 +1070,10 @@ class _ControlInterrupted(BaseException):
         self.fatal = fatal
 
 
-async def _control_transaction[T](change: Callable[[Any], Awaitable[T]]) -> T:
+async def _control_transaction[T](change: Callable[[Any], Awaitable[T]], *, seconds: float) -> T:
     """Bound the whole callback, close first, then settle work and pool ownership."""
     async with _reading():
-        owner = _ControlOwner()
+        owner = _ControlOwner(seconds)
         task = owner.start(lambda: owner.work(change))
         try:
             result = await owner.wait(task, owner.work_end)
@@ -1060,7 +1112,7 @@ async def _attach_change[T](
         await conn.execute("SELECT pg_logical_emit_message(true, 'loom.control', '')")
         return await change(conn, attaching)
 
-    return await _control_transaction(locked)
+    return await _control_transaction(locked, seconds=CONTROL_MAX_S)
 
 
 async def claim(cell_name: str, expected: Control) -> Attaching:

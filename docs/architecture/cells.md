@@ -1295,6 +1295,17 @@ connection before releasing the pool context. Unexpected errors never wait for r
 on that discarded session. A late acquisition cannot start mutation work or obtain a
 fresh cleanup allowance; acquisition without a known proxy remains an unknown outcome.
 Ordinary live placement retains its separate transaction and connection handling.
+Repeated interruption keeps the same close task and original end; a completed child
+cancellation remains a terminal failure. Fallback abort errors cannot replace the first
+operation or cleanup failure.
+
+The shared directory pool opens physical sessions only for foreground acquisitions;
+pool object creation does not establish connectivity. Healthy released sessions are
+cached under the existing size cap, recycling and idle expiry. A later cold acquisition
+opens a new session. Fixed JSON codec initialization quarantines its never-borrowed raw
+session on failure; native interruptions return to that foreground consumer after driver
+cleanup, with no autonomous opening or replenishment task. If quarantine fails, the
+original failure records that session closure is unknown.
 
 The source census for acceptance and operator directory writes is checked by
 `tests/unit/test_cell_control_census.py`, including dynamic cleanup tables, guarded
