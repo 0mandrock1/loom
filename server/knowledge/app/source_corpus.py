@@ -1,8 +1,9 @@
-"""Current metadata proofs for a synthesis corpus; no document bodies are retained."""
+"""Checked synthesis chunks and current metadata proofs."""
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import InitVar, dataclass, field
 from typing import Any
 
@@ -10,6 +11,8 @@ from server.core.ch import sequential_reads, set_query_tag
 from server.core.datetimes import to_naive_utc_second
 from server.core.diagnostics import private_work
 from server.knowledge.app.source_access import Admitted, ReadPlan
+from server.knowledge.domain.chunk_metadata import read_structure
+from server.memory.domain.corpus_synthesis import CorpusChunk
 
 
 class LostCorpus(Exception):
@@ -92,3 +95,98 @@ class Proofs:
                 refreshed.append(item)
         if not all(self.plan.current(item) for item in refreshed):
             raise LostCorpus()
+
+
+@dataclass(frozen=True)
+class Corpus:
+    chunks: list[CorpusChunk]
+    documents: int
+    proofs: Proofs
+
+
+@dataclass(frozen=True)
+class _Document:
+    chunks: list[CorpusChunk]
+    mirrored: Admitted | None = None
+
+
+async def _mirror(plan: ReadPlan, namespace: str, uri: str, model: str) -> _Document:
+    from server.knowledge.app import source_documents
+
+    checked = await source_documents.get(plan, namespace, uri)
+    if checked is None:
+        return _Document([])
+    chunks = await source_documents.chunks(plan, checked, model=model)
+    if chunks is None:
+        raise LostCorpus()
+    if not chunks:
+        return _Document([])
+    out = []
+    for chunk in chunks:
+        if (
+            checked.row.org != plan.org
+            or _key(chunk.admitted) != (checked.row.namespace, checked.row.source_uri)
+            or _identity(chunk.admitted) != _identity(checked.admitted)
+        ):
+            raise LostCorpus()
+        row = chunk.row
+        meta = read_structure(row.get("chunk_metadata"))
+        out.append(
+            CorpusChunk(
+                source_uri=uri,
+                idx=int(row["chunk_idx"]),
+                text=str(row.get("content") or ""),
+                section_path=meta.section_path,
+                revision=meta.revision,
+                locator=meta.locator,
+            )
+        )
+    return _Document(out, checked.admitted)
+
+
+async def load(
+    plan: ReadPlan,
+    namespace: str,
+    source_uris: list[str],
+    *,
+    ordinary_chunks: Callable[[str, str, str], Awaitable[list[CorpusChunk]]],
+    model: str,
+) -> Corpus:
+    """Assemble whole copies for synthesis while keeping generic readers ordinary-only."""
+    from server.knowledge.store import documents
+
+    set_query_tag("knowledge.mirror.synthesis_corpus")
+    selected = []
+    by_uri: dict[str, _Document] = {}
+    with private_work(), sequential_reads():
+        for uri in source_uris:
+            if uri in by_uri:
+                selected.append(by_uri[uri])
+                continue
+            ordinary = await ordinary_chunks(plan.org, namespace, uri)
+            if ordinary:
+                document = _Document(ordinary)
+            # The existing resolver arbitrates heads, older builds and pending publications.
+            elif await documents.get_one(plan.org, namespace, uri) is not None:
+                document = _Document([])
+            else:
+                try:
+                    document = await _mirror(plan, namespace, uri, model)
+                except Exception:  # noqa: BLE001 — a conditional mirror failure cannot publish a partial corpus
+                    plan.failed = True
+                    document = _Document([])
+            by_uri[uri] = document
+            selected.append(document)
+        proofs = Proofs(
+            plan, tuple(item.mirrored for item in selected if item.mirrored is not None)
+        )
+        try:
+            await proofs.check()
+        except LostCorpus:
+            selected = [item for item in selected if item.mirrored is None]
+            proofs = Proofs(plan, ())
+        return Corpus(
+            [chunk for item in selected for chunk in item.chunks],
+            sum(bool(item.chunks) for item in selected),
+            proofs,
+        )
