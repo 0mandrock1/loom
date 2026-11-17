@@ -87,7 +87,7 @@ export class LoomMemoryService implements BaseMemoryService {
       honourAbstain && found.abstain ? [] : found.results.filter((hit) => !(honourAbstain && hit.below_threshold));
     const memories = hits.slice(0, this.topK).map((hit) => ({
       content: { role: "user", parts: [{ text: hit.content_excerpt }] },
-      ...(hit.source === "fact" && hit.agent && hit.agent !== "*"
+      ...((hit.source === "fact" || hit.source === "anchor") && hit.agent && hit.agent !== "*"
         ? { id: JSON.stringify([hit.memory_key, hit.session_id || "-", hit.agent]) }
         : {}),
       customMetadata: { similarity: hit.similarity, source: hit.source },

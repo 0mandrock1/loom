@@ -177,10 +177,12 @@ class LoomMemoryService(BaseMemoryService):
             hits = [hit for hit in hits if not hit.below_threshold]
         memories = [
             MemoryEntry(
-                # Only a fact is deleted by its key; a chunk outlives the fact it names
-                # and a summary has no key, so erasure removes both.
+                # Stored facts support exact deletion; chunks and summaries need erasure.
                 id=_entry_id(hit.memory_key, hit.session_id, hit.agent, hit.version)
-                if hit.source == "fact" and hit.agent and hit.agent != "*" and hit.version > 0
+                if hit.source in ("fact", "anchor")
+                and hit.agent
+                and hit.agent != "*"
+                and hit.version > 0
                 else None,
                 content=types.Content(role="user", parts=[types.Part(text=hit.content_excerpt)]),
                 custom_metadata={"similarity": hit.similarity, "source": hit.source},
