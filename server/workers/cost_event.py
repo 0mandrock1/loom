@@ -149,6 +149,7 @@ async def write_private_cost_event_for(
     if not spent(snap):
         return
     try:
+        # not a setting: best-effort private accounting cannot delay turn cleanup indefinitely.
         async with asyncio.timeout(5.0):
             await write_private_event(
                 _worker_event(
