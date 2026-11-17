@@ -8,6 +8,7 @@ import dataclasses
 import json
 import socket
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -1005,7 +1006,8 @@ def test_source_provenance_uses_only_fixed_bounded_readonly_git(monkeypatch, fau
     def git(argv, **kwargs):
         calls.append(argv)
         assert argv[0] == "git" and kwargs["timeout"] == 5 and kwargs["check"] is False
-        assert kwargs["capture_output"] is True and kwargs["cwd"].name == "scale-attachcli"
+        assert kwargs["capture_output"] is True
+        assert kwargs["cwd"] == Path(__file__).resolve().parents[2]
         assert "shell" not in kwargs
         if argv[1:] == ["rev-parse", "HEAD"]:
             value = "wrong" if fault == "head" else fixture.build_commit
