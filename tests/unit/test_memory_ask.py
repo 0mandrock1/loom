@@ -980,3 +980,57 @@ async def test_compound_ask_keeps_governed_text_instead_of_a_private_same_key(
     ]
     assert "Conflicting private" not in str(result.model_dump())
     assert ask_env.llm.calls == []
+
+
+@pytest.mark.parametrize("synthesize", [False, True])
+async def test_bridge_ask_uses_the_read_namespace_for_governed_conflicts(
+    ask_env, monkeypatch, synthesize
+) -> None:
+    import server.core.ch as ch_mod
+
+    key = "definition/alice_jones"
+    approved = _hit(key, excerpt="The CEO of ARR is Alice Jones.")
+    approved.namespace = "ns"
+    approved.governed = True
+    approved._row_identity = ("_shared", "-", "-")
+    other = _hit(key, excerpt="independent definition from another namespace.")
+    other.namespace = "other"
+    other._row_identity = ("bot", "alice", "other-session")
+    ask_env.search_output = _search_output([approved, other])
+    ch = ch_mod.get_client()
+    original_query_all = ch.query_all
+    bridges = []
+
+    async def query_all(sql, params=None):
+        if "memory_key LIKE {pat:String}" in sql:
+            bridges.append(dict(params or {}))
+            return [
+                {
+                    "memory_key": key,
+                    "memory_type": "fact",
+                    "value": "Conflicting private country of residence.",
+                    "agent": "bot",
+                    "user_id": "alice",
+                    "session_id": "private-session",
+                    "status": "active",
+                    "version": 1,
+                    "tags": [],
+                }
+            ]
+        return await original_query_all(sql, params=params)
+
+    monkeypatch.setattr(ch, "query_all", query_all)
+    result = await _run(
+        query="What country is the CEO of ARR from?",
+        allow_synthesis=synthesize,
+        decompose="off",
+        top_k=15,
+    )
+    assert any(p["ns"] == "ns" and p["pat"] == "%alice_jones%" for p in bridges)
+    assert [(h.namespace, h.memory_key) for h in result.results] == [
+        ("ns", key),
+        ("other", key),
+    ]
+    assert "Conflicting private" not in str(result.model_dump())
+    assert len(ask_env.llm.calls) == int(synthesize)
+    assert "Conflicting private" not in str(ask_env.llm.calls)

@@ -274,7 +274,7 @@ async def _fill_pool(
     run.ranked = await _served_pool(run.ranked, run.search_input)
     # The reranks and injections above order by recency and identifiers: a governed
     # definition any of the searches served leads again.
-    run.ranked = governed_after_computed(run.ranked)
+    run.ranked = governed_after_computed(run.ranked, str(run.search_input.namespace))
     run.results = run.ranked[: run.target_k]
     run.synth_pool = run.ranked[: run.window]
     return notes

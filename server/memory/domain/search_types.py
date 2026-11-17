@@ -434,7 +434,7 @@ def is_computed_row(hit: Any) -> bool:
     return get("source") == "computed" or get("memory_key") == "derived_aggregate"
 
 
-def governed_after_computed(rows: list[Any]) -> list[Any]:
+def governed_after_computed(rows: list[Any], namespace: str = "") -> list[Any]:
     """Governed definitions replace other rows of their namespace/key and follow computed
     rows, each group in its order: for search hits or wire hit dicts alike."""
 
@@ -445,10 +445,10 @@ def governed_after_computed(rows: list[Any]) -> list[Any]:
         return list(rows)
     computed = [h for h in rows if is_computed_row(h)]
     lead = [h for h in rows if governed(h) and not is_computed_row(h)]
-    governed_keys = {hit_row(h) for h in lead}
+    governed_keys = {hit_row(h, namespace) for h in lead}
     rest = [
         h
         for h in rows
-        if not governed(h) and not is_computed_row(h) and hit_row(h) not in governed_keys
+        if not governed(h) and not is_computed_row(h) and hit_row(h, namespace) not in governed_keys
     ]
     return computed + lead + rest

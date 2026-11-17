@@ -695,7 +695,7 @@ async def _settle_window(run: _AskRun, *, token_budget: int | None) -> bool:
     note (something superseded was dropped or masked)."""
     search_input, _settings = run.search_input, run.settings
     # Grounding can prepend code records after retrieval restored this order.
-    run.synth_pool = governed_after_computed(run.synth_pool)
+    run.synth_pool = governed_after_computed(run.synth_pool, str(search_input.namespace))
     run.memories = _publish_window_keys(run.synth_pool)  # The cache's key axis
 
     # Synthesis-window token budget (memory.domain.ask_budget): the caller fixes the
