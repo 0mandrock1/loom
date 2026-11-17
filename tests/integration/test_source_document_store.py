@@ -254,3 +254,105 @@ async def test_list_projection_and_count_stay_in_one_live_copy(content: str) -> 
     finally:
         await ch.disconnect()
         await pg.close_pool()
+
+
+async def test_list_discovery_pages_all_families_and_shadows_ordinary_rows(monkeypatch) -> None:
+    os.environ.get("LOOM_CH_HOST") or pytest.skip("LOOM_CH_HOST not set")
+    from server.core import pg
+    from server.core.ch import get_client, set_query_tag
+    from server.core.naming import new_mirror_name
+    from server.knowledge.domain.access_list import AccessList, to_json
+    from server.knowledge.store import documents, pg_documents, source_documents
+    from server.settings import settings
+
+    if pg.enabled():
+        await pg.close_pool()
+        monkeypatch.setattr(settings, "pg_pool_min_size", 1)
+        monkeypatch.setattr(settings, "pg_pool_max_size", 1)
+
+    org, first, second = unique_org("list-families"), new_mirror_name(), new_mirror_name()
+    sid, other_sid = str(uuid4()), str(uuid4())
+    sources = {(first, sid): "team", (second, other_sid): "team"}
+    ch = get_client()
+    await ch.connect()
+    set_query_tag("test.checked_list_discovery")
+    at = datetime.now(UTC).replace(microsecond=0, tzinfo=None)
+
+    def document(namespace, uri, tags):
+        return documents.build_document_row(
+            org=org,
+            namespace=namespace,
+            source_uri=uri,
+            doc_id=str(uuid4()),
+            content="body",
+            title="Title",
+            tags=tags,
+            version=10,
+            revision=0,
+            ingested_at=at,
+            agent="fixture",
+            actor="process:fixture",
+            source_class="external",
+            access_json=to_json(AccessList(anyone=True)),
+        )
+
+    rows = [document(first, f"gdrive:{i:04d}#" + sid, ["source-id:" + sid]) for i in range(130)]
+    rows.append(document(first, "gdrive:K#native#" + sid, ["source-id:" + sid]))
+    other = document(second, "gdrive:0000#" + other_sid, ["source-id:" + other_sid])
+    try:
+        if pg.enabled():
+            await pg_documents.commit(rows, over={}, targets={r["source_uri"]: 1 for r in rows})
+            await pg_documents.commit([other], over={}, targets={other["source_uri"]: 1})
+            # Published mirror rows with no head cannot enter the PG metadata stream.
+            await ch.insert(
+                "loom.documents", [document(first, "gdrive:ch-only#" + sid, ["source-id:" + sid])]
+            )
+        else:
+            await ch.insert("loom.documents", [*rows, other])
+        async with source_documents.list_candidates(org, sources, ["anyone"]) as stream:
+            found = []
+            async for row in stream:
+                found.append(row)
+                if pg.enabled() and len(found) % 64 == 1:
+                    # Admission can borrow the sole connection between metadata pages.
+                    assert await pg.fetchval("SELECT 1") == 1
+        expected = [
+            {
+                "namespace": row["namespace"],
+                "source_uri": row["source_uri"],
+                "public_namespace": "team",
+                "public_uri": row["source_uri"].rsplit("#", 1)[0],
+            }
+            for row in [*rows, other]
+        ]
+
+        def order(row):
+            return tuple(
+                row[k] for k in ("public_namespace", "public_uri", "namespace", "source_uri")
+            )
+
+        assert found == sorted(expected, key=order)
+        assert len(found) == 132
+        async with source_documents.list_candidates(org + "-other", sources, ["anyone"]) as stream:
+            assert [row async for row in stream] == []
+
+        published = document("team", "gdrive:0000", [])
+        retired = {**document("team", "gdrive:retired", []), "superseded_at": at}
+        await ch.insert("loom.documents", [published, retired])
+        pairs = [("team", uri) for uri in ("gdrive:0000", "gdrive:retired", "gdrive:head-only")]
+        expected_shadows = {("team", "gdrive:0000")}
+        if pg.enabled():
+            head_only = document("team", "gdrive:head-only", [])
+            await pg_documents.commit([head_only], over={}, targets={head_only["source_uri"]: 1})
+            expected_shadows.add(("team", "gdrive:head-only"))
+        assert await source_documents.ordinary_families(org, pairs) == expected_shadows
+        assert await source_documents.ordinary_families(
+            org, pairs, include_superseded=True
+        ) == expected_shadows | {("team", "gdrive:retired")}
+        assert (
+            await source_documents.ordinary_families(org + "-other", pairs, include_superseded=True)
+            == set()
+        )
+    finally:
+        await ch.disconnect()
+        await pg.close_pool()

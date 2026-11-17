@@ -745,6 +745,13 @@ embedding-model and section-index pairs, including sections awaiting embeddings.
 Postgres count also requires the head's recorded chunk version; a current revision
 without recorded chunks counts zero. Permission and serving-state proofs must remain
 current through the list's final read before any count or lookahead is returned.
+Metadata discovery groups complete public address families before a public cursor or
+limit. Postgres reads internal pages of 64 rows, releasing the connection before
+permission checks; it reads every page without a candidate cutoff. Ordinary shadow
+checks read bounded batches independently of public filters and cursors. They cover
+the ordinary listing's published rows and its unpublished Postgres heads; requesting
+superseded rows also lets an ordinary tombstone shadow a mirrored copy. Mirrored
+candidates remain live-only.
 
 A token reads as one person, for both the `owner` entry and the emails, or as nobody:
 

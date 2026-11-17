@@ -3,17 +3,146 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing, asynccontextmanager
 from typing import Any
 
 from server.core import pg
-from server.core.ch import get_client
+from server.core.ch import get_client, set_query_tag
 from server.knowledge.domain.live_chunks import live_chunk_sql
 from server.knowledge.domain.serving import Serving
 from server.knowledge.store.documents import DOCUMENT_COLUMNS, DocumentRow, _hydrate
 from server.knowledge.store.pg_documents import decode_row
 from server.knowledge.store.source_candidates import candidates
+
+_PG_LIST_CANDIDATES = """
+WITH metadata AS (
+    SELECT h.namespace COLLATE "C" AS namespace, h.source_uri COLLATE "C" AS source_uri,
+        s.original COLLATE "C" AS public_namespace,
+        left(h.source_uri, length(h.source_uri) - 37) COLLATE "C" AS public_uri
+    FROM loom.knowledge_heads h
+    JOIN unnest($2::text[], $3::text[], $4::text[]) AS s(mirror, source, original)
+      ON h.namespace = s.mirror AND right(h.source_uri, 37) = '#' || s.source
+    WHERE h.org = $1 AND NOT h.deleted AND h.row ->> 'superseded_at' IS NULL
+      AND length(h.source_uri) > 37
+)
+SELECT namespace, source_uri, public_namespace, public_uri FROM metadata
+WHERE (public_namespace, public_uri, namespace, source_uri) > ($5, $6, $7, $8)
+ORDER BY public_namespace, public_uri, namespace, source_uri LIMIT 64
+"""
+
+
+async def _pg_list_candidates(
+    org: str, bindings: list[tuple[str, str]], originals: list[str]
+) -> AsyncGenerator[dict[str, Any], None]:
+    position: tuple[str, ...] = ("", "", "", "")
+    set_query_tag("knowledge.mirror.list_candidates")
+    while True:
+        # Release the connection before yielding: permission checks use this pool too.
+        page = await pg.fetch(
+            _PG_LIST_CANDIDATES,
+            org,
+            [ns for ns, _ in bindings],
+            [source for _, source in bindings],
+            originals,
+            *position,
+        )
+        for saved in page:
+            row = dict(saved)
+            next_position = tuple(
+                row[k] for k in ("public_namespace", "public_uri", "namespace", "source_uri")
+            )
+            if next_position <= position:
+                raise ValueError("nonadvancing list metadata page")
+            position = next_position
+            yield row
+        if len(page) < 64:
+            break
+
+
+@asynccontextmanager
+async def list_candidates(
+    org: str, sources: dict[tuple[str, str], str], access_keys: list[str] | None
+) -> AsyncIterator[AsyncIterator[dict[str, Any]]]:
+    """Group metadata by public family before admission, without a candidate cutoff."""
+    if not sources:
+        raise ValueError("list discovery requires selected sources")
+    bindings = sorted(sources)
+    originals = [sources[key] for key in bindings]
+    if pg.enabled():
+        async with aclosing(_pg_list_candidates(org, bindings, originals)) as rows:
+            yield rows
+        return
+    params: dict[str, Any] = {
+        "org": org,
+        "nss": sorted({ns for ns, _ in bindings}),
+        "bindings": bindings,
+        "originals": originals,
+    }
+    coarse = ""
+    if access_keys is not None:
+        params["acl_keys"] = access_keys
+        coarse = " AND hasAny(access_keys, {acl_keys:Array(String)})"
+    sql = (
+        "WITH indexOf({bindings:Array(Tuple(String, String))}, "
+        "(namespace, right(source_uri, 36))) AS binding, "
+        "arrayElement({originals:Array(String)}, binding) AS public_namespace, "
+        "substring(source_uri, 1, greatest(toInt64(length(source_uri)) - 37, 0)) AS public_uri "
+        "SELECT namespace, source_uri, public_namespace, public_uri "
+        "FROM loom.documents FINAL WHERE org = {org:String} "
+        "AND namespace IN {nss:Array(String)} AND superseded_at IS NULL "
+        "AND length(source_uri) > 37 AND substring(source_uri, -37, 1) = '#' AND binding > 0"
+        + coarse
+        + " ORDER BY public_namespace, public_uri, namespace, source_uri FORMAT JSONEachRow"
+    )
+    async with candidates(sql, params) as rows:
+        yield rows
+
+
+async def ordinary_families(
+    org: str, pairs: list[tuple[str, str]], *, include_superseded: bool = False
+) -> set[tuple[str, str]]:
+    """Find ordinary shadows independently of the caller's filters and page position."""
+    if len(pairs) > 64:
+        raise ValueError("ordinary shadow batch exceeds bound")
+    if not pairs:
+        return set()
+    pairs = sorted(set(pairs))
+    live = "" if include_superseded else " AND superseded_at IS NULL"
+    rows = await get_client().query_all(
+        "SELECT namespace, source_uri FROM loom.documents FINAL WHERE org = {org:String} "
+        "AND (namespace, source_uri) IN {pairs:Array(Tuple(String, String))}"
+        + live
+        + " LIMIT {limit:UInt32}",
+        params={"org": org, "pairs": pairs, "limit": len(pairs) + 1},
+    )
+    if pg.enabled():
+        # Keep the ordinary listing's published rows and unpublished heads as shadows.
+        rows = [
+            *rows,
+            *(
+                await pg.fetch(
+                    "SELECT h.namespace, h.source_uri FROM loom.knowledge_heads h "
+                    "JOIN unnest($2::text[], $3::text[]) AS s(namespace, source_uri) "
+                    "ON (h.namespace, h.source_uri) = (s.namespace, s.source_uri) WHERE h.org = $1"
+                    + (
+                        ""
+                        if include_superseded
+                        else " AND NOT h.deleted AND h.row ->> 'superseded_at' IS NULL"
+                    )
+                    + " LIMIT $4",
+                    org,
+                    [ns for ns, _ in pairs],
+                    [uri for _, uri in pairs],
+                    len(pairs) + 1,
+                )
+            ),
+        ]
+    found = {(str(row["namespace"]), str(row["source_uri"])) for row in rows}
+    if not found.issubset(pairs):
+        raise ValueError("unexpected ordinary shadow identity")
+    return found
+
 
 _LIST_COLUMNS = (
     "org",
