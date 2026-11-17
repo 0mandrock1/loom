@@ -8,6 +8,9 @@ from typing import Any
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
+from server.code.domain.index import repos
+from server.core import cell
+from server.router import fingerprints
 from server.settings import Settings
 from server.settings._file import SettingsFileError, read_settings_file
 from server.settings._live import coerce
@@ -51,3 +54,19 @@ def read_target(path: Path, current: Settings) -> Settings:
         raise SettingsFileError(
             f"{path}: invalid target configuration; check the setting constraints"
         ) from None
+
+
+def target_fingerprint(
+    target: Settings, deployment_id: str, registered: dict[str, Any]
+) -> dict[str, Any]:
+    """Validate the candidate without admitting it or changing process settings."""
+    value = cell.as_value(
+        cell.fingerprint_for(target, deployment_id, repos.operator_orgs_for(target))
+    )
+    if reason := fingerprints.registration_refusal(value, registered):
+        raise ValueError(reason)
+    if value["fields"]["scim"]:
+        raise ValueError("configuration update requires per-cell SCIM before enabling SCIM")
+    if reason := fingerprints.placement_refusal(registered["cell"], "candidate", value):
+        raise ValueError(reason)
+    return value

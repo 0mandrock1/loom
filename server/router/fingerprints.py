@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from server.core import cell, org_patterns
@@ -54,6 +54,32 @@ def readable(value: Any) -> bool:
             if cell.named_org(org) is None or cell.org_name_refusal(org):
                 return False
     return True
+
+
+def registration_refusal(value: Any, registered: Mapping[str, Any], name: str = "candidate") -> str:
+    """A fingerprint accepts only the registered stores and host."""
+    if not readable(value):
+        return f"{name}: unreadable fingerprint; change fingerprints with `loom cell update`"
+    expected = {
+        "deployment_id": registered["deployment_id"],
+        "bucket": registered["bucket"],
+        "bucket_prefix": registered["bucket_prefix"],
+        "public_host": registered["host"],
+    }
+    fields = value["fields"]
+    changed = [
+        name for name, want in expected.items() if fields.get(name, cell.DEFAULTS[name]) != want
+    ]
+    if changed:
+        return (
+            f"{name}'s {', '.join(changed)} differ from cell {registered['cell']!r}'s registration"
+        )
+    if fields.get("oauth_issuer_host", cell.DEFAULTS["oauth_issuer_host"]) != registered["host"]:
+        return (
+            f"{name}'s oauth_issuer_host differs from the registered host: the router "
+            "attaches no issuer host other than the cell's own"
+        )
+    return ""
 
 
 def _pair_refusal(a: dict[str, Any], b: dict[str, Any]) -> str:

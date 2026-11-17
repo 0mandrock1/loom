@@ -782,29 +782,6 @@ def attach_refusal(
     return ""
 
 
-def _fingerprint_refusal(found: Attaching, name: str, value: dict[str, Any]) -> str:
-    """Why a posted fingerprint is not this row's cell ('' when it is): its stores and
-    hosts, the servers' own values, equal the row's."""
-    fields = value["fields"]
-    row = found.row
-    expected = {
-        "deployment_id": row.deployment_id,
-        "bucket": found.bucket,
-        "bucket_prefix": found.bucket_prefix,
-        "public_host": row.host,
-    }
-    differ = [k for k, want in expected.items() if fields.get(k, cell_state.DEFAULTS[k]) != want]
-    if differ:
-        return f"{name}'s {', '.join(differ)} differ from cell {row.cell!r}'s registration"
-    issuer_host = fields.get("oauth_issuer_host", cell_state.DEFAULTS["oauth_issuer_host"])
-    if issuer_host != row.host:
-        return (
-            f"{name}'s oauth_issuer_host is not cell {row.cell!r}'s host {row.host!r}: the "
-            "router attaches no issuer host other than the cell's own"
-        )
-    return ""
-
-
 def _as_json(*values: Any) -> str:
     """Values in one canonical JSON text, which tells `false`, `0` and `0.0` apart."""
     return json.dumps(values, sort_keys=True)
@@ -816,12 +793,19 @@ def begin_refusal(found: Attaching, begin: Begin) -> str:
     if reason := attach_refusal(found, begin.deployment_id, begun=False):
         return reason
     row = found.row
+    registered = {
+        "cell": row.cell,
+        "deployment_id": row.deployment_id,
+        "bucket": found.bucket,
+        "bucket_prefix": found.bucket_prefix,
+        "host": row.host,
+    }
     for name, value in (("current_fp", begin.current_fp), ("next_fp", begin.next_fp)):
         if value is None:
             continue
-        if reason := _fingerprint_refusal(found, name, value) or fingerprints.placement_refusal(
-            row.cell, name, value
-        ):
+        if reason := fingerprints.registration_refusal(value, registered, name):
+            return reason
+        if reason := fingerprints.placement_refusal(row.cell, name, value):
             return reason
     # Compared as JSON, not as Python values, where `false == 0` and `1 == 1.0`: a rerun
     # writes the fingerprints again only when they are the row's to the type.
