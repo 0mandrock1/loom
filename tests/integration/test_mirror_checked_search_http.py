@@ -1,4 +1,4 @@
-"""Signed searches admit current source permissions under either storage authority."""
+"""Signed document reads follow current permissions under either storage authority."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
     org, namespace, mirror = unique_org("checked-search"), "team", new_mirror_name()
     source = str(uuid4())
     query = "markedsearchcanary"
+    private_content = query + " private\n\n# Pending\nUnembedded section."
     public_uri = "gdrive:checked-document#native-fragment"
     uri = public_uri + "#" + source
     vector = await embedder.embed(query)
@@ -121,6 +122,20 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert response.status_code == 200, response.text
             return response.json()
 
+        async def outline(token):
+            response = await client.post(
+                "/v1/knowledge.outline",
+                json={
+                    "org": org,
+                    "namespace": namespace,
+                    "source_uri": public_uri,
+                    "section_path": ["Pending"],
+                },
+                headers={"Authorization": "Bearer " + token},
+            )
+            assert response.status_code == 200, response.text
+            return response.json()
+
         try:
             anonymous = await client.post(
                 "/v1/knowledge.search",
@@ -151,26 +166,59 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
             assert [r["source_uri"] for r in baseline["results"]] == ["ordinary:visible"]
             missing_get = await get(outsider)
             assert not missing_get["found"]
+            missing_outline = await outline(outsider)
+            assert not missing_outline["found"]
             row = await write_document(
                 mirror,
                 uri,
-                query + " private",
+                private_content,
                 to_json(AccessList(owner="source-owner")),
                 ["source-id:" + source],
+            )
+            await ch.insert(
+                "loom.chunks",
+                [
+                    {
+                        "org": org,
+                        "namespace": mirror,
+                        "source_uri": uri,
+                        "chunk_idx": 1,
+                        "content": "Unembedded section.",
+                        "doc_version": 10,
+                        "chunk_metadata": json.dumps(
+                            {
+                                "revision": 0,
+                                "section_path": ["Pending"],
+                                "section_depth": 1,
+                                "section_idx": 1,
+                            }
+                        ),
+                        "embedding_model": embedder.model_name,
+                        "embedding_dim": 0,
+                        "embedding": [0.0] * len(vector),
+                        "tags": ["source-id:" + source],
+                    }
+                ],
             )
             assert await search(outsider) == baseline
             assert await search(owner_bot) == baseline
             assert await get(outsider) == await get(owner_bot) == missing_get
+            assert await outline(outsider) == await outline(owner_bot) == missing_outline
             allowed = await search(owner)
             private = [r for r in allowed["results"] if r["source_uri"] == public_uri]
-            assert len(private) == 1 and private[0]["content"] == query + " private"
+            assert len(private) == 1 and private[0]["content"] == private_content
             assert private[0]["namespace"] == namespace
             assert not any(tag.startswith("source-id:") for tag in private[0]["tags"])
             document = await get(owner)
-            assert document["found"] and document["content"] == query + " private"
+            assert document["found"] and document["content"] == private_content
             assert document["source_uri"] == public_uri
             assert not any(tag.startswith("source-id:") for tag in document["tags"])
             assert "access_json" not in document
+            sections = await outline(owner)
+            assert sections["found"] and sections["source_uri"] == public_uri
+            assert sections["chunk_count"] == 2 and sections["structured"]
+            assert sections["section_content"] == "Unembedded section."
+            assert sections["section_chunk_idxs"] == [1]
             denied = await client.post(
                 "/v1/knowledge.search",
                 json={
@@ -188,6 +236,7 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
                 await ch.insert("loom.documents", [narrowed])
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
+            assert await outline(owner) == missing_outline
             widened = {**row, "version": 12, "access_json": to_json(AccessList(anyone=True))}
             if pg.enabled():
                 await pg_documents.commit([widened], over={uri: 11}, targets={uri: 1})
@@ -195,10 +244,12 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
                 await ch.insert("loom.documents", [widened])
             assert public_uri in [r["source_uri"] for r in (await search(owner_bot))["results"]]
             assert (await get(owner_bot))["found"]
+            assert (await outline(owner_bot))["section_content"] == "Unembedded section."
             stale = now - timedelta(seconds=settings.knowledge_source_acl_stale_seconds + 1)
             await mirrors.record_listing(org, mirror, source, "checked", stale)
             assert await search(owner) == baseline
             assert await get(owner) == missing_get
+            assert await outline(owner) == missing_outline
         finally:
             await ch.disconnect()
             await pg.close_pool()

@@ -140,41 +140,58 @@ def _cursor_scope(org: str, namespaces: list[str]) -> list[str]:
 
 
 async def handle_knowledge_outline(input: KnowledgeOutlineInput) -> KnowledgeOutlineOutput:
-    """A document's table of contents from its chunks' section metadata, and
-    optionally one section's text. Read-only; two cheap reads (document row,
-    the document's chunks in index order) and, under the Postgres authority, one of the
-    heads (`pg_serving`)."""
+    """A document's current admitted sections, including chunks awaiting embedding."""
     from server.core.ch import own_write_reads
-    from server.knowledge.domain.chunking import Chunk, outline
+    from server.knowledge.app import source_access, source_documents
     from server.knowledge.store import chunks as knowledge_repo
     from server.knowledge.store import documents as documents_repo
 
+    plan = await source_access.prepare(input.org, [input.namespace])
     with own_write_reads():
         doc = await documents_repo.get_one(input.org, input.namespace, input.source_uri)
-    if doc is None:
-        return KnowledgeOutlineOutput(found=False, source_uri=input.source_uri)
-    listed = await knowledge_repo.list_for_doc(
-        input.org,
-        input.namespace,
-        input.source_uri,
-        embedding_model=get_embedder().model_name,
-    )
-    # The ones its head serves: not an older version's still being retired, nor a write's
-    # not committed (`pg_serving`).
-    rows, _ = await pg_serving.keep_served(input.org, listed)
-    chunks: list[Chunk] = []
-    for r in rows:
-        meta = read_structure(r.chunk_metadata)
-        chunks.append(
-            Chunk(
-                idx=r.chunk_idx,
-                text=r.content,
-                section_path=meta.section_path,
-                section_depth=meta.section_depth,
-                section_idx=meta.section_idx,
-                char_start=meta.char_start,
-            )
+    if doc is not None:
+        listed = await knowledge_repo.list_for_doc(
+            input.org, input.namespace, input.source_uri, embedding_model=get_embedder().model_name
         )
+        rows, _ = await pg_serving.keep_served(input.org, listed)
+        chunks = [_outline_chunk(r.chunk_idx, r.content, r.chunk_metadata) for r in rows]
+        return _outline_output(input, doc.title or "", chunks)
+    if not plan.marked:
+        return KnowledgeOutlineOutput(found=False, source_uri=input.source_uri)
+    checked = await source_documents.get(plan, input.namespace, input.source_uri)
+    if checked is None:
+        return KnowledgeOutlineOutput(found=False, source_uri=input.source_uri)
+    admitted = await source_documents.chunks(plan, checked, model=get_embedder().model_name)
+    if admitted is None:
+        return KnowledgeOutlineOutput(found=False, source_uri=input.source_uri)
+    chunks = [
+        _outline_chunk(
+            int(item.admitted.candidate["chunk_idx"]),
+            str(item.row["content"] or ""),
+            str(item.row["chunk_metadata"] or "{}"),
+        )
+        for item in admitted
+    ]
+    return _outline_output(input, checked.row.title or "", chunks)
+
+
+def _outline_chunk(idx: int, content: str, metadata: str) -> Chunk:
+    meta = read_structure(metadata)
+    return Chunk(
+        idx=idx,
+        text=content,
+        section_path=meta.section_path,
+        section_depth=meta.section_depth,
+        section_idx=meta.section_idx,
+        char_start=meta.char_start,
+    )
+
+
+def _outline_output(
+    input: KnowledgeOutlineInput, title: str, chunks: list[Chunk]
+) -> KnowledgeOutlineOutput:
+    from server.knowledge.domain.chunking import outline
+
     by_idx = {c.idx: c for c in chunks}
     entries = [
         _OutlineEntry(
@@ -200,7 +217,7 @@ async def handle_knowledge_outline(input: KnowledgeOutlineInput) -> KnowledgeOut
     return KnowledgeOutlineOutput(
         found=True,
         source_uri=input.source_uri,
-        title=doc.title or "",
+        title=title,
         structured=bool(entries),
         chunk_count=len(chunks),
         sections=entries,
