@@ -28,7 +28,6 @@ import asyncio
 import contextlib
 import dataclasses
 import functools
-import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -37,7 +36,7 @@ from server.clients import gdrive
 from server.code.app.index.pass_budget import PassBudget
 from server.core.ch import sequential_reads
 from server.core.pg_lease import PublicationPending
-from server.knowledge.app import mirrors
+from server.knowledge.app import mirrors, private_sync
 from server.knowledge.app import source_gdrive_items as gdrive_items
 from server.knowledge.app import source_sync as sync
 from server.knowledge.domain import access_list
@@ -51,11 +50,8 @@ from server.knowledge.domain.sources import (
 from server.knowledge.store import documents
 from server.knowledge.store import mirrors as mirror_store
 from server.knowledge.store import sources as store
-from server.llm import customer
 from server.workers import pass_context
 from server.workers.status import set_worker_identity
-
-log = logging.getLogger("loom.knowledge.source_sync")
 
 # Seconds between two files' permission reads: ten a second stay well under the store's
 # per-user rate limit.
@@ -94,8 +90,7 @@ async def turn(src: KnowledgeSource, state: dict[str, str], run: sync.Pass) -> s
         sync.start_waits(result, detail)
     result.mirror = mirror
     src = dataclasses.replace(src, mirror=mirror)
-    # Attribute the turn's model calls to the mirror.
-    with customer.for_org(src.org, namespace=mirror):
+    async with private_sync.mirror_costs(src.org, mirror, sync.WORKER):
         set_worker_identity(sync.WORKER, org=src.org, namespace=mirror)
         await _in_mirror(src, opened, detail, started, run, result)
     return result
@@ -164,10 +159,6 @@ async def _in_mirror(
     if held_back:
         cycle.keep(result)  # the lists read count for nothing: the cycle stays as it was
         note = _HELD_BACK[held_back]
-        if held_back == "parked":  # no reader sees a mirror's state yet: say it here
-            log.warning(
-                "knowledge_source_sync: %s/%s/%s: %s", src.org, src.namespace, src.name, note
-            )
         if result.error:  # the state shows the error alone: the note goes with it
             result.error = f"{note}; {result.error}"
         else:

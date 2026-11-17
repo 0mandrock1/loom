@@ -858,6 +858,17 @@ schema. These rules keep that safe. The operator procedure is in
     Mirrored registration remains unavailable. `tests/unit/test_knowledge_source_retirements.py`
     checks name replacement, bounded progress and cursor persistence.
 
+58. **Mirrored work keeps diagnostics inside its namespace**: N suppresses shared
+    logs, spans, metrics and work figures while syncing or retiring mirrored content.
+    Its worker summaries carry fixed codes and no elapsed time or document figures;
+    billing rows stay in the mirror namespace. N-1 has no equivalent boundary, so
+    mirrored source creation remains refused until every process implements the read,
+    session and enablement protections. Before N-1 can serve after enablement, stop
+    writers, settle outstanding inserts and sagas, scrub marked receipts and audit
+    figures, and erase every mirror store, including `agent_events` and
+    `agent_cost_rollup_daily`, before clearing the enablement latch. Stopping a client
+    after its timeout does not prove a sent insert has completed.
+
 ## What checks them
 
 `scripts/gates/mixed_version.py` (`make test-mixed-version`, the `mixed-version` CI job,
