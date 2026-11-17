@@ -22,9 +22,16 @@ URI = "gdrive:file#native"
 
 @pytest.fixture
 def world(monkeypatch):
-    metadata = {"version": 11, "revision": 0, "ingested_at": datetime(2025, 1, 1, tzinfo=UTC)}
+    metadata = {
+        "tags": [],
+        "version": 11,
+        "revision": 0,
+        "ingested_at": datetime(2025, 1, 1, tzinfo=UTC),
+    }
     candidate = {"namespace": NS, "source_uri": URI + "#source"}
-    admitted = Admitted("team", candidate, metadata, serving=Serving(False, 0, 0, 10))
+    admitted = Admitted(
+        "team", candidate, {**candidate, **metadata}, serving=Serving(False, 0, 0, 10)
+    )
     checked = source_documents.CheckedDocument(
         admitted,
         SimpleNamespace(

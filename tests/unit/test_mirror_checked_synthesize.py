@@ -27,7 +27,14 @@ def world(monkeypatch):
     item = Admitted(
         "team",
         {"namespace": "acl-" + "1" * 24, "source_uri": "stored"},
-        {"version": 1, "revision": 1, "ingested_at": datetime(2025, 1, 1, tzinfo=UTC)},
+        {
+            "namespace": "acl-" + "1" * 24,
+            "source_uri": "stored",
+            "tags": [],
+            "version": 1,
+            "revision": 1,
+            "ingested_at": datetime(2025, 1, 1, tzinfo=UTC),
+        },
     )
     plan = SimpleNamespace(
         org="acme", marked=True, failed=False, unread=False, current=lambda _: True

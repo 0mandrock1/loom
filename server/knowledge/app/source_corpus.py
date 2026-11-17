@@ -10,7 +10,7 @@ from typing import Any
 from server.core.ch import sequential_reads, set_query_tag
 from server.core.datetimes import to_naive_utc_second
 from server.core.diagnostics import private_work
-from server.knowledge.app.source_access import Admitted, ReadPlan
+from server.knowledge.app.source_access import AccessEvidence, Admitted, ReadPlan
 from server.knowledge.domain.chunk_metadata import read_structure
 from server.memory.domain.corpus_synthesis import CorpusChunk
 
@@ -40,6 +40,7 @@ class Proofs:
     items: InitVar[tuple[Admitted, ...]]
     invalid: bool = field(default=False, init=False)
     _expected: dict[tuple[str, str], tuple[Any, ...]] = field(default_factory=dict, init=False)
+    _evidence: tuple[AccessEvidence, ...] = field(default=(), init=False, repr=False)
     _checking: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     def __post_init__(self, items: tuple[Admitted, ...]) -> None:
@@ -53,6 +54,20 @@ class Proofs:
     def mirrored(self) -> bool:
         return bool(self._expected)
 
+    def fresh(self) -> bool:
+        """Check all retained deadlines after the composed request's last await."""
+        if self.invalid:
+            return False
+        if not self._expected:
+            return True
+        self.invalid = (
+            self.plan.failed
+            or self.plan.unread
+            or len(self._evidence) != len(self._expected)
+            or not all(self.plan.current_evidence(item) for item in self._evidence)
+        )
+        return not self.invalid
+
     async def check(self) -> None:
         """Renew every retained copy; an invalid corpus cannot be admitted again."""
         async with self._checking:
@@ -64,6 +79,8 @@ class Proofs:
             try:
                 with private_work(), sequential_reads():
                     await self._check()
+                    if self.invalid:
+                        raise LostCorpus()
             except LostCorpus:
                 self.invalid = True
                 raise
@@ -95,6 +112,7 @@ class Proofs:
                 refreshed.append(item)
         if not all(self.plan.current(item) for item in refreshed):
             raise LostCorpus()
+        self._evidence = tuple(AccessEvidence.from_admitted(item) for item in refreshed)
 
 
 @dataclass(frozen=True)

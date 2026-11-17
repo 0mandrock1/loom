@@ -40,6 +40,28 @@ class Admitted:
     serving: Serving | None = None
 
 
+@dataclass(frozen=True)
+class AccessEvidence:
+    namespace: str
+    source_id: str
+    access: AccessList
+    canonical_owner: str
+    groups: tuple[tuple[str, datetime], ...]
+    reader_emails: frozenset[str]
+
+    @classmethod
+    def from_admitted(cls, item: Admitted) -> AccessEvidence:
+        doc = item.document
+        return cls(
+            doc["namespace"],
+            source_id(doc["source_uri"], doc["tags"]),
+            item.access,
+            item.canonical_owner,
+            item.groups,
+            item.reader_emails,
+        )
+
+
 @dataclass
 class ReadPlan:
     org: str
@@ -68,11 +90,12 @@ class ReadPlan:
 
     def current(self, item: Admitted) -> bool:
         """Recheck retained time bounds without discarding independent permission arms."""
+        return self.current_evidence(AccessEvidence.from_admitted(item))
+
+    def current_evidence(self, item: AccessEvidence) -> bool:
+        """Evaluate retained permission evidence against the latest shared reader view."""
         at = now()
-        doc = item.document
-        if not self.listing_current(
-            doc["namespace"], source_id(doc["source_uri"], doc["tags"]), at=at
-        ):
+        if not self.listing_current(item.namespace, item.source_id, at=at):
             return False
         reader = self.reader
         return allows(

@@ -38,7 +38,14 @@ async def test_lost_provider_proof_rebuilds_the_whole_ordinary_search_reply(
     admitted = Admitted(
         "team",
         candidate,
-        {"version": 10, "revision": 0, "ingested_at": datetime(2025, 1, 1, tzinfo=UTC)},
+        {
+            "namespace": candidate["namespace"],
+            "source_uri": candidate["source_uri"],
+            "tags": [],
+            "version": 10,
+            "revision": 0,
+            "ingested_at": datetime(2025, 1, 1, tzinfo=UTC),
+        },
         serving=Serving(False, 0, 0, 9),
     )
     hydrated = Hydrated(admitted, {"content": "Private provider text"})

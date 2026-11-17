@@ -19,7 +19,14 @@ def world():
     item = Admitted(
         "team",
         {"namespace": "acl-" + "1" * 24, "source_uri": "gdrive:file#source"},
-        {"version": 10, "revision": 0, "ingested_at": datetime(2025, 1, 1, tzinfo=UTC)},
+        {
+            "namespace": "acl-" + "1" * 24,
+            "source_uri": "gdrive:file#source",
+            "tags": [],
+            "version": 10,
+            "revision": 0,
+            "ingested_at": datetime(2025, 1, 1, tzinfo=UTC),
+        },
         serving=Serving(False, 0, 0, 9),
     )
     fresh = replace(item, candidate=dict(item.candidate), document=dict(item.document))

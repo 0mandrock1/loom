@@ -43,7 +43,14 @@ def world(monkeypatch):
                 "doc_version": 9,
                 "revision": 0,
             },
-            {"version": 10, "revision": 0, "ingested_at": datetime(2025, 1, 1, tzinfo=UTC)},
+            {
+                "namespace": NS,
+                "source_uri": URI,
+                "tags": [],
+                "version": 10,
+                "revision": 0,
+                "ingested_at": datetime(2025, 1, 1, tzinfo=UTC),
+            },
             serving=Serving(False, 0, 0, 9),
         )
         for index in range(2)

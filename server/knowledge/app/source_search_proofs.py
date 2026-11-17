@@ -35,6 +35,7 @@ class SearchProofs:
     invalid: bool = field(default=False, init=False)
     _documents: Proofs = field(init=False, repr=False)
     _keys: tuple[store.ChunkKey, ...] = field(default=(), init=False, repr=False)
+    _checked: bool = field(default=False, init=False, repr=False)
     _checking: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self, items: tuple[Admitted, ...]) -> None:
@@ -49,6 +50,14 @@ class SearchProofs:
     @property
     def mirrored(self) -> bool:
         return bool(self._keys)
+
+    def fresh(self) -> bool:
+        if self.invalid:
+            return False
+        if not self._keys:
+            return True
+        self.invalid = not self._checked or not self._documents.fresh()
+        return not self.invalid
 
     async def check(self) -> None:
         """Renew documents before and after every bounded exact-key probe sequence."""
@@ -67,6 +76,9 @@ class SearchProofs:
                         if len(current) != len(keys) or set(current) != set(keys):
                             raise LostCorpus()
                     await self._documents.check()
+                    if self.invalid:
+                        raise LostCorpus()
+                    self._checked = True
             except LostCorpus:
                 self.invalid = True
                 raise
