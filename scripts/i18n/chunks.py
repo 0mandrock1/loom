@@ -114,6 +114,44 @@ def _lists(text: str) -> list[tuple[int, int]]:
     ]
 
 
+def _site_line(line: str) -> tuple[int, str]:
+    depth, logical = 0, line.expandtabs(4)
+    while match := re.match(r"^ *> ?", logical):
+        depth += 1
+        logical = logical[match.end() :]
+    return depth, logical
+
+
+def _site_lists(text: str, protected: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    # The site's two-space list extension has no source maps; protect its continuations
+    # in addition to CommonMark's marker-width-dependent ranges.
+    spans = []
+    active, after_blank, offset = None, False, 0
+    for line in text.splitlines(keepends=True):
+        inside = any(a <= offset < b for a, b in protected)
+        depth, logical = _site_line(line)
+        item = None if inside else re.match(r"^( *)(?:[-+*]|\d+[.)])\s", logical)
+        indent = len(logical) - len(logical.lstrip(" "))
+        new_block = not inside or any(a == offset for a, _ in protected)
+        if (
+            active is not None
+            and new_block
+            and (depth != active[2] or (after_blank and logical.strip() and indent < active[1] + 2))
+        ):
+            spans.append((active[0], offset))
+            active, after_blank = None, False
+        if item and (active is None or len(item[1]) <= active[1]):
+            if active is not None:
+                spans.append((active[0], offset))
+            active, after_blank = (offset, len(item[1]), depth), False
+        elif active is not None and not inside:
+            after_blank = not logical.strip()
+        offset += len(line)
+    if active is not None:
+        spans.append((active[0], len(text)))
+    return spans
+
+
 def _protected(text: str) -> list[tuple[int, int]]:
     spans = _fences(text)
     masked = list(text)
@@ -123,7 +161,7 @@ def _protected(text: str) -> list[tuple[int, int]]:
         spans.append(match.span())
         masked[match.start() : match.end()] = ["\n" if c == "\n" else " " for c in match[0]]
     spans.extend(_html("".join(masked)))
-    return spans + _lists(text)
+    return spans + _lists(text) + _site_lists(text, spans)
 
 
 def heading_sections(text: str) -> list[str]:
@@ -157,7 +195,7 @@ def _boundaries(text: str) -> list[int]:
     lines, offset, last = text.splitlines(keepends=True), 0, ""
     protected = _protected(text)
     rows = _table_rows(text)
-    items = {a for a, _ in _lists(text)}
+    items = {a for a, _ in [*_lists(text), *_site_lists(text, [])]}
     boundaries = [0]
     for previous, _current in pairwise(lines):
         offset += len(previous)

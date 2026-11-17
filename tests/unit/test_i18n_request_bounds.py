@@ -46,8 +46,9 @@ def test_slices_keep_code_html_and_anchor_heading_pairs_together() -> None:
     assert any('<a id="next"></a>\n\n## Next' in part for part in requests)
 
 
-def test_multiline_list_continuation_never_becomes_a_separate_request() -> None:
-    item = "- Loom " + "x" * 4000 + "\n\n  continued " + "y" * 4000 + "\n"
+@pytest.mark.parametrize("marker", ["-", "1."])
+def test_multiline_list_continuation_never_becomes_a_separate_request(marker) -> None:
+    item = marker + " Loom " + "x" * 4000 + "\n\n  continued " + "y" * 4000 + "\n"
     text = "# Loom\n\n" + "Loom\n\n" * 1800 + item + "\n- next\n"
     requests = assert_bounded(text)
     assert any(item.rstrip("\n") in part for part in requests)
@@ -83,8 +84,11 @@ def test_single_column_table_keeps_header_with_delimiter_at_byte_boundary() -> N
         "<details>\n" + "x" * MAXIMUM + "\n</details>\n",
         "- Loom " + "x" * 9000 + "\n\n  continued " + "y" * 9000 + "\n",
         "- " + "x" * 9000 + "\n\n\t" + "y" * 9000 + "\n",
+        "1. Loom " + "x" * 9000 + "\n\n  continued " + "y" * 9000 + "\n",
+        "> 1. Loom " + "x" * 9000 + "\n>\n>   continued " + "y" * 9000 + "\n",
+        "!!! note\n\n    1. Loom " + "x" * 9000 + "\n\n      continued " + "y" * 9000 + "\n",
     ],
-    ids=["fence", "html", "list", "tab-list"],
+    ids=["fence", "html", "list", "tab-list", "site-ordered", "quote-ordered", "note-ordered"],
 )
 def test_indivisible_oversize_input_stops_before_any_provider_call(monkeypatch, unit) -> None:
     calls = []

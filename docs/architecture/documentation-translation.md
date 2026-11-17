@@ -14,6 +14,10 @@ inline code, complete HTML elements and comments remain together. A table header
 with its delimiter. An indivisible oversized unit refuses before the page's first model
 call. Cost estimation uses the same request list as translation.
 
+The site's list extension accepts two-space continuations, including ordered items.
+Its parser has no source maps, so an indentation scan protects those items alongside
+the CommonMark ranges. Both dialects' items remain indivisible.
+
 ## Assembled validation
 
 The assembled page passes the existing content invariants and table checks before its
