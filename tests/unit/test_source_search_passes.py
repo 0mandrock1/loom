@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -27,7 +28,14 @@ def mirror(namespace):
         "lexical": 0.0,
         "matched": [],
     }
-    return Hydrated(Admitted(namespace, candidate, {"version": 10}), {"content": "private text"})
+    return Hydrated(
+        Admitted(
+            namespace,
+            candidate,
+            {"version": 10, "revision": 0, "ingested_at": datetime(2025, 1, 1, tzinfo=UTC)},
+        ),
+        {"content": "private text"},
+    )
 
 
 def ordinary(namespace):
@@ -163,7 +171,9 @@ async def test_final_proof_refresh_preserves_the_checked_candidates_own_scores(w
         return {
             leg: [
                 replace(
-                    item, candidate={**item.candidate, "distance": 0.99}, document={"version": 11}
+                    item,
+                    candidate={**item.candidate, "distance": 0.99},
+                    document={**item.document, "version": 11},
                 )
                 for item in pool
             ]
@@ -172,7 +182,8 @@ async def test_final_proof_refresh_preserves_the_checked_candidates_own_scores(w
 
     monkeypatch.setattr(app, "recheck", AsyncMock(side_effect=latest))
     [[hit]] = await session.finish()
-    assert hit.chunk.distance == 0.05 and hit.admitted.document == {"version": 11}
+    assert hit.chunk.distance == 0.05
+    assert hit.admitted.document == {**_source["private"].admitted.document, "version": 11}
     assert hit.admitted.candidate["distance"] == 0.05
 
 

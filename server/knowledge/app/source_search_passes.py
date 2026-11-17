@@ -10,6 +10,7 @@ from server.knowledge.app.search import ChunkHit, HybridSearchQuery
 from server.knowledge.app.source_access import Admitted, ReadPlan
 from server.knowledge.app.source_ranking import RankedHit, ordinary_families, rank
 from server.knowledge.app.source_search import Hydrated, _chunk_key, discover, hydrate, recheck
+from server.knowledge.app.source_search_proofs import SearchProofs
 from server.knowledge.store.source_candidates import ChunkKey, Leg
 
 
@@ -50,7 +51,15 @@ class _Pass:
 @dataclass
 class SearchPasses:
     plan: ReadPlan
+    proofs: SearchProofs = field(init=False)
     _passes: list[_Pass] = field(default_factory=list, init=False, repr=False)
+    _model: str = field(default="", init=False)
+
+    def __post_init__(self) -> None:
+        self.proofs = SearchProofs(self.plan, "", ())
+
+    def ordinary(self) -> list[list[RankedHit]]:
+        return [[RankedHit(hit) for hit in selected.fallback] for selected in self._passes]
 
     async def collect(
         self,
@@ -67,6 +76,9 @@ class SearchPasses:
         mirrored = {}
         try:
             with private_work(), sequential_reads():
+                if self._model and query.embedding_model != self._model:
+                    raise ValueError("inconsistent search embedding model")
+                self._model = query.embedding_model
                 candidates = await discover(
                     self.plan,
                     query,
@@ -94,7 +106,11 @@ class SearchPasses:
                 }
                 if self.plan.failed or self.plan.unread:
                     checked = {}
+                self.proofs = SearchProofs(self.plan, self._model, tuple(checked.values()))
+                if self.proofs.invalid:
+                    raise ValueError("invalid final search admission")
                 return [selected.ranked(checked) for selected in self._passes]
         except Exception:  # noqa: BLE001 — final candidate failure invalidates every earlier mirror pass
             self.plan.failed = True
-            return [[RankedHit(hit) for hit in selected.fallback] for selected in self._passes]
+            self.proofs = SearchProofs(self.plan, "", ())
+            return self.ordinary()

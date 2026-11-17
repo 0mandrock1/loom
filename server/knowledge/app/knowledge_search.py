@@ -9,9 +9,11 @@ import asyncio
 import dataclasses
 import functools
 import logging
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 
 from server.auth.fanout import namespaces_to_search
+from server.core.diagnostics import private_work
 from server.core.vectors.private_first import search_private_first
 from server.embedding import get_embedder
 from server.identity.app import namespace_visibility
@@ -22,6 +24,8 @@ from server.knowledge.api.models_knowledge import (
 )
 from server.knowledge.app import gaps as gaps_app
 from server.knowledge.app.readable import readable_namespaces
+from server.knowledge.app.source_corpus import LostCorpus
+from server.knowledge.app.source_search_proofs import SearchProofs
 from server.knowledge.domain.chunking import embedding_text
 from server.memory.app.log_once import LogOnce
 from server.settings import settings
@@ -35,6 +39,7 @@ if TYPE_CHECKING:
     from server.embedding import Embedder
     from server.knowledge.app.search import ChunkHit
     from server.knowledge.app.search_legs import LegPools
+    from server.knowledge.app.source_ranking import RankedHit
     from server.knowledge.app.source_search_passes import SearchPasses
 
 # A hit this close (cosine similarity) answers the query: as a first-pass hit it ends a
@@ -45,7 +50,106 @@ PRIVATE_HIT_THRESHOLD = 0.30
 _BAD_DEFAULT_LOGGED = LogOnce()
 
 
+@dataclasses.dataclass(frozen=True)
+class _SearchRenderer:
+    input: KnowledgeSearchInput
+    embedder: Embedder
+    query_vec: list[float]
+    endpoint: str
+    pool: int
+    skipped: list[str]
+    marked: bool
+
+    async def render(
+        self,
+        rows: list[tuple[str, list[ChunkHit]]],
+        dropped: int,
+        proofs: SearchProofs | None = None,
+    ) -> KnowledgeSearchOutput:
+        with private_work() if self.marked else nullcontext():
+            return await self._render(rows, dropped, proofs)
+
+    async def _render(
+        self,
+        rows: list[tuple[str, list[ChunkHit]]],
+        dropped: int,
+        proofs: SearchProofs | None,
+    ) -> KnowledgeSearchOutput:
+        all_hits = _as_search_hits(rows)
+        all_hits.sort(key=lambda hit: (hit.score, hit.similarity), reverse=True)
+        if proofs is not None:
+            await proofs.check()
+        reranked_by = ""
+        if self.endpoint and len(all_hits) > 1:
+            all_hits, reranked = await _rerank(self.endpoint, self.input.query, all_hits, self.pool)
+            if proofs is not None:
+                await proofs.check()
+            reranked_by = self.endpoint if reranked else ""
+        if self.input.collapse_sections:
+            all_hits = _collapse_by_section(all_hits)
+        top = noise_last(all_hits)[: self.input.top_k]
+        if self.input.narrow_spans and top:
+            await _narrow_spans(self.embedder, self.query_vec, top, proofs=proofs)
+        if proofs is not None:
+            await proofs.check()
+        if _missed(self.input, top, skipped=bool(self.skipped), dropped=bool(dropped)):
+            gaps_app.record_miss(
+                op="knowledge.search",
+                org=self.input.org,
+                namespace=self.input.namespace,
+                query=self.input.query,
+            )
+        return KnowledgeSearchOutput(
+            results=top,
+            embedding_model=self.embedder.model_name,
+            namespaces_skipped=self.skipped,
+            reranked_by=reranked_by,
+            stale_dropped=dropped,
+        )
+
+
+@dataclasses.dataclass
+class CheckedSearch:
+    output: KnowledgeSearchOutput
+    proofs: SearchProofs | None
+    _renderer: _SearchRenderer
+    _ordinary: list[tuple[str, list[ChunkHit]]]
+    _ordinary_dropped: int
+    _failed: bool = dataclasses.field(default=False, init=False)
+    _checking: asyncio.Lock = dataclasses.field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
+
+    @property
+    def marked(self) -> bool:
+        return self._renderer.marked
+
+    async def current(self) -> KnowledgeSearchOutput:
+        """Return the renewed reply, rebuilding one ordinary fallback after access loss."""
+        async with self._checking:
+            with private_work() if self.marked else nullcontext():
+                if self._failed:
+                    raise LostCorpus()
+                if self.proofs is not None:
+                    try:
+                        await self.proofs.check()
+                    except LostCorpus:
+                        self.proofs = None
+                        try:
+                            self.output = await self._renderer.render(
+                                self._ordinary, self._ordinary_dropped
+                            )
+                        except BaseException:
+                            self._failed = True
+                            raise
+                return self.output
+
+
 async def handle_knowledge_search(input: KnowledgeSearchInput) -> KnowledgeSearchOutput:
+    return (await checked_knowledge_search(input)).output
+
+
+async def checked_knowledge_search(input: KnowledgeSearchInput) -> CheckedSearch:
     from server.auth.context import current_auth
     from server.auth.gateway import is_end_user
     from server.knowledge.app.source_access import prepare
@@ -77,33 +181,21 @@ async def handle_knowledge_search(input: KnowledgeSearchInput) -> KnowledgeSearc
     pool = settings.knowledge_search_rerank_top if endpoint else 0
     dropped = _Dropped()
     search = _namespaces_search(input, embedder, query_vec, pool, dropped, checked=checked)
-    results_per_ns = (
-        await _search_marked(input, namespaces, search, checked, dropped)
-        if checked is not None
-        else await _search_private_first(input, namespaces, search)
-    )
-    all_hits = _as_search_hits(results_per_ns)
-    all_hits.sort(key=lambda x: (x.score, x.similarity), reverse=True)
-    reranked_by = ""
-    if endpoint and len(all_hits) > 1:
-        all_hits, reranked = await _rerank(endpoint, input.query, all_hits, pool)
-        reranked_by = endpoint if reranked else ""
-    if input.collapse_sections:
-        all_hits = _collapse_by_section(all_hits)
-    top = noise_last(all_hits)[: input.top_k]
-    if input.narrow_spans and top:
-        await _narrow_spans(embedder, query_vec, top)
-    if _missed(input, top, skipped=bool(skipped), dropped=bool(dropped.count)):
-        gaps_app.record_miss(
-            op="knowledge.search", org=input.org, namespace=input.namespace, query=input.query
+    if checked is not None:
+        results_per_ns, ordinary, ordinary_dropped = await _search_marked(
+            input, namespaces, search, checked, dropped
         )
-    return KnowledgeSearchOutput(
-        results=top,
-        embedding_model=embedder.model_name,
-        namespaces_skipped=skipped,
-        reranked_by=reranked_by,
-        stale_dropped=dropped.count,
-    )
+        proofs: SearchProofs | None = checked.proofs
+    else:
+        results_per_ns = await _search_private_first(input, namespaces, search)
+        ordinary, ordinary_dropped, proofs = results_per_ns, dropped.count, None
+    renderer = _SearchRenderer(input, embedder, query_vec, endpoint, pool, skipped, plan.marked)
+    try:
+        output = await renderer.render(results_per_ns, dropped.count, proofs)
+    except LostCorpus:
+        output = await renderer.render(ordinary, ordinary_dropped)
+        proofs = None
+    return CheckedSearch(output, proofs, renderer, ordinary, ordinary_dropped)
 
 
 # The fields that narrow a knowledge.search to part of the namespace's documents.
@@ -326,7 +418,7 @@ async def _search_marked(
     search: Callable[[list[str]], Awaitable[list[tuple[str, list[ChunkHit]]]]],
     checked: SearchPasses,
     dropped: _Dropped,
-) -> list[tuple[str, list[ChunkHit]]]:
+) -> tuple[list[tuple[str, list[ChunkHit]]], list[tuple[str, list[ChunkHit]]], int]:
     from server.core.ch import set_query_tag
     from server.core.vectors.private_first import best_similarity, private_first_passes
 
@@ -342,17 +434,21 @@ async def _search_marked(
         before = dropped.count
         await search(names)
         counts.append(dropped.count - before)
-    final = await checked.finish()
-    if len(final) > 1:
-        first = [(item.chunk.namespace, [item.chunk]) for item in final[0]]
-        if best_similarity(first, not_noise()) >= PRIVATE_HIT_THRESHOLD:
-            final = final[:1]
-    dropped.count = sum(counts[: len(final)])
-    by_ns: dict[str, list[ChunkHit]] = {}
-    for selected in final:
-        for item in selected:
-            by_ns.setdefault(item.chunk.namespace, []).append(item.chunk)
-    return list(by_ns.items())
+
+    def selected(passes: list[list[RankedHit]]) -> tuple[list[tuple[str, list[ChunkHit]]], int]:
+        if len(passes) > 1:
+            first = [(item.chunk.namespace, [item.chunk]) for item in passes[0]]
+            if best_similarity(first, not_noise()) >= PRIVATE_HIT_THRESHOLD:
+                passes = passes[:1]
+        by_ns: dict[str, list[ChunkHit]] = {}
+        for pool in passes:
+            for item in pool:
+                by_ns.setdefault(item.chunk.namespace, []).append(item.chunk)
+        return list(by_ns.items()), sum(counts[: len(passes)])
+
+    final, dropped.count = selected(await checked.finish())
+    ordinary, ordinary_dropped = selected(checked.ordinary())
+    return final, ordinary, ordinary_dropped
 
 
 async def _search_private_first(
@@ -412,7 +508,13 @@ def _as_search_hits(results_per_ns: list[tuple[str, list[ChunkHit]]]) -> list[_S
     return all_hits
 
 
-async def _narrow_spans(embedder: Embedder, query_vec: list[float], top: list[_SearchHit]) -> None:
+async def _narrow_spans(
+    embedder: Embedder,
+    query_vec: list[float],
+    top: list[_SearchHit],
+    *,
+    proofs: SearchProofs | None = None,
+) -> None:
     """The sentence window nearest the query, per hit, from one batched embed over every
     returned chunk's windows. Fail-open."""
     from server.observability.otel import traced
@@ -422,10 +524,23 @@ async def _narrow_spans(embedder: Embedder, query_vec: list[float], top: list[_S
 
         many = getattr(embedder, "embed_many", None)
 
+        async def _embed_one(text: str) -> list[float]:
+            if proofs is not None:
+                await proofs.check()
+            vector = await embedder.embed(text)
+            if proofs is not None:
+                await proofs.check()
+            return vector
+
         async def _embed_many(texts: list[str]) -> list[list[float]]:
             if many is not None:
-                return list(await many(texts))
-            return [await embedder.embed(t) for t in texts]
+                if proofs is not None:
+                    await proofs.check()
+                vectors = list(await many(texts))
+                if proofs is not None:
+                    await proofs.check()
+                return vectors
+            return [await _embed_one(text) for text in texts]
 
         with traced("embed.compute.spans", n=len(top)):
             spans = await best_spans(query_vec, [h.content for h in top], _embed_many)
@@ -433,6 +548,8 @@ async def _narrow_spans(embedder: Embedder, query_vec: list[float], top: list[_S
             if sp is not None:
                 hit.span, hit.span_start, hit.span_end = sp.text, sp.start, sp.end
                 hit.span_similarity = sp.similarity
+    except LostCorpus:
+        raise
     except Exception as e:  # noqa: BLE001 — the chunk is still the answer
         log.debug("knowledge.search span narrowing skipped: %s", e)
 

@@ -56,7 +56,11 @@ def world(monkeypatch):
         phases.append("finish")
         return final
 
-    session = SimpleNamespace(finish=finish)
+    session = SimpleNamespace(
+        finish=finish,
+        proofs=SimpleNamespace(check=AsyncMock()),
+        ordinary=lambda: [[hit("private")], [hit("public")]],
+    )
 
     def factory(_input, _embedder, _vector, _pool, dropped, **kwargs):
         collected.append(kwargs.get("checked"))
