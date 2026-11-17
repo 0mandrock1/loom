@@ -202,6 +202,37 @@ def record(source: str, lang: t.Language, base: str) -> None:
     save(data)
 
 
+def rebase_readme_proof_data(data: dict[str, Any], changed: dict[str, tuple[str, str]]) -> bool:
+    """Follow only verified generator-owned README metadata changes."""
+    updated = False
+    for path, (before, after) in changed.items():
+        published = t.lifecycle.publication_path(path)
+        proof = data["completed"].get(published)
+        old_stamp, new_stamp = t.STAMP.match(before), t.STAMP.match(after)
+        if not proof or not old_stamp or not new_stamp or proof["blob"] != old_stamp[2]:
+            continue
+        if proof["sha256"] == digest(before):
+            proof.update(blob=new_stamp[2], sha256=digest(after))
+            updated = True
+        if path == published and proof["base"] == digest(before):
+            proof["base"] = digest(after)
+            updated = True
+    return updated
+
+
+def rebase_readme_proofs(changed: dict[str, tuple[str, str]]) -> None:
+    data = read()
+    if data is not None and rebase_readme_proof_data(data, changed):
+        save(data)
+
+
+def rebase_imported_readme_proofs(text: str, changed: dict[str, tuple[str, str]]) -> str:
+    data = parse(text)
+    if not rebase_readme_proof_data(data, changed):
+        return text
+    return json.dumps(parse(json.dumps(data)), sort_keys=True) + "\n"
+
+
 def merged(data: dict[str, Any]) -> bool:
     if not data["complete"] or (data["prompt"], data["model"]) != epoch():
         return False

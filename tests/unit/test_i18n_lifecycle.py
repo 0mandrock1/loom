@@ -551,3 +551,212 @@ def test_deferred_archival_refuses_unknown_ownership_metadata(
     with pytest.raises(SystemExit, match="ownership/banner/model"):
         t.import_pending(sha, ["ja"])
     assert not (repo / "i18n/.pending/es/docs/a.md").exists()
+
+
+def readme_baseline(repo: pathlib.Path, codes: list[str]) -> None:
+    put(repo, "README.md", "# Source\n\n<!-- languages -->\n<!-- /languages -->\n")
+    for code in codes:
+        lang = next(item for item in t.LANGUAGES if item.code == code)
+        put(repo, t.target_path(code, "README.md"), readme_translation("README.md", lang))
+    t.write_language_lines()
+    for code in codes:
+        lang = next(item for item in t.LANGUAGES if item.code == code)
+        put(repo, t.target_path(code, "README.md"), readme_translation("README.md", lang))
+    put(repo, ".github/workflows/ci.yml", "name: trusted\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "Current language links")
+
+
+def readme_translation(source: str, lang: t.Language) -> str:
+    text, line = t.prepare(source, lang)
+    body = "\n".join(t.english_requests(text))
+    for english, target in (("Source", "Traducido"), ("Alpha", "Uno"), ("Beta", "Dos")):
+        body = body.replace("# " + english, "# " + target)
+    return t.render(source, lang, body, line, t.DEFAULT_MODEL)
+
+
+def fake_readme_generation(
+    monkeypatch: pytest.MonkeyPatch, calls: list[tuple[str, str]], *, cap: str = "1"
+) -> None:
+    def fake(source: str, lang: t.Language, client: object, spend: t.Spend) -> None:
+        calls.append((source, lang.code))
+        lc.stage(t.target_path(lang.code, source), readme_translation(source, lang))
+
+    monkeypatch.setenv("LOOM_I18N_MAX_USD", cap)
+    monkeypatch.setattr(t, "estimate_usd", lambda model, chars: 1.0)
+    monkeypatch.setattr(t, "bedrock_client", lambda: None)
+    monkeypatch.setattr(t, "translate_page", fake)
+
+
+@pytest.mark.parametrize("codes", [None, list(t.ROLLOUT_LANGUAGES)])
+@pytest.mark.parametrize("japanese_exists", [False, True])
+def test_readme_bootstrap_publishes_valid_language_lines(
+    repo: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    codes: list[str] | None,
+    japanese_exists: bool,
+) -> None:
+    from scripts.i18n import automation
+
+    readme_baseline(repo, ["es", "ja"] if japanese_exists else ["es"])
+    calls: list[tuple[str, str]] = []
+    fake_readme_generation(monkeypatch, calls, cap="0" if japanese_exists else "1")
+    assert t.check(skip_stale=True) == 0
+    assert t.update(codes=codes) == 0
+    assert calls == ([] if japanese_exists else [("README.md", "ja")])
+    assert (repo / "i18n/ja/README.md").is_file()
+    assert t.check(skip_stale=True) == 0
+    assert t.language_lines_differ() == []
+    base = git(repo, "rev-parse", "HEAD")
+    git(repo, "add", ".")
+    candidate = git(repo, "commit-tree", git(repo, "write-tree"), "-p", base, "-m", "Generated")
+    automation.validate_changes(base, candidate)
+
+
+def test_partial_batch_defers_new_readme_without_spending_or_changing_other_locales(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    readme_baseline(repo, ["es"])
+    spanish = (repo / "i18n/es/README.md").read_bytes()
+    calls: list[tuple[str, str]] = []
+    fake_readme_generation(monkeypatch, calls)
+    assert t.update(codes=["ja"]) == 0
+    assert calls == [("docs/a.md", "ja")]
+    assert "deferred i18n/ja/README.md" in capsys.readouterr().out
+    assert (repo / "i18n/es/README.md").read_bytes() == spanish
+    assert not (repo / "i18n/ja/README.md").exists()
+    assert t.check(skip_stale=True) == 0
+    pending = repo / lc.checkpoint_path(t.target_path("ja", "README.md"))
+    lc.stage(t.target_path("ja", "README.md"), readme_translation("README.md", JA))
+    retained = pending.read_bytes()
+    assert lc.activate_ready(["ja"]) == 0
+    assert pending.read_bytes() == retained
+    assert (repo / "i18n/es/README.md").read_bytes() == spanish
+    assert t.check(skip_stale=True) == 0
+    assert lc.activate_ready(list(t.ROLLOUT_LANGUAGES)) == 1
+    assert not pending.exists()
+    assert (repo / "i18n/ja/README.md").is_file()
+    assert t.check(skip_stale=True) == 0
+
+
+def test_new_readme_waits_for_a_stale_published_readme_instead_of_restamping_it(
+    repo: pathlib.Path,
+) -> None:
+    readme_baseline(repo, ["es"])
+    path = repo / "README.md"
+    path.write_text(path.read_text().replace("# Source", "# Changed"))
+    spanish = (repo / "i18n/es/README.md").read_bytes()
+    t.write_language_lines()
+    assert (repo / "i18n/es/README.md").read_bytes() == spanish
+    text, line = t.prepare("README.md", JA)
+    body = "\n".join(t.english_requests(text)).replace("# Changed", "# Nuevo")
+    lc.stage(
+        t.target_path("ja", "README.md"), t.render("README.md", JA, body, line, t.DEFAULT_MODEL)
+    )
+    pending = repo / lc.checkpoint_path(t.target_path("ja", "README.md"))
+    retained = pending.read_bytes()
+    assert lc.activate_ready(list(t.ROLLOUT_LANGUAGES)) == 0
+    assert pending.read_bytes() == retained
+    assert (repo / "i18n/es/README.md").read_bytes() == spanish
+    assert not (repo / "i18n/ja/README.md").exists()
+
+
+def test_readme_bar_repair_preserves_refresh_proofs_without_a_second_provider_call(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scripts.i18n import refresh
+
+    readme_baseline(repo, ["es"])
+    calls: list[tuple[str, str]] = []
+    fake_readme_generation(monkeypatch, calls)
+    assert t.update(every=True, codes=list(t.ROLLOUT_LANGUAGES)) == 0
+    assert t.update(codes=list(t.ROLLOUT_LANGUAGES)) == 0
+    assert calls == [("README.md", "es"), ("README.md", "ja")]
+    job = refresh.read()
+    assert job is not None
+    for code in ("es", "ja"):
+        path = t.target_path(code, "README.md")
+        assert refresh.done(path, job)
+        assert job["completed"][path]["blob"] == t.blob("README.md")
+        assert job["completed"][path]["sha256"] == refresh.digest((repo / path).read_text())
+    monkeypatch.setenv("LOOM_I18N_MAX_USD", "0")
+    assert t.update(codes=list(t.ROLLOUT_LANGUAGES)) == 0
+    assert calls == [("README.md", "es"), ("README.md", "ja")]
+    assert t.check(skip_stale=True) == 0
+
+
+def test_readme_bootstrap_retains_conflicted_refresh_candidate(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scripts.i18n import refresh
+
+    readme_baseline(repo, ["es"])
+    calls: list[tuple[str, str]] = []
+    fake_readme_generation(monkeypatch, calls)
+    assert t.update(every=True, codes=list(t.ROLLOUT_LANGUAGES)) == 0
+    spanish_path = repo / "i18n/es/README.md"
+    generated = spanish_path.read_text()
+    spanish_path.write_text(generated + "\nTexto manual.\n")
+    manual = spanish_path.read_bytes()
+    lc.stage("i18n/es/README.md", generated)
+    lc.stage("i18n/ja/README.md", readme_translation("README.md", JA))
+    refresh.record("README.md", JA, "")
+    proof = refresh.read()
+    assert proof is not None and refresh.blocked("i18n/es/README.md", proof)
+    pending = {
+        name: (repo / name).read_bytes()
+        for name in ("i18n/.pending/es/README.md", "i18n/.pending/ja/README.md")
+    }
+    assert lc.activate_ready(list(t.ROLLOUT_LANGUAGES)) == 0
+    assert spanish_path.read_bytes() == manual
+    assert not (repo / "i18n/ja/README.md").exists()
+    assert all((repo / name).read_bytes() == text for name, text in pending.items())
+    assert refresh.read() == proof
+    assert calls == [("README.md", "es")]
+
+
+@pytest.mark.parametrize("every", [False, True])
+@pytest.mark.parametrize("english_changed", [False, True])
+def test_pending_readme_bootstrap_is_reused_before_its_english_bar_merges(
+    repo: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    every: bool,
+    english_changed: bool,
+) -> None:
+    readme_baseline(repo, ["es"])
+    base = git(repo, "rev-parse", "HEAD")
+    calls: list[tuple[str, str]] = []
+    fake_readme_generation(monkeypatch, calls)
+    assert t.update(every=every, codes=list(t.ROLLOUT_LANGUAGES)) == 0
+    if every:
+        assert t.update(codes=list(t.ROLLOUT_LANGUAGES)) == 0
+    japanese = (repo / "i18n/ja/README.md").read_bytes()
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "Pending verified translations")
+    candidate = git(repo, "rev-parse", "HEAD")
+    git(repo, "switch", "-qc", "unmerged-main", base)
+    assert not (repo / "i18n/ja/README.md").exists()
+    if english_changed:
+        readme = repo / "README.md"
+        readme.write_text(readme.read_text().replace("# Source", "# Changed"))
+        english = readme.read_bytes()
+        spanish = (repo / "i18n/es/README.md").read_bytes()
+        assert t.import_pending(candidate, list(t.ROLLOUT_LANGUAGES)) == 0
+        assert not (repo / "i18n/ja/README.md").exists()
+        assert readme.read_bytes() == english
+        assert (repo / "i18n/es/README.md").read_bytes() == spanish
+        return
+    retained = lc.pending_blobs(candidate)
+    called = list(calls)
+    with pytest.raises(SystemExit, match="full approved language selection"):
+        t.import_pending(candidate, ["ja"])
+    assert git(repo, "status", "--porcelain") == ""
+    assert lc.pending_blobs(candidate) == retained
+    assert calls == called
+    assert t.import_pending(candidate, list(t.ROLLOUT_LANGUAGES)) > 0
+    assert (repo / "i18n/ja/README.md").read_bytes() == japanese
+    assert t.check(skip_stale=True) == 0
+    assert t.update(codes=list(t.ROLLOUT_LANGUAGES)) == 0
+    assert calls.count(("README.md", "ja")) == 1
+    assert calls.count(("README.md", "es")) == int(every)
+    assert calls[-1] == ("README.md", "ko")

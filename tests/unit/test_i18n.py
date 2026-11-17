@@ -408,6 +408,14 @@ def test_a_new_language_is_linked_from_every_readme_without_translating(
     for path in t.readmes():
         (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / path).write_text((ROOT / path).read_text())
+    for args in (
+        ("init", "-q"),
+        ("config", "user.name", "test"),
+        ("config", "user.email", "test@example.test"),
+        ("add", "."),
+        ("commit", "-qm", "Copied documentation"),
+    ):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True)
     monkeypatch.setattr(t, "ROOT", tmp_path)
     ja = t.LANGUAGES[1]
     extra = t.Language("xx", "Xx", "Xx", ja.banner, ja.style)

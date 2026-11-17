@@ -679,6 +679,8 @@ def translate_page(source: str, lang: Language, client: Any, spend: Spend) -> No
 
 
 def write_language_lines(codes: list[str] | None = None) -> None:
+    current = lifecycle.current_readme_outputs(codes)
+    english_before = (ROOT / "README.md").read_text() if (ROOT / "README.md").is_file() else ""
     selected = None if codes is None else {target_path(code, "README.md") for code in codes}
     for path in language_lines_differ():
         if selected is not None and path != "README.md" and path not in selected:
@@ -689,6 +691,7 @@ def write_language_lines(codes: list[str] | None = None) -> None:
         if not match:
             raise SystemExit(f"{path} has no <!-- languages --> markers")
         file.write_text(text[: match.start()] + language_line(path) + text[match.end() :])
+    lifecycle.rebase_readme_outputs(current, english_before)
 
 
 # ---- commands -------------------------------------------------------------------------
@@ -746,7 +749,8 @@ def batch(
     work = [
         (s, lg)
         for s, lg in work
-        if target_path(lg.code, s) not in checkpoints or target_path(lg.code, s) in force_paths
+        if (target_path(lg.code, s) not in checkpoints or target_path(lg.code, s) in force_paths)
+        and not lifecycle.readme_publication_blocked(target_path(lg.code, s), codes, checkpoints)
     ]
     selected, cost = [], 0.0
     for source, lang in work:
@@ -787,6 +791,12 @@ def update(every: bool = False, codes: list[str] | None = None) -> int:
     if job := refresh.plan(every, codes):
         refresh.save(job)
     work, deferred = batch(every, codes, cap)
+    for lang in LANGUAGES:
+        path = target_path(lang.code, "README.md")
+        if (codes is None or lang.code in codes) and lifecycle.readme_publication_blocked(
+            path, codes, lifecycle.current_checkpoints()
+        ):
+            print(f"deferred {path}: README language links require other locales")
     spend = Spend(model, cap)
     written = 0
     failed: list[str] = []

@@ -318,6 +318,79 @@ def retire_obsolete(codes: list[str] | None = None) -> tuple[int, int]:
     return len(candidates), len(obsolete) - len(candidates)
 
 
+def readme_publication_blocked(
+    path: str, codes: list[str] | None, overlay: dict[str, str] | None = None
+) -> bool:
+    """A new README changes every published README's generated language links."""
+    if regular(path) or path.split("/", 2)[-1] != "README.md":
+        return False
+    selected = {lang.code for lang in t.LANGUAGES} if codes is None else set(codes)
+    job = refresh.plan()
+    for other in t.readmes() + checkpoint_files():
+        if not regular(other):
+            continue
+        text = (t.ROOT / other).read_text()
+        owned = owner(other, text)
+        if owned is None or owned[0] != "README.md":
+            continue
+        if owned[1].code not in selected or refresh.blocked(publication_path(other), job):
+            return True
+        if other in t.readmes() and candidate_problems(other, (overlay or {}).get(other, text)):
+            return True
+    return False
+
+
+def current_readme_outputs(codes: list[str] | None) -> dict[str, str]:
+    """Remember only current, verified output before deterministic link maintenance."""
+    current = {}
+    job = refresh.plan()
+    for path in output_files() + checkpoint_files():
+        if not regular(path):
+            continue
+        text = (t.ROOT / path).read_text()
+        owned = owner(path, text)
+        if (
+            owned
+            and owned[0] == "README.md"
+            and (codes is None or owned[1].code in codes)
+            and not refresh.blocked(publication_path(path), job)
+            and not candidate_problems(path, text)
+        ):
+            current[path] = text
+    return current
+
+
+def rebase_readme_outputs(current: dict[str, str], english_before: str) -> None:
+    """A generated language-bar edit does not require another model call."""
+    if not current:
+        return
+    english_after = (t.ROOT / "README.md").read_text()
+    if strip_language_line(english_before) != strip_language_line(english_after):
+        raise ValueError("README prose changed during language-line maintenance")
+    changed = {}
+    for path, before in current.items():
+        owned = owner(path, before)
+        assert owned is not None
+        _, lang = owned
+        stamp = t.STAMP.match(before)
+        assert stamp is not None
+        header = t.header("README.md", lang, stamp[3], stamp[2])
+        text = (t.ROOT / path).read_text()
+        if not text.startswith(header):
+            raise ValueError(f"{path}: README changed during language-line maintenance")
+        line = t.LANGUAGE_LINE.search(text)
+        if line is None:
+            raise ValueError(f"{path}: README has no generated language markers")
+        text = text[: line.start()] + t.language_line(publication_path(path)) + text[line.end() :]
+        text = t.header("README.md", lang, stamp[3], t.blob("README.md")) + text[len(header) :]
+        if candidate_problems(path, text):
+            raise ValueError(f"{path}: README language-line repair failed validation")
+        if text != before:
+            (t.ROOT / path).write_text(text)
+            changed[path] = (before, text)
+    refresh.rebase_readme_proofs(changed)
+
+
 def current_checkpoints() -> dict[str, str]:
     ready = {}
     job = refresh.plan()
@@ -358,7 +431,9 @@ def activate_ready(codes: list[str] | None = None) -> int:
         if codes is None or path.split("/", 2)[1] in codes
     }
     while ready:
-        blocked = set()
+        blocked = {path for path in ready if readme_publication_blocked(path, codes, ready)}
+        for path in sorted(blocked):
+            print(f"deferred {path}: README language links require other locales")
         for source, target, _ in link_failures(ready):
             if target in ready and target != source:
                 blocked.add(target)
@@ -380,6 +455,7 @@ def activate_ready(codes: list[str] | None = None) -> int:
             text = (t.ROOT / path).read_text()
             if owner(path, text) and candidate_problems(path, text):
                 (t.ROOT / path).unlink()
+    t.write_language_lines(codes)
     refresh.finish()
     print(f"published={len(ready)} checkpointed={len(checkpoint_files())}")
     return len(ready)
@@ -387,7 +463,10 @@ def activate_ready(codes: list[str] | None = None) -> int:
 
 def pending_blobs(ref: str) -> dict[str, str]:
     tree = subprocess.run(
-        ["git", "ls-tree", "-rz", ref, "--", t.OUT_DIR], cwd=t.ROOT, check=True, capture_output=True
+        ["git", "ls-tree", "-rz", ref, "--", t.OUT_DIR, "README.md"],
+        cwd=t.ROOT,
+        check=True,
+        capture_output=True,
     ).stdout
     blobs: dict[str, str] = {}
     pending_bytes = 0
@@ -440,16 +519,74 @@ def preserve_deferred(path: str, text: str) -> bool:
     return True
 
 
+def rebase_pending_readmes(
+    blobs: dict[str, str], english: str | None, codes: list[str] | None
+) -> None:
+    """Reuse verified data when main differs only in its generated language bar."""
+    if english is None or not regular("README.md"):
+        return
+    if strip_language_line(english) != strip_language_line((t.ROOT / "README.md").read_text()):
+        return
+    old_blob = subprocess.run(
+        ["git", "hash-object", "--stdin"],
+        input=english,
+        cwd=t.ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    current_blob = t.blob("README.md")
+    if old_blob == current_blob:
+        return
+    for path, text in blobs.items():
+        owned = owner(path, text)
+        if (
+            codes is not None
+            and owned
+            and owned[0] == "README.md"
+            and owned[1].code not in codes
+            and (stamp := t.STAMP.match(text))
+            and text.startswith(t.header("README.md", owned[1], stamp[3], old_blob))
+        ):
+            raise SystemExit(
+                "Pending README language links include excluded locales; "
+                "rerun with the full approved language selection"
+            )
+    changed = {}
+    for path, before in list(blobs.items()):
+        owned, stamp = owner(path, before), t.STAMP.match(before)
+        if not owned or owned[0] != "README.md" or not stamp:
+            continue
+        _, lang = owned
+        header = t.header("README.md", lang, stamp[3], old_blob)
+        if (codes is not None and lang.code not in codes) or not before.startswith(header):
+            continue
+        after = t.header("README.md", lang, stamp[3], current_blob) + before[len(header) :]
+        line = t.LANGUAGE_LINE.search(after)
+        if line is None:
+            continue
+        after = (
+            after[: line.start()] + t.language_line(publication_path(path)) + after[line.end() :]
+        )
+        if not candidate_problems(path, after):
+            blobs[path] = after
+            changed[path] = (before, after)
+    if refresh.PATH in blobs:
+        blobs[refresh.PATH] = refresh.rebase_imported_readme_proofs(blobs[refresh.PATH], changed)
+
+
 def import_pending(ref: str, codes: list[str] | None = None) -> int:
     """Read only blob objects, never branch code; current main output wins."""
     require_owned_outputs()
-    refresh.clear_merged()
     if not re.fullmatch(r"[0-9a-f]{40}", ref):
         raise SystemExit("pending ref must be an exact commit SHA")
     blobs = pending_blobs(ref)
+    english = blobs.pop("README.md", None)
     for path, text in blobs.items():
         if path != refresh.PATH and owner(path, text) is None:
             raise SystemExit(f"{path}: refusing unknown pending output")
+    rebase_pending_readmes(blobs, english, codes)
+    refresh.clear_merged()
     force = refresh.import_receipt(blobs[refresh.PATH], blobs) if refresh.PATH in blobs else set()
     proposed: dict[str, str] = {}
     preserved = 0
