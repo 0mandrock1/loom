@@ -223,8 +223,43 @@ def test_a_set_gap_never_clears_a_change_to_one_of_its_peers() -> None:
         embedding=[1.0, 0.0],
         reach=0.3,
         peer_ids={str(far["memory_id"])},
+        user_id="-",
     )
     assert not check([far])
+
+
+def test_a_set_gap_for_a_named_user_ignores_another_users_unpinned_row() -> None:
+    """Another user's row is no peer of the write, so committing it inside the reach
+    leaves the verdict standing; the same row is a peer of a write with no user."""
+    near = _row("near", user_id="alice")
+    pg_admission.remember(identity_key(near), 1, [1.0, 0.1])
+
+    def check(user: str) -> bool:
+        gap = pg_admission.set_gap_check(
+            memory_type="semantic",
+            memory_key="mine",
+            embedding=[1.0, 0.0],
+            reach=0.3,
+            peer_ids=set(),
+            user_id=user,
+        )
+        return gap([near])
+
+    assert check("bob")
+    assert not check("-")
+
+
+def test_a_named_users_peers_keep_only_its_rows_and_every_pinned_one() -> None:
+    from server.memory.app.conflicts import could_be_peer, trim_peers
+
+    alices = {**_row("a1", user_id="alice"), "dist": 0.1}
+    alices_pin = {**_row("a2", user_id="alice", pinned=1), "dist": 0.2}
+    bobs = {**_row("b1", user_id="bob"), "dist": 0.3}
+    assert not could_be_peer(alices, "bob") and could_be_peer(alices, "-")
+    assert could_be_peer(alices_pin, "bob") and could_be_peer(bobs, "bob")
+    kept = trim_peers([alices, alices_pin, bobs], "bob")
+    assert [r["memory_key"] for r in kept] == ["b1", "a2"]
+    assert len(trim_peers([alices, alices_pin, bobs], "-")) == 3  # a write with no user: every row
 
 
 def test_every_postgres_table_is_classified_for_erasure() -> None:
@@ -7070,3 +7105,70 @@ async def test_a_durable_read_on_a_demoted_primary_is_the_read_only_outage(
             await c.fetch("SELECT 1")
     assert expired == [True] and conn.terminated
     assert not pg.is_outage(_InRecovery("some other internal error"))
+
+
+async def test_a_postgres_point_write_reads_the_peers_of_its_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from server.memory.api.models_crud import MemorySetInput
+    from server.memory.app import conflicts, set_commit
+
+    reads: list[dict[str, object]] = []
+
+    async def distance(*a: object, **kw: object) -> float:
+        return 0.3
+
+    async def peer_rows(**kw: object) -> list[object]:
+        reads.append(kw)
+        return []
+
+    monkeypatch.setattr(conflicts, "peer_distance", distance)
+    monkeypatch.setattr(conflicts, "peer_rows", peer_rows)
+    input = MemorySetInput(
+        org="o", namespace="n", agent="a", user_id="bob", memory_key="seat", value="aisle"
+    )
+    w = set_commit._SetWrite(
+        input=input, version=1, retyped_from="", existing=None, expires_at=None
+    )
+    w.embedding = [0.1, 0.2]
+    await set_commit._pg_peer_rows(w, SimpleNamespace(policy="auto_reinforce"))
+    assert [r["user_id"] for r in reads] == ["bob"]
+
+
+async def test_absorb_rejoins_a_gap_row_only_for_a_write_it_could_be_a_peer_of(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A commit of Alice's unpinned row inside the reach joins the peers of a write with no
+    user, and is no peer of Bob's write, as on the verdict's first round."""
+    alices = _row("hers", user_id="alice", value="Prefers aisle seats", run_id="-", valid_at=None)
+    pg_admission.remember(identity_key(alices), 1, [1.0, 0.0])
+
+    async def gap(*_a: object) -> tuple[int, list[dict[str, object]]]:
+        return 7, [alices]
+
+    async def measure(*_a: object) -> list[list[float] | None]:
+        return [[1.0, 0.0]]
+
+    monkeypatch.setattr(pg_admission, "_gap", gap)
+    monkeypatch.setattr(pg_admission, "_measure", measure)
+
+    async def peers(user: str) -> list[str]:
+        out = await pg_admission.absorb(
+            captured={},
+            moved={},
+            org="o",
+            namespace="n",
+            memory_type="semantic",
+            memory_key="mine",
+            embedding=[1.0, 0.0],
+            max_distance=0.3,
+            peers=[],
+            user_id=user,
+        )
+        assert out is not None
+        return [str(r["memory_key"]) for r in out[1]]
+
+    assert await peers("bob") == []
+    assert await peers("-") == ["hers"]

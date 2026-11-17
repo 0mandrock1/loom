@@ -80,6 +80,7 @@ def stub_model_command(monkeypatch):
         return None
 
     monkeypatch.setattr(provider_command, "model_command", command)
+    monkeypatch.setattr(provider_command, "participant_command", command)
     monkeypatch.setattr(pg_profile, "check_configured", checked)
 
 
@@ -1152,3 +1153,11 @@ def no_mirrors(monkeypatch: pytest.MonkeyPatch) -> None:
         return {}
 
     monkeypatch.setattr("server.knowledge.app.mirrors.mirrors_of", _none)
+
+
+@pytest.fixture(autouse=True)
+def isolated_retirement_gate(monkeypatch):
+    """Each test models a fresh process; permanent shutdown cannot leak between them."""
+    from server.core import retirement
+
+    monkeypatch.setattr(retirement, "_gate", retirement.RetirementGate())
