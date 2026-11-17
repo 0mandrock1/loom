@@ -91,6 +91,30 @@ async def test_scan_passes_thousands_of_denied_candidates_in_bounded_batches(wor
     assert opened == closed == ["semantic"]
 
 
+async def test_each_search_pass_discovers_only_its_requested_original_namespaces(
+    world, monkeypatch
+):
+    plan, q, _sizes, _opened, _closed, _install = world
+    other = "acl-" + "2" * 24
+    other_sid = "22222222-2222-4222-8222-222222222222"
+    plan.sources[(other, other_sid)] = "other-docs"
+    seen = []
+
+    @asynccontextmanager
+    async def candidates(_sql, params):
+        seen.append(params)
+
+        async def rows():
+            yield row(0)
+
+        yield rows()
+
+    monkeypatch.setattr(app.store, "candidates", candidates)
+    assert len(await app.collect_leg(plan, q, "semantic", limit=2)) == 1
+    assert seen[0]["nss"] == [MIRROR]
+    assert seen[0]["source_tags"] == ["source-id:" + SID]
+
+
 async def test_ordinary_families_and_duplicate_copies_do_not_consume_admitted_pool(world):
     plan, q, _sizes, _opened, closed, install = world
 

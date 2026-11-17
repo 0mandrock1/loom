@@ -34,7 +34,10 @@ async def collect_leg(
     ordinary: set[tuple[str, str]] | None = None,
 ) -> list[Admitted]:
     """Close one ranked discovery stream when its admitted pool fills or it ends."""
-    if not plan.sources or limit <= 0:
+    sources = {
+        key: original for key, original in plan.sources.items() if original in query.namespaces
+    }
+    if not sources or limit <= 0:
         return []
     set_query_tag("knowledge.mirror.search")
     out: list[Admitted] = []
@@ -53,11 +56,11 @@ async def collect_leg(
 
     try:
         with sequential_reads(), private_work():
-            mirrors = tuple(sorted({ns for ns, _sid in plan.sources}))
+            mirrors = tuple(sorted({ns for ns, _sid in sources}))
             where, params = _common_where(replace(query, namespaces=mirrors))
             where.append("hasAny(tags, {source_tags:Array(String)})")
             params.update(
-                source_tags=sorted({"source-id:" + sid for _ns, sid in plan.sources}),
+                source_tags=sorted({"source-id:" + sid for _ns, sid in sources}),
                 toks=query.tokens,
                 keys=query.keys,
             )
