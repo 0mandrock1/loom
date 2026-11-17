@@ -179,9 +179,13 @@ class Owner:
             if isinstance(result, _Fatal):
                 raise _ForwardFatal(result)
         except BaseException:
-            pg._terminate(self.conn)
-            if not self._close_task.done():
-                self._close_task.cancel()
+            try:
+                pg._terminate(self.conn)
+            except BaseException:  # noqa: BLE001 — abort cannot replace the first close failure.
+                pass
+            finally:
+                if not self._close_task.done():
+                    self._close_task.cancel()
             if interrupted is not None:
                 raise interrupted from None
             raise
@@ -197,7 +201,10 @@ class Owner:
                 await asyncio.wait(tasks, timeout=max(0, (self.close_end or 0) - time.monotonic()))
         except BaseException:  # noqa: BLE001 — cleanup cannot replace the original failure.
             if self.conn is not None:
-                pg._terminate(self.conn)
+                try:
+                    pg._terminate(self.conn)
+                except BaseException:  # noqa: BLE001 — failed abort preserves the caller's failure.
+                    pass
 
     async def call[T](self, work: Callable[[], Awaitable[T]], *, total_s: float) -> T:
         if self.closed or self.phase_end is not None:

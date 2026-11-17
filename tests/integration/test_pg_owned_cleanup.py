@@ -75,6 +75,64 @@ async def test_owned_migrator_cancellation_releases_server_locks(database, tmp_p
     await released(observer, pid)
 
 
+@pytest.mark.parametrize("signals", [1, 2])
+async def test_owned_migrator_keeps_real_cancel_request_alive(
+    database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, signals: int
+) -> None:
+    from asyncpg import connect_utils
+
+    conn, observer = database
+    pid = conn.get_server_pid()
+    cancelling, allow_cancel = asyncio.Event(), asyncio.Event()
+    real_cancel = connect_utils._cancel
+    monkeypatch.setattr(pg, "_RELEASE_TIMEOUT_S", 0.5)
+
+    async def held_cancel(**kwargs: Any) -> None:
+        if kwargs["backend_pid"] == pid:
+            cancelling.set()
+            await allow_cancel.wait()
+        await real_cancel(**kwargs)
+
+    monkeypatch.setattr(connect_utils, "_cancel", held_cancel)
+    (tmp_path / "001_sleep.sql").write_text("SELECT * FROM probe FOR UPDATE; SELECT pg_sleep(10);")
+
+    @contextlib.asynccontextmanager
+    async def connect() -> AsyncIterator[Any]:
+        yield conn
+
+    task = asyncio.create_task(pg_migrate.migrate(tmp_path, connect=connect, schema="test"))
+    try:
+        await sleeping(observer, pid)
+        task.cancel("first signal")
+        await asyncio.wait_for(cancelling.wait(), 2)
+        if signals == 2:
+            task.cancel("second signal")
+        await asyncio.sleep(0.03)
+        assert not task.done(), (
+            await observer.fetchval("SELECT wait_event FROM pg_stat_activity WHERE pid=$1", pid),
+            await observer.fetchval("SELECT count(*) FROM pg_locks WHERE pid=$1", pid),
+        )
+        allow_cancel.set()
+        with pytest.raises(asyncio.CancelledError, match="first signal"):
+            await asyncio.wait_for(task, 0.5)
+        await released(observer, pid)
+    finally:
+        allow_cancel.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await observer.execute("SELECT pg_cancel_backend($1)", pid)
+        async with asyncio.timeout(2):
+            for _ in range(200):
+                if not await observer.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", pid
+                ):
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                pytest.fail("owned backend did not end after teardown cancellation")
+
+
 @pytest.mark.parametrize("transaction_context", [False, True])
 async def test_public_owned_close_releases_live_query_before_task_cancel(
     database, transaction_context: bool
