@@ -76,8 +76,9 @@ given up on at once). Each decision's writes run whole with their audit row, and
 stops writing before the next one once the pass is stopped or the source's lease is
 lost.
 
-`knowledge_source_sync_documents_per_pass` bounds the files fetched, the
-documents retired and the documents mined in one pass, across all sources.
+`knowledge_source_sync_documents_per_pass` bounds the files fetched, documents
+retired and documents mined for namespace sources in one pass. Mirrored sources
+have the separate `knowledge_source_mirror_documents_per_pass` bound.
 """
 
 from __future__ import annotations
