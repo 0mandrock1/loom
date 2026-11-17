@@ -1220,8 +1220,38 @@ a row for the state read and the `loom.tenancy` lookup. Loom's own writes are ma
 this predicts the ship gate (a `memory.set` p99 rise of at most 10 ms, a delivery pass
 at most 10% slower) holds by a wide margin; the cost lands on scripts and older builds
 writing a cell without the check. This measures the triggers on the statements, not a
-whole `memory.set` through a server on a cell: the gate itself is measured end to end
-with attach.
+whole `memory.set` through a server on a cell; the end-to-end gate follows.
+
+`bench/cell_trigger_gate.py` measures the gate end to end, locally: a first cell attached
+by `loom cell attach` (two server processes, a router, Postgres 16 with a synchronous
+standby and ClickHouse in Docker on a shared host under other load), 400 sequential
+`memory.set` calls of a placed org through one server, and a delivery-sized 1,000-row insert
+of the held org from a marked and an unmarked session, the org triggers on and dropped in
+turn, three rounds each; the harness checks the triggers it asked for are enabled:
+
+```bash
+PYTHONPATH=$PWD .venv/bin/python bench/cell_trigger_gate.py --base-url <server> \
+  --pg-dsn <the cell's LOOM_PG_DSN> --token <writer token> --org <placed org> --namespace <ns>
+```
+
+| Local, three rounds                 | Triggers on            | Triggers off           |
+| ----------------------------------- | ---------------------- | ---------------------- |
+| `memory.set` p50                    | 154.4, 99.3, 98.4 ms   | 91.9, 101.2, 101.6 ms  |
+| `memory.set` p99                    | 494.0, 291.7, 257.6 ms | 279.2, 244.7, 233.3 ms |
+| 1,000-row insert, marked (median)   | 11.0, 9.2, 8.5 ms      | 9.7, 11.1, 10.6 ms     |
+| 1,000-row insert, unmarked (median) | 22.1, 21.4, 21.0 ms    | 10.9, 9.6, 11.0 ms     |
+
+The marked batch is what a delivery pass of a cell's own processes writes. On minus off
+within each round it moved +1.3, −1.9 and −2.1 ms (+13.4%, −17.1% and −19.8%); the means are
+9.6 ms on and 10.5 ms off, −0.9 ms (−8.6%). The delivery-pass gate (at most 10% slower) is
+met on the mean, but one round of three was 13% slower and three rounds give no paired bound
+(methodology's paired bootstrap is for per-item labels), so this run does not establish the
+gate on its own; the statement-level figures above do, at under a microsecond a row against
+about 10 µs a row of insert. The `memory.set` figures move by more between rounds of one
+configuration than any trigger cost: on this loaded host the p99 differences within a round
+(+214.8, +47.0, +24.3 ms here, and −71.7, −10.0, −42.4 ms in an earlier run of the same
+measurement) have no consistent sign: the `memory.set` p99 gate (a rise of at most 10 ms) is
+unresolved locally. An unmarked session pays about 11 µs a row, as above.
 
 ## Reference computations
 
