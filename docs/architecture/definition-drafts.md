@@ -111,11 +111,29 @@ registration name, never its password.
 
 Private-kind production and promotion require every live server and worker heartbeat to
 advertise the registration migration. Missing or unreadable fleet state fails closed.
-An older build does not filter these candidates or erase registrations, so no private
-candidate or registration is produced while it serves. Before rollback, disable query
-history, remove registrations and private candidate kinds, and repeat removal after the
-first older replica serves to cover writes during the transition. Governed memory and
-shared rows retain their existing upgrade rules.
+Apply the migration and upgrade every server and worker before enabling either drafting
+path. Keep both paths disabled while any serving build is older or unknown. An older
+build does not filter private candidates or erase registrations. Fleet checks alone do
+not protect a rollback: a request can pass its check before an older heartbeat appears.
+
+Rollback requires a maintenance window before any older reader starts:
+
+1. Disable both `knowledge_gaps_enabled` and `knowledge_query_history_enabled`. Stop new
+   private drafting, review and source-registration requests and query-history worker
+   turns. Quiesce their queued work and every admitted model call, review, registration
+   and removal. Disabling a flag does not cancel an existing request or review.
+2. Let those operations finish or terminate, then settle their uncertain server sends
+   and retained writer leases through their bounds. Do not clean the tables while an
+   admitted operation can still write a candidate, decision or registration.
+3. With only a supporting build running for maintenance, remove every version of
+   `knowledge_gap` and `query_history` candidates from `loom.learnings_queue`, and all
+   `loom.query_history_sources` registrations. Wait for deletion to finish and verify
+   both are absent on every storage replica a reader can use. Preserve ordinary
+   candidates and published definitions. Only then start an older reader.
+
+Keep private producers disabled throughout the downgrade. Enable them again only after
+all serving processes support the registration migration. Governed memory and shared
+rows retain their existing upgrade rules.
 
 ## Source entry points
 
