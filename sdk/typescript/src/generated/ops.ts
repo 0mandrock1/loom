@@ -3570,6 +3570,7 @@ export interface KnowledgeFormatsOutput {
 export interface KnowledgeGapsDraftInput {
   org: string;
   namespace: string;
+  /** The gap to draft, as returned by knowledge.gaps.list. */
   gap_id: string;
 }
 
@@ -4102,7 +4103,9 @@ export interface KnowledgeQueryHistoryAddInput {
   namespace: string;
   name: string;
   host: string;
+  /** The ClickHouse HTTP interface port; default 8443. */
   port?: number;
+  /** Whether the HTTP connection uses TLS; default true. */
   secure?: boolean;
   user: string;
   password: string;
@@ -4126,6 +4129,7 @@ export interface KnowledgeQueryHistoryAddOutput {
 export interface KnowledgeQueryHistoryListInput {
   org: string;
   namespace: string;
+  /** Registered sources to return, at most; default 50. */
   limit?: number;
 }
 
@@ -4137,6 +4141,7 @@ export interface KnowledgeQueryHistoryListOutput {
 export interface KnowledgeQueryHistoryRemoveInput {
   org: string;
   namespace: string;
+  /** The registration name of the query-history source to remove. */
   name: string;
 }
 

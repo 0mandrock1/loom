@@ -196,13 +196,15 @@ The document formats this deployment reads, as `knowledge.ingest` sends them to 
 
 ## `knowledge.gaps.draft`
 
+Draft a definition from a knowledge gap for an admin to review.
+
 `POST /v1/knowledge.gaps.draft` · MCP `loom_knowledge_gaps_draft` · role `admin` · idempotent · audited · not listed under the MCP `all` toolset
 
 | Input field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `org` | `str` | required | The tenant (first element of the identity tuple). |
 | `namespace` | `str` | required | The namespace the op reads or writes. |
-| `gap_id` | `str` | required |  |
+| `gap_id` | `str` | required | The gap to draft, as returned by knowledge.gaps.list. |
 
 | Output field | Type | Meaning |
 | --- | --- | --- |
@@ -467,6 +469,8 @@ Calculate over the live snapshots of ingested datasets with a typed plan: filter
 
 ## `knowledge.query_history.add`
 
+Register a read-only ClickHouse query-history source for definition drafts.
+
 `POST /v1/knowledge.query_history.add` · MCP `loom_knowledge_query_history_add` · role `admin` · write · audited · not listed under the MCP `all` toolset
 
 | Input field | Type | Default | Meaning |
@@ -475,8 +479,8 @@ Calculate over the live snapshots of ingested datasets with a typed plan: filter
 | `namespace` | `str` | required | The namespace the op reads or writes. |
 | `name` | `str` | required | Registration name within this namespace. |
 | `host` | `str` | required | ClickHouse host; follows the tracker's host-vetting policy. |
-| `port` | `int` | `8443` |  |
-| `secure` | `bool` | `True` |  |
+| `port` | `int` | `8443` | The ClickHouse HTTP interface port; default 8443. |
+| `secure` | `bool` | `True` | Whether the HTTP connection uses TLS; default true. |
 | `user` | `str` | required | Read-only ClickHouse account with SELECT on system.query_log. |
 | `password` | `str` | required | Sealed at rest and never returned. |
 | `databases` | `list[str]` | required | Only queries whose databases all belong to this allowlist are considered. |
@@ -497,13 +501,15 @@ Calculate over the live snapshots of ingested datasets with a typed plan: filter
 
 ## `knowledge.query_history.list`
 
+List the namespace's registered query-history sources.
+
 `POST /v1/knowledge.query_history.list` · MCP `loom_knowledge_query_history_list` · role `admin` · idempotent · not listed under the MCP `all` toolset
 
 | Input field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `org` | `str` | required | The tenant (first element of the identity tuple). |
 | `namespace` | `str` | required | The namespace the op reads or writes. |
-| `limit` | `int` | `50` |  |
+| `limit` | `int` | `50` | Registered sources to return, at most; default 50. |
 
 | Output field | Type | Meaning |
 | --- | --- | --- |
@@ -512,13 +518,15 @@ Calculate over the live snapshots of ingested datasets with a typed plan: filter
 
 ## `knowledge.query_history.remove`
 
+Remove a query-history source registration from the namespace.
+
 `POST /v1/knowledge.query_history.remove` · MCP `loom_knowledge_query_history_remove` · role `admin` · idempotent · audited · not listed under the MCP `all` toolset
 
 | Input field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `org` | `str` | required | The tenant (first element of the identity tuple). |
 | `namespace` | `str` | required | The namespace the op reads or writes. |
-| `name` | `str` | required |  |
+| `name` | `str` | required | The registration name of the query-history source to remove. |
 
 | Output field | Type | Meaning |
 | --- | --- | --- |

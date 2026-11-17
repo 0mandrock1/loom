@@ -184,7 +184,7 @@ search](../concepts/identities-and-namespaces.md#governed-definitions-in-search)
 - A definition's promotion, through `memory.promote` or `learnings.review`, reads the
   namespace's definition rows once, at most `memory_shared_definitions_max` plus one (past
   it the promotion is refused), to check its term and aliases; the review path runs the
-  read twice, once before its write and once at the promotion.
+  read three times: at candidate selection, during preflight and at the promotion write.
 - `memory.definitions.list` reads the definition rows once and returns at most twice the
   ceiling, with values for the ceiling's most recent only; it reads their sources in one
   bulk read and grades the value of each source nothing else lapses.

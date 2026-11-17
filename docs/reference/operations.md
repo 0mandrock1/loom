@@ -416,7 +416,7 @@ Fields for every `knowledge` op: [operations/knowledge.md](operations/knowledge.
 | [`knowledge.dedup_resolve`](operations/knowledge.md#knowledgededup_resolve) | Resolve one document duplicate pair. | admin | idempotent | no | yes |
 | [`knowledge.delete`](operations/knowledge.md#knowledgedelete) | Soft-delete a document by source_uri: writes its tombstone. | writer | idempotent | no | yes |
 | [`knowledge.formats`](operations/knowledge.md#knowledgeformats) | The document formats this deployment reads, as `knowledge.ingest` sends them to its extractors, and the upload's limits. | viewer | read | no |  |
-| [`knowledge.gaps.draft`](operations/knowledge.md#knowledgegapsdraft) |  | admin | idempotent | no | yes |
+| [`knowledge.gaps.draft`](operations/knowledge.md#knowledgegapsdraft) | Draft a definition from a knowledge gap for an admin to review. | admin | idempotent | no | yes |
 | [`knowledge.gaps.list`](operations/knowledge.md#knowledgegapslist) | The questions people keep asking in a namespace that nothing answers. | admin | idempotent | no |  |
 | [`knowledge.get`](operations/knowledge.md#knowledgeget) | Fetch a single document by source_uri. | viewer | read | yes |  |
 | [`knowledge.ingest`](operations/knowledge.md#knowledgeingest) | Extract an uploaded file (the extractor service parses it, the server checks what it returns) and publish it as a document revision, asynchronously: the answer names the job, and… | writer | write | no |  |
@@ -427,9 +427,9 @@ Fields for every `knowledge` op: [operations/knowledge.md](operations/knowledge.
 | [`knowledge.move`](operations/knowledge.md#knowledgemove) | Move documents to another namespace of the org: a collection, `@me` (an end user's own collection), or a namespace. | writer | idempotent | no | yes |
 | [`knowledge.outline`](operations/knowledge.md#knowledgeoutline) | A document's table of contents, as recorded on its chunks at ingest, and optionally one section's assembled text. | viewer | read | no |  |
 | [`knowledge.query`](operations/knowledge.md#knowledgequery) | Calculate over the live snapshots of ingested datasets with a typed plan: filters, inner joins, groups and aggregates, or the rows themselves. | viewer | read | no |  |
-| [`knowledge.query_history.add`](operations/knowledge.md#knowledgequery_historyadd) |  | admin | write | no | yes |
-| [`knowledge.query_history.list`](operations/knowledge.md#knowledgequery_historylist) |  | admin | idempotent | no |  |
-| [`knowledge.query_history.remove`](operations/knowledge.md#knowledgequery_historyremove) |  | admin | idempotent | no | yes |
+| [`knowledge.query_history.add`](operations/knowledge.md#knowledgequery_historyadd) | Register a read-only ClickHouse query-history source for definition drafts. | admin | write | no | yes |
+| [`knowledge.query_history.list`](operations/knowledge.md#knowledgequery_historylist) | List the namespace's registered query-history sources. | admin | idempotent | no |  |
+| [`knowledge.query_history.remove`](operations/knowledge.md#knowledgequery_historyremove) | Remove a query-history source registration from the namespace. | admin | idempotent | no | yes |
 | [`knowledge.reads`](operations/knowledge.md#knowledgereads) | How often agents opened each document over the last `days` (`knowledge.get` ledger rows; dashboard, assistant and bench traffic left out). | viewer | read | no |  |
 | [`knowledge.restore`](operations/knowledge.md#knowledgerestore) | Undo a `knowledge.delete` or `knowledge.bulk_delete` of one document. | writer | idempotent | no | yes |
 | [`knowledge.search`](operations/knowledge.md#knowledgesearch) | Search the user's uploaded document library — bills, contracts, receipts, resumes, policies, manuals, technical docs. | viewer | read | no |  |

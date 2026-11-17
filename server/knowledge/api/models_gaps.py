@@ -49,9 +49,15 @@ class KnowledgeGapsListOutput(BaseModel):
 
 
 class KnowledgeGapsDraftInput(BaseModel):
+    """Draft a definition from a knowledge gap for an admin to review."""
+
     org: str
     namespace: str
-    gap_id: str = Field(min_length=1, max_length=128)
+    gap_id: str = Field(
+        min_length=1,
+        max_length=128,
+        description="The gap to draft, as returned by knowledge.gaps.list.",
+    )
 
 
 class KnowledgeGapsDraftOutput(BaseModel):

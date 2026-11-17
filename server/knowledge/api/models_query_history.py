@@ -9,14 +9,23 @@ from pydantic import BaseModel, Field
 
 
 class QueryHistoryAddInput(BaseModel):
+    """Register a read-only ClickHouse query-history source for definition drafts."""
+
     org: str
     namespace: str
     # Registration name within this namespace.
     name: str = Field(min_length=1, max_length=100)
     # ClickHouse host; follows the tracker's host-vetting policy.
     host: str = Field(min_length=1, max_length=253)
-    port: int = Field(default=8443, ge=1, le=65535)
-    secure: bool = True
+    port: int = Field(
+        default=8443,
+        ge=1,
+        le=65535,
+        description="The ClickHouse HTTP interface port; default 8443.",
+    )
+    secure: bool = Field(
+        default=True, description="Whether the HTTP connection uses TLS; default true."
+    )
     # Read-only ClickHouse account with SELECT on system.query_log.
     user: str = Field(min_length=1, max_length=255)
     # Sealed at rest and never returned.
@@ -43,9 +52,13 @@ class QueryHistorySource(BaseModel):
 
 
 class QueryHistoryListInput(BaseModel):
+    """List the namespace's registered query-history sources."""
+
     org: str
     namespace: str
-    limit: int = Field(default=50, ge=1, le=1000)
+    limit: int = Field(
+        default=50, ge=1, le=1000, description="Registered sources to return, at most; default 50."
+    )
 
 
 class QueryHistoryListOutput(BaseModel):
@@ -55,9 +68,11 @@ class QueryHistoryListOutput(BaseModel):
 
 
 class QueryHistoryRemoveInput(BaseModel):
+    """Remove a query-history source registration from the namespace."""
+
     org: str
     namespace: str
-    name: str
+    name: str = Field(description="The registration name of the query-history source to remove.")
 
 
 class QueryHistoryRemoveOutput(BaseModel):

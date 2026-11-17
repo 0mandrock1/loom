@@ -10638,12 +10638,16 @@ class KnowledgeFormat(TypedDict, total=False):
 
 
 class KnowledgeGapsDraftInput(TypedDict, total=False):
+    "Draft a definition from a knowledge gap for an admin to review."
+
     org: Required[str]
     namespace: Required[str]
     gap_id: Required[str]
 
 
 class KnowledgeGapsDraftBody(TypedDict, total=False):
+    "Draft a definition from a knowledge gap for an admin to review."
+
     org: NotRequired[str]
     namespace: NotRequired[str]
     gap_id: Required[str]
@@ -11357,6 +11361,8 @@ class QuerySnapshot(TypedDict, total=False):
 
 
 class KnowledgeQueryHistoryAddInput(TypedDict, total=False):
+    "Register a read-only ClickHouse query-history source for definition drafts."
+
     org: Required[str]
     namespace: Required[str]
     name: Required[str]
@@ -11370,6 +11376,8 @@ class KnowledgeQueryHistoryAddInput(TypedDict, total=False):
 
 
 class KnowledgeQueryHistoryAddBody(TypedDict, total=False):
+    "Register a read-only ClickHouse query-history source for definition drafts."
+
     org: NotRequired[str]
     namespace: NotRequired[str]
     name: Required[str]
@@ -11396,12 +11404,16 @@ class KnowledgeQueryHistoryAddOutput(TypedDict, total=False):
 
 
 class KnowledgeQueryHistoryListInput(TypedDict, total=False):
+    "List the namespace's registered query-history sources."
+
     org: Required[str]
     namespace: Required[str]
     limit: NotRequired[int]
 
 
 class KnowledgeQueryHistoryListBody(TypedDict, total=False):
+    "List the namespace's registered query-history sources."
+
     org: NotRequired[str]
     namespace: NotRequired[str]
     limit: NotRequired[int]
@@ -11413,12 +11425,16 @@ class KnowledgeQueryHistoryListOutput(TypedDict, total=False):
 
 
 class KnowledgeQueryHistoryRemoveInput(TypedDict, total=False):
+    "Remove a query-history source registration from the namespace."
+
     org: Required[str]
     namespace: Required[str]
     name: Required[str]
 
 
 class KnowledgeQueryHistoryRemoveBody(TypedDict, total=False):
+    "Remove a query-history source registration from the namespace."
+
     org: NotRequired[str]
     namespace: NotRequired[str]
     name: Required[str]
