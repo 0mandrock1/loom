@@ -19,8 +19,8 @@ Counting and filtering hydrate the whole store through cursor pages. Native filt
 helpers apply comparisons and Boolean logic. Retrieval searches up to 100 chunks with
 explicit namespace, tag and URI boundaries, hydrates full documents and deduplicates
 by source URI, preserving each document's best-ranked hit. These operations have no
-cross-request snapshot, and concurrent edits keep the latest write. Duplicate checks
-and multi-document operations are not transactions.
+cross-request snapshot. Concurrent writes can return a conflict from Loom. Duplicate
+checks and multi-document operations are not transactions.
 
 Serialized connections carry Haystack environment-variable Secret references; raw
 Secret tokens refuse serialization. Explicit endpoint URLs reject embedded secrets.

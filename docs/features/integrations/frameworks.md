@@ -203,8 +203,8 @@ policies and deletion. `DuplicatePolicy.NONE` has the same behavior as `FAIL`.
 Filters use Haystack's native nested comparison and logic predicates over the full
 stored documents. Counting and filtering list and hydrate the store, so large stores
 incur a full read. Missing ids raise `MissingDocumentError`; writes and batched
-deletions can partially finish when a request fails. Concurrent edits keep the later
-write, and duplicate checks are not a transaction across concurrent writers.
+deletions can partially finish when a request fails. Concurrent writes can return a
+conflict from Loom; duplicate checks are not a transaction across writers.
 
 The retriever accepts `top_k` from 1 to 100 and `search_mode` of `hybrid` (default),
 `semantic` or `lexical`. It searches only this store in this namespace, then hydrates
