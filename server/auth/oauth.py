@@ -422,11 +422,14 @@ async def _redirect_with_code(
     upstream_refresh: str,
     state: str,
     since: int,
+    verified_email: str = "",
 ) -> RedirectResponse:
     """Mint the MCP client's single-use code for a signed-in user and send the
     browser back to the client with it. `since` is when the identity was
     resolved: a subject revoked after it gets no tokens for the code."""
     subject, org, namespaces, roles = identity
+    if await scim.refuses_subject(subject, org=org, verified_email=verified_email):
+        raise _invalid_grant("this person cannot sign in under the cell's provisioning policy")
     code = secrets.token_urlsafe(32)
     await store.save_code(
         code,
@@ -442,6 +445,7 @@ async def _redirect_with_code(
             "since": since,
             "family": new_jti(),
             "upstream_refresh": upstream_refresh,
+            "verified_email": scim.normalized(verified_email),
         },
     )
     return _back_to_client(client["redirect_uri"], {"code": code}, state)
@@ -794,8 +798,8 @@ async def _account_for(
     from server.auth.login import SignInUnavailable, resolve_identity_for_email
 
     try:
-        if await scim.deactivated(email):  # before JIT makes them an account
-            return _Denied(_DEACTIVATED)
+        if await scim.refuses_subject(email, org="", verified_email=email):  # before JIT writes
+            return _Denied(_SIGN_IN_REFUSED)
         await finish_unfinished_account(email)
         resolved = await resolve_identity_for_email(email)
         if resolved is not None:
@@ -814,7 +818,7 @@ async def _account_for(
         return _sign_in_unavailable(_restart_url(pending))
 
 
-_DEACTIVATED = "this account is deactivated"
+_SIGN_IN_REFUSED = "this account is not allowed to sign in"
 
 
 async def _signed_in_as(
@@ -824,38 +828,43 @@ async def _signed_in_as(
     email: str,
 ) -> Response:
     """Carry on the sign-in `pending` began, as `identity`. Every SSO sign-in
-    ends here, so here is where a SCIM deactivation is sure to be checked."""
+    ends here, so the resolved identity is checked before the next grant."""
     from server.auth import device
 
-    if refused := await _refused_if_deactivated(email, pending, upstream):
+    if refused := await _refused_sign_in(
+        identity[0], pending, upstream, org=identity[1], verified_email=email
+    ):
         return refused
     if pending["kind"] == "device":
-        return await device.signed_in(pending["user_code"], identity, upstream)
+        return await device.signed_in(
+            pending["user_code"], identity, upstream, verified_email=email
+        )
     if pending["kind"] == "dashboard":
-        return await _dashboard_signed_in(identity, pending)
-    return await _connect_consent(pending, identity, upstream)
+        return await _dashboard_signed_in(
+            identity, pending, verified_email=email, upstream=upstream
+        )
+    return await _connect_consent(pending, identity, upstream, verified_email=email)
 
 
-async def _refused_if_deactivated(
-    email: str, pending: dict[str, Any], upstream: str
+async def _refused_sign_in(
+    subject: str, pending: dict[str, Any], upstream: str, *, org: str = "", verified_email: str = ""
 ) -> Response | None:
-    """The answer to a sign-in by `email` that SCIM has deactivated (or that
-    cannot be checked), or None to carry on."""
+    """A person refused by provisioning, a retryable read failure, or None to carry on."""
     from server.auth import device, oidc
     from server.auth.login import SignInUnavailable
 
     try:
-        deactivated = await scim.deactivated(email)
+        deactivated = await scim.refuses_subject(subject, org=org, verified_email=verified_email)
     except SignInUnavailable:
         await oidc.revoke(upstream)
         return _sign_in_unavailable(_restart_url(pending))
     if not deactivated:
         return None
-    await _signin_denied(email, _DEACTIVATED)
+    await _signin_denied(subject, _SIGN_IN_REFUSED)
     await oidc.revoke(upstream)
     if pending["kind"] == "device":
         await device.deny(pending["user_code"])
-    return _denied_page(f"{_DEACTIVATED}; ask your Loom operator for access")
+    return _denied_page(f"{_SIGN_IN_REFUSED}; ask your Loom operator for access")
 
 
 def _link_cookie(ticket: str) -> str:
@@ -950,7 +959,13 @@ async def link_account(request: Request) -> Response:
     upstream = unseal(UPSTREAM_PURPOSE, held["upstream_refresh"])
     # Before any link or account is written: the page may have been open since before
     # a deactivation, and what it wrote would be reachable but never revoked.
-    if refused := await _refused_if_deactivated(email, sign_in, upstream):
+    if refused := await _refused_sign_in(
+        proven[0] if proven else email,
+        sign_in,
+        upstream,
+        org=proven[1] if proven else "",
+        verified_email=email,
+    ):
         refused.delete_cookie(_link_cookie(ticket), path="/oauth/link")
         return refused
     try:
@@ -1047,10 +1062,15 @@ async def _connect_consent(
     pending: dict[str, Any],
     identity: Identity,
     upstream_refresh: str,
+    verified_email: str = "",
 ) -> Response:
     """Under OIDC the IdP may sign the user in without a single click, so the
     MCP client gets its code only after the user approves here, on a page that
     names the client and where the authorization goes."""
+    if refused := await _refused_sign_in(
+        identity[0], pending, upstream_refresh, org=identity[1], verified_email=verified_email
+    ):
+        return refused
     client = await store.get_client(pending["client_id"])
     if client is None:
         raise OAuthError("invalid_client")
@@ -1065,6 +1085,7 @@ async def _connect_consent(
                 "code_challenge": pending["code_challenge"],
                 "mcp_state": pending["mcp_state"],
                 "identity": list(identity),
+                "verified_email": scim.normalized(verified_email),
                 "since": int(time.time()),  # the identity was resolved now
                 "upstream_refresh": seal(UPSTREAM_PURPOSE, upstream_refresh),
             },
@@ -1092,9 +1113,18 @@ authorization to <b>{html.escape(destination)}</b>.</p>
 
 @connect_router.post("/oauth/authorize/approve")
 async def connect_approve(request: Request) -> Response:
+    from server.auth.login import SignInUnavailable
+
     f = await form_body(request)
     try:
         return await _decide_connect(f)
+    except SignInUnavailable:
+        return html_page(
+            "Connect Loom",
+            "<h2>Provisioning cannot be checked</h2><p>Go back and submit your choice again.</p>",
+            503,
+            headers={"Retry-After": "5"},
+        )
     except claims.Busy:  # nothing was spent: the same choice can be sent again
         return html_page(
             "Connect Loom",
@@ -1126,6 +1156,7 @@ async def _decide_connect(f: dict[str, str]) -> Response:
             upstream_refresh=unseal(UPSTREAM_PURPOSE, pending["upstream_refresh"]),
             state=pending["mcp_state"],
             since=pending["since"],
+            verified_email=pending.get("verified_email", ""),
         )
     if await store.take_pending(ticket) is None:
         return expired  # the other submit answered
@@ -1144,11 +1175,17 @@ async def _decide_connect(f: dict[str, str]) -> Response:
     return _back_to_client(client["redirect_uri"], {"error": "access_denied"}, pending["mcp_state"])
 
 
-async def _dashboard_signed_in(identity: Identity, pending: dict[str, Any]) -> Response:
+async def _dashboard_signed_in(
+    identity: Identity, pending: dict[str, Any], *, verified_email: str = "", upstream: str = ""
+) -> Response:
     """Deliver a short-lived token at `/me`, which never redirects to another origin."""
     from server.auth.revocation import subjects_revoked
 
     subject, org, namespaces, roles = identity
+    if refused := await _refused_sign_in(
+        subject, pending, upstream, org=org, verified_email=verified_email
+    ):
+        return refused
     issued_at = int(time.time())  # before the read: a revocation after it postdates the token
     try:
         revoked = await subjects_revoked([subject], issued_at=issued_at)
@@ -1207,6 +1244,10 @@ async def issue_tokens(
     from server.auth.device import DEVICE_CLIENT_ID
     from server.auth.revocation import subjects_revoked
 
+    if await scim.refuses_subject(
+        grant["subject"], org=grant["org"], verified_email=grant.get("verified_email", "")
+    ):
+        raise _invalid_grant("this person cannot sign in under the cell's provisioning policy")
     issued_at = int(time.time())  # before the read: a revocation after it postdates the tokens
     if await subjects_revoked([grant["subject"]], issued_at=since):
         raise _invalid_grant("this account's tokens are revoked")
@@ -1245,6 +1286,7 @@ async def issue_tokens(
             "family": grant["family"],
             "generation": generation,
             "upstream_refresh": grant["upstream_refresh"],
+            "verified_email": scim.normalized(grant.get("verified_email", "")),
             "held": grant.get("held", {}),  # a rotation swaps from the token it spent
         },
     )
@@ -1462,6 +1504,10 @@ async def _refresh_session(grant: Grant, refresh_token: str) -> dict[str, Any]:
     # ago on another process (or owed its revocation) mints nothing more.
     if await store.session_ended(grant["family"]):
         raise _invalid_grant()
+    if await scim.refuses_subject(
+        grant["subject"], org=grant["org"], verified_email=grant.get("verified_email", "")
+    ):
+        raise _invalid_grant("this person cannot sign in under the cell's provisioning policy")
     if settings.oauth_login_provider == "oidc":
         grant["upstream_refresh"] = await _ask_identity_provider(grant, refresh_token)
     elif grant["upstream_refresh"]:

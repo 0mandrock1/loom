@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import hmac
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -40,7 +41,9 @@ def identity(monkeypatch):
 @pytest.fixture
 def client(identity, store, monkeypatch):
     monkeypatch.setattr(
-        scim_groups, "verify_token", functools.partial(verify_token, secret=JWT_SECRET)
+        scim_groups,
+        "authenticate_token",
+        AsyncMock(side_effect=functools.partial(verify_token, secret=JWT_SECRET)),
     )
     api = FastAPI()
     scim_groups.attach(api)
@@ -131,7 +134,7 @@ def test_reserved_cell_token_cannot_fall_through_as_a_groups_admin(client, monke
     def forbidden(_token):
         pytest.fail("a reserved SCIM credential must not use the org-admin alternative")
 
-    monkeypatch.setattr(scim_groups, "verify_token", forbidden)
+    monkeypatch.setattr(scim_groups, "authenticate_token", AsyncMock(side_effect=forbidden))
     response = client.get("/scim/v2/Groups", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 401
 
@@ -142,6 +145,6 @@ def test_groups_availability_failure_cannot_use_an_admin_fallback(client, identi
     def forbidden(_token):
         pytest.fail("an unread SCIM cell must not fall through unchecked")
 
-    monkeypatch.setattr(scim_groups, "verify_token", forbidden)
+    monkeypatch.setattr(scim_groups, "authenticate_token", AsyncMock(side_effect=forbidden))
     response = client.get("/scim/v2/Groups", headers={"Authorization": "Bearer org-admin"})
     assert response.status_code == 503 and response.headers["Retry-After"] == "5"

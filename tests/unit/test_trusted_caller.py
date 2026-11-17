@@ -18,7 +18,7 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -53,7 +53,7 @@ def _auth(subject: str = "sa:gateway"):
     )
 
 
-def test_extract_auth_honors_obo_header_for_trusted_caller() -> None:
+async def test_extract_auth_honors_obo_header_for_trusted_caller() -> None:
     """sa:gateway is on LOOM_TRUSTED_CALLERS → header replaces subject."""
     from server.transport import http as http_mod
 
@@ -65,17 +65,17 @@ def test_extract_auth_honors_obo_header_for_trusted_caller() -> None:
     )
 
     with (
-        patch.object(bearer_mod, "verify_token", return_value=_auth("sa:gateway")),
+        patch.object(bearer_mod, "authenticate_token", return_value=_auth("sa:gateway")),
         patch.object(http_mod.settings, "trusted_callers", "sa:gateway,sa:other"),
     ):
-        out = http_mod._extract_auth(req)  # type: ignore[arg-type]
+        out = await http_mod._extract_auth(req)  # type: ignore[arg-type]
 
     assert out is not None
     assert out.subject == "bob@example.com"
     assert out.impersonated_by == "sa:gateway"
 
 
-def test_extract_auth_ignores_obo_when_caller_not_trusted() -> None:
+async def test_extract_auth_ignores_obo_when_caller_not_trusted() -> None:
     """sa:imposter not in LOOM_TRUSTED_CALLERS → header is ignored."""
     from server.transport import http as http_mod
 
@@ -87,17 +87,17 @@ def test_extract_auth_ignores_obo_when_caller_not_trusted() -> None:
     )
 
     with (
-        patch.object(bearer_mod, "verify_token", return_value=_auth("sa:imposter")),
+        patch.object(bearer_mod, "authenticate_token", return_value=_auth("sa:imposter")),
         patch.object(http_mod.settings, "trusted_callers", "sa:gateway"),
     ):
-        out = http_mod._extract_auth(req)  # type: ignore[arg-type]
+        out = await http_mod._extract_auth(req)  # type: ignore[arg-type]
 
     assert out is not None
     assert out.subject == "sa:imposter"  # unchanged
     assert out.impersonated_by == ""
 
 
-def test_extract_auth_ignores_obo_when_no_trusted_callers_configured() -> None:
+async def test_extract_auth_ignores_obo_when_no_trusted_callers_configured() -> None:
     """Empty LOOM_TRUSTED_CALLERS → impersonation feature is off entirely."""
     from server.transport import http as http_mod
 
@@ -109,17 +109,17 @@ def test_extract_auth_ignores_obo_when_no_trusted_callers_configured() -> None:
     )
 
     with (
-        patch.object(bearer_mod, "verify_token", return_value=_auth("sa:gateway")),
+        patch.object(bearer_mod, "authenticate_token", return_value=_auth("sa:gateway")),
         patch.object(http_mod.settings, "trusted_callers", ""),
     ):
-        out = http_mod._extract_auth(req)  # type: ignore[arg-type]
+        out = await http_mod._extract_auth(req)  # type: ignore[arg-type]
 
     assert out is not None
     assert out.subject == "sa:gateway"
     assert out.impersonated_by == ""
 
 
-def test_extract_auth_trusted_caller_without_obo_header_is_noop() -> None:
+async def test_extract_auth_trusted_caller_without_obo_header_is_noop() -> None:
     """Trusted caller making a normal request (no impersonation) — works as
     today; subject stays the JWT's actual sub."""
     from server.transport import http as http_mod
@@ -127,10 +127,10 @@ def test_extract_auth_trusted_caller_without_obo_header_is_noop() -> None:
     req = _FakeRequest({"Authorization": "Bearer fake-token"})
 
     with (
-        patch.object(bearer_mod, "verify_token", return_value=_auth("sa:gateway")),
+        patch.object(bearer_mod, "authenticate_token", return_value=_auth("sa:gateway")),
         patch.object(http_mod.settings, "trusted_callers", "sa:gateway"),
     ):
-        out = http_mod._extract_auth(req)  # type: ignore[arg-type]
+        out = await http_mod._extract_auth(req)  # type: ignore[arg-type]
 
     assert out is not None
     assert out.subject == "sa:gateway"
@@ -452,7 +452,9 @@ def _trusted(monkeypatch: pytest.MonkeyPatch) -> object:
     async def grant_map(org: str, subject: str) -> grant_cache.GrantMap:
         return grant_cache.GrantMap(ranks={}, held=(subject.lower(),))
 
-    monkeypatch.setattr(bearer_mod, "verify_token", lambda *a, **k: _auth("sa:gateway"))
+    monkeypatch.setattr(
+        bearer_mod, "authenticate_token", AsyncMock(side_effect=lambda *a, **k: _auth("sa:gateway"))
+    )
     monkeypatch.setattr(http_mod.settings, "trusted_callers", "sa:gateway")
     monkeypatch.setattr(grant_cache, "grant_map", grant_map)
     return TestClient(app)

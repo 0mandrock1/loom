@@ -29,7 +29,7 @@ from server.auth import scim
 from server.auth.bearer import bearer_token
 from server.auth.gateway import is_end_user
 from server.auth.grant_claims import group_change
-from server.auth.jwt import AuthInfo, AuthUnavailable, TokenError, verify_token
+from server.auth.jwt import AuthInfo, AuthUnavailable, TokenError, authenticate_token
 from server.auth.scim_routes import (
     LAST_INDEX,
     LIST_SCHEMA,
@@ -96,7 +96,7 @@ async def _caller(request: Request) -> _Caller:
         record_auth_refusal(e, transport="scim")
         raise ScimError(401, message) from None
     try:
-        auth: AuthInfo = verify_token(token)
+        auth: AuthInfo = await authenticate_token(token)
     except AuthUnavailable as e:  # the revocation list or keyring is not loaded yet
         raise ScimError(503, "tokens cannot be checked yet; retry") from e
     except TokenError as e:

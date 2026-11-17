@@ -69,11 +69,11 @@ class TenancyMiddleware:
         if not acts_in_token_org(path):
             await self.app(scope, receive, send)
             return
-        from server.auth.jwt import AuthUnavailable, TokenError, verify_token
+        from server.auth.jwt import AuthUnavailable, TokenError, authenticate_token
 
         try:
             token = _bearer(scope)
-            info = verify_token(token) if token is not None else None
+            info = await authenticate_token(token) if token is not None else None
         except AuthUnavailable as e:
             # Cannot judge the token yet: refused, never passed on unchecked. The caller
             # gets the error's kind; the text is logged.
@@ -99,9 +99,17 @@ class TenancyMiddleware:
             return
         try:
             org = acting_org(path, info)
+            from server.auth.authz import check_acted_for
+
+            await check_acted_for(info, org)
             # The sign-up org a route falls back to is not the token's: no principal, so
             # it is recorded or refused, never placed, as for a sign-up.
             await tenancy.ensure_held(org, info if org == info.org else None)
+        except PermissionError as e:
+            await _refuse(
+                scope, receive, send, path, 401, {"code": "AUTH_INVALID", "message": str(e)}, None
+            )
+            return
         except LoomServerError as e:
             await _refuse(scope, receive, send, path, e.status_code, e.to_detail(), e.headers())
             return
