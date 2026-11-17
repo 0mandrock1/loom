@@ -55,6 +55,14 @@ def _prefix(tmp_path: Path) -> Path:
     return prefix
 
 
+def _journal() -> list[str]:
+    return sorted(path.name for path in ROUTER_MIGRATIONS_DIR.glob("*.sql"))
+
+
+def _after_prefix() -> list[str]:
+    return _journal()[3:]
+
+
 async def _migrate(connect: Any, files: Path = ROUTER_MIGRATIONS_DIR) -> list[str]:
     return await pg_migrate.migrate(files, connect=connect, schema="loom_router", lock_key=8917423)
 
@@ -62,7 +70,7 @@ async def _migrate(connect: Any, files: Path = ROUTER_MIGRATIONS_DIR) -> list[st
 async def test_online_migration_installs_and_retries_from_both_schemas(database, tmp_path) -> None:
     conn, connect = database
     await _migrate(connect, _prefix(tmp_path))
-    assert await _migrate(connect) == ["004_placements_by_cell_org.sql"]
+    assert await _migrate(connect) == _after_prefix()
     assert await _migrate(connect) == []
     index = pg_online_index.parse(
         (ROUTER_MIGRATIONS_DIR / "004_placements_by_cell_org.sql").read_text()
@@ -73,7 +81,7 @@ async def test_online_migration_installs_and_retries_from_both_schemas(database,
 
 async def test_install_from_empty(database) -> None:
     _, connect = database
-    assert len(await _migrate(connect)) == 4
+    assert await _migrate(connect) == _journal()
 
 
 async def _until(conn: Any, sql: str, *args: Any) -> None:
@@ -132,12 +140,19 @@ async def test_old_snapshot_old_blocking_migrator_and_two_new_migrators(database
                 "(cell, host, state, credential_sha256, deployment_id) "
                 "VALUES ('a', 'a.example.test', 'serving', repeat('a', 64), 'dep-a')"
             )
-            assert await directory.place("org-a", "a", lambda _: "") == ("a", "dep-a")
-            assert await directory.lookup("org-a") == ("a", "a.example.test")
+            from tests.integration.fixtures import router_placement_n_minus_one as serving
+
+            assert await serving.place("org-a", "a", lambda _: "") == ("a", "dep-a")
+            assert await serving.lookup("org-a") == ("a", "a.example.test")
+            assert await conn.fetchval("SELECT placed FROM loom_router.cells WHERE cell = 'a'") == 1
+            assert (
+                await conn.fetchval("SELECT count(*) FROM loom_router.audit WHERE action = 'place'")
+                == 1
+            )
             await tx.rollback()
             async with asyncio.timeout(5):
                 results = await asyncio.gather(first, second)
-            assert sorted(results) == [[], ["004_placements_by_cell_org.sql"]]
+            assert sorted(results) == [[], _after_prefix()]
         finally:
             if snapshot.is_in_transaction():
                 await tx.rollback()
@@ -182,7 +197,7 @@ async def test_cancelled_build_leaves_a_matching_invalid_index_and_retry_repairs
             if not migrating.done():
                 migrating.cancel()
                 await asyncio.gather(migrating, return_exceptions=True)
-    assert await _migrate(connect) == ["004_placements_by_cell_org.sql"]
+    assert await _migrate(connect) == _after_prefix()
     assert await _migrate(connect) == []
 
 
@@ -241,7 +256,7 @@ async def test_cancel_after_catalog_completion_reuses_the_valid_index(
         await _migrate(connect)
     oid = await conn.fetchval("SELECT 'loom_router.placements_by_cell_org'::regclass::oid")
     monkeypatch.setattr(pg_online_index, "build", original)
-    assert await _migrate(connect) == ["004_placements_by_cell_org.sql"]
+    assert await _migrate(connect) == _after_prefix()
     assert await conn.fetchval("SELECT 'loom_router.placements_by_cell_org'::regclass::oid") == oid
 
 
@@ -347,7 +362,7 @@ async def test_cancelled_concurrent_drop_is_retryable(database, tmp_path) -> Non
             if not dropping.done():
                 dropping.cancel()
                 await asyncio.gather(dropping, return_exceptions=True)
-    assert await _migrate(connect) == ["004_placements_by_cell_org.sql"]
+    assert await _migrate(connect) == _after_prefix()
 
 
 async def test_try_lock_wait_has_no_retained_transaction_or_snapshot(database) -> None:
@@ -364,7 +379,7 @@ async def test_try_lock_wait_has_no_retained_transaction_or_snapshot(database) -
         )
         assert not migrating.done()
         await conn.execute("SELECT pg_advisory_unlock(8917423::bigint)")
-        assert len(await asyncio.wait_for(migrating, 5)) == 4
+        assert await asyncio.wait_for(migrating, 5) == _journal()
     finally:
         await conn.execute("SELECT pg_advisory_unlock(8917423::bigint)")
         if not migrating.done():
@@ -376,6 +391,8 @@ async def test_online_validation_is_repeated_after_later_files(database, tmp_pat
     _, connect = database
     for source in ROUTER_MIGRATIONS_DIR.glob("*.sql"):
         (tmp_path / source.name).write_bytes(source.read_bytes())
-    (tmp_path / "005_damage.sql").write_text("DROP INDEX loom_router.placements_by_cell_org;")
+    (
+        tmp_path / f"{max(int(name.split('_')[0]) for name in _journal()) + 1:03d}_damage.sql"
+    ).write_text("DROP INDEX loom_router.placements_by_cell_org;")
     with pytest.raises(ValueError, match="recorded online-index"):
         await _migrate(connect, tmp_path)

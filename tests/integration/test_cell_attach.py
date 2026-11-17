@@ -809,7 +809,7 @@ async def test_signaling_another_role_requires_an_effective_signal_grant(cell_st
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("capability", ["pg_read_all_stats", "pg_signal_backend"])
+@pytest.mark.parametrize("capability", ["pg_read_all_stats"])
 async def test_attach_needs_its_predefined_capabilities_without_set_role(
     cell_stores, monkeypatch, capsys, capability: str
 ) -> None:
@@ -829,7 +829,7 @@ async def test_attach_needs_its_predefined_capabilities_without_set_role(
         async with real_dedicated() as conn:
             owner = await conn.fetchval("SELECT current_user")
             await conn.execute(f"GRANT {owner} TO {role} WITH INHERIT TRUE, SET FALSE")
-            await conn.execute(f"GRANT pg_read_all_stats, pg_signal_backend TO {role}")
+            await conn.execute(f"GRANT pg_read_all_stats TO {role}")
             await conn.execute(f"GRANT {capability} TO {role} WITH INHERIT FALSE")
             assert await conn.fetchval("SELECT pg_has_role($1, $2, 'MEMBER')", role, capability)
             assert not await conn.fetchval("SELECT pg_has_role($1, $2, 'USAGE')", role, capability)

@@ -293,3 +293,122 @@ async def test_native_attach_run_body_uses_sole_owner_on_cancellation(native_dat
     with pytest.raises(asyncio.CancelledError, match="native attach cancellation"):
         await asyncio.wait_for(task, 1.3)
     await released(native_database, backend["pid"])
+
+
+async def test_attach_role_needs_stats_but_not_backend_signal_privilege(native_database):
+    import uuid
+
+    from server.cli import cell_attach_pg as apg
+
+    role = f"it_attach_grants_{uuid.uuid4().hex[:10]}"
+    conn = native_database
+    database = await conn.fetchval("SELECT current_database()")
+    await conn.execute(f"CREATE ROLE {role}")
+    try:
+        await conn.execute(f"GRANT USAGE ON SCHEMA loom TO {role}")
+        await conn.execute(
+            f"GRANT SELECT ON loom.cell_first, loom.tenancy_mode, loom.cell_self, loom.authority TO {role}"
+        )
+        await conn.execute(f"GRANT UPDATE ON loom.tenancy_mode TO {role}")
+        await conn.execute(f"GRANT INSERT ON loom.tenancy TO {role}")
+        await conn.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON loom.cell_probe TO {role}")
+        await conn.execute(f'GRANT TEMPORARY ON DATABASE "{database}" TO {role}')
+        await conn.execute(f"GRANT pg_read_all_stats TO {role} WITH INHERIT FALSE")
+        await conn.execute(f"SET SESSION AUTHORIZATION {role}")
+        assert not await conn.fetchval(
+            "SELECT pg_has_role(current_user, 'pg_signal_backend', 'USAGE')"
+        )
+        refused = await apg.own_role_refusals(conn, [])
+        assert [r.reason for r in refused] == [
+            "attach's role lacks effective privileges of pg_read_all_stats"
+        ]
+        await conn.execute("RESET SESSION AUTHORIZATION")
+        await conn.execute(f"GRANT pg_read_all_stats TO {role} WITH INHERIT TRUE")
+        await conn.execute(f"SET SESSION AUTHORIZATION {role}")
+        assert not await conn.fetchval(
+            "SELECT pg_has_role(current_user, 'pg_signal_backend', 'USAGE')"
+        )
+        assert await apg.own_role_refusals(conn, []) == []
+    finally:
+        await conn.execute("RESET SESSION AUTHORIZATION")
+        await conn.execute(f"DROP OWNED BY {role}")
+        await conn.execute(f"DROP ROLE {role}")
+
+
+@pytest.mark.parametrize("late", [False, True])
+@pytest.mark.parametrize("kind", ["exit", "keyboard"])
+async def test_native_public_close_fatal_stays_inside_owner(native_database, late, kind):
+    import os
+    import sys
+
+    from tests.integration._pg_database import with_database
+
+    dsn = with_database(
+        os.environ["LOOM_PG_DSN"], await native_database.fetchval("SELECT current_database()")
+    )
+    script = r"""
+import asyncio, os, sys
+import asyncpg
+from server.cli import cell_control
+from server.core import pg
+from server.settings import settings
+late, kind = sys.argv[1:]
+settings.pg_dsn = os.environ['LOOM_NATIVE_CLEANUP_DSN']
+settings.cell = 'first'
+pg._expected = None
+original = SystemExit(17) if kind == 'exit' else KeyboardInterrupt('close interrupted')
+real_connect, real_close = pg._connect_dedicated, asyncpg.Connection.close
+backend = {}
+async def connect(**kwargs):
+ conn = await real_connect(**kwargs)
+ backend['pid'] = conn.get_server_pid()
+ if late == 'True':
+  try: await asyncio.Future()
+  except asyncio.CancelledError: pass
+ return conn
+async def close(self, **kwargs):
+ ours = self.get_server_pid() == backend.get('pid')
+ await real_close(self, **kwargs)
+ if ours:
+  backend['closes'] = backend.get('closes', 0) + 1
+  raise original
+async def body(owner):
+ await owner.conn.execute('SELECT * FROM probe FOR UPDATE')
+ return 19
+pg._connect_dedicated = connect
+asyncpg.Connection.close = close
+if late == 'True': cell_control.OPEN_S = .5
+async def main():
+ observer = await asyncpg.connect(settings.pg_dsn)
+ try:
+  try: await cell_control.run('native close', body)
+  except BaseException as caught:
+   if late == 'True': assert isinstance(caught, TimeoutError), type(caught)
+   else: assert caught is original, type(caught)
+   assert backend['closes'] == 1
+   assert not await observer.fetchval('SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1)', backend['pid'])
+   assert not await observer.fetchval('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)', backend['pid'])
+   print('LOOP_STILL_RUNNING')
+  else: raise AssertionError('required close fatal became success')
+ finally:
+  asyncpg.Connection.close = real_close
+  await observer.close(timeout=1)
+asyncio.run(main())
+"""
+    child = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        script,
+        str(late),
+        kind,
+        env={**os.environ, "LOOM_NATIVE_CLEANUP_DSN": dsn},
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(child.communicate(), 10)
+        assert child.returncode == 0 and b"LOOP_STILL_RUNNING" in stdout, stderr.decode()
+    finally:
+        if child.returncode is None:
+            child.kill()
+            await child.wait()

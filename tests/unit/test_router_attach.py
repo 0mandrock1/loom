@@ -1437,3 +1437,17 @@ def test_attach_serving_waits_for_a_state_read_in_flight_and_drops_its_row(
             assert again.json()["state"] == "serving"
 
     asyncio.run(_run())
+
+
+def test_native_compact_batch_with_control_envelope_fits_public_handler(client, store):
+    from server.cli.cell_attach import _encoded_size, batches
+
+    _enforced(client)
+    orgs = [f"{i:03d}" + "x" * 127 for i in range(500)]
+    batch = batches(orgs, "dep-1")[0]
+    body = {"deployment_id": "dep-1", "orgs": batch}
+    assert _encoded_size(body) <= MAX_BODY_BYTES < len(json.dumps(body).encode())
+    response = _call(client, "POST", "attach/place", body)
+    assert response.status_code == 200, response.text
+    assert response.json()["placed"] == len(batch)
+    assert set(store.placements) == set(batch)

@@ -677,13 +677,13 @@ inserts cannot hold the write off, a new-org request waits on attach for a few s
 at most, and an attach that stalls holding the write's lock releases it within seconds.
 Attach takes `LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE` (which waits for running
 inserts and queues later ones behind it) in short tries, in one transaction with
-server-side timeouts, then writes the mode and commits; after a failed try it ends the
-mode transaction still in flight, found by its `ExclusiveLock` on `loom.tenancy_mode` in
-this database (a pid captured at connect is wrong behind a connection path that swaps
-backends), and waits until the lock clears. Whether the commit landed is decided by a
-durable read of the mode, whose commit waits for the standby, since a commit ended while
-it waited is on the primary alone ([attaching a cell](#attaching-a-cell): step 3 and the
-durable read).
+server-side timeouts, then writes the mode and commits on its exact ATTACH backend.
+Only recognized pre-COMMIT contention can retry, after acknowledged rollback and a check
+that this backend still holds ATTACH. Unexpected failure or an uncertain COMMIT closes
+the owned session and ends the run. Attach neither finds nor ends another backend. A
+fresh run takes the lock and claims again; whether an earlier commit landed is decided
+by a durable mode read whose COMMIT waits for the standby
+([attaching a cell](#attaching-a-cell): step 3 and the durable read).
 The mode cache reads the mode with a plain `SELECT`, which takes no row lock and never
 waits on attach. An insert that finds `enforced` (a process whose cache
 still reads `recording`) writes nothing: the request goes on to the placement call as in
@@ -1065,7 +1065,7 @@ Then, in order (the step numbers are the ones the rest of this page uses):
   checks and the standbys again, and the scan's elapsed time within half of `--scan-budget`,
   since step 4 reads the same tables again. Each refuses in `recording`, which can still be
   backed out.
-- **Step 3, the mode commit**: `attach/enforced`, then on a session of its own an EXCLUSIVE
+- **Step 3, the mode commit**: `attach/enforced`, then on the same ATTACH session an EXCLUSIVE
   lock on `loom.tenancy_mode`, 2 s a try within `--wait`, the attach lock confirmed and the
   cheap heartbeat refusals run before each try (a booting process skips the try). Each try,
   including COMMIT, has a client deadline: the lock wait plus a 3 s statement margin and
@@ -1077,10 +1077,11 @@ Then, in order (the step numbers are the ones the rest of this page uses):
   failure or exhausted cleanup time aborts the transport and preserves the original
   failure; abort alone does not prove that server locks disappeared. A commit past
   its deadline has an unknown outcome until the durable read.
-  After a failed try, the mode transaction an earlier run left in flight is found by its lock (only
-  attach takes `ExclusiveLock` there; a relation's OID is matched in this database alone)
-  and ended. From the commit on the mode only rises: every later refusal leaves the cell
-  `enforced` and `attaching`, and a rerun resumes from the durable read.
+  Only acknowledged pre-COMMIT rollback with ATTACH still held permits another try on
+  that backend. Any other failure ends the run without terminating another backend;
+  rerun to take the lock and claim afresh. From an acknowledged commit on, the mode
+  only rises: every later refusal leaves the cell `enforced` and `attaching`, and a
+  rerun resumes from the durable read.
 - **The durable read**, in every run that reads `enforced`: the mode and the `first` row
   read in a transaction that emits a transactional logical message, whose commit waits for
   the synchronous standbys, with the standbys checked attached just before and after. Then
@@ -1312,17 +1313,18 @@ participate in this protocol.
 - `loom cell limit --cell <cell> --closed` closes a cell to new orgs, `--open` reopens
   a serving cell, and `--placements-max <n>` sets its placement quota (`--placements-max none`
   clears it).
-- `loom cell remove --cell <cell>` removes the directory row of a cell that is `attaching`
-  with no placement (`--cell` is the cell's `LOOM_CELL`, unset by then). For the first cell
-  it reads the cell's Postgres alone, on one session from `LOOM_PG_DSN` with no ClickHouse,
-  and refuses unless it reads `open` and records the row's deployment id, which enforces the
-  back-out order: unset `LOOM_CELL` on every process (each serves as in `recording`), then
-  the full-state cleanup, then the removal
+- `loom cell remove --cell <cell>` removes the directory row of an `attaching` cell
+  with no placement. For both first and later cells, keep `LOOM_CELL=<cell>` and the
+  registered store settings on the control client. Removal takes the direct marked
+  ATTACH backend, verifies the paired deployment and registration, and claims a fresh
+  directory generation before deleting the row. The first cell must also read `open`,
+  enforcing the back-out order: stop or unset `LOOM_CELL` on the accepting processes,
+  complete full-state cleanup, then remove the directory row
   ([troubleshooting](../operations/troubleshooting.md#a-process-with-loom_cell-unset-is-gated)).
   Removing the row first answers every new org 503; clearing the state first gates every
-  process with `LOOM_CELL` set. A first cell with a placement goes forward, never back. A
-  removed cell's stores keep whatever state rows they hold, so the full-state cleanup runs
-  before they are prepared again.
+  accepting process with `LOOM_CELL` set. A first cell with a placement goes forward,
+  never back. Removal leaves the stores' state rows intact; full-state cleanup must
+  precede preparing those stores again.
 - The router's operator credential is `lco_` and 128 lowercase hex (a router with no
   `LOOM_ROUTER_OPERATOR_SHA256` answers the operator API 503 with
   `NO_OPERATOR_CREDENTIAL`), which `loom cell credential new --operator` makes; the

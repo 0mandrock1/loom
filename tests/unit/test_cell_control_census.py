@@ -19,16 +19,16 @@ ROOT = Path(__file__).resolve().parents[2]
 TABLES = r"(?:loom\.(?:cell_self|cell_first|tenancy_mode)|loom_router\.[A-Za-z_]+)"
 TARGET = rf"(?:{TABLES}|loom(?:_router)?\.\{{[^}}]+\}}|\{{[^}}]+\}})"
 WRITES = re.compile(
-    rf"(?:^|;)\s*(INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|"
+    rf"(?:^|;|[()])\s*(INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?|"
     rf"ALTER\s+TABLE(?:\s+IF\s+EXISTS)?|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|"
     rf"DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+({TARGET})"
-    rf"|(?:^|;)\s*((?:CREATE|DROP)\s+TRIGGER)\b[^;]*?\bON\s+({TARGET})",
+    rf"|(?:^|;|[()])\s*((?:CREATE|DROP)\s+TRIGGER)\b[^;]*?\bON\s+({TARGET})",
     re.IGNORECASE,
 )
 
 
 def mutations(sql: str) -> list[tuple[str, str]]:
-    sql = re.sub(r"--[^\n]*", "", sql).replace('"', "")
+    sql = re.sub(r"--[^\n]*|/\*.*?\*/", "", sql, flags=re.DOTALL).replace('"', "")
     return [(" ".join((a or c).upper().split()), b or d) for a, b, c, d in WRITES.findall(sql)]
 
 
@@ -506,6 +506,22 @@ def test_reads_registration_and_immutable_placement_are_explicit_exceptions():
     [
         ('"UPDATE loom.cell_self SET current_fp = $1"', ("UPDATE", "loom.cell_self")),
         (
+            '"WITH expected AS (SELECT 1) UPDATE loom.cell_self SET current_fp = $1"',
+            ("UPDATE", "loom.cell_self"),
+        ),
+        (
+            '"WITH expected AS (SELECT 1) DELETE FROM loom_router.cells WHERE cell = $1"',
+            ("DELETE FROM", "loom_router.cells"),
+        ),
+        (
+            '"WITH changed AS (UPDATE loom.cell_self SET current_fp = $1 RETURNING 1) SELECT * FROM changed"',
+            ("UPDATE", "loom.cell_self"),
+        ),
+        (
+            '"WITH outer_cte AS (WITH inner_cte AS (SELECT 1) UPDATE loom_router.cells SET closed = true RETURNING cell) SELECT * FROM outer_cte"',
+            ("UPDATE", "loom_router.cells"),
+        ),
+        (
             '"INSERT INTO loom_router.cells (cell) VALUES ($1)"',
             ("INSERT INTO", "loom_router.cells"),
         ),
@@ -548,5 +564,19 @@ def test_acceptance_writer_callsites_are_classified():
             ("server/cli/cell_attach_pg.py", "commit_enforced", "_mode_try"): 1,
             ("server/cli/cell_attach_pg.py", "_mode_try", "_mode_transaction"): 1,
             ("server/cli/cell_attach.py", "Run.commit_mode", "apg.commit_enforced"): 1,
+        }
+    )
+
+
+def test_cte_data_modification_classifies_every_literal_sink():
+    source = """
+async def unclassified(conn):
+    await conn.execute("WITH changed AS (DELETE FROM loom.cell_self RETURNING 1) "
+                       "/* body done */ UPDATE loom_router.cells SET closed = true")
+"""
+    assert inventory(source).writes == Counter(
+        {
+            ("unclassified", "DELETE FROM", "loom.cell_self"): 1,
+            ("unclassified", "UPDATE", "loom_router.cells"): 1,
         }
     )
