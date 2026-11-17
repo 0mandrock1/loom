@@ -105,6 +105,8 @@ async def test_native_prepare_second_cancel_preserves_first_and_releases_locks(
     real_close = asyncpg.Connection.close
     observed, close_started, close_return = asyncio.Event(), asyncio.Event(), asyncio.Event()
     backend = {}
+    close_interrupted = asyncio.Event()
+    monkeypatch.setattr(cell_control, "TRANSACTION_S", 0.4)
 
     async def read(conn, **_):
         backend["conn"], backend["pid"] = conn, conn.get_server_pid()
@@ -115,7 +117,11 @@ async def test_native_prepare_second_cancel_preserves_first_and_releases_locks(
         await real_close(self, **kwargs)
         if self is backend.get("conn"):
             close_started.set()
-            await close_return.wait()
+            try:
+                await close_return.wait()
+            except asyncio.CancelledError:
+                close_interrupted.set()
+                raise
 
     monkeypatch.setattr(cell_prepare, "_read_rows", read)
     monkeypatch.setattr(asyncpg.Connection, "close", delayed_close)
@@ -128,6 +134,10 @@ async def test_native_prepare_second_cancel_preserves_first_and_releases_locks(
         task.cancel("first native cancellation")
         await asyncio.wait_for(close_started.wait(), 1)
         task.cancel("second cancellation")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not close_interrupted.is_set(), "second signal cannot interrupt public close"
+        assert not task.done()
         with pytest.raises(asyncio.CancelledError, match="first native cancellation"):
             await asyncio.wait_for(task, 0.5)
         await released(native_database, backend["pid"])

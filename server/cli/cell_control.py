@@ -119,7 +119,8 @@ async def _captured[T](work: Callable[[], Awaitable[T]]) -> T | _Fatal:
 class Owner:
     """One raw backend and one cleanup owner for a native control command."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, exit_s: float = pg._RELEASE_TIMEOUT_S) -> None:
+        self.exit_s = exit_s
         self.conn: Any = None
         self.phase_end: float | None = None
         self.close_end: float | None = None
@@ -155,7 +156,7 @@ class Owner:
     async def close(self) -> None:
         if not self.closed:
             self.closed = True
-            self.close_end = self.phase_end or (time.monotonic() + pg._RELEASE_TIMEOUT_S)
+            self.close_end = self.phase_end or (time.monotonic() + self.exit_s)
         if self.conn is None:
             return
         if self._close_task is None:
@@ -163,20 +164,33 @@ class Owner:
                 _captured(lambda: pg.close_owned(self.conn, end=cast(float, self.close_end)))
             )
             self._close_task.add_done_callback(pg._retrieve_task)
+        interrupted: asyncio.CancelledError | None = None
         try:
-            done, _ = await asyncio.wait(
-                {self._close_task}, timeout=max(0, cast(float, self.close_end) - time.monotonic())
-            )
-            if not done:
-                raise TimeoutError("cell control cleanup deadline expired; outcome unknown")
+            while not self._close_task.done():
+                remaining = cast(float, self.close_end) - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("cell control cleanup deadline expired; outcome unknown")
+                try:
+                    await asyncio.wait({self._close_task}, timeout=remaining)
+                except asyncio.CancelledError as error:
+                    # Signals cannot abort the public cancellation already in flight.
+                    interrupted = interrupted or error
             result = self._close_task.result()
             if isinstance(result, _Fatal):
                 raise _ForwardFatal(result)
         except BaseException:
-            pg._terminate(self.conn)
-            if not self._close_task.done():
-                self._close_task.cancel()
+            try:
+                pg._terminate(self.conn)
+            except BaseException:  # noqa: BLE001 — abort cannot replace the first close failure.
+                pass
+            finally:
+                if not self._close_task.done():
+                    self._close_task.cancel()
+            if interrupted is not None:
+                raise interrupted from None
             raise
+        if interrupted is not None:
+            raise interrupted
 
     async def _stop(self, tasks: set[asyncio.Task[Any]]) -> None:
         for task in tasks:
@@ -187,7 +201,10 @@ class Owner:
                 await asyncio.wait(tasks, timeout=max(0, (self.close_end or 0) - time.monotonic()))
         except BaseException:  # noqa: BLE001 — cleanup cannot replace the original failure.
             if self.conn is not None:
-                pg._terminate(self.conn)
+                try:
+                    pg._terminate(self.conn)
+                except BaseException:  # noqa: BLE001 — failed abort preserves the caller's failure.
+                    pass
 
     async def call[T](self, work: Callable[[], Awaitable[T]], *, total_s: float) -> T:
         if self.closed or self.phase_end is not None:
@@ -219,31 +236,43 @@ class Owner:
     async def transaction[T](self, work: Callable[[], Awaitable[T]]) -> T:
         return await self.call(lambda: transaction(self.conn, work), total_s=TRANSACTION_S)
 
+    async def run[T](
+        self,
+        opening: Callable[[], Awaitable[None]],
+        work: Callable[[], Awaitable[T]],
+        *,
+        opening_s: float,
+    ) -> T:
+        """Own one command; fatal guard failures leave only after bounded cleanup."""
+        if self.conn is not None or self.phase_end is not None or self._tasks or self.closed:
+            raise _refused("a command needs a fresh control owner")
+        try:
+            await self.call(opening, total_s=opening_s)
+            result = await asyncio.shield(self._start(work))
+            if isinstance(result, _Fatal):
+                raise _ForwardFatal(result)
+        except BaseException as original:
+            try:
+                await self.close()
+            except BaseException:  # noqa: BLE001 — preserve the command's original failure.
+                pass
+            await self._stop(set(self._tasks))
+            if isinstance(original, _ForwardFatal):
+                raise original.fatal.error from None
+            raise
+        try:
+            await self.close()
+        except _ForwardFatal as interrupted:
+            raise interrupted.fatal.error from None
+        finally:
+            await self._stop(set(self._tasks))
+        return result
+
 
 async def run[T](what: str, work: Callable[[Owner], Awaitable[T]]) -> T:
-    """Run at the command boundary; fatal guard exceptions leave only after cleanup."""
+    """Run native control with its existing opening, transaction and exit allowances."""
     owner = Owner()
-    try:
-        await owner.call(lambda: owner._open(what), total_s=OPEN_S)
-        result = await asyncio.shield(owner._start(lambda: work(owner)))
-        if isinstance(result, _Fatal):
-            raise _ForwardFatal(result)
-    except BaseException as original:
-        try:
-            await owner.close()
-        except BaseException:  # noqa: BLE001 — preserve the command's original failure.
-            pass
-        await owner._stop(set(owner._tasks))
-        if isinstance(original, _ForwardFatal):
-            raise original.fatal.error from None
-        raise
-    try:
-        await owner.close()
-    except _ForwardFatal as interrupted:
-        raise interrupted.fatal.error from None
-    finally:
-        await owner._stop(set(owner._tasks))
-    return result
+    return await owner.run(lambda: owner._open(what), lambda: work(owner), opening_s=OPEN_S)
 
 
 async def transaction[T](conn: Any, work: Callable[[], Awaitable[T]]) -> T:
