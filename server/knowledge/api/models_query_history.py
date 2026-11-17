@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+from server.operations.read_projection import ProjectedRow
+
 
 class QueryHistoryAddInput(BaseModel):
     """Register a read-only ClickHouse query-history source for definition drafts."""
@@ -38,7 +40,7 @@ class QueryHistoryAddInput(BaseModel):
     cluster: str = Field(default="", max_length=255)
 
 
-class QueryHistorySource(BaseModel):
+class QueryHistorySource(ProjectedRow):
     name: str
     source_id: str
     kind: Literal["clickhouse_queries"] = "clickhouse_queries"
@@ -54,6 +56,7 @@ class QueryHistorySource(BaseModel):
 class QueryHistoryListInput(BaseModel):
     """List the namespace's registered query-history sources."""
 
+    fields: list[str] | None = None
     org: str
     namespace: str
     limit: int = Field(

@@ -505,6 +505,7 @@
 3e00482285b2	SELECT count() AS n FROM loom.entity_vectors WHERE org = {org:String} AND namespace = {ns:String}
 3e18758b5b32	ALTER TABLE loom.session_outcomes_by_user DELETE WHERE (org = {org:String} AND namespace IN {ns:Array(String)}) AND ({erasure_mutation_tag:String} = {erasure_mutation_tag:String}) SETTINGS mutations_s
 3e2075d7a93f	SELECT count() AS n FROM loom.memory_record_fields FINAL WHERE org = {org:String} AND namespace = {ns:String} AND tombstoned_at IS NULL
+3e2b5291eea1	SELECT ? AS in_use FROM ((SELECT ? FROM loom.namespace_grants FINAL WHERE org = {org:String} AND namespace = {ns:String} AND revoked_at IS NULL AND status = ? LIMIT ?) UNION ALL (SELECT ? FROM loom.me
 3e48779bb136	SELECT e.memory_key AS memory_key, e.memory_type AS memory_type, e.content_excerpt AS content_excerpt, e.status AS status, e.version AS version, -- Multi-vector axis: min(value_dist, key_dist). CH?t g
 3e49eabd4e23	SELECT toString(memory_id) AS memory_id, agent, user_id, session_id, memory_key, memory_type, value, toString(value_json) AS value_json, confidence, source_trace, version, tombstoned_at, created_at, e
 3e750c517754	SELECT count() AS n FROM loom.memory_chunk_sources FINAL WHERE org = {org:String} AND namespace = {ns:String} AND tombstoned_at IS NULL
@@ -971,7 +972,6 @@
 76f47ab9df72	SELECT ? AS present FROM loom.code_caller_guards WHERE org = {org:String} AND namespace = {ns:String} LIMIT ?
 77424b91d322	SELECT count() AS n FROM loom.memory FINAL WHERE org = {org:String} AND namespace IN {ns:Array(String)}
 778a3bb04c67	SELECT namespace, source_uri, title, description, tags, ingested_at, superseded_at, blob_path, blob_size, toString(blob_content_type) AS blob_content_type, original_filename, content_preview FROM loom
-779a883d3348	SELECT ? AS in_use FROM ((SELECT ? FROM loom.namespace_grants FINAL WHERE org = {org:String} AND namespace = {ns:String} AND revoked_at IS NULL AND status = ? LIMIT ?) UNION ALL (SELECT ? FROM loom.me
 77abb6560e82	ALTER TABLE loom.memory_code_links DELETE WHERE (org = {org:String} AND user_id = {uid:String}) AND ({erasure_mutation_tag:String} = {erasure_mutation_tag:String}) SETTINGS mutations_sync = ?
 77b5d76bd16d	SELECT count() AS n FROM loom.entity_triple_rows WHERE org = {org:String} AND namespace IN {ns:Array(String)} AND ?
 77be1ad28338	SELECT DISTINCT agent FROM loom.memory_embeddings WHERE org = {org:String} AND namespace = {ns:String} AND tombstoned_at IS NULL ORDER BY agent

@@ -3141,6 +3141,13 @@
           "type": "integer",
           "description": "Seconds between query-history passes."
         },
+        "knowledge_query_history_max_breakers": {
+          "default": 1000,
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Query-history circuit states kept per process, at most; older sources are evicted first."
+        },
         "knowledge_query_history_max_drafts": {
           "default": 20,
           "maximum": 100,

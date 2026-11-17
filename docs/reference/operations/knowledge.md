@@ -507,6 +507,7 @@ List the namespace's registered query-history sources.
 
 | Input field | Type | Default | Meaning |
 | --- | --- | --- | --- |
+| `fields` | `list[str] \| None` | `None` |  |
 | `org` | `str` | required | The tenant (first element of the identity tuple). |
 | `namespace` | `str` | required | The namespace the op reads or writes. |
 | `limit` | `int` | `50` | Registered sources to return, at most; default 50. |

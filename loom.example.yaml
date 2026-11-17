@@ -2752,6 +2752,10 @@ settings:
   # Sources one pass reads, at most; each turn is separately time bounded. [live]
   # knowledge_query_history_max_sources: 100
 
+  # Query-history circuit states kept per process, at most; older sources are evicted
+  # first. [restart]
+  # knowledge_query_history_max_breakers: 1000
+
   # --- chunking ---
 
   # Sliding-window chunking on knowledge.add/upsert, in characters. chunk_size 0 = one

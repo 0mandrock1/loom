@@ -921,6 +921,7 @@ Knowledge documents and conversations: chunking, search floor, thread titles.
 | `LOOM_KNOWLEDGE_QUERY_HISTORY_MAX_PASS_SECONDS` | `float` | `120.0` |  | Deadline of one query-history pass; it starts no new group after half this budget. |
 | `LOOM_KNOWLEDGE_QUERY_HISTORY_INTERVAL_SECONDS` | `int` | `3600` |  | Seconds between query-history passes. |
 | `LOOM_KNOWLEDGE_QUERY_HISTORY_MAX_SOURCES` | `int` | `100` | live | Sources one pass reads, at most; each turn is separately time bounded. |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_MAX_BREAKERS` | `int` | `1000` |  | Query-history circuit states kept per process, at most; older sources are evicted first. |
 
 ### Chunking
 

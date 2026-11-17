@@ -2258,6 +2258,9 @@ class KnowledgeSettings(BaseModel):
     # Sources one pass reads, at most; each turn is separately time bounded.
     knowledge_query_history_max_sources: Annotated[int, LIVE] = Field(default=100, ge=1, le=1000)
 
+    # Query-history circuit states kept per process, at most; older sources are evicted first.
+    knowledge_query_history_max_breakers: int = Field(default=1000, ge=1, le=100000)
+
     # ---- chunking ----
     # Sliding-window chunking on knowledge.add/upsert, in characters.
     # chunk_size 0 = one chunk per doc (hurts long-form retrieval). Smaller
@@ -6541,6 +6544,8 @@ OP_SHAPE_BUDGETS_P99_MS: dict[str, dict[str, int]] = {
 # input stays a formula at its call.
 
 LLM_MAX_TOKENS: dict[str, int] = {
+    # The private metric definition drafted from eligible gap or query-history evidence.
+    "definition_draft": 1600,
     # code.ask: the synthesized answer; part of its cached answers' version, so a change
     # marks them stale.
     "code_answer_synth": 900,

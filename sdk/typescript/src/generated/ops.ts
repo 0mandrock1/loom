@@ -4127,6 +4127,7 @@ export interface KnowledgeQueryHistoryAddOutput {
 }
 
 export interface KnowledgeQueryHistoryListInput {
+  fields?: string[] | null;
   org: string;
   namespace: string;
   /** Registered sources to return, at most; default 50. */

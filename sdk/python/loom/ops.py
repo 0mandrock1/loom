@@ -11406,6 +11406,7 @@ class KnowledgeQueryHistoryAddOutput(TypedDict, total=False):
 class KnowledgeQueryHistoryListInput(TypedDict, total=False):
     "List the namespace's registered query-history sources."
 
+    fields: NotRequired[Optional[list[str]]]
     org: Required[str]
     namespace: Required[str]
     limit: NotRequired[int]
@@ -11414,6 +11415,7 @@ class KnowledgeQueryHistoryListInput(TypedDict, total=False):
 class KnowledgeQueryHistoryListBody(TypedDict, total=False):
     "List the namespace's registered query-history sources."
 
+    fields: NotRequired[Optional[list[str]]]
     org: NotRequired[str]
     namespace: NotRequired[str]
     limit: NotRequired[int]

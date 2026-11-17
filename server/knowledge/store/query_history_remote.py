@@ -18,8 +18,6 @@ from server.tracker.domain.source_circuit import SourceCircuit
 
 PASSWORD_PURPOSE = "query_history_sources.password"
 _BREAKERS: OrderedDict[str, SourceCircuit] = OrderedDict()
-# A bound on process-local circuit telemetry, independent of stored sources.
-_MAX_BREAKERS = 1000
 
 
 @asynccontextmanager
@@ -76,7 +74,7 @@ async def read_groups(source: dict[str, Any]) -> list[dict[str, Any]]:
     key = str(source["source_id"])
     breaker = _BREAKERS.setdefault(key, SourceCircuit(name=f"query-history/{key}"))
     _BREAKERS.move_to_end(key)
-    while len(_BREAKERS) > _MAX_BREAKERS:
+    while len(_BREAKERS) > settings.knowledge_query_history_max_breakers:
         _BREAKERS.popitem(last=False)
     if not breaker.allow():
         return []

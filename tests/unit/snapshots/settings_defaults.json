@@ -564,6 +564,7 @@
  "knowledge_orphan_chunk_min_age_seconds": 3600,
  "knowledge_query_history_enabled": false,
  "knowledge_query_history_interval_seconds": 3600,
+ "knowledge_query_history_max_breakers": 1000,
  "knowledge_query_history_max_drafts": 20,
  "knowledge_query_history_max_groups": 200,
  "knowledge_query_history_max_pass_seconds": 120.0,

@@ -24,6 +24,7 @@ from server.knowledge.store import query_history_remote as remote
 from server.memory.app.definition_review import require_draft_fleet
 from server.memory.app.provenance import writer_actor
 from server.memory.domain.provenance import source_class_for
+from server.operations.read_projection import project_rows
 from server.settings import settings
 from server.tracker.app.onboarding import review_grants
 
@@ -123,9 +124,15 @@ async def handle_add(input: QueryHistoryAddInput) -> QueryHistorySource:
 async def handle_list(input: QueryHistoryListInput) -> QueryHistoryListOutput:
     return QueryHistoryListOutput(
         enabled=settings.knowledge_query_history_enabled,
-        sources=[
-            source_view(r) for r in await repo.list_sources(input.org, input.namespace, input.limit)
-        ],
+        sources=project_rows(
+            [
+                source_view(r)
+                for r in await repo.list_sources(input.org, input.namespace, input.limit)
+            ],
+            QueryHistorySource,
+            input.fields,
+            always=frozenset({"name", "source_id"}),
+        ),
     )
 
 

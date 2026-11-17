@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@clickhouse/click-ui/Button";
 import { Checkbox } from "@clickhouse/click-ui/Checkbox";
 import { PasswordField } from "@clickhouse/click-ui/PasswordField";
@@ -9,32 +10,70 @@ import {
   removeQueryHistory,
   type QueryHistorySources as Sources,
 } from "../api/queryHistory";
+import { IconButton } from "../components/IconButton";
+import { PHONE_QUERY, useMedia } from "../lib/useMedia";
 import { BusyButton } from "../components/ui/BusyButton";
 import { ListState } from "../components/ui/ListState";
 import { Loading } from "../components/ui/Loading";
 import { RowMenu } from "../components/ui/RowMenu";
+import { SectionHeading } from "../components/ui/SectionHeading";
 import { humanizeError } from "../lib/errorWords";
 import { useAbortableEffect, useMounted } from "../lib/hooks";
 
 type Scope = { org: string; namespace: string };
 
-export function QueryHistorySources({ org, namespace }: Scope) {
+export function QueryHistorySources({ org, namespace, panel }: Scope & { panel?: HTMLElement | null }) {
   const [open, setOpen] = useState(false);
   const disclosure = useRef<HTMLButtonElement>(null);
-  return (
-    <section className="mb-4" aria-label="Query history">
-      <Button ref={disclosure} type="empty" htmlType="button" aria-expanded={open} onClick={() => setOpen(!open)}>
+  const panelId = useId();
+  const headingId = useId();
+  const phone = useMedia(PHONE_QUERY);
+  useEffect(() => {
+    if (open && panel) document.getElementById(headingId)?.focus();
+  }, [open, panel, headingId]);
+  const toggle = {
+    ref: disclosure,
+    "aria-expanded": open,
+    "aria-controls": panel !== undefined ? panelId : undefined,
+    onClick: () => setOpen(!open),
+  };
+  const button =
+    phone && panel !== undefined ? (
+      <IconButton icon="database" label="Query history" {...toggle} />
+    ) : (
+      <Button type="empty" htmlType="button" {...toggle}>
         Query history
       </Button>
-      {open && (
-        <SourceList
-          key={`${org}/${namespace}`}
-          org={org}
-          namespace={namespace}
-          focusDisclosure={() => disclosure.current?.focus()}
-        />
-      )}
-    </section>
+    );
+  const list = open && (
+    <SourceList
+      key={`${org}/${namespace}`}
+      org={org}
+      namespace={namespace}
+      focusDisclosure={() => disclosure.current?.focus()}
+    />
+  );
+  if (panel === undefined) {
+    return (
+      <section className="mb-4" aria-label="Query history">
+        {button}
+        {list}
+      </section>
+    );
+  }
+  return (
+    <>
+      {button}
+      {panel &&
+        list &&
+        createPortal(
+          <section id={panelId} aria-labelledby={headingId} className="mb-6">
+            <SectionHeading id={headingId} label="Query history" level={2} focusable />
+            {list}
+          </section>,
+          panel,
+        )}
+    </>
   );
 }
 

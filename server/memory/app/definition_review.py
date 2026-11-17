@@ -65,7 +65,9 @@ async def promote_candidate(
     if sensitivity_lapse("", graded) is not None:
         raise SensitiveDefinitionRefusedError("a sensitive definition draft is not promoted")
     identity = memory_repo.Identity(org=org, namespace=namespace, agent="-")
-    head = await memory_repo.get_by_key(identity, key, scope=WHOLE_NAMESPACE, strong=True)
+    head = await memory_repo.get_by_key(
+        identity, key, scope=WHOLE_NAMESPACE, fresh=True, strong=True
+    )
     copy = await shared_repo.fetch_shared(org, namespace, key, strong=True)
     shared_value = (
         json.loads(copy["value"]) if copy is not None and copy["tombstoned_at"] is None else None

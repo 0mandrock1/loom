@@ -179,6 +179,7 @@ def _set_input(value: str, if_match_sha256: str, pinned: bool = False) -> Any:
         memory_key=_IDENT[5],
         value=value,
         if_match_sha256=if_match_sha256,
+        if_absent=False,
         pinned=pinned,
     )
 

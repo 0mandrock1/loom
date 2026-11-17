@@ -14,7 +14,11 @@ import pytest
 from server.core import leases
 from server.core.errors import BackendUnavailableError, ValidationError
 from server.erasure.store import steps_ledgers
-from server.knowledge.api.models_query_history import QueryHistoryAddInput, QueryHistoryRemoveInput
+from server.knowledge.api.models_query_history import (
+    QueryHistoryAddInput,
+    QueryHistoryListInput,
+    QueryHistoryRemoveInput,
+)
 from server.knowledge.app import query_history_sources as sources
 from tests.unit.definition_queue_fake import install
 
@@ -233,3 +237,99 @@ async def test_removal_start_precedes_its_first_claim_await(
     with pytest.raises(ValidationError, match="eras"):
         await change(registry, "remove")
     assert registry.pending is None
+
+
+async def test_source_projection_preserves_identity_and_refuses_credentials(
+    registry: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await change(registry, "add")
+    monkeypatch.setattr(sources.repo, "list_sources", AsyncMock(return_value=registry.rows))
+    whole = await sources.handle_list(QueryHistoryListInput(org="o", namespace="n"))
+    assert whole.model_dump()["sources"][0]["host"] == "db.example"
+    selected = await sources.handle_list(
+        QueryHistoryListInput(org="o", namespace="n", fields=["host"])
+    )
+    assert selected.model_dump()["sources"] == [
+        {"name": "sales", "source_id": registry.rows[0]["source_id"], "host": "db.example"}
+    ]
+    with pytest.raises(ValidationError, match="unknown output field"):
+        await sources.handle_list(
+            QueryHistoryListInput(org="o", namespace="n", fields=["password_enc"])
+        )
+
+
+async def test_recent_source_keeps_its_open_circuit_when_cache_evicts_an_older_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from collections import OrderedDict
+
+    from server.knowledge.store import query_history_remote as remote
+
+    @asynccontextmanager
+    async def connection(source: Any) -> Any:
+        yield object()
+
+    monkeypatch.setattr(remote, "_BREAKERS", OrderedDict())
+    monkeypatch.setattr(remote, "connection", connection)
+    query = AsyncMock(return_value=[])
+    monkeypatch.setattr(remote, "query", query)
+    monkeypatch.setattr(remote.settings, "knowledge_query_history_max_breakers", 2)
+    monkeypatch.setattr(remote.settings, "tracker_circuit_failure_threshold", 1)
+    rows = {name: {"source_id": name, "cluster": "", "databases": ["sales"]} for name in "abc"}
+    await remote.read_groups(rows["a"])
+    query.side_effect = ValidationError("refused source")
+    with pytest.raises(ValidationError):
+        await remote.read_groups(rows["b"])
+    query.side_effect = None
+    await remote.read_groups(rows["c"])
+    before = query.await_count
+    assert await remote.read_groups(rows["b"]) == []
+    assert query.await_count == before
+    await remote.read_groups(rows["a"])
+    assert query.await_count == before + 1
+
+
+async def test_remote_group_read_applies_the_history_window_and_group_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from collections import OrderedDict
+
+    from server.knowledge.store import query_history_remote as remote
+
+    @asynccontextmanager
+    async def connection(source: Any) -> Any:
+        yield object()
+
+    monkeypatch.setattr(remote, "_BREAKERS", OrderedDict())
+    monkeypatch.setattr(remote, "connection", connection)
+    read = AsyncMock(return_value=[{"query_hash": 1}])
+    monkeypatch.setattr(remote, "query", read)
+    monkeypatch.setattr(remote.settings, "knowledge_query_history_max_groups", 1)
+    monkeypatch.setattr(remote.settings, "knowledge_query_history_window_days", 2)
+    assert await remote.read_groups(
+        {"source_id": "source", "cluster": "", "databases": ["sales"]}
+    ) == [{"query_hash": 1}]
+    assert read.await_args.args[2] == {
+        "cluster": "",
+        "databases": ["sales"],
+        "days": 2,
+        "k": 3,
+        "lim": 1,
+    }
+
+
+async def test_remote_query_cancels_at_the_configured_read_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.knowledge.store import query_history_remote as remote
+
+    waiting = asyncio.Event()
+
+    async def blocked(*args: Any, **kw: Any) -> Any:
+        await waiting.wait()
+
+    client = SimpleNamespace(query=AsyncMock(side_effect=blocked))
+    monkeypatch.setattr(remote.settings, "knowledge_query_history_read_timeout_s", 0.001)
+    with pytest.raises(TimeoutError):
+        await remote.query(client, "SELECT 1")
+    client.query.assert_awaited_once()

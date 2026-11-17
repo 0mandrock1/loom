@@ -1510,6 +1510,14 @@ export function Documents() {
                 />
               </Suspense>
             )}
+            {seesGaps && !resolving && !all && (
+              <QueryHistorySources
+                key={`${identity.org}/${identity.namespace}`}
+                org={identity.org}
+                namespace={identity.namespace}
+                panel={sourcesPanel}
+              />
+            )}
             {share.button}
             {/* The empty state's own Add is the one primary while it shows. */}
             {!emptyLibrary && !resolving && (
@@ -1530,13 +1538,6 @@ export function Documents() {
       </PageHeader>
       {picker}
       {seesGaps && !resolving && !all && <KnowledgeGaps org={identity.org} namespace={identity.namespace} />}
-      {seesGaps && !resolving && !all && (
-        <QueryHistorySources
-          key={`${identity.org}/${identity.namespace}`}
-          org={identity.org}
-          namespace={identity.namespace}
-        />
-      )}
       {/* One line: who can see the collection shown, the library's figures once they are read,
           what the library is behind the tip. A phone, with the place picker above the list, has
           room for who can see it only: the bar's count says how many are shown. */}

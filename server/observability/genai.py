@@ -97,6 +97,7 @@ def current_generation_attrs() -> dict[str, str]:
 _KNOWN_STAGES: frozenset[str] = frozenset(
     {
         "provider_validation",
+        "definition_draft",
         "dupcheck_rerank",
         "hyde",
         "iterative_judge",

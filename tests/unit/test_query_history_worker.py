@@ -123,3 +123,52 @@ async def test_gap_draft_invalidates_evidence_when_live_threshold_increases(
         KnowledgeGapsDraftInput(org="o", namespace="n", gap_id="g")
     )
     assert result.candidate_id == "candidate"
+
+
+async def test_source_stops_at_the_configured_draft_limit(
+    source: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(worker.settings, "knowledge_query_history_max_drafts", 1)
+    groups = [
+        {"query_hash": i, "template_hash": i, "users": 3, "sql": "SELECT x FROM t"} for i in [1, 2]
+    ]
+    monkeypatch.setattr(worker, "read_groups", AsyncMock(return_value=groups))
+    model = AsyncMock(return_value="candidate")
+    monkeypatch.setattr(worker, "draft", model)
+    assert await worker._source(source, time.monotonic() + 30) == 1
+    assert model.await_count == 1
+
+
+async def test_pass_bounds_source_selection_and_starts_no_work_after_its_deadline(
+    source: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = {"now": 100.0}
+    monkeypatch.setattr(worker, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    monkeypatch.setattr(worker.settings, "knowledge_query_history_max_sources", 2)
+    monkeypatch.setattr(worker.settings, "knowledge_query_history_max_pass_seconds", 6.0)
+
+    async def loaded(*args: Any) -> Any:
+        clock["now"] = 104.0
+        return [source]
+
+    monkeypatch.setattr(worker.repo, "active_after", AsyncMock(side_effect=loaded))
+    turn = AsyncMock(return_value=0)
+    monkeypatch.setattr(worker, "_source", turn)
+    monkeypatch.setattr(worker, "record_pass", lambda name: nullcontext(SimpleNamespace()))
+    assert await worker.run_pass() == {"sources": 0, "attempted": 0}
+    assert worker.repo.active_after.await_args.args[1] == 2
+    turn.assert_not_awaited()
+
+
+def test_query_history_registry_uses_the_configured_cadence_and_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.workers.registry import enabled_workers
+
+    monkeypatch.setattr(worker.settings, "knowledge_query_history_enabled", True)
+    monkeypatch.setattr(worker.settings, "knowledge_query_history_interval_seconds", 1234)
+    monkeypatch.setattr(worker.settings, "knowledge_query_history_max_pass_seconds", 90.0)
+    spec = next(s for s in enabled_workers() if s.name == "query_history")
+    assert spec.interval_seconds == 1234
+    assert spec.max_pass_seconds == 90.0
+    assert spec.pass_callable is worker.run_pass

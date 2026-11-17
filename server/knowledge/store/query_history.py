@@ -49,7 +49,9 @@ async def active_after(after: str, limit: int) -> list[dict[str, Any]]:
 
 async def insert(row: dict[str, Any], *, ch: _CHClient | None = None) -> None:
     await (ch or _default_client()).insert(
-        TABLE, [row], settings={"async_insert": 0, "wait_for_async_insert": 1}
+        TABLE,
+        [{column: row[column] for column in _COLUMNS.split(", ")}],
+        settings={"async_insert": 0, "wait_for_async_insert": 1},
     )
 
 
