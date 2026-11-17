@@ -448,6 +448,9 @@ def _hit_author(actors: _KeyWriters, input: ContextPackInput, h: Any) -> str:
     identity the hit carries (user, session, agent, where the leg read them); when the rows
     left were written by more than one actor the label says `unknown`, never a writer whose
     row this may not be."""
+    # Governed text is the approved shared copy, not a same-key private row.
+    if getattr(h, "governed", False):
+        return author_label([])
     rows = actors.get(hit_row(h, input.namespace)) or []
     is_fact_row = names_row(h) and getattr(h, "source", "fact") != "chunk"
     row = hit_row_key(h, input.namespace) if is_fact_row else None
