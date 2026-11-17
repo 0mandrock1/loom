@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from scripts.docs_site import locales
 
 URL = "https://example.com/loom/"
@@ -257,3 +259,32 @@ def test_translated_section_index_serves_the_same_markdown_aliases(tmp_path, mon
     body = (site / "ja/index.md").read_text()
     assert (site / "ja.md").read_text() == body
     assert (site / "ja/index.html.md").read_text() == body
+
+
+@pytest.mark.parametrize("source", ["use-cases/index.md", "getting-started/quickstart.md"])
+@pytest.mark.parametrize("stale", [False, True])
+def test_markdown_aliases_warn_only_when_the_english_source_changes(
+    tmp_path, monkeypatch, source, stale
+):
+    blob = _source(tmp_path, source)
+    _translation(tmp_path, "ja", source, blob)
+    if stale:
+        _source(tmp_path, source, "# Updated instructions\n")
+    pages = locales.translations(tmp_path)
+    site = tmp_path / "site"
+    monkeypatch.setattr(locales, "ROOT", tmp_path)
+    locales.on_post_build(
+        SimpleNamespace(site_dir=site, site_url=URL, extra={"locale_pages": pages})
+    )
+    uri = locales.localized_uri("ja", source)
+    directory = "ja" if source == "use-cases/index.md" else "ja/getting-started/quickstart"
+    paths = [site / uri, site / directory / "index.html.md"]
+    if source == "use-cases/index.md":
+        paths.append(site / "ja.md")
+    notice = "The English source has changed since this machine translation."
+    english = "use-cases/" if source == "use-cases/index.md" else "getting-started/quickstart/"
+    for path in paths:
+        text = path.read_text()
+        assert (notice in text) is stale
+        if stale:
+            assert f"[English page]({URL}{english})" in text
