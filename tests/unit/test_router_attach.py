@@ -89,6 +89,7 @@ class _Conn:
 
     def __init__(self, store: _Store) -> None:
         self.s = store
+        self._tx = None
 
     def _count(self) -> None:
         if self.s.down:
@@ -175,8 +176,13 @@ class _Conn:
         self.s.placements.update(dict.fromkeys(new, a[1]))
         return [{"org": o} for o in new]
 
+    async def close(self, **_kw: Any) -> None:
+        self.terminate()
+
     def terminate(self) -> None:
-        pass
+        if self._tx is not None:
+            self.s.cells, self.s.hosts, self.s.placements, self.s.audit = self._tx.saved
+            self._tx = None
 
     def transaction(self) -> Any:
         conn = self
@@ -192,12 +198,14 @@ class _Conn:
                 await self.__aexit__(Exception)
 
             async def __aenter__(self) -> None:
+                conn._tx = self
                 conn._count()
                 self.saved = copy.deepcopy(
                     (conn.s.cells, conn.s.hosts, conn.s.placements, conn.s.audit)
                 )
 
             async def __aexit__(self, kind: Any, *_exc: Any) -> None:
+                conn._tx = None
                 conn.s.statements += 1  # the commit, or the rollback
                 if kind is not None:
                     conn.s.cells, conn.s.hosts, conn.s.placements, conn.s.audit = self.saved

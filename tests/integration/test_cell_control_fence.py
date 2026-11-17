@@ -370,11 +370,13 @@ async def test_inflight_finalizer_cannot_release_after_new_owner_rewidens(
         await resume.wait()  # request already sent; caller can no longer retract it
 
         async def change():
-            async with directory._attach_change("first", compare) as (conn, found):
+            async def mutate(conn, found):
                 await conn.execute(
                     "UPDATE loom_router.cells SET current_fp = next_fp, next_fp = NULL, issuers = ARRAY['new'] WHERE cell = 'first'"
                 )
-            return found
+                return found
+
+            return await directory._attach_change("first", compare, mutate)
 
         return await app._answered(change, app._attach_answer)
 

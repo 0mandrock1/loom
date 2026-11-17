@@ -7,9 +7,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from server.cli import cell_attach
-from server.cli import cell_attach_pg as apg
+from server.cli import cell_attach, cell_control
 from server.core import pg
+from tests.unit.cell_control_owner import owner
+from tests.unit.test_cell_control import snapshot
 
 
 @pytest.mark.asyncio
@@ -24,12 +25,16 @@ async def test_failed_work_keeps_its_error_when_public_close_also_fails():
         def terminate(self):
             events.append("abort")
 
-    async def work():
-        raise ValueError("original work failure")
+    original = ValueError("original work failure")
 
-    with pytest.raises(ValueError, match="original work failure"):
-        await apg.supervise(Conn(), work(), end=time.monotonic() + 0.1)
-    assert events == ["close", "abort"]
+    async def work():
+        raise original
+
+    with pytest.raises(ValueError, match="original work failure") as caught:
+        await owner(Conn()).call(work, total_s=0.1)
+    assert caught.value is original
+    assert events[0] == "close" and events.count("close") == 1
+    assert events[1:] and set(events[1:]) == {"abort"}
 
 
 @pytest.mark.asyncio
@@ -56,7 +61,7 @@ async def test_second_cancellation_preserves_original_failure_and_closes_before_
         finally:
             events.append("work ended")
 
-    task = asyncio.create_task(apg.supervise(Conn(), work(), end=time.monotonic() + 0.2))
+    task = asyncio.create_task(owner(Conn()).call(work, total_s=0.2))
     await entered.wait()
     if not failed:
         task.cancel("first cancellation")
@@ -73,47 +78,58 @@ async def test_second_cancellation_preserves_original_failure_and_closes_before_
 
 
 @pytest.mark.asyncio
-async def test_lock_owner_bounds_context_exit_inside_the_same_cleanup_allowance(monkeypatch):
+async def test_lock_owner_bounds_close_inside_the_same_cleanup_allowance(monkeypatch):
+    closing = asyncio.Event()
     conn = AsyncMock()
-    conn.is_closed = lambda: False
     conn.terminate = lambda: None
-    cm = AsyncMock()
-    exit_started = asyncio.Event()
 
-    async def exit(*_):
-        exit_started.set()
+    async def close(**_):
+        closing.set()
         await asyncio.Future()
 
-    cm.__aexit__.side_effect = exit
-    run = cell_attach.Run(None, argparse.Namespace(cell="test", wait=0), None, lambda _: None)
-    run._lock_cm, run.lock_conn = cm, conn
+    conn.close.side_effect = close
+    owned = owner(conn)
     monkeypatch.setattr(pg, "_RELEASE_TIMEOUT_S", 0.03)
     started = time.monotonic()
     with pytest.raises(TimeoutError):
-        await run.close_lock()
+        await owned.close()
     assert time.monotonic() - started < 0.15
-    assert exit_started.is_set() and run.lock_conn is None
+    assert closing.is_set() and owned.closed
     conn.close.assert_awaited_once()
     await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failed", [False, True])
-async def test_run_preserves_its_own_failure_without_hiding_normal_close_failure(failed):
+async def test_run_preserves_its_own_failure_without_hiding_normal_close_failure(
+    failed, monkeypatch
+):
     router = AsyncMock()
-    router.call.return_value = {"state": "attaching"}
+    router.call.return_value = {**snapshot(), "state": "attaching"}
     run = cell_attach.Run(
         None, argparse.Namespace(cell="test", wait=0, dry_run=True), router, lambda _: None
     )
-    run.open_lock = AsyncMock(side_effect=ValueError("run failed") if failed else None)
+    original = ValueError("run failed")
+    conn = AsyncMock()
+    conn.terminate = lambda: None
+    conn.close.side_effect = RuntimeError("close failed")
+
+    async def open(owned, what):
+        owned.conn = conn
+        if failed:
+            raise original
+
+    monkeypatch.setattr(cell_control.Owner, "_open", open)
     run.read_own_row = AsyncMock()
     run.refusals = AsyncMock(return_value=(None, None, None))
     run.dry_run = AsyncMock(return_value=0)
-    run.close_lock = AsyncMock(side_effect=RuntimeError("close failed"))
     try:
         raise LookupError("unrelated caller exception")
     except LookupError:
         with pytest.raises(
             ValueError if failed else RuntimeError, match="run failed" if failed else "close failed"
-        ):
+        ) as caught:
             await run.run()
+        if failed:
+            assert caught.value is original
+    conn.close.assert_awaited_once()
