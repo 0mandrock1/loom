@@ -59,6 +59,13 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+      - name: Install translation runtime
+        # A virtualenv in the job's temp directory: a self-hosted runner keeps its Python.
+        run: |
+          python -m venv "$RUNNER_TEMP/i18n"
+          "$RUNNER_TEMP/i18n/bin/python" -m pip install --quiet --require-hashes --no-deps \
+            --only-binary=:all: -r scripts/i18n/requirements.txt
+          echo "$RUNNER_TEMP/i18n/bin" >> "$GITHUB_PATH"
       - name: Find stale translations
         id: check
         env:
@@ -69,14 +76,6 @@ jobs:
           else
             echo "stale=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Install the Bedrock client
-        if: steps.check.outputs.stale == 'true'
-        # A virtualenv in the job's temp directory: a self-hosted runner keeps its Python.
-        run: |
-          python -m venv "$RUNNER_TEMP/i18n"
-          "$RUNNER_TEMP/i18n/bin/python" -m pip install --quiet --require-hashes --no-deps \
-            --only-binary=:all: -r scripts/i18n/requirements.txt
-          echo "$RUNNER_TEMP/i18n/bin" >> "$GITHUB_PATH"
       - name: Translate
         id: translate
         if: steps.check.outputs.stale == 'true'
