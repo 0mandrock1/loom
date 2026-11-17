@@ -1283,19 +1283,20 @@ The source census for acceptance and operator directory writes is checked by
 `tests/unit/test_cell_control_census.py`, including dynamic cleanup tables, guarded
 entry points and the named exceptions:
 
-| Writer                                                                                  | Fence                                                                                              |
-| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `cell_prepare._write_rows`                                                              | Fresh claim, observed local rows, exact lock backend                                               |
-| `cell_attach_pg._mode_transaction`                                                      | Attach's claim, supervised mode try, recording/first/fingerprint comparison, exact lock backend    |
-| `cell_control.backout`                                                                  | Fresh claim, fenced close and zero-placement read, observed local rows, exact lock backend         |
-| `directory.attach_begin`, `attach_place`, `attach_enforced`, `attach_serving`, `remove` | Claimed generation, full registration and exact pair, including retries/no-ops                     |
-| `directory.set_limit`, `rotate_credential`                                              | Read and compare the current generation/registration/pair; do not claim or rotate                  |
-| `directory.register`                                                                    | Bootstrap default or immutable rerun lookup; never replaces existing acceptance or generation      |
-| `directory.place`                                                                       | Immutable placement only; keeps its org/cell locks and quota checks; never writes local acceptance |
+| Writer                                                                                  | Fence                                                                                                  |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `cell_prepare._write_rows`                                                              | Fresh claim, observed local rows, exact lock backend                                                   |
+| `cell_attach_pg._mode_transaction`                                                      | Attach's claim, supervised mode try, recording/first/fingerprint comparison, exact lock backend        |
+| `cell_restore` schema, tenancy, state and trigger repair                                | Fresh claim before repair, same lock backend, retained generation at restart and final acknowledgement |
+| `cell_control.backout`                                                                  | Fresh claim, fenced close and zero-placement read, observed local rows, exact lock backend             |
+| `directory.attach_begin`, `attach_place`, `attach_enforced`, `attach_serving`, `remove` | Claimed generation, full registration and exact pair, including retries/no-ops                         |
+| `directory.set_limit`, `rotate_credential`                                              | Read and compare the current generation/registration/pair; do not claim or rotate                      |
+| `directory.register`                                                                    | Bootstrap default or immutable rerun lookup; never replaces existing acceptance or generation          |
+| `directory.place`                                                                       | Immutable placement only; keeps its org/cell locks and quota checks; never writes local acceptance     |
 
 Read-only routes are exempt. Router migrations and an offline directory restore are
-maintenance operations. Future restore/update acceptance writers must use the same
-claim and lock-session helpers; a new directory mutation must use the common comparison
+maintenance operations. Configuration update acceptance writers use the same claim
+and lock-session helpers; a directory mutation uses the common comparison
 before its no-op branch as well. Direct privileged SQL is not an online control writer.
 The [control upgrade and recovery procedure](../operations/cell-control.md) defines the
 required fleet turnover and offline restore of generations. N-1 data-plane builds can
@@ -1323,6 +1324,23 @@ repairs first/mode/own rows and verifies the complete trigger set. A closed cell
 placement quota does not exclude its existing orgs. The directory's placement count
 and limits stay unchanged. The command holds the same operator lock as prepare, attach
 and place; another operation on that cell must finish first.
+
+Before Postgres migration, probes or metadata repair, restore reads the full operator
+registration and claims a fresh control generation on that exact lock backend. It
+compares the registration and exact fingerprint pair with the bounded restore
+descriptor and recorded stores. A count-only traversal restart retains that claim;
+a fresh full operator read at restart and final acknowledgement must match its
+registration, fingerprints and generation. A delayed claim from an earlier controller
+can invalidate the attempt even while restore holds its local lock. Restore refuses
+that change and requires a new attempt; it never adopts another generation mid-run.
+A lost claim acknowledgement or local session also ends the attempt.
+
+The single `--wait` deadline includes connection setup, every repair phase and cleanup.
+The raw connection belongs to its cleanup owner before deployment checks or codec
+initialization can wait. Cleanup sends public connection close before cancelling work;
+a second signal does not cancel that close early or extend the original deadline.
+A late connection cannot become usable after the attempt ends. A transport abort
+leaves an unknown outcome rather than proving that the backend released its locks.
 
 Pages have fixed row and byte bounds and use the directory's `(cell, org)` index. A
 placement added during the scan restarts it; a configuration change refuses the run.

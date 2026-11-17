@@ -312,7 +312,8 @@ async def test_offline_cli_cancellation_releases_its_actual_backend(stores, monk
             await original(conn, end=end)
             if pid == owned.get("pid"):
                 closing.set()
-                await asyncio.Future()
+                # A second signal must not cancel a close that can still finish.
+                await asyncio.sleep(0.03)
 
         monkeypatch.setattr(pg, "close_owned", stalled_close)
     seconds = 2 if ending == "deadline" else 15
@@ -384,6 +385,13 @@ async def test_full_restore_restarts_count_growth_without_losing_its_session(sto
         argparse.Namespace(cell="first", wait=15), ROUTER, cell_restore.Budget(15)
     ).run(OfflineClickHouse())
     assert grew and result["snapshot_orgs"] == 2 and result["inserted_tenancy"] == 2
+    async with directory._connection() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM loom_router.audit WHERE action='control_claim'"
+            )
+            == 1
+        )
     async with pg.dedicated() as conn:
         assert await conn.fetchval("SELECT count(*) FROM loom.tenancy") == 2
 
@@ -519,3 +527,201 @@ async def test_retained_own_configuration_recovery_is_reported_without_changing_
         )
     finally:
         await conn.close(timeout=1)
+
+
+@pytest.mark.parametrize("failure", ["pair", "type", "claim_shape", "claim_ack"])
+async def test_full_restore_claim_refuses_before_any_repair_write(stores, monkeypatch, failure):
+    import argparse
+
+    import asyncpg
+
+    from server.cli import cell_control, cell_restore_stores
+    from server.settings import settings
+
+    monkeypatch.setattr(settings, "cell", "first")
+    monkeypatch.setattr(settings, "pg_dsn", stores["first"])
+    monkeypatch.setattr(settings, "document_s3_bucket", "")
+    request = cell_control.request
+    called = []
+
+    async def change_reply(url, name, transport, path, body=None, *, method="POST"):
+        answer = await request(url, name, transport, path, body, method=method)
+        if method == "GET" and failure in ("pair", "type"):
+            answer = {
+                **answer,
+                **({"bucket": "different"} if failure == "pair" else {"is_first": 1}),
+            }
+        if path == "/claim":
+            called.append("claim")
+            if failure == "claim_shape":
+                answer.pop("mutation_generation")
+            if failure == "claim_ack":
+                raise cell_control._refused("claim acknowledgement lost: stop and rerun")
+        return answer
+
+    async def no_migration(conn):
+        called.append("migration")
+
+    async def no_nonces(ch, conn):
+        called.append("nonces")
+
+    monkeypatch.setattr(cell_control, "request", change_reply)
+    monkeypatch.setattr(cell_restore, "_migrate", no_migration)
+    monkeypatch.setattr(cell_restore_stores, "nonces", no_nonces)
+    ch = OfflineClickHouse()
+    conn = await asyncpg.connect(stores["first"])
+    try:
+        before = await conn.fetchval("SELECT row_to_json(s)::text FROM loom.cell_self s")
+        with pytest.raises((ValueError, cell_control.Refused)):
+            await cell_restore.Restore(
+                argparse.Namespace(cell="first", wait=15), ROUTER, cell_restore.Budget(15)
+            ).run(ch)
+        assert "migration" not in called and "nonces" not in called and ch.writes == []
+        assert await conn.fetchval("SELECT row_to_json(s)::text FROM loom.cell_self s") == before
+        assert await conn.fetchval("SELECT count(*) FROM loom.tenancy") == 0
+    finally:
+        await conn.close(timeout=1)
+
+
+@pytest.mark.parametrize("moment", ["restart", "final"])
+async def test_delayed_prior_claim_invalidates_restore_without_reclaim(stores, monkeypatch, moment):
+    import argparse
+
+    from server.cli import cell_control
+    from server.settings import settings
+
+    monkeypatch.setattr(settings, "cell", "first")
+    monkeypatch.setattr(settings, "pg_dsn", stores["first"])
+    monkeypatch.setattr(settings, "document_s3_bucket", "")
+    request, copy_rows = cell_control.request, cell_restore.Restore.copy
+    stale = None
+    own_claims = 0
+    delayed = False
+
+    async def observe(url, name, transport, path, body=None, *, method="POST"):
+        nonlocal stale, own_claims
+        answer = await request(url, name, transport, path, body, method=method)
+        if method == "GET" and stale is None:
+            stale = answer
+        if path == "/claim":
+            own_claims += 1
+        return answer
+
+    async def delayed_claim(runner):
+        nonlocal delayed
+        assert await cell_restore.apg.lock_held(runner.conn)
+        assert stale is not None
+        await request(
+            ROUTER, "first", None, "/claim", cell_control.preconditions(stale, claim=True)
+        )
+        delayed = True
+
+    async def grow(runner, first):
+        await copy_rows(runner, first)
+        if moment == "restart" and not delayed:
+            await delayed_claim(runner)
+            await seed(["new-placement"])
+
+    page = cell_restore.Restore.page
+    pages = 0
+
+    async def final(runner, after, previous):
+        nonlocal pages
+        answer = await page(runner, after, previous)
+        pages += 1
+        # Empty placement traversal's third page is the final acknowledgement.
+        if moment == "final" and pages == 3 and not delayed:
+            await delayed_claim(runner)
+        return answer
+
+    monkeypatch.setattr(cell_control, "request", observe)
+    monkeypatch.setattr(cell_restore.Restore, "copy", grow)
+    monkeypatch.setattr(cell_restore.Restore, "page", final)
+    with pytest.raises(cell_control.Refused, match="generation|registration"):
+        await cell_restore.Restore(
+            argparse.Namespace(cell="first", wait=15), ROUTER, cell_restore.Budget(15)
+        ).run(OfflineClickHouse())
+    assert delayed and own_claims == 1
+
+
+async def test_lost_restore_session_never_reconnects_or_probes(stores, monkeypatch):
+    import argparse
+
+    import asyncpg
+
+    from server.cli import cell_control
+    from server.core import pg
+    from server.settings import settings
+
+    monkeypatch.setattr(settings, "cell", "first")
+    monkeypatch.setattr(settings, "pg_dsn", stores["first"])
+    monkeypatch.setattr(settings, "document_s3_bucket", "")
+    connect, migrate = pg._connect_dedicated, cell_restore._migrate
+    opens = 0
+
+    async def count_open(**kw):
+        nonlocal opens
+        opens += 1
+        return await connect(**kw)
+
+    async def lose_backend(conn):
+        await migrate(conn)
+        observer = await asyncpg.connect(stores["first"])
+        try:
+            await observer.execute("SELECT pg_terminate_backend($1)", conn.get_server_pid())
+        finally:
+            await observer.close(timeout=1)
+
+    monkeypatch.setattr(pg, "_connect_dedicated", count_open)
+    monkeypatch.setattr(cell_restore, "_migrate", lose_backend)
+    ch = OfflineClickHouse()
+    with pytest.raises(cell_control.Refused, match="lock session lost|attach lock lost"):
+        await cell_restore.Restore(
+            argparse.Namespace(cell="first", wait=15), ROUTER, cell_restore.Budget(15)
+        ).run(ch)
+    assert opens == 1 and ch.writes == []
+
+
+async def test_normal_restore_requires_owned_public_close_success(stores, monkeypatch):
+    import argparse
+
+    import asyncpg
+
+    from server.core import pg
+    from server.settings import settings
+
+    monkeypatch.setattr(settings, "cell", "first")
+    monkeypatch.setattr(settings, "pg_dsn", stores["first"])
+    monkeypatch.setattr(settings, "document_s3_bucket", "")
+    connect, close = pg._connect_dedicated, pg.close_owned
+    failure = RuntimeError("public close acknowledgement failed")
+    owned = {}
+
+    async def remember(**kwargs):
+        conn = await connect(**kwargs)
+        owned["pid"] = conn.get_server_pid()
+        return conn
+
+    async def bad_close(conn, *, end):
+        pid = conn.get_server_pid()
+        await close(conn, end=end)
+        if pid == owned.get("pid"):
+            raise failure
+
+    monkeypatch.setattr(pg, "_connect_dedicated", remember)
+    monkeypatch.setattr(pg, "close_owned", bad_close)
+    with pytest.raises(RuntimeError) as caught:
+        await cell_restore.Restore(
+            argparse.Namespace(cell="first", wait=15), ROUTER, cell_restore.Budget(15)
+        ).run(OfflineClickHouse())
+    assert caught.value is failure
+    observer = await asyncpg.connect(stores["first"])
+    try:
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1)", owned["pid"]
+        )
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", owned["pid"]
+        )
+    finally:
+        await observer.close(timeout=1)

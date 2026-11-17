@@ -196,12 +196,18 @@ def test_cli_cancellation_names_retry_and_preserves_cancellation(
 
 
 async def test_second_cancellation_during_public_close_preserves_first_cancellation():
-    started = asyncio.Event()
+    started, release, cancelled_close = asyncio.Event(), asyncio.Event(), asyncio.Event()
     conn = DriverConnection()
 
     async def stalled_close(**kwargs):
         started.set()
-        await asyncio.Future()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            cancelled_close.set()
+            raise
+        conn.closed = True
+        conn.terminated.set()
 
     conn.close = stalled_close
     budget = cell_restore.Budget(1)
@@ -211,9 +217,12 @@ async def test_second_cancellation_during_public_close_preserves_first_cancellat
     task.cancel("first cancellation")
     await asyncio.wait_for(started.wait(), 1)
     task.cancel("second cancellation")
+    await asyncio.sleep(0)
+    assert not cancelled_close.is_set()
+    release.set()
     with pytest.raises(asyncio.CancelledError, match="first cancellation"):
         await asyncio.wait_for(task, 0.5)
-    assert conn.is_closed()
+    assert conn.is_closed() and conn.closed and not cancelled_close.is_set()
 
 
 async def test_budget_keeps_original_failure_when_owned_close_fails():
@@ -259,3 +268,19 @@ def test_retained_configuration_mismatch_names_recovery_without_changing_prepare
     assert json.loads(printed.out)["prepare_required"] is False
     assert "restore a matching configuration" in printed.err
     assert "before starting processes" in printed.err
+
+
+async def test_closed_restore_attempt_refuses_before_raw_acquisition(monkeypatch):
+    from server.cli import cell_control
+    from server.core import pg
+
+    connect = AsyncMock(return_value=DriverConnection())
+    monkeypatch.setattr(pg, "_connect_dedicated", connect)
+    budget = cell_restore.Budget(1)
+    budget.closed = True
+    runner = cell_restore.Restore(
+        argparse.Namespace(cell="first"), httpx.URL("http://127.0.0.1:7901"), budget
+    )
+    with pytest.raises(cell_control.Refused):
+        await runner.run(object())
+    connect.assert_not_awaited()

@@ -328,3 +328,177 @@ async def test_failed_trigger_repair_keeps_original_error_until_owner_close(cell
         )
     finally:
         await observer.close(timeout=1)
+
+
+@pytest.mark.parametrize("opening", ["_check_deployment", "init_connection"])
+@pytest.mark.parametrize("ending", ["deadline", "cancel", "second_cancel"])
+async def test_restore_owns_raw_backend_before_initialization(
+    cell_db, monkeypatch, opening, ending
+):
+    import argparse
+    import asyncio
+    import time
+
+    import asyncpg
+    import httpx
+
+    from server.cli import cell_restore
+
+    observer = await asyncpg.connect(settings.pg_dsn)
+    owned = {}
+    started, closing = asyncio.Event(), asyncio.Event()
+    close = pg.close_owned
+    closes = 0
+
+    async def public_close(conn, *, end):
+        nonlocal closes
+        closes += 1
+        closing.set()
+        await asyncio.sleep(0.02)
+        await close(conn, end=end)
+
+    async def blocked(conn):
+        owned["pid"] = conn.get_server_pid()
+        await conn.execute("SELECT pg_advisory_lock(846233)")
+        started.set()
+        await conn.execute("SELECT pg_sleep(10)")
+
+    monkeypatch.setattr(pg, opening, blocked)
+    monkeypatch.setattr(pg, "close_owned", public_close)
+    seconds = 0.3 if ending == "deadline" else 1.0
+    budget = cell_restore.Budget(seconds)
+    task = asyncio.create_task(
+        cell_restore.Restore(
+            argparse.Namespace(cell="first", wait=seconds),
+            httpx.URL("http://127.0.0.1:7901"),
+            budget,
+        ).run(object())
+    )
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        before = time.monotonic()
+        if ending != "deadline":
+            task.cancel("first initialization cancellation")
+        if ending == "second_cancel":
+            await asyncio.wait_for(closing.wait(), 0.3)
+            task.cancel("second initialization cancellation")
+        if ending == "deadline":
+            with pytest.raises(TimeoutError, match="--wait"):
+                await task
+        else:
+            with pytest.raises(asyncio.CancelledError, match="first initialization cancellation"):
+                await task
+        assert time.monotonic() - before < 0.6 and time.monotonic() <= budget.end + 0.1
+        assert closes == 1
+        assert owned["pid"] != cell_db.get_server_pid()
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1)", owned["pid"]
+        )
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", owned["pid"]
+        )
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if "pid" in owned:
+            await observer.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid=$1", owned["pid"]
+            )
+        await observer.close(timeout=1)
+
+
+async def test_late_raw_connection_stays_with_closed_budget_owner(cell_db, monkeypatch):
+    import argparse
+    import asyncio
+    import time
+
+    import asyncpg
+    import httpx
+
+    from server.cli import cell_restore
+
+    connect, close = pg._connect_dedicated, pg.close_owned
+    owned, initialized, closed = {}, [], []
+
+    async def late(**kwargs):
+        conn = await connect(**kwargs)
+        owned["pid"] = conn.get_server_pid()
+        await conn.execute("SELECT pg_advisory_lock(846234)")
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            return conn
+
+    async def initialize(conn):
+        initialized.append(conn)
+
+    async def public_close(conn, *, end):
+        closed.append(conn.get_server_pid())
+        await close(conn, end=end)
+
+    monkeypatch.setattr(pg, "_connect_dedicated", late)
+    monkeypatch.setattr(pg, "_check_deployment", initialize)
+    monkeypatch.setattr(pg, "close_owned", public_close)
+    observer = await asyncpg.connect(settings.pg_dsn)
+    budget = cell_restore.Budget(0.4)
+    try:
+        with pytest.raises(TimeoutError, match="--wait"):
+            await cell_restore.Restore(
+                argparse.Namespace(cell="first", wait=0.4),
+                httpx.URL("http://127.0.0.1:7901"),
+                budget,
+            ).run(object())
+        assert time.monotonic() <= budget.end + 0.1
+        assert closed == [owned["pid"]] and initialized == []
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1)", owned["pid"]
+        )
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", owned["pid"]
+        )
+    finally:
+        if "pid" in owned:
+            await observer.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE pid=$1", owned["pid"]
+            )
+        await observer.close(timeout=1)
+
+
+@pytest.mark.parametrize("opening", ["_check_deployment", "init_connection"])
+async def test_raw_initialization_preserves_original_error_after_public_close(
+    cell_db, monkeypatch, opening
+):
+    import argparse
+
+    import asyncpg
+    import httpx
+
+    from server.cli import cell_restore
+
+    failure = ValueError("initialization programmer error")
+    owned = {}
+
+    async def fail(conn):
+        owned["pid"] = conn.get_server_pid()
+        await conn.execute("SELECT pg_advisory_lock(846235)")
+        raise failure
+
+    monkeypatch.setattr(pg, opening, fail)
+    observer = await asyncpg.connect(settings.pg_dsn)
+    try:
+        with pytest.raises(ValueError) as caught:
+            await cell_restore.Restore(
+                argparse.Namespace(cell="first", wait=1),
+                httpx.URL("http://127.0.0.1:7901"),
+                cell_restore.Budget(1),
+            ).run(object())
+        assert caught.value is failure
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=$1)", owned["pid"]
+        )
+        assert not await observer.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", owned["pid"]
+        )
+    finally:
+        await observer.close(timeout=1)

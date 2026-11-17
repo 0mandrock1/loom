@@ -15,6 +15,7 @@ import httpx
 
 from server.cli import cell as cell_cli
 from server.cli import cell_attach_pg as apg
+from server.cli import cell_control
 from server.cli import cell_restore_pg as local
 from server.cli._ch import OrgNotHeld, connect_declared, disconnect, writes
 from server.core import cell, pg
@@ -30,17 +31,23 @@ class Budget:
         self.end = time.monotonic() + seconds
         self.reserve = min(1.0, seconds / 4)
         self.conn: Any = None
+        self.closed = False
+        self._close_task: asyncio.Task[Any] | None = None
 
     def left(self, *, cleanup: bool = False) -> float:
         return max(0.0, self.end - time.monotonic() - (0 if cleanup else self.reserve))
 
     async def call[T](self, work: Awaitable[T], *, cleanup: bool = False) -> T:
-        task = asyncio.ensure_future(work)
+        task = asyncio.create_task(cell_control._captured(lambda: work))
+        task.add_done_callback(pg._retrieve_task)
         try:
             done, _ = await asyncio.wait({task}, timeout=self.left(cleanup=cleanup))
             if not done:
                 raise TimeoutError("cell restore reached --wait")
-            return task.result()
+            result = task.result()
+            if isinstance(result, cell_control._Fatal):
+                raise cell_control._ForwardFatal(result)
+            return result
         except protocol.SnapshotChanged:
             # Count-only directory growth restarts enumeration on the same session.
             raise
@@ -51,7 +58,6 @@ class Budget:
                 pass
             if not task.done():
                 task.cancel()
-            task.add_done_callback(pg._retrieve_task)
             try:
                 await asyncio.wait({task}, timeout=self.left(cleanup=True))
             except BaseException:  # noqa: BLE001 — preserve the first cancellation.
@@ -59,9 +65,31 @@ class Budget:
             raise
 
     async def close(self) -> None:
-        conn, self.conn = self.conn, None
-        if conn is not None:
-            await pg.close_owned(conn, end=self.end)
+        self.closed = True
+        if self.conn is None:
+            return
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(
+                cell_control._captured(lambda: pg.close_owned(self.conn, end=self.end))
+            )
+            self._close_task.add_done_callback(pg._retrieve_task)
+        interrupted = None
+        while True:
+            try:
+                done, _ = await asyncio.wait({self._close_task}, timeout=self.left(cleanup=True))
+                break
+            except asyncio.CancelledError as error:
+                # Another signal cannot cancel the independent public close early.
+                interrupted = interrupted or error
+        if not done:
+            pg._terminate(self.conn)
+            self._close_task.cancel()
+            raise TimeoutError("cell restore cleanup reached --wait; outcome unknown")
+        result = self._close_task.result()
+        if isinstance(result, cell_control._Fatal):
+            raise cell_control._ForwardFatal(result)
+        if interrupted is not None:
+            raise interrupted
 
 
 def _args_problem(args: argparse.Namespace) -> str:
@@ -138,6 +166,7 @@ class Restore:
         self.conn: Any = None
         self.recorded: dict[str, Any] = {}
         self.inserted = 0
+        self.claimed: dict[str, Any] | None = None
 
     async def page(self, after: str | None, previous: dict[str, Any] | None) -> dict[str, Any]:
         return await self.budget.call(
@@ -151,13 +180,60 @@ class Restore:
             )
         )
 
+    async def operator(self, path: str = "", body: dict[str, Any] | None = None) -> dict[str, Any]:
+        return await cell_control.request(
+            self.router,
+            self.args.cell,
+            None,
+            path,
+            body,
+            method="GET" if body is None else "POST",
+        )
+
+    async def control(self, descriptor: dict[str, Any], *, claim: bool = False) -> None:
+        await cell_control.check_lock(self.conn)
+        row = await self.operator()
+        cell_control.preconditions(row)
+        overlap = {name for name in directory.CONTROL_FIELDS if name in descriptor}
+        if protocol.encode({k: row[k] for k in overlap}) != protocol.encode(
+            {k: descriptor[k] for k in overlap}
+        ):
+            raise cell_control._refused(
+                "restore registration or fingerprints changed: stop and rerun"
+            )
+        await cell_control.paired(self.conn, row)
+        if claim:
+            self.claimed = await cell_control.claim(self.conn, self.operator, row)
+        elif self.claimed is None or protocol.encode(
+            cell_control.preconditions(row)
+        ) != protocol.encode(cell_control.preconditions(self.claimed)):
+            raise cell_control._refused(
+                "restore control generation or registration changed: stop and rerun"
+            )
+        await cell_control.check_lock(self.conn)
+
+    async def open(self) -> None:
+        if self.conn is not None or self.budget.closed:
+            raise cell_control._refused("a restore attempt cannot open another session")
+        self.conn = await pg._connect_dedicated(
+            statement_timeout_ms=settings.pg_statement_timeout_ms
+        )
+        self.budget.conn = self.conn
+        if self.budget.closed:
+            await self.budget.close()
+            raise cell_control._refused("restore connection arrived after the attempt ended")
+        try:
+            await pg._check_deployment(self.conn)
+            await pg.init_connection(self.conn)
+        except Exception as error:
+            pg._raise_if_unavailable(error)
+            raise
+
     async def run(self, ch: Any) -> dict[str, Any]:
         from server.cli import cell_restore_stores as stores
 
-        cm = pg.dedicated(statement_timeout_ms=settings.pg_statement_timeout_ms)
         try:
-            self.conn = await self.budget.call(cm.__aenter__())
-            self.budget.conn = self.conn
+            await self.budget.call(self.open())
             refusals = await self.budget.call(apg.direct_refusals(self.conn, "restore"))
             if refusals:
                 raise ValueError("; ".join(r.reason for r in refusals))
@@ -167,20 +243,19 @@ class Restore:
             first = await self.page(None, None)
             stores.descriptor(first["descriptor"], self.recorded)
             await self.budget.call(local.checked(self.conn, first["descriptor"], self.recorded))
+            await self.budget.call(self.control(first["descriptor"], claim=True))
+            await self.budget.call(cell_control.check_lock(self.conn))
             await self.budget.call(_migrate(self.conn))
+            await self.budget.call(cell_control.check_lock(self.conn))
             await self.budget.call(stores.nonces(ch, self.conn))
             return await self.finish(first)
         finally:
-            if self.conn is not None:
-                failed = sys.exc_info()[0] is not None
-                try:
-                    try:
-                        await self.budget.close()
-                    finally:
-                        await self.budget.call(cm.__aexit__(None, None, None), cleanup=True)
-                except BaseException:
-                    if not failed:
-                        raise
+            failed = sys.exc_info()[0] is not None
+            try:
+                await self.budget.close()
+            except BaseException:
+                if not failed:
+                    raise
 
     async def finish(self, first: dict[str, Any]) -> dict[str, Any]:
         from server.cli import cell_restore_stores as stores
@@ -197,6 +272,7 @@ class Restore:
                 if rows != verified:
                     raise ValueError("cell rows changed during trigger repair")
                 await self.page(None, descriptor)
+                await self.budget.call(self.control(descriptor))
                 await self.budget.call(local.checked(self.conn, descriptor, self.recorded))
                 if await self.budget.call(local.read_rows(self.conn)) != verified:
                     raise ValueError("cell rows changed after the final directory acknowledgement")
@@ -219,6 +295,7 @@ class Restore:
                 except protocol.SnapshotChanged:
                     pass
                 stores.descriptor(first["descriptor"], self.recorded)
+                await self.budget.call(self.control(first["descriptor"]))
 
     async def copy(self, first: dict[str, Any]) -> None:
         answer, count = first, 0
@@ -283,7 +360,10 @@ def cmd_restore(args: argparse.Namespace) -> int:
                     raise
 
     try:
-        result = asyncio.run(run())
+        try:
+            result = asyncio.run(run())
+        except cell_control._ForwardFatal as interrupted:
+            raise interrupted.fatal.error from None
     except (asyncio.CancelledError, KeyboardInterrupt):
         print(
             "loom cell restore: outcome may be unknown; "

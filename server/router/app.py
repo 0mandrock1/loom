@@ -712,7 +712,7 @@ class Router:
 
     async def restore_read(self, request: Request) -> JSONResponse:
         """Read permanent placements for a stopped cell's metadata repair."""
-        body = await self._operator_body(request)
+        body = await self._operator_body(request, MAX_BODY_BYTES)
         if isinstance(body, JSONResponse):
             return body
         after, expected = body.get("after"), body.get("expected_sha256")

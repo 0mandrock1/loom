@@ -108,6 +108,11 @@ GUARDED_WRITERS = {
         ("backout.clear_state", "DELETE FROM", "loom.{table}"): 1,
         ("backout.clear_triggers", "DROP TRIGGER", "loom.{table}"): 1,
     },
+    "server/cli/cell_restore_pg.py": {
+        ("state.write", "INSERT INTO", "loom.cell_first"): 1,
+        ("state.write", "INSERT INTO", "loom.tenancy_mode"): 1,
+        ("state.write", "INSERT INTO", "loom.cell_self"): 1,
+    },
     "server/cli/cell_prepare.py": {
         ("_write_rows.write", "INSERT INTO", "loom.cell_first"): 1,
         ("_write_rows.write", "INSERT INTO", "loom.tenancy_mode"): 1,
@@ -143,7 +148,7 @@ EXEMPT_WRITERS = {
         ("register", "INSERT INTO", "loom_router.audit"): 1,
         ("_place_one", "INSERT INTO", "loom_router.placements"): 1,
         ("_place_one", "UPDATE", "loom_router.cells"): 1,
-        ("_place_one", "INSERT INTO", "loom_router.audit"): 1,
+        ("place", "INSERT INTO", "loom_router.audit"): 1,
         ("_audit", "INSERT INTO", "loom_router.audit"): 1,
     },
 }
@@ -154,6 +159,7 @@ EXEMPT_WRITERS = {
 # pg_migrate writes only its named migration ledger, and prepare's nonce writes only
 # the probe lock table. None is a cell acceptance or directory control write.
 GENERIC_SQL_EXCLUSIONS = {
+    "server/cli/cell_restore_stores.py": {("nonces", "INSERT INTO", "{leases.LOCK_TABLE}"): 1},
     "server/cli/cell_prepare.py": {("_write_nonces", "INSERT INTO", "{leases.LOCK_TABLE}"): 1},
     "server/code/store/index/prefix_twin.py": {("fill_sql", "INSERT INTO", "{table}"): 1},
     "server/core/ch.py": {("_fenced_statement", "INSERT INTO", "{qualify(table)}"): 1},
@@ -267,8 +273,8 @@ GENERIC_SQL_EXCLUSIONS = {
 }
 
 # Schema creation/extension and immutable-trigger installation run as migrations,
-# never as live acceptance writers. Offline restore generation rotation stays stopped
-# and fenced as described in the recovery guide, not a live SQL exemption.
+# never as live acceptance writers. Restore acceptance sinks are classified above
+# and enter only after a fresh claim on the retained ATTACH session.
 MIGRATION_WRITERS = {
     "schemas/pg_migrations/008_cells.sql": {
         ("CREATE TABLE IF NOT EXISTS", "loom.cell_first"): 1,
@@ -307,6 +313,59 @@ def function(path: str, name: str) -> ast.AST:
 @pytest.mark.parametrize(
     ("path", "name", "required"),
     [
+        (
+            "server/cli/cell_restore.py",
+            "Restore.control",
+            [
+                "cell_control.check_lock(self.conn)",
+                "cell_control.paired(self.conn, row)",
+                "cell_control.claim(self.conn, self.operator, row)",
+                "cell_control.preconditions(self.claimed)",
+            ],
+        ),
+        (
+            "server/cli/cell_restore.py",
+            "Restore.run",
+            [
+                "self.control(first['descriptor'], claim=True)",
+                "_migrate(self.conn)",
+                "cell_control.check_lock(self.conn)",
+                "stores.nonces(ch, self.conn)",
+            ],
+        ),
+        (
+            "server/cli/cell_restore.py",
+            "Restore.finish",
+            [
+                "self.control(descriptor)",
+                "self.control(first['descriptor'])",
+                "local.state(self.conn, descriptor, self.recorded)",
+                "repair(self.conn, descriptor)",
+            ],
+        ),
+        (
+            "server/cli/cell_restore.py",
+            "Restore.copy",
+            ["local.tenancy(self.conn, descriptor, self.recorded, answer['orgs'])"],
+        ),
+        (
+            "server/cli/cell_restore.py",
+            "_migrate",
+            ["pg_migrate.migrate_borrowed(conn)"],
+        ),
+        *[
+            (
+                "server/cli/cell_restore_pg.py",
+                name,
+                ["checked(conn, descriptor, recorded)", "transaction(conn, write)"],
+            )
+            for name in ("tenancy", "state")
+        ],
+        (
+            "server/cli/cell_restore_triggers.py",
+            "repair",
+            ["apg.lock_held(conn)", "_tables(conn, descriptor)"],
+        ),
         (
             "server/cli/cell_prepare.py",
             "prepare",
@@ -465,9 +524,7 @@ def test_reads_registration_and_immutable_placement_are_explicit_exceptions():
     # Operator reads may audit, but cannot bypass control guards for a state write.
     assert any(call.startswith("_audit(") for call in calls(found.functions["attach_read"]))
     assert "_rerun_refusal(held, reg)" in calls(found.functions["register"])
-    assert "_place_one(conn, org, cell_name, _cell(locked), refusal)" in calls(
-        found.functions["place"]
-    )
+    assert "_place_one(conn, org, cell_name, candidate, refusal)" in calls(found.functions["place"])
     assert "refusal(candidate)" in calls(found.functions["_place_one"])
     for name in ("set_limit", "rotate_credential"):
         assert not any(call.startswith("claim(") for call in calls(found.functions[name]))
@@ -521,4 +578,17 @@ def test_acceptance_writer_callsites_are_classified():
             ("server/cli/cell_attach_pg.py", "_mode_try", "_mode_transaction"): 1,
             ("server/cli/cell_attach.py", "Run.commit_mode", "apg.commit_enforced"): 1,
         }
+    )
+
+
+def test_restore_claim_precedes_schema_probes_and_acceptance():
+    run = function("server/cli/cell_restore.py", "Restore.run")
+    found = {ast.unparse(node.func): node for node in ast.walk(run) if isinstance(node, ast.Call)}
+    claim = found["self.control"]
+    assert any(kw.arg == "claim" and ast.literal_eval(kw.value) is True for kw in claim.keywords)
+    assert (
+        claim.lineno
+        < found["_migrate"].lineno
+        < found["stores.nonces"].lineno
+        < found["self.finish"].lineno
     )
