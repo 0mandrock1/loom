@@ -240,8 +240,9 @@ The SDK's `Session.offload` / `Session.fetch` wrap the pair for one session.
 
 - **An empty `loom_search` is not "nothing in Loom".** The memory leg may have abstained or rows may have been
   withheld; the text says which.
-- **Code and tracker namespaces are not in the fan-out.** Only the scoped repository's decisions and documents join
-  under a code scope. Otherwise use the code tools, or `memory.search` with that namespace.
+- **Memory fan-out excludes code and tracker namespaces.** The scoped repository's decisions and documents join
+  under a code scope; a separate tracker leg searches authorized tracker records. For code, use the code tools, or
+  `memory.search` with that namespace.
 - **A decision written moments ago may be missing.** The repository's decision search keeps only the up-front
   read-your-writes check (a namespace marked as just written is read with sequential consistency). It runs no re-read
   of its own, and the home search re-reads only the home namespaces, so a decision written through another replica can
