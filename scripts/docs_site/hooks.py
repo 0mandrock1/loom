@@ -55,6 +55,71 @@ _TOKEN = re.compile(
 _DESCRIPTION_MAX = 160
 
 
+def on_page_context(context, page, config, nav):
+    heading = html.unescape(re.sub(r"<[^>]*>", "", page.meta.get("title") or page.title))
+    title = heading
+    if page.is_homepage:
+        title = config["site_name"] + ": agent memory, document search and code index"
+    else:
+        full = title + " - " + config["site_name"]
+        if len(full) <= 70:
+            title = full
+    context["loom_title"] = title
+    description = html.unescape(page.meta.get("description") or config["site_description"])
+    software_id = config["site_url"] + "#software"
+    if page.is_homepage:
+        graph = [_software_schema(config, description, software_id)]
+    else:
+        graph = [
+            {
+                "@type": "TechArticle",
+                "headline": heading,
+                "description": description,
+                "url": page.canonical_url,
+                "about": {"@id": software_id},
+            },
+            {
+                "@type": "BreadcrumbList",
+                "itemListElement": [
+                    {
+                        "@type": "ListItem",
+                        "position": 1,
+                        "name": config["site_name"],
+                        "item": config["site_url"],
+                    },
+                    {
+                        "@type": "ListItem",
+                        "position": 2,
+                        "name": heading,
+                        "item": page.canonical_url,
+                    },
+                ],
+            },
+        ]
+    context["loom_schema"] = {"@context": "https://schema.org", "@graph": graph}
+    return context
+
+
+def _software_schema(config, description, software_id):
+    return {
+        "@type": ["SoftwareApplication", "SoftwareSourceCode"],
+        "@id": software_id,
+        "name": config["site_name"],
+        "alternateName": "Loom",
+        "description": description,
+        "url": config["site_url"],
+        "codeRepository": "https://github.com/ClickHouse/loom",
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "programmingLanguage": ["Python", "TypeScript"],
+        "applicationCategory": "DeveloperApplication",
+        "sameAs": [
+            "https://github.com/ClickHouse/loom",
+            "https://pypi.org/project/clickhouse-loom/",
+            "https://www.npmjs.com/package/@clickhouse/loom",
+        ],
+    }
+
+
 def on_page_markdown(markdown, page, config, files):
     _title, summary = page_summary(Path(page.file.abs_src_path))
     description = page.meta.get("description") or summary.replace("`", "")
