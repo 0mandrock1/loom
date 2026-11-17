@@ -207,10 +207,11 @@ lapses for it. What N-1 does to them is caught by the read-time check: a promoti
 another source, or an edit, relabel or tombstone of the source, leaves a row the term leg
 does not serve, and the term leg's last-promoted rule covers a promotion that skipped the
 term check. A promotion on N-1 also skips the approved-hash check and takes `promoted_by`
-from the body, which no read-time check can tell, and an N-1 `memory.set` ignores
-`if_absent`, a field it does not know, so it can write over a live row; the review path answers 503
-while N-1 serves, and a direct caller relies on them only once no N-1 replica serves. Once
-none does, an admin promotes again every definition promoted before then, through N-1 or
+from the body, which no read-time check can tell. Private review uses the existing
+conditional-set precondition (`if_match_sha256="absent"` or the observed source hash);
+its separate fleet gate requires every replica to understand private candidates.
+Direct callers rely on the approved-hash and token-stamped promotion checks only once
+no N-1 replica serves. An admin then promotes again every definition promoted before then, through N-1 or
 before this design (`loom.shared` rows of type `definition` by promotion time), since none
 of those carried the hash check or a token-stamped `promoted_by`; that promotion on N also
 moves the write mark, which N-1's promotions and demotions never move, so a stored
