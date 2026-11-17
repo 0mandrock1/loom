@@ -24,6 +24,7 @@ _MIN_FUZZY_SCORE = 0.95
 _MAX_NORMALIZED_ENTROPY = 0.55
 _MIN_TOP_GAP = 0.02
 _MAX_NAMESPACE_CANDIDATES = 5000
+# not a setting: the documented entity-filter contract accepts at most 256 effective names.
 _MAX_EFFECTIVE_ENTITY_FILTER = 256
 
 
