@@ -882,3 +882,16 @@ It does not check new enum values (rule 3), wire formats (rule 4), signing keys 
 than `default` (rule 5), new revocation keys (rule 18), an `/assistant` history entry
 (rule 46), or a process killed mid-migration. It skips with exit 0 where docker is
 unreachable; CI passes `--require`, which fails there instead.
+
+### Analyst probes across catalog versions
+
+The analyst probe checks its signed key canary before reading the stored entity version.
+When a newer build owns the entities, the older probe leaves that build's catalog and
+grant checks to it. It does not query retired tables or overwrite the newer entities.
+A failed key canary still refuses analysis, regardless of the version stamp.
+
+Deploy this probe ordering across the fleet before a later catalog change revokes a raw
+relation. Builds with the earlier probe order can refuse `insights.query` after that
+cutover because they probe the retired relation before checking the entity version.
+Statements naming a removed relation still fail its grant check; trusting the newer
+catalog does not restore a retired grant.
