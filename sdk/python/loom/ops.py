@@ -11857,7 +11857,7 @@ class PushStatusOutput(TypedDict, total=False):
 
 
 class KnowledgeSourcePushConfirmInput(TypedDict, total=False):
-    "Activate the exact pending setup. For Notion, first verify in the provider UI"
+    "Activate the exact pending setup."
 
     org: Required[str]
     namespace: Required[str]
@@ -11868,7 +11868,7 @@ class KnowledgeSourcePushConfirmInput(TypedDict, total=False):
 
 
 class KnowledgeSourcePushConfirmBody(TypedDict, total=False):
-    "Activate the exact pending setup. For Notion, first verify in the provider UI"
+    "Activate the exact pending setup."
 
     org: NotRequired[str]
     namespace: NotRequired[str]
@@ -11879,7 +11879,7 @@ class KnowledgeSourcePushConfirmBody(TypedDict, total=False):
 
 
 class KnowledgeSourcePushStatusInput(TypedDict, total=False):
-    "Read push setup as a namespace admin. Explicit reveal returns only a pending"
+    "Read push setup as a namespace admin."
 
     org: Required[str]
     namespace: Required[str]
@@ -11888,7 +11888,7 @@ class KnowledgeSourcePushStatusInput(TypedDict, total=False):
 
 
 class KnowledgeSourcePushStatusBody(TypedDict, total=False):
-    "Read push setup as a namespace admin. Explicit reveal returns only a pending"
+    "Read push setup as a namespace admin."
 
     org: NotRequired[str]
     namespace: NotRequired[str]

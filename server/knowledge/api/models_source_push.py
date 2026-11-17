@@ -25,8 +25,11 @@ class PushConfigureInput(PushSourceInput):
 
 
 class PushStatusInput(PushSourceInput):
-    """Read push setup as a namespace admin. Explicit reveal returns only a pending
-    Notion verification token, for copying to the provider's verification form."""
+    """Read push setup as a namespace admin.
+
+    Explicit reveal returns only a pending Notion verification token, for copying
+    to the provider's verification form.
+    """
 
     reveal_challenge: bool = Field(
         default=False, description="Reveal a pending Notion challenge, default false."
@@ -34,9 +37,12 @@ class PushStatusInput(PushSourceInput):
 
 
 class PushConfirmInput(PushSourceInput):
-    """Activate the exact pending setup. For Notion, first verify in the provider UI
-    and name the inspected challenge fingerprint. For Linear, supply the signing
-    secret of the webhook created with this generation's notification address."""
+    """Activate the exact pending setup.
+
+    For Notion, first verify in the provider UI and name the inspected challenge
+    fingerprint. For Linear, supply the signing secret of the webhook created
+    with this generation's notification address.
+    """
 
     generation: str = Field(..., max_length=36, description="The pending setup generation.")
     challenge_fingerprint: str = Field(
