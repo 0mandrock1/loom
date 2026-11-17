@@ -9,8 +9,42 @@ from typing import Any, Literal
 
 from server.core import bm25
 from server.core.ch import CHClient, get_client, set_query_tag
+from server.knowledge.domain.live_chunks import live_chunk_sql
 
 Leg = Literal["semantic", "lexical", "keys"]
+ChunkKey = tuple[str, str, int, int, int]
+
+
+async def chunks(
+    org: str, model: str, keys: list[ChunkKey], *, ch: CHClient | None = None
+) -> list[dict[str, Any]]:
+    """Fetch one bounded batch at its admitted key, never a replacement version."""
+    if not keys:
+        return []
+    if len(keys) > 64:
+        raise ValueError("chunk hydration batch exceeds bound")
+    keys = sorted(set(keys))
+    set_query_tag("knowledge.mirror.hydrate")
+    return await (ch or get_client()).query_all(
+        "SELECT namespace, source_uri, chunk_idx, doc_version, "
+        "JSONExtractUInt(chunk_metadata, 'revision') AS revision, "
+        "content, context, tags, chunk_metadata, ingested_at, agent, session_id, "
+        "toString(source_class) AS source_class "
+        "FROM loom.chunks WHERE org = {org:String} "
+        "AND namespace IN {nss:Array(String)} AND embedding_model = {model:String} "
+        "AND embedding_dim > 0 AND " + live_chunk_sql() + " "
+        "AND (namespace, source_uri, chunk_idx, doc_version, "
+        "JSONExtractUInt(chunk_metadata, 'revision')) "
+        "IN {keys:Array(Tuple(String, String, UInt32, UInt64, UInt64))} "
+        "LIMIT {limit:UInt32}",
+        params={
+            "org": org,
+            "nss": sorted({key[0] for key in keys}),
+            "model": model,
+            "keys": keys,
+            "limit": len(keys) + 1,
+        },
+    )
 
 
 def statement(

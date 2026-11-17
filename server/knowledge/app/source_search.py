@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from server.core import pg, request_work
@@ -13,6 +13,12 @@ from server.knowledge.app.search import HybridSearchQuery, _common_where
 from server.knowledge.app.source_access import Admitted, ReadPlan
 from server.knowledge.domain.access_list import candidate_keys
 from server.knowledge.store import source_candidates as store
+
+
+@dataclass(frozen=True)
+class Hydrated:
+    admitted: Admitted
+    row: dict[str, Any]
 
 
 def _family(item: Admitted) -> tuple[str, str]:
@@ -110,6 +116,46 @@ def _chunk_key(row: dict[str, Any]) -> tuple[str, str, int, int, int]:
         int(row["doc_version"]),
         int(row["revision"]),
     )
+
+
+async def hydrate(
+    plan: ReadPlan, pools: dict[store.Leg, list[Admitted]], *, model: str
+) -> dict[store.Leg, list[Hydrated]]:
+    """Keep text private until its exact key passes the post-fetch permission check."""
+    if plan.failed or plan.unread:
+        return {}
+    set_query_tag("knowledge.mirror.hydrate")
+    try:
+        with private_work(), sequential_reads():
+            checked = await recheck(plan, pools)
+            keys = list(
+                dict.fromkeys(
+                    _chunk_key(item.candidate) for pool in checked.values() for item in pool
+                )
+            )
+            rows = {}
+            for start in range(0, len(keys), 64):
+                batch = keys[start : start + 64]
+                wanted = set(batch)
+                for row in await store.chunks(plan.org, model, batch):
+                    key = _chunk_key(row)
+                    # MergeTree retries can leave physical duplicates. Ambiguous
+                    # hydration discards the leg rather than picking one payload.
+                    if key not in wanted or key in rows:
+                        raise ValueError("ambiguous hydrated chunk")
+                    rows[key] = row
+            checked = await recheck(plan, checked)
+            return {
+                leg: [
+                    Hydrated(item, rows[_chunk_key(item.candidate)])
+                    for item in pool
+                    if _chunk_key(item.candidate) in rows
+                ]
+                for leg, pool in checked.items()
+            }
+    except Exception:  # noqa: BLE001 — conditional hydration must not expose partial mirror results
+        plan.failed = True
+        return {}
 
 
 async def recheck(

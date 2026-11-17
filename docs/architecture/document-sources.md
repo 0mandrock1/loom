@@ -433,6 +433,16 @@ mirror that holds rows. A permission column on `loom.documents` read by every pa
 make the opposite the default; [sharing](sharing.md#alternatives-not-taken) rejected
 that for collections, since one missed path leaks.
 
+Search discovers chunk keys and scores without returning chunk text. Each leg checks
+candidates in batches of at most 64 until its admitted pool fills or its stream ends;
+denied candidates consume no pool position or fusion rank. Content reads bind the
+exact admitted namespace, address, chunk index, version and revision under the requested
+embedding model. A missing key is omitted without substituting a later version.
+Duplicate or unexpected rows discard all mirrored legs. Permissions are checked again
+after content is fetched. Listing evidence and any group membership relied on must
+still be fresh before the content leaves the checked leg. Independent email, owner, domain or public grants
+can admit a document whose group evidence expired.
+
 - **Legs with the check:** `knowledge.search`, `get`, `outline`, `list`, `download`,
   `synthesize`, `knowledge.inspect` (titles), `knowledge.source.inspect` (a mirrored
   source's documents), the `search.query` knowledge and repository-docs legs,

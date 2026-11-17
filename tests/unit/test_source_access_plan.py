@@ -333,3 +333,39 @@ async def test_final_pool_rechecks_group_expiry_without_removing_independent_gra
     out = await source_search.recheck(plan, {"semantic": retained})
     assert len(out["semantic"]) == (0 if independent == "none" else count)
     assert not plan.failed and not plan.unread
+
+
+@pytest.mark.parametrize("change", ["permission", "revision", "listing", "group"])
+async def test_content_is_discarded_if_access_changes_during_hydration(world, monkeypatch, change):
+    from server.knowledge.app import source_search
+
+    if change == "group":
+        world["doc"]["access_json"] = to_json(AccessList(groups=("team@example.com",)))
+        world["groups"].return_value = [
+            {
+                "namespace": MIRROR,
+                "source_id": SID,
+                "group": "team@example.com",
+                "members": ["lee@example.com"],
+                "read_at": NOW - timedelta(seconds=3599),
+                "deleted": False,
+            }
+        ]
+    plan = await app.prepare("acme", ["docs"])
+    [retained] = await plan.check([candidate(chunk_idx=0)], chunks=True)
+
+    async def chunks(_org, _model, _keys):
+        if change == "permission":
+            world["doc"]["access_json"] = to_json(AccessList())
+        elif change == "revision":
+            world["doc"]["revision"] = 1
+        else:
+            age = 3601 if change == "listing" else 10
+            monkeypatch.setattr(app, "now", lambda: NOW + timedelta(seconds=age))
+        return [{**retained.candidate, "content": "never returned"}]
+
+    monkeypatch.setattr(source_search.store, "chunks", chunks)
+    assert await source_search.hydrate(plan, {"semantic": [retained]}, model="fake") == {
+        "semantic": []
+    }
+    assert not plan.failed and not plan.unread and not world["bag"].mirror_unread

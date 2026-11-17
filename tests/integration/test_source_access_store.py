@@ -63,6 +63,81 @@ async def test_group_snapshot_readback_and_erasure_are_scoped() -> None:
         await ch.disconnect()
 
 
+async def test_chunk_hydration_reads_only_its_exact_live_admitted_key() -> None:
+    os.environ.get("LOOM_CH_HOST") or pytest.skip("LOOM_CH_HOST not set")
+    import json
+
+    from server.core.ch import get_client, set_query_tag
+    from server.core.naming import new_mirror_name
+    from server.knowledge.store import source_candidates as store
+
+    ch = get_client()
+    await ch.connect()
+    set_query_tag("test.source_chunk_hydration")
+    org, mirror, uri = (
+        unique_org("access-hydrate"),
+        new_mirror_name(),
+        "gdrive:file#" + str(uuid4()),
+    )
+    model = "synthetic-3072"
+    row = {
+        "org": org,
+        "namespace": mirror,
+        "source_uri": uri,
+        "chunk_idx": 0,
+        "doc_version": 10,
+        "doc_superseded_at": None,
+        "chunk_metadata": json.dumps({"revision": 0}),
+        "content": "exact admitted content",
+        "embedding_model": model,
+        "embedding_dim": 3072,
+        "embedding": [1.0] + [0.0] * 3071,
+    }
+    alternatives = [
+        {"org": unique_org("other-access-hydrate")},
+        {"namespace": new_mirror_name()},
+        {"source_uri": uri + "other"},
+        {"chunk_idx": 1},
+        {"doc_version": 11},
+        {"chunk_metadata": json.dumps({"revision": 1})},
+        {"embedding_model": "different-model"},
+        {"embedding_dim": 0},
+        {"doc_superseded_at": datetime.now(UTC)},
+    ]
+    # The same exact row with a superseded marker is also excluded.
+    try:
+        await ch.insert(
+            "loom.chunks",
+            [row, *[{**row, "content": "not admitted", **change} for change in alternatives]],
+        )
+        key = (mirror, uri, 0, 10, 0)
+        selected = await store.chunks(org, model, [key])
+        assert len(selected) == 1 and selected[0]["content"] == "exact admitted content"
+        assert (
+            tuple(
+                selected[0][field]
+                for field in ("namespace", "source_uri", "chunk_idx", "doc_version", "revision")
+            )
+            == key
+        )
+        await ch.insert(
+            "loom.chunk_supersessions",
+            [
+                {
+                    "org": org,
+                    "namespace": mirror,
+                    "source_uri": uri,
+                    "embedding_model": model,
+                    "doc_version": 10,
+                    "superseded_at": datetime.now(UTC),
+                }
+            ],
+        )
+        assert await store.chunks(org, model, [key]) == []
+    finally:
+        await ch.disconnect()
+
+
 async def test_pg_head_metadata_has_current_acl_and_recorded_chunks() -> None:
     os.environ.get("LOOM_CH_HOST") or pytest.skip("LOOM_CH_HOST not set")
     from server.core import pg
