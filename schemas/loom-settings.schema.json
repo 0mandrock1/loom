@@ -3277,6 +3277,17 @@
           "type": "number",
           "description": "Seconds a document source's probe (add, update, check, rotate) or tracker short-id lookup may take in all; past it add, update and rotate answer SOURCE_UNREACHABLE and check answers reachable: false."
         },
+        "knowledge_source_push_enabled": {
+          "default": false,
+          "type": "boolean",
+          "description": "Enable optional source push setup, callbacks and Drive renewal; false keeps polling only."
+        },
+        "knowledge_source_push_interval_seconds": {
+          "default": 300,
+          "minimum": 60,
+          "type": "integer",
+          "description": "Seconds between bounded channel-renewal pages; channels renew a day before expiry."
+        },
         "knowledge_source_retire_documents_per_pass": {
           "default": 40,
           "minimum": 1,

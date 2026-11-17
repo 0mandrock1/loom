@@ -2339,6 +2339,10 @@ class KnowledgeSettings(BaseModel):
     # credential, spends embedding calls on every changed document and model calls
     # mining it for decisions.
     knowledge_source_sync_enabled: bool = False
+    # Enable optional source push setup, callbacks and Drive renewal; false keeps polling only.
+    knowledge_source_push_enabled: bool = False
+    # Seconds between bounded channel-renewal pages; channels renew a day before expiry.
+    knowledge_source_push_interval_seconds: int = Field(default=300, ge=60)
     # Seconds between sync passes while there are sources.
     knowledge_source_sync_interval_seconds: int = Field(default=900, ge=60)
     # Seconds between passes that found no source to sync; one idle sleep plus one
@@ -6184,6 +6188,9 @@ OP_BUDGETS_P99_MS: dict[str, int] = {
     "knowledge.source.remove": 400,
     "knowledge.source.rotate": 30000,
     "knowledge.source.sync_now": 300,
+    "knowledge.source.push_configure": 60000,
+    "knowledge.source.push_status": 1000,
+    "knowledge.source.push_confirm": 1000,
     "knowledge.source.update": 60000,
     # One LLM call per window plus the reduce; bounded by max_windows.
     "knowledge.synthesize": 60000,

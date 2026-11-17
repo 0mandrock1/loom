@@ -2844,6 +2844,14 @@ settings:
   # it for decisions. [restart]
   # knowledge_source_sync_enabled: false
 
+  # Enable optional source push setup, callbacks and Drive renewal; false keeps polling
+  # only. [restart]
+  # knowledge_source_push_enabled: false
+
+  # Seconds between bounded channel-renewal pages; channels renew a day before expiry.
+  # [restart]
+  # knowledge_source_push_interval_seconds: 300
+
   # Seconds between sync passes while there are sources. [restart]
   # knowledge_source_sync_interval_seconds: 900
 

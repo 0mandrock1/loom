@@ -453,6 +453,13 @@ _WORKERS: tuple[_Worker, ...] = (
         max_pass_attr="MAX_PASS_SECONDS",
     ),
     _Worker(
+        "knowledge_source_push",
+        "server.knowledge.workers.source_push",
+        "knowledge_source_push_enabled",
+        "knowledge_source_push_interval_seconds",
+        max_pass_attr="MAX_PASS_SECONDS",
+    ),
+    _Worker(
         "code_embed_recovery",
         "server.code.workers.embed_recovery",
         "code_embed_recovery_enabled",

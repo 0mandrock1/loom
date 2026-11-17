@@ -49,6 +49,14 @@ _CODE_LINKS = (
 _SOURCES_RETIRE = ("knowledge_sources.retire", (("OTHER", "INSERT"), (D, "loom._migration_lock")))
 
 
+def _push_delete(namespaces: int) -> tuple[str, tuple[tuple[str, str], ...]]:
+    return (
+        "knowledge_source_push.delete",
+        (("OTHER", "INSERT"), (D, "loom.knowledge_source_push"), (D, "loom._migration_lock"))
+        * namespaces,
+    )
+
+
 USER_TRACE: list[tuple[str, tuple[tuple[str, str], ...]]] = [
     ("memory.tombstone", ((U, "loom.memory"),)),
     ("memory_embeddings.tombstone", ((U, "loom.memory_embeddings"),)),
@@ -624,6 +632,7 @@ async def test_namespace_saga_trace(
                 (D, "loom._migration_lock"),
             ),
         ),
+        _push_delete(1 if scope_type == "namespace" else 2),
         *_with_tail(NS_TRACE, backends),
     ]
     assert await run(scope_type, scope_value) == want
@@ -644,6 +653,7 @@ async def test_namespace_purge_saga_trace(run: Any, external: bool) -> None:
                 (D, "loom._migration_lock"),
             ),
         ),
+        _push_delete(2),
         *_with_tail(NS_PURGE_TRACE, NS_BACKENDS if external else []),
     ]
 

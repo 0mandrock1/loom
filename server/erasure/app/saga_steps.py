@@ -381,6 +381,7 @@ USER_STEPS: tuple[UserStep, ...] = (
 # saga order. Names as for USER_STEPS.
 NAMESPACE_STEPS: tuple[NamespaceStep, ...] = (
     ("knowledge_sources.retire", _step_retire_knowledge_sources_by_ns),
+    ("knowledge_source_push.delete", ledger_steps.delete_source_push_by_namespace),
     ("pg_memory.delete", pg_steps.delete_pg_memory_by_namespace),
     ("pg_knowledge.delete", pg_steps.delete_pg_knowledge_by_namespace),
     ("query_history_sources.delete", ledger_steps.delete_query_history_by_namespace),

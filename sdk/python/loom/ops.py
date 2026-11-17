@@ -195,6 +195,9 @@ OpName = Literal[
     "knowledge.source.inspect",
     "knowledge.source.list",
     "knowledge.source.parse_links",
+    "knowledge.source.push_configure",
+    "knowledge.source.push_confirm",
+    "knowledge.source.push_status",
     "knowledge.source.remove",
     "knowledge.source.rotate",
     "knowledge.source.sync_now",
@@ -568,6 +571,9 @@ OP_NAMES: tuple[str, ...] = (
     "knowledge.source.inspect",
     "knowledge.source.list",
     "knowledge.source.parse_links",
+    "knowledge.source.push_configure",
+    "knowledge.source.push_confirm",
+    "knowledge.source.push_status",
     "knowledge.source.remove",
     "knowledge.source.rotate",
     "knowledge.source.sync_now",
@@ -2656,6 +2662,42 @@ OPS: dict[str, OpSpec] = {
         50,
         False,
         True,
+    ),
+    "knowledge.source.push_configure": OpSpec(
+        "knowledge.source.push_configure",
+        "KnowledgeSourcePushConfigureInput",
+        "KnowledgeSourcePushConfigureBody",
+        "PushStatusOutput",
+        False,
+        "admin",
+        "experimental",
+        60000,
+        True,
+        False,
+    ),
+    "knowledge.source.push_confirm": OpSpec(
+        "knowledge.source.push_confirm",
+        "KnowledgeSourcePushConfirmInput",
+        "KnowledgeSourcePushConfirmBody",
+        "PushStatusOutput",
+        False,
+        "admin",
+        "experimental",
+        1000,
+        True,
+        False,
+    ),
+    "knowledge.source.push_status": OpSpec(
+        "knowledge.source.push_status",
+        "KnowledgeSourcePushStatusInput",
+        "KnowledgeSourcePushStatusBody",
+        "PushStatusOutput",
+        False,
+        "admin",
+        "experimental",
+        1000,
+        False,
+        False,
     ),
     "knowledge.source.remove": OpSpec(
         "knowledge.source.remove",
@@ -11775,6 +11817,83 @@ class KnowledgeSourceParsedLink(TypedDict, total=False):
     kind: NotRequired[str]
     item: NotRequired[dict[str, Any]]
     unreadable: NotRequired[str]
+
+
+class KnowledgeSourcePushConfigureInput(TypedDict, total=False):
+    "Enable provider sync hints for an existing source, or disable its setup."
+
+    org: Required[str]
+    namespace: Required[str]
+    name: Required[str]
+    enabled: NotRequired[bool]
+    agent: NotRequired[str]
+    user_id: NotRequired[str]
+    session_id: NotRequired[str]
+
+
+class KnowledgeSourcePushConfigureBody(TypedDict, total=False):
+    "Enable provider sync hints for an existing source, or disable its setup."
+
+    org: NotRequired[str]
+    namespace: NotRequired[str]
+    name: Required[str]
+    enabled: NotRequired[bool]
+    agent: NotRequired[str]
+    user_id: NotRequired[str]
+    session_id: NotRequired[str]
+
+
+class PushStatusOutput(TypedDict, total=False):
+    enabled: NotRequired[bool]
+    status: NotRequired[str]
+    provider: NotRequired[str]
+    generation: NotRequired[str]
+    callback_url: NotRequired[str]
+    provider_id: NotRequired[str]
+    challenge_fingerprint: NotRequired[str]
+    verification_token: NotRequired[str]
+    channels: NotRequired[int]
+    expires_at: NotRequired[float]
+
+
+class KnowledgeSourcePushConfirmInput(TypedDict, total=False):
+    "Activate the exact pending setup. For Notion, first verify in the provider UI"
+
+    org: Required[str]
+    namespace: Required[str]
+    name: Required[str]
+    generation: Required[str]
+    challenge_fingerprint: NotRequired[str]
+    signing_secret: NotRequired[str]
+
+
+class KnowledgeSourcePushConfirmBody(TypedDict, total=False):
+    "Activate the exact pending setup. For Notion, first verify in the provider UI"
+
+    org: NotRequired[str]
+    namespace: NotRequired[str]
+    name: Required[str]
+    generation: Required[str]
+    challenge_fingerprint: NotRequired[str]
+    signing_secret: NotRequired[str]
+
+
+class KnowledgeSourcePushStatusInput(TypedDict, total=False):
+    "Read push setup as a namespace admin. Explicit reveal returns only a pending"
+
+    org: Required[str]
+    namespace: Required[str]
+    name: Required[str]
+    reveal_challenge: NotRequired[bool]
+
+
+class KnowledgeSourcePushStatusBody(TypedDict, total=False):
+    "Read push setup as a namespace admin. Explicit reveal returns only a pending"
+
+    org: NotRequired[str]
+    namespace: NotRequired[str]
+    name: Required[str]
+    reveal_challenge: NotRequired[bool]
 
 
 class KnowledgeSourceRemoveInput(TypedDict, total=False):
