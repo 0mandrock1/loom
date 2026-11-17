@@ -27,10 +27,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from server.auth import login, revocation, service_accounts
-from server.core import leases
+from server.core import leases, scim_tokens
 from server.core.ch import get_client, own_write_reads
 from server.core.datetimes import as_aware_utc
 from server.core.grant_sql import LIVE_GRANT
+from server.core.scim_tokens import tokens as tokens
 from server.core.versions import next_version
 from server.observability import audit
 from server.settings import settings
@@ -73,9 +74,34 @@ class Busy(Exception):
     """Another request is changing this user; retry shortly."""
 
 
-def tokens(raw: str) -> list[str]:
-    """The SCIM bearer tokens a `LOOM_SCIM_TOKEN` value lists; none means SCIM is off."""
-    return [t.strip() for t in raw.split(",") if t.strip()]
+def authorized(presented: str) -> bool:
+    """Compare all configured candidates after the cell's token policy admits them."""
+    from server.auth.jwt import AuthUnavailable, TokenError
+    from server.core import cell
+
+    configured = tokens(settings.scim_token)
+    if not configured:
+        return False
+    named = None
+    if settings.cell:
+        try:
+            named = scim_tokens.token_cell(presented)
+        except ValueError:
+            raise TokenError("invalid SCIM token", reason="invalid") from None
+        if named is not None and named != settings.cell:
+            raise TokenError("SCIM token names another cell", reason="invalid")
+        problem = scim_tokens.cell_policy_problem(
+            settings.scim_token, settings.cell, cell.first_identity()
+        )
+        if problem is None:
+            raise AuthUnavailable("the cell's SCIM identity is not read yet; retry")
+        if problem:
+            raise AuthUnavailable("the cell's SCIM token configuration is not valid")
+    matches = [hmac.compare_digest(presented.encode(), token.encode()) for token in configured]
+    matched = any(matches)
+    if named is not None and not matched:
+        raise TokenError("invalid SCIM token", reason="invalid")
+    return matched
 
 
 def normalized(address: str) -> str:

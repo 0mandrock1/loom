@@ -462,11 +462,26 @@ the tokens they made are refused at once by the Loom process that took the
 request, and by every other process, on that replica or another, at its next
 revocation refresh (`LOOM_JWT_REVOCATION_CACHE_TTL_SECONDS`, 30 s by default).
 No process makes them a new token meanwhile: every mint reads revocations from
-ClickHouse. Set a long random token and restart:
+ClickHouse. On a standalone deployment, set a long random token and restart:
 
 ```bash
 LOOM_SCIM_TOKEN=$(openssl rand -hex 32)
 ```
+
+With `LOOM_CELL` set, generate a token for that exact cell name:
+
+```bash
+loom cell scim-token new --cell <name>
+```
+
+This runs offline and prints only the token. Keep it in the operator's secret
+store and set it as `LOOM_SCIM_TOKEN` and the provider application's bearer for
+that cell's host. A cell accepts only its own named tokens. Only the observed
+first cell also accepts existing unnamed tokens, so its rollout needs no forced
+rotation. A cell allows at most two configured entries, including duplicates.
+An unread first-cell identity answers 503 with `Retry-After`; `loom doctor`
+fails its SCIM check until it can read the identity. See [cell token
+policy](../architecture/cells.md#scim-and-sign-in-across-cells).
 
 Empty (the default) leaves SCIM off and its routes unmounted. Loom refuses to
 start with a token shorter than 32 characters, or with SCIM set while sign-in
@@ -479,8 +494,12 @@ comma-separated, and roll the replicas; set the new one at the provider; then
 remove the old one and roll again:
 
 ```bash
-LOOM_SCIM_TOKEN="$OLD_TOKEN,$(openssl rand -hex 32)"
+LOOM_SCIM_TOKEN="$OLD_TOKEN,$REPLACEMENT_TOKEN"
 ```
+
+Generate the replacement with the same command used for that deployment's
+initial token. Both entries on a cell must name that cell, except for unnamed
+tokens retained by its observed first cell.
 
 Loom keys a SCIM user on an email: of the request's `emails` entries with an
 address, the one marked primary, else the first work one, else the first; or

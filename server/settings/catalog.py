@@ -275,6 +275,8 @@ class AuthSettings(BaseModel):
     identity_provider_timeout_s: Annotated[float, LIVE] = Field(default=10.0, gt=0)
     # Bearer tokens (comma-separated, any one accepted) an identity provider presents to
     # deactivate and reactivate people over SCIM 2.0 (/scim/v2). Empty = off; needs auth on, oidc.
+    # With LOOM_CELL set, at most two entries, named for that cell; only the observed first
+    # cell also accepts unnamed tokens. Generate one with `loom cell scim-token new --cell NAME`.
     scim_token: str = ""
 
     @property

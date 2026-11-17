@@ -434,9 +434,18 @@
   "options: -h, --help show this help message and exit"
  ],
  "loom cell": [
-  "usage: loom cell [-h] {credential,limit,which,remove,prepare} ...",
-  "positional arguments: {credential,limit,which,remove,prepare} credential Make a router credential, or rotate a cell's. limit Close, reopen or bound a cell to new orgs. which Print the lookup's cell and host for an org (the first cell if not placed). remove Remove the directory row of a cell attaching with no placement. prepare Register this cell in the router's directory and write its rows.",
+  "usage: loom cell [-h] {scim-token,credential,limit,which,remove,prepare} ...",
+  "positional arguments: {scim-token,credential,limit,which,remove,prepare} scim-token Generate a cell's SCIM token offline. credential Make a router credential, or rotate a cell's. limit Close, reopen or bound a cell to new orgs. which Print the lookup's cell and host for an org (the first cell if not placed). remove Remove the directory row of a cell attaching with no placement. prepare Register this cell in the router's directory and write its rows.",
   "options: -h, --help show this help message and exit"
+ ],
+ "loom cell scim-token": [
+  "usage: loom cell scim-token [-h] {new} ...",
+  "positional arguments: {new} new Print a random token for the named cell.",
+  "options: -h, --help show this help message and exit"
+ ],
+ "loom cell scim-token new": [
+  "usage: loom cell scim-token new [-h] --cell CELL",
+  "options: -h, --help show this help message and exit --cell CELL The cell's exact LOOM_CELL name"
  ],
  "loom cell credential": [
   "usage: loom cell credential [-h] [--cell CELL] [--next SHA256] [--finish] [--revert] [--operator] [--router ROUTER] [{new}]",

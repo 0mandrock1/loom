@@ -278,10 +278,14 @@ unique in the directory). A token that starts with `lsc_` names a cell and must 
 without that prefix names no cell. With `LOOM_CELL` set, a SCIM token has the form
 `lsc_<cell>_<secret>`, as `loom cell scim-token new --cell <name>` makes it (it runs
 offline): exactly three fields split on `_`, the middle one equal to `LOOM_CELL`, and a
-secret of at least 32 lowercase hex characters (128 bits).
+secret of at least 32 lowercase hex characters. The offline command draws 32 random
+bytes and prints 64 lowercase hex characters; a configured token's length alone does
+not establish its randomness.
 
-One parser beside `scim.tokens()` returns a token's cell name or nothing, and its
-callers compare that with `LOOM_CELL` and the cell's `first` row (below).
+The pure parser and configuration policy in `server.core.scim_tokens` share the token
+splitter exposed as `scim.tokens()`. Core admission and authentication use the same
+policy without a second identity query or cache. Callers compare the token's name
+with `LOOM_CELL` and the full immutable `first` tuple (below).
 `scim_settings_problem` takes both, so boot and `loom doctor` refuse through one
 function, and with `LOOM_CELL` set they refuse a third configured token (two allow a
 rotation). One function, `scim.authorized(presented)`, holds the constant-time
@@ -290,6 +294,19 @@ unset it compares against the configured tokens as a single deployment does and 
 nothing. With it set it compares against the tokens the parser admits for `LOOM_CELL`
 and the `first` row; while that row is unread it raises as `AuthUnavailable` does, so
 the routes answer 503 with `Retry-After` and the identity provider retries.
+
+The cell admission gate derives token policy before returning a cached readiness
+verdict. A late first successful identity read cannot admit an invalid configuration.
+Server and worker startup check known identity before starting writers; unknown
+identity keeps the process unready while its deployment probe remains available for
+prepare. Doctor grades policy from its own bounded state query, including both fields
+of the first tuple. Unread identity fails the configured SCIM check.
+
+Store generated tokens in the operator's secret store and configure the identity
+provider for that cell's host. To rotate, configure current and replacement tokens,
+switch the identity provider to the replacement, verify requests, then remove the old
+entry. Two configured entries are allowed per cell, including duplicate entries in
+that count. Standalone deployments retain their existing configured-token behavior.
 
 - A process refuses to boot with a SCIM token that names another cell, and `/scim/v2`
   answers 401 to one.

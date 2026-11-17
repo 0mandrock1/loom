@@ -325,6 +325,8 @@ python scripts/codegen/docs_reference.py
 | `loom router serve` | Serve the placement, lookup and operator APIs; route other requests to cells. | `--host`, `--port`, `--log-level` |
 | `loom router migrate` | Apply the directory's pending migrations. |  |
 | `loom cell` | Operate a deployment's cells through the router's directory. |  |
+| `loom cell scim-token` | Generate a cell's SCIM token offline. |  |
+| `loom cell scim-token new` | Print a random token for the named cell. | `--cell` |
 | `loom cell credential` | Make a router credential, or rotate a cell's. | `<action>`, `--cell`, `--next`, `--finish`, `--revert`, `--operator`, `--router` |
 | `loom cell limit` | Close, reopen or bound a cell to new orgs. | `--cell`, `--closed`, `--open`, `--placements-max`, `--router` |
 | `loom cell which` | Print the lookup's cell and host for an org (the first cell if not placed). | `--org`, `--router` |

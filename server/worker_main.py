@@ -103,23 +103,24 @@ async def _serve(fd: int, alive_fd: int) -> None:
     ch = get_client()
     await ch.connect()
     await boot.open_storage_authority()
+    services = []
     try:
-        services = await _start_services(ch)
         if settings.cell:
             # The passes verify tokens and judge the gate as the parent does: the child
             # reads the cell's rows itself.
             services += await boot.start_cell_state()
+        services += await _start_services(ch)
         supervisor = get_supervisor()
         supervisor.start_all()
         await stop.wait()
         log.info("workers child %s stopping", os.getpid())
         embedder_calibration.stop_refresh_loop()
-        for task in services:
-            task.cancel()
-        await asyncio.gather(*services, return_exceptions=True)
         await supervisor.stop_all(drain_timeout_s=leader.drain_timeout_s())
         await _drain()
     finally:
+        for task in services:
+            task.cancel()
+        await asyncio.gather(*services, return_exceptions=True)
         beat.cancel()
         await boot.leave_deployment(ch, budget_s=SHUTDOWN_RETIRE_S)
         await boot.close_storage_authority()
