@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from collections.abc import Callable
 from typing import Any, Literal
 
 from server.core.datetimes import naive_utc_now
@@ -22,7 +23,7 @@ from server.memory.api.models_learnings import (
 )
 from server.memory.api.models_lifecycle import MemoryPromoteInput
 from server.memory.app import blacklist_guard
-from server.memory.app.definition_queue import persist
+from server.memory.app.definition_queue import writing
 from server.memory.app.learning_access import private_candidates_visible
 from server.memory.app.provenance import writer_actor
 from server.memory.domain import assistant_rules
@@ -212,11 +213,21 @@ async def handle_learnings_review(
             row = await learnings_repo.find_candidate(
                 input.org, input.namespace, input.candidate_id
             )
+            if row is not None and row.get("proposed_value"):
+                async with writing(
+                    {**row, "org": input.org, "namespace": input.namespace}
+                ) as uncertain:
+                    return await _review(input, row, uncertain=uncertain)
             return await _review(input, row)
     return await _review(input, row)
 
 
-async def _review(input: LearningsReviewInput, row: dict[str, Any] | None) -> LearningsReviewOutput:
+async def _review(
+    input: LearningsReviewInput,
+    row: dict[str, Any] | None,
+    *,
+    uncertain: Callable[[bool], None] | None = None,
+) -> LearningsReviewOutput:
     from fastapi import HTTPException
 
     if row is not None and row.get("source_kind") in DEFINITION_DRAFT_KINDS:
@@ -280,7 +291,10 @@ async def _review(input: LearningsReviewInput, row: dict[str, Any] | None) -> Le
                 raise ValidationError("a definition draft is promoted only to memory")
             from server.memory.app.definition_review import promote_candidate
 
-            await promote_candidate(input.org, input.namespace, row, input.reason)
+            assert uncertain is not None  # private reviews hold the evidence writer fence
+            await promote_candidate(
+                input.org, input.namespace, row, input.reason, uncertain=uncertain
+            )
             promoted_to_shared = True
         if wants_memory and is_definition(row) and not private_definition:
             # A definition reaches memory only through memory.promote of its namespace-wide
@@ -312,7 +326,9 @@ async def _review(input: LearningsReviewInput, row: dict[str, Any] | None) -> Le
     # column is carried from the candidate — `seeded_from_*` keeps its conversation
     # back-pointer (read by memory.lineage), and the support counts and proposal time
     # stay what learnings.list and the lineage's candidate report.
-    await persist(
+    if uncertain is not None:
+        uncertain(True)
+    await learnings_repo.insert_row(
         {
             "candidate_id": str(row["candidate_id"]),
             "org": input.org,
@@ -343,6 +359,9 @@ async def _review(input: LearningsReviewInput, row: dict[str, Any] | None) -> Le
             "version": version_over(int(row.get("version") or 0)),
         }
     )
+
+    if uncertain is not None:
+        uncertain(False)
 
     return LearningsReviewOutput(
         candidate_id=str(row["candidate_id"]),

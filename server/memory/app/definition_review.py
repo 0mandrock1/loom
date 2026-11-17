@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 import server.memory.store as memory_repo
+from server.core import lease_writes
 from server.core.ch import get_client
 from server.core.datetimes import naive_utc_now
 from server.core.errors import (
@@ -39,7 +41,14 @@ async def require_draft_fleet() -> None:
         )
 
 
-async def promote_candidate(org: str, namespace: str, row: dict[str, Any], reason: str) -> None:
+async def promote_candidate(
+    org: str,
+    namespace: str,
+    row: dict[str, Any],
+    reason: str,
+    *,
+    uncertain: Callable[[bool], None],
+) -> None:
     """Preflight routine refusals before writing; an interrupted promotion leaves a draft."""
     from server.memory.app.write import handle_memory_set
 
@@ -68,6 +77,7 @@ async def promote_candidate(org: str, namespace: str, row: dict[str, Any], reaso
     ):
         raise PreconditionFailedError("the shared definition changed while planning this review")
     if plan.write_needed(head, shared_value, value, now=naive_utc_now()):
+        uncertain(True)
         await handle_memory_set(
             MemorySetInput(
                 org=org,
@@ -85,6 +95,8 @@ async def promote_candidate(org: str, namespace: str, row: dict[str, Any], reaso
                 if_match_sha256=served_content_sha256(head.value) if head is not None else "",
             )
         )
+        uncertain(False)
+    uncertain(True)
     result = await promote.handle_memory_promote(
         MemoryPromoteInput(
             org=org,
@@ -96,6 +108,8 @@ async def promote_candidate(org: str, namespace: str, row: dict[str, Any], reaso
         ),
         reviewed_candidate_id=str(row["candidate_id"]),
     )
+
+    uncertain(False)
 
     from server.memory.app.provenance import writer_actor
     from server.observability import audit
@@ -154,5 +168,8 @@ async def redact_candidates(org: str, target: Any, head: Any) -> None:
                     raise OverloadedError(
                         "a draft is being reviewed; retry redaction", retry_after_s=1
                     )
-                await learnings.scrub_private_candidate(org, target.namespace, cid)
+                async with lease_writes.fenced(f"definition.writer/{org}") as uncertain:
+                    uncertain(True)
+                    await learnings.scrub_private_candidate(org, target.namespace, cid)
+                    uncertain(False)
         after = rows[-1]["candidate_id"]

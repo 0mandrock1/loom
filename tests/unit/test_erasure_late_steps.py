@@ -67,7 +67,8 @@ def test_conversations_user_scope_uses_the_user_column() -> None:
         assert "user_id = {uid:String}" in sql and params["uid"] == "alice"
 
 
-def test_query_history_registration_leaves_with_its_namespace() -> None:
+def test_query_history_registration_leaves_with_its_namespace(monkeypatch) -> None:
+    install(monkeypatch)
     ch = _StubCH()
     count = asyncio.run(ledger_steps.delete_query_history_by_namespace("o", ["a", "b"], ch=ch))
     assert count == 1

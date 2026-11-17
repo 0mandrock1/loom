@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -22,8 +23,9 @@ KEY = "definition/draft"
 
 @pytest.fixture
 def review(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    install(monkeypatch)
+    fence = install(monkeypatch)
     state: dict[str, Any] = {
+        "fence": fence,
         "candidate": {
             "candidate_id": "c",
             "memory_key": KEY,
@@ -183,3 +185,103 @@ async def test_exact_draft_retry_does_not_rewrite_source(review: Any) -> None:
     review["head"] = head(VALUE)
     await learnings.handle_learnings_review(request())
     assert not review["writes"] and len(review["promotions"]) == 1
+
+
+@pytest.mark.parametrize("kind", ["query_history", "knowledge_gap"])
+async def test_completed_erasure_after_candidate_read_prevents_all_publication(
+    review: Any, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    from server.core.errors import ValidationError
+    from server.erasure.store import steps_ledgers
+
+    review["candidate"]["source_kind"] = kind
+    find = learnings.learnings_repo.find_candidate
+    reads = 0
+
+    async def delete(*args: Any, **kw: Any) -> int:
+        review["candidate"] = None
+        review["decisions"].clear()
+        return 1
+
+    async def stale(*args: Any, **kw: Any) -> Any:
+        nonlocal reads
+        row = await find(*args, **kw)
+        reads += 1
+        if reads == 2:
+            row = dict(row)
+            review["fence"].erasures = [{"scope_type": "namespace", "scope_value": "n"}]
+            await steps_ledgers.delete_learnings_queue_by_namespace("o", "n")
+        return row
+
+    monkeypatch.setattr(steps_ledgers, "_delete_many", delete)
+    monkeypatch.setattr(learnings.learnings_repo, "find_candidate", stale)
+    with pytest.raises(ValidationError, match="eras"):
+        await learnings.handle_learnings_review(request())
+    assert not review["writes"] and not review["promotions"] and not review["decisions"]
+    assert review["candidate"] is None
+
+
+@pytest.mark.parametrize("boundary", ["source", "shared"])
+@pytest.mark.parametrize("failure", [TimeoutError, asyncio.CancelledError])
+async def test_uncertain_private_publication_holds_namespace_eraser_out(
+    review: Any, monkeypatch: pytest.MonkeyPatch, boundary: str, failure: type[BaseException]
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from server.core.errors import BackendUnavailableError
+    from server.erasure.store import steps_ledgers
+
+    module, name = (
+        (write, "handle_memory_set") if boundary == "source" else (promote, "handle_memory_promote")
+    )
+    monkeypatch.setattr(module, name, AsyncMock(side_effect=failure()))
+    deleted = AsyncMock(return_value=1)
+    monkeypatch.setattr(steps_ledgers, "_delete_many", deleted)
+    with pytest.raises(failure):
+        await learnings.handle_learnings_review(request())
+    with pytest.raises(BackendUnavailableError):
+        await steps_ledgers.delete_learnings_queue_by_namespace("o", "n")
+    deleted.assert_not_awaited()
+    assert not review["decisions"]
+
+
+@pytest.mark.parametrize("boundary", ["source", "shared"])
+async def test_namespace_erasure_cannot_finish_during_private_publication(
+    review: Any, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    from server.core.errors import BackendUnavailableError
+    from server.erasure.store import steps_ledgers
+
+    entered, resume = asyncio.Event(), asyncio.Event()
+    module, name = (
+        (write, "handle_memory_set") if boundary == "source" else (promote, "handle_memory_promote")
+    )
+    publish = getattr(module, name)
+
+    async def paused(*args: Any, **kw: Any) -> Any:
+        entered.set()
+        await resume.wait()
+        return await publish(*args, **kw)
+
+    deletions = []
+
+    async def delete(*args: Any, **kw: Any) -> int:
+        deletions.append(True)
+        review["candidate"] = None
+        review["decisions"].clear()
+        return 1
+
+    monkeypatch.setattr(module, name, paused)
+    monkeypatch.setattr(steps_ledgers, "_delete_many", delete)
+    writer = asyncio.create_task(learnings.handle_learnings_review(request()))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        with pytest.raises(BackendUnavailableError):
+            await steps_ledgers.delete_learnings_queue_by_namespace("o", "n")
+        assert not deletions
+    finally:
+        resume.set()
+        result = await writer
+    assert result.promoted_to_shared and review["decisions"]
+    await steps_ledgers.delete_learnings_queue_by_namespace("o", "n")
+    assert deletions == [True] and not review["decisions"]

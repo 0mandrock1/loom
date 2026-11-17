@@ -6,7 +6,7 @@ import time
 import uuid
 from typing import Any
 
-from server.core import leases
+from server.core import lease_writes, leases
 from server.core.datetimes import naive_utc_now_seconds
 from server.core.errors import OverloadedError, ValidationError
 from server.core.secrets_at_rest import seal
@@ -67,12 +67,12 @@ async def probe(row: dict[str, Any]) -> None:
 
 
 async def handle_add(input: QueryHistoryAddInput) -> QueryHistorySource:
+    started = int(time.time())
     await require_draft_fleet()
     if not settings.knowledge_query_history_enabled:
         raise ValidationError("query history is disabled on this deployment")
     if not input.name.strip() or any(not d.strip() for d in input.databases):
         raise ValidationError("a source name and database names must not be blank")
-    started = int(time.time())
     row = {
         "org": input.org,
         "namespace": input.namespace,
@@ -114,23 +114,9 @@ async def handle_add(input: QueryHistoryAddInput) -> QueryHistorySource:
             >= settings.knowledge_query_history_max_sources
         ):
             raise ValidationError("the namespace has reached its query-history source limit")
-        if await erasure_since(input.org, input.namespace, started, set()):
-            raise ValidationError("an erasure reached this namespace; retry registration")
         await require_draft_fleet()
         row["version"] = await repo.next_source_version(input.org, input.namespace, input.name)
-        await repo.insert(row)
-        if await erasure_since(input.org, input.namespace, started, set()):
-            await repo.insert(
-                {
-                    **row,
-                    "password_enc": "",
-                    "tombstoned_at": naive_utc_now_seconds(),
-                    "version": await repo.next_source_version(
-                        input.org, input.namespace, input.name
-                    ),
-                }
-            )
-            raise ValidationError("an erasure reached this namespace; retry registration")
+        await _persist(row, started)
     return source_view(row)
 
 
@@ -144,6 +130,7 @@ async def handle_list(input: QueryHistoryListInput) -> QueryHistoryListOutput:
 
 
 async def handle_remove(input: QueryHistoryRemoveInput) -> QueryHistoryRemoveOutput:
+    started = int(time.time())
     async with leases.holding(
         f"query_history.sources/{input.org}/{input.namespace}", ttl_s=30
     ) as held:
@@ -152,7 +139,7 @@ async def handle_remove(input: QueryHistoryRemoveInput) -> QueryHistoryRemoveOut
         row = await repo.find(input.org, input.namespace, input.name)
         if row is None or row["tombstoned_at"] is not None:
             return QueryHistoryRemoveOutput(removed=False)
-        await repo.insert(
+        await _persist(
             {
                 **row,
                 "actor": writer_actor("explicit"),
@@ -160,6 +147,17 @@ async def handle_remove(input: QueryHistoryRemoveInput) -> QueryHistoryRemoveOut
                 "password_enc": "",
                 "tombstoned_at": naive_utc_now_seconds(),
                 "version": await repo.next_source_version(input.org, input.namespace, input.name),
-            }
+            },
+            started,
         )
     return QueryHistoryRemoveOutput(removed=True)
+
+
+async def _persist(row: dict[str, Any], started: int) -> None:
+    org, namespace = row["org"], row["namespace"]
+    async with lease_writes.fenced(f"query_history.writer/{org}") as uncertain:
+        if await erasure_since(org, namespace, started, set()):
+            raise ValidationError("an erasure reached this namespace; retry the source change")
+        uncertain(True)
+        await repo.insert(row)
+        uncertain(False)

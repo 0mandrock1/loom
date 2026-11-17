@@ -216,3 +216,81 @@ async def test_namespace_list_eraser_keeps_the_fence_until_deletion_settles(
         resume.set()
         assert await eraser == 1
     assert queue.rows == [] and queue.fence.holders == {}
+
+
+@pytest.mark.parametrize("kind", ["query_history", "knowledge_gap"])
+@pytest.mark.parametrize("failure", [TimeoutError, asyncio.CancelledError])
+async def test_historical_redaction_cannot_finish_before_late_status_send(
+    queue: Any, monkeypatch: pytest.MonkeyPatch, kind: str, failure: type[BaseException]
+) -> None:
+    from server.core.hashing import served_content_sha256
+
+    queue.rows[0]["source_kind"] = kind
+    queue.rows[0]["status"] = "promoted"
+    late = {**queue.rows[0], "status": "rejected", "version": 2}
+    queue.failure = failure()
+    with pytest.raises(failure):
+        await reject()
+    target = SimpleNamespace(
+        agent="-",
+        user_id="-",
+        session_id="-",
+        memory_key="definition/c",
+        namespace="n",
+        content_sha256=served_content_sha256(json.loads(VALUE)),
+        tags=(),
+    )
+
+    async def page(org: str, namespace: str, after: str) -> Any:
+        return [] if after else [dict(queue.rows[-1])]
+
+    async def scrub(*args: Any) -> None:
+        for row in queue.rows:
+            row["proposed_value"] = ""
+
+    monkeypatch.setattr(learnings.learnings_repo, "private_candidates_after", page)
+    monkeypatch.setattr(learnings.learnings_repo, "scrub_private_candidate", scrub)
+    with pytest.raises(BackendUnavailableError):
+        await definition_review.redact_candidates("o", target, None)
+    queue.rows.append(late)  # an admitted server insert settles before lease takeover
+    queue.fence.holders.clear()
+    await definition_review.redact_candidates("o", target, None)
+    assert all(row["proposed_value"] == "" for row in queue.rows)
+
+
+async def test_historical_scrub_holds_writer_fence_until_all_versions_settle(
+    queue: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.core.hashing import served_content_sha256
+
+    entered, resume = asyncio.Event(), asyncio.Event()
+    target = SimpleNamespace(
+        agent="-",
+        user_id="-",
+        session_id="-",
+        memory_key="definition/c",
+        namespace="n",
+        content_sha256=served_content_sha256(json.loads(VALUE)),
+        tags=(),
+    )
+
+    async def page(org: str, namespace: str, after: str) -> Any:
+        return [] if after else [dict(queue.rows[-1])]
+
+    async def scrub(*args: Any) -> None:
+        entered.set()
+        await resume.wait()
+        for row in queue.rows:
+            row["proposed_value"] = ""
+
+    monkeypatch.setattr(learnings.learnings_repo, "private_candidates_after", page)
+    monkeypatch.setattr(learnings.learnings_repo, "scrub_private_candidate", scrub)
+    redaction = asyncio.create_task(definition_review.redact_candidates("o", target, None))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        with pytest.raises(BackendUnavailableError):
+            await reject()
+    finally:
+        resume.set()
+        await redaction
+    assert all(row["proposed_value"] == "" for row in queue.rows)

@@ -10,6 +10,7 @@ import pytest
 from server.core.hashing import served_content_sha256
 from server.memory.app import definition_review
 from server.memory.store import learnings
+from tests.unit.definition_queue_fake import install
 
 VALUE = {"term": "ARR", "body": "Revenue."}
 
@@ -18,6 +19,7 @@ VALUE = {"term": "ARR", "body": "Revenue."}
 async def test_redaction_reaches_exact_text_and_tag_but_not_other_drafts(
     monkeypatch: pytest.MonkeyPatch, live_same: bool
 ) -> None:
+    install(monkeypatch)
     pages, scrubbed = [], []
     target = SimpleNamespace(
         agent="-",
