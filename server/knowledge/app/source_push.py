@@ -38,7 +38,7 @@ from server.memory.app.provenance import writer_actor
 from server.settings import settings
 
 log = logging.getLogger(__name__)
-PUSH_MIGRATION = 103
+PUSH_MIGRATION = 104
 PROVIDER_TIMEOUT_S = 40  # not a setting: bounded admin/renewal provider work
 
 
