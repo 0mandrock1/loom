@@ -30,7 +30,7 @@ or needs another database, vector store or cache.
 | LangGraph                      | `LoomStore`                                     | Python, `loom.integrations.langgraph`                     | `BaseStore`                                                              |
 | Strands Agents                 | `LoomMemoryStore`                               | Python, `loom.integrations.strands`                       | the `MemoryStore` protocol                                               |
 | Strands Agents                 | `LoomMemoryStore`                               | TypeScript, `@clickhouse/loom/integrations/strands`       | the same protocol, structurally                                          |
-| Dify                           | Remember, Recall, Search knowledge              | `integrations/dify` standalone plugin                     | Native Dify tools                                        |
+| Dify                           | Remember, Recall, Search knowledge              | `integrations/dify` standalone plugin                     | Native Dify tools                                                        |
 
 Any other framework that can call an HTTP endpoint or an MCP server uses Loom directly:
 see [agent integration](../../guides/agent-integration.md) and
