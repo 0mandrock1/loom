@@ -152,6 +152,19 @@ def _row_width(line: str) -> int:
     return prose.count("|") + 1
 
 
+def _starts_block(line: str) -> bool:
+    """A new block interrupts a pipe table even without a preceding blank line."""
+    if _LIST.match(line) or re.match(r"^ {0,3}(?:>|#{1,6}(?:\s|$))", line):
+        return True
+    if re.fullmatch(r" {0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})", line):
+        return True
+    raw = line.lstrip(" ")
+    if raw.startswith(("<!--", "<?", "<!")):
+        return True
+    tag = _TAG_NAME.match(raw)
+    return bool(tag and tag[1].lower() in _BLOCK)
+
+
 def _table_rows(text: str) -> dict[int, tuple[str, int]]:
     """Row roles and cell counts preserve table boundaries as well as optional pipes."""
     lines = outside_fences(text)
@@ -159,8 +172,15 @@ def _table_rows(text: str) -> dict[int, tuple[str, int]]:
     active, delimiter, offset = False, -1, 0
     for index, (line, fenced) in enumerate(lines):
         role = "pipe"
-        if fenced or not line.strip():
+        expanded = line.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip(" "))
+        interrupted = (not active and indent >= 4) or (
+            index != delimiter and _starts_block(expanded)
+        )
+        if fenced or not line.strip() or interrupted:
             active = False
+            offset += len(line) + 1
+            continue
         elif not active and index + 1 < len(lines) and not lines[index + 1][1]:
             following = lines[index + 1][0]
             if (

@@ -163,3 +163,20 @@ def test_assembled_table_preserves_delimiter_and_membership(monkeypatch, tmp_pat
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()
+
+
+@pytest.mark.parametrize("context", ["quote", "list", "indented-code"])
+def test_assembled_table_cannot_become_another_block(monkeypatch, tmp_path, context):
+    header = "Loom | Loom\n--- | ---\n"
+    source = header + "Loom | Loom\n"
+    if context == "indented-code":
+        reply = "".join("    " + line for line in source.splitlines(keepends=True))
+    else:
+        reply = header + ("> " if context == "quote" else "- ") + "Loom | Loom\n"
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
+    monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
+    monkeypatch.setattr(t, "translate_text", lambda *args: reply)
+    with pytest.raises(t.TranslationDiffers, match="table"):
+        t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
+    assert not (tmp_path / "i18n").exists()
