@@ -6,5 +6,5 @@ from server.workers.status import record_pass
 
 
 async def run_pass() -> None:
-    with record_pass(WORKER):
+    with record_pass(WORKER, trace_pass=False):
         await run_once()
