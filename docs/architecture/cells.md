@@ -802,9 +802,9 @@ read-only scope, lists any tenancy row the directory does not place.
   serves past a table whose lock it cannot take, logged with the holders of its locks, or
   one the role cannot alter, logged as such (the third exception under Invariants). A
   first cell is `recording` until attach sets `enforced` while it runs, so no boot can
-  have created them: attach creates them itself with the same pass
-  (`cell_triggers.ensure`) once it has set `enforced`, and the cell goes `serving` only
-  once `cell_triggers.missing` names no defect. A later cell is `enforced` from prepare
+  have created them: attach creates them with `cell_triggers.ensure_table`, passing
+  `recording_first=True`, before step 2 and again before setting `enforced`.
+  The cell goes `serving` only once `cell_triggers.missing` names no defect. A later cell is `enforced` from prepare
   and gets them at its first migrating boot after prepare, which its attach requires the
   same way. `loom doctor` names a disabled or altered one in any state, a missing one on
   an `enforced` cell, and a partitioned table with an `org` column as unsupported, since
