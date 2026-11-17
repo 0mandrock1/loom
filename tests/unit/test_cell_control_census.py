@@ -143,7 +143,7 @@ EXEMPT_WRITERS = {
         ("register", "INSERT INTO", "loom_router.audit"): 1,
         ("_place_one", "INSERT INTO", "loom_router.placements"): 1,
         ("_place_one", "UPDATE", "loom_router.cells"): 1,
-        ("_place_one", "INSERT INTO", "loom_router.audit"): 1,
+        ("place", "INSERT INTO", "loom_router.audit"): 1,
         ("_audit", "INSERT INTO", "loom_router.audit"): 1,
     },
 }
@@ -493,9 +493,9 @@ def test_reads_registration_and_immutable_placement_are_explicit_exceptions():
     # Operator reads may audit, but cannot bypass control guards for a state write.
     assert any(call.startswith("_audit(") for call in calls(found.functions["attach_read"]))
     assert "_rerun_refusal(held, reg)" in calls(found.functions["register"])
-    assert "_place_one(conn, org, cell_name, _cell(locked), refusal)" in calls(
-        found.functions["place"]
-    )
+    assert "_place_one(conn, org, cell_name, candidate, refusal)" in calls(found.functions["place"])
+    assert "_cell(locked)" in calls(found.functions["place"])
+    assert "verify(candidate)" in calls(found.functions["place"])
     assert "refusal(candidate)" in calls(found.functions["_place_one"])
     for name in ("set_limit", "rotate_credential"):
         assert not any(call.startswith("claim(") for call in calls(found.functions[name]))

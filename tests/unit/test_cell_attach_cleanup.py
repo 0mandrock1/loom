@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from server.cli import cell_attach, cell_control
-from server.core import pg
 from tests.unit.cell_control_owner import owner
 from tests.unit.test_cell_control import snapshot
 
@@ -52,6 +51,9 @@ async def test_second_cancellation_preserves_original_failure_and_closes_before_
         def terminate(self):
             events.append("abort")
 
+        def is_closed(self):
+            return False
+
     async def work():
         entered.set()
         try:
@@ -78,7 +80,7 @@ async def test_second_cancellation_preserves_original_failure_and_closes_before_
 
 
 @pytest.mark.asyncio
-async def test_lock_owner_bounds_close_inside_the_same_cleanup_allowance(monkeypatch):
+async def test_lock_owner_bounds_close_inside_the_same_cleanup_allowance():
     closing = asyncio.Event()
     conn = AsyncMock()
     conn.terminate = lambda: None
@@ -88,8 +90,8 @@ async def test_lock_owner_bounds_close_inside_the_same_cleanup_allowance(monkeyp
         await asyncio.Future()
 
     conn.close.side_effect = close
-    owned = owner(conn)
-    monkeypatch.setattr(pg, "_RELEASE_TIMEOUT_S", 0.03)
+    owned = cell_control.Owner(exit_s=0.03)
+    owned.conn = conn
     started = time.monotonic()
     with pytest.raises(TimeoutError):
         await owned.close()

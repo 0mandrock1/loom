@@ -125,6 +125,7 @@ class LocalConnection:
         self.calls = []
         self.committed = False
         self.terminated = False
+        self.closed = False
         self.stall_commit = False
         self.stall_close = False
         self.fail_insert = False
@@ -151,8 +152,17 @@ class LocalConnection:
             raise OSError("local insert failed")
         return "INSERT 0 0"
 
+    async def close(self, **kwargs):
+        self.calls.append("close")
+        if self.stall_close:
+            await asyncio.Event().wait()
+        self.closed = True
+
     def terminate(self):
         self.terminated = True
+
+    def is_closed(self):
+        return self.closed or self.terminated
 
 
 @pytest.fixture
@@ -175,13 +185,12 @@ def local(monkeypatch):
     conn.fetchval = fetchval
     conn.fetchrow = fetchrow
 
-    @asynccontextmanager
-    async def dedicated(**kw):
-        try:
-            yield conn
-        finally:
-            if conn.stall_close:
-                await asyncio.Event().wait()
+    async def connect(**kw):
+        assert kw == {"statement_timeout_ms": settings.pg_statement_timeout_ms}
+        return conn
+
+    async def initialize(c):
+        assert c is conn
 
     async def direct(c, what):
         return []
@@ -195,7 +204,9 @@ def local(monkeypatch):
     async def directory_call(*a):
         conn.calls.append("directory")
 
-    monkeypatch.setattr(pg, "dedicated", dedicated)
+    monkeypatch.setattr(pg, "_connect_dedicated", connect)
+    monkeypatch.setattr(pg, "_check_deployment", initialize)
+    monkeypatch.setattr(pg, "init_connection", initialize)
     monkeypatch.setattr(cell, "read_state_if_present", read_state)
     monkeypatch.setattr(cell_place.apg, "direct_refusals", direct)
     monkeypatch.setattr(cell_place.apg, "take_lock", take_lock)
@@ -224,9 +235,9 @@ async def test_local_noop_insert_still_commits_durability_message(local):
 
     conn, state = local
     assert await invoke_place() == {"org": "acme", "cell": "eu-1", "deployment_id": "dep-eu-1"}
-    assert conn.committed and conn.terminated
+    assert conn.committed and conn.closed and not conn.terminated
     assert conn.calls[0:2] == ["lock", "directory"]
-    assert conn.calls[-1] == pg._DURABLE_MESSAGE
+    assert conn.calls[-2:] == [pg._DURABLE_MESSAGE, "close"]
 
 
 @pytest.mark.parametrize(
@@ -246,7 +257,7 @@ async def test_local_invalid_identity_refuses_before_directory(local, change):
     state.update(change)
     with pytest.raises(cell_place.PlacementRefused):
         await invoke_place()
-    assert conn.calls == ["lock"] and conn.terminated
+    assert conn.calls == ["lock", "close"] and conn.closed and not conn.terminated
 
 
 @pytest.mark.parametrize("change", [{"state": "recording"}, {"first": "us-1"}, {"row": None}])
@@ -262,7 +273,7 @@ async def test_local_identity_is_read_again_before_insert(local, monkeypatch, ch
     with pytest.raises(cell_place.PlacementRefused):
         await invoke_place()
     assert not any("INSERT" in sql for sql in conn.calls)
-    assert conn.terminated and not conn.committed
+    assert conn.closed and not conn.terminated and not conn.committed
 
 
 async def test_local_insert_failure_can_be_retried(local):
@@ -270,7 +281,7 @@ async def test_local_insert_failure_can_be_retried(local):
     conn.fail_insert = True
     with pytest.raises(OSError, match="local insert failed"):
         await invoke_place()
-    assert not conn.committed and conn.terminated
+    assert not conn.committed and conn.closed and not conn.terminated
     conn.fail_insert = False
     await invoke_place()
     assert conn.committed
@@ -295,7 +306,7 @@ async def test_local_commit_cancellation_closes_the_session(local):
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert conn.terminated and not conn.committed
+    assert conn.closed and not conn.terminated and not conn.committed
 
 
 async def test_stalled_direct_context_entry_is_bounded(local, monkeypatch):
@@ -304,16 +315,14 @@ async def test_stalled_direct_context_entry_is_bounded(local, monkeypatch):
     conn, state = local
     cleaned = False
 
-    @asynccontextmanager
     async def stalled(**kw):
         nonlocal cleaned
         try:
             await asyncio.Event().wait()
-            yield conn
         finally:
             cleaned = True
 
-    monkeypatch.setattr(pg, "dedicated", stalled)
+    monkeypatch.setattr(pg, "_connect_dedicated", stalled)
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(invoke_place(), 0.5)
     assert cleaned and conn.calls == []
@@ -346,7 +355,7 @@ async def test_query_timeout_cannot_enter_an_unbounded_rollback(local):
         assert done, "the statement deadline must include ending its transaction"
         with pytest.raises(TimeoutError):
             await task
-        assert conn.terminated
+        assert conn.closed and not conn.terminated
     finally:
         if not task.done():
             task.cancel()
@@ -464,3 +473,122 @@ def test_cli_cancellation_names_the_idempotent_retry_and_preserves_cancellation(
     printed = capsys.readouterr()
     assert printed.out == ""
     assert "placement may have committed; rerun the same command" in printed.err
+
+
+async def test_local_phases_remain_separate_from_directory_and_exit(local, monkeypatch):
+    from server.cli import cell_control, cell_place
+
+    observed = []
+    actual_call = cell_control.Owner.call
+
+    async def timed(self, work, *, total_s):
+        observed.append(total_s)
+        return await actual_call(self, work, total_s=total_s)
+
+    async def directory_call(*args):
+        # HTTP owns its existing independent transport limit, not a local phase cap.
+        await asyncio.sleep(0.06)
+
+    monkeypatch.setattr(cell_control.Owner, "call", timed)
+    monkeypatch.setattr(cell_place, "_directory", directory_call)
+    await invoke_place()
+    assert observed == [0.03, 0.03, 0.03]
+    conn, _ = local
+    assert conn.committed and conn.closed and not conn.terminated
+
+
+@pytest.mark.parametrize("where", ["initialization", "initial", "transaction", "directory"])
+async def test_original_error_survives_failed_required_close(local, monkeypatch, where):
+    from server.cli import cell_place
+    from server.core import pg
+
+    original = ValueError("original placement failure")
+    conn, _ = local
+
+    async def fail(*args):
+        raise original
+
+    async def bad_close(**kwargs):
+        raise RuntimeError("close failed")
+
+    conn.close = bad_close
+    if where == "initialization":
+        monkeypatch.setattr(pg, "init_connection", fail)
+    elif where == "initial":
+        monkeypatch.setattr(cell_place, "_identity", fail)
+    elif where == "directory":
+        monkeypatch.setattr(cell_place, "_directory", fail)
+    else:
+        conn.execute = fail
+    with pytest.raises(ValueError) as caught:
+        await invoke_place()
+    assert caught.value is original
+    assert conn.terminated and not conn.committed
+
+
+async def test_success_refuses_when_required_close_fails(local):
+    conn, _ = local
+
+    async def fail(**kwargs):
+        raise OSError("required close failed")
+
+    conn.close = fail
+    with pytest.raises(OSError, match="required close failed"):
+        await invoke_place()
+    assert conn.committed and conn.terminated
+
+
+async def test_lost_original_lock_refuses_without_reconnecting(local, monkeypatch):
+    from server.cli import cell_place
+
+    conn, _ = local
+
+    async def lost(c):
+        assert c is conn
+        return False
+
+    monkeypatch.setattr(cell_place.apg, "lock_held", lost)
+    with pytest.raises(cell_place.PlacementRefused, match="lock was lost"):
+        await invoke_place()
+    assert conn.calls == ["lock", "directory", "close"]
+    assert conn.closed and not conn.committed
+
+
+@pytest.mark.parametrize("inside_reserve", [False, True])
+async def test_late_placement_connection_never_reaches_body(local, monkeypatch, inside_reserve):
+    from server.core import pg
+
+    conn, _ = local
+    released, discarded = asyncio.Event(), asyncio.Event()
+    real_terminate = conn.terminate
+    real_close = conn.close
+
+    def terminate():
+        real_terminate()
+        discarded.set()
+
+    async def close(**kw):
+        await real_close(**kw)
+        discarded.set()
+
+    async def late(**kwargs):
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            if not inside_reserve:
+                while not released.is_set():
+                    try:
+                        await released.wait()
+                    except asyncio.CancelledError:
+                        pass
+            return conn
+
+    conn.terminate, conn.close = terminate, close
+    monkeypatch.setattr(pg, "_connect_dedicated", late)
+    with pytest.raises(TimeoutError):
+        await invoke_place()
+    released.set()
+    await asyncio.wait_for(discarded.wait(), 0.2)
+    assert conn.calls == (["close"] if inside_reserve else [])
+    assert conn.closed if inside_reserve else conn.terminated
+    assert not conn.committed

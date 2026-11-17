@@ -320,7 +320,7 @@ class Router:
     async def operator_place(self, request: Request) -> JSONResponse:
         """Place with the operator credential. The CLI checks its local Postgres mode;
         this route trusts that check and verifies the directory's locked identity."""
-        body = await self._operator_body(request)
+        body = await self._operator_body(request, MAX_BODY_BYTES)
         if isinstance(body, JSONResponse):
             return body
         org = cell_state.named_org(body.get("org"))

@@ -764,8 +764,13 @@ read-only scope, lists any tenancy row the directory does not place.
   session, requires a full enforced local cell state and the full accepted configuration
   fingerprint, and checks both again before inserting. A transactional durability message
   makes even a no-op insert flush an earlier primary-only tenancy row to the standby.
-  Opening the session, local statements, COMMIT and cleanup have client deadlines derived
-  from `LOOM_PG_STATEMENT_TIMEOUT_MS`. An unknown outcome names rerunning the same command;
+  Opening the session, initial checks and the local transaction through COMMIT each have
+  a separate client deadline derived from `LOOM_PG_STATEMENT_TIMEOUT_MS`; the directory
+  request keeps its own transport timeout. Each local phase reserves cleanup inside its
+  original deadline. On failure the shared control owner closes the exact backend before
+  cancelling or reaping its work, deferring repeated signals within that same deadline.
+  Successful exit and failures outside a local phase have a separate cleanup allowance
+  derived from the same setting. An unknown outcome names rerunning the same command;
   the permanent directory winner and idempotent local insert let that rerun finish. The
   route checks directory state; a direct operator API caller is trusted to check local
   Postgres mode as the CLI does. For an org the directory does not place yet it
