@@ -271,8 +271,9 @@ rest) through `code.repos`. A GitHub fork with no index of its own resolves to i
 parent's index when you can read it. `LOOM_CODE_REPO=<owner>/<name>` or a bare name (or
 the `code_repo` option, or `code_repo` in `~/.loom/config.json`) is the fallback candidate
 after the remotes: it serves a session outside any git checkout, or a checkout with no
-index, and gives it that repository's index and scope header. The repository lookup is bounded at 2.5 s, separately from the local context wait; a
-miss leaves the scope header absent.
+index, and gives it that repository's index and scope header. The repository lookup
+uses request timeouts, separately from the local context wait; a miss leaves the
+scope header absent.
 See [code index overview](../code-index/overview.md) and the
 [MCP reference](../../reference/mcp.md) for how the server uses the scope.
 
