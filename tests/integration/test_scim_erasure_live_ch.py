@@ -35,8 +35,11 @@ _PARENT_POLICY = delegation._refuse_a_revoked_parent
 def directory_row(org: str, namespace: str, owner: str, *, ordinary: bool) -> dict[str, Any]:
     row = registry_row(
         NamespaceRegisterInput(
-            org=org, namespace=namespace, owner_email=owner,
-            kind="memory" if ordinary else None, description="directory description",
+            org=org,
+            namespace=namespace,
+            owner_email=owner,
+            kind="memory" if ordinary else None,
+            description="directory description",
         ),
         None,
         datetime.now(UTC).replace(microsecond=0),
@@ -58,9 +61,7 @@ async def stored_row(client: ch.CHClient, table: str, org: str, namespace: str) 
 
 
 async def cold_decision(auth: AuthInfo, expected_accounts: int, refused: bool) -> None:
-    extra = scim_people._roots(
-        auth.subject, "", (*auth.parent_subjects, auth.creator), auth.org
-    )
+    extra = scim_people._roots(auth.subject, "", (*auth.parent_subjects, auth.creator), auth.org)
     seconds = scim_people._decision_seconds()
     decision = scim_people._Decision(auth.org, auth.subject, "", scim_people._now() + seconds)
     with ch.own_write_reads(), ch.query_tag("test.scim_erasure.cold"):
@@ -100,7 +101,8 @@ async def test_real_erasure_rewrite_rechecks_a_native_child_after_account_count_
     # The foreign personal-name row is an operator-registerable memory row.
     foreign_row = directory_row(other_org, target, owner, ordinary=kind == "personal")
     await client.insert(
-        "loom.namespaces", [*ordinary, target_row, foreign_row],
+        "loom.namespaces",
+        [*ordinary, target_row, foreign_row],
         settings={"async_insert": 0, "wait_for_async_insert": 1},
     )
     if kind == "collection":
@@ -111,12 +113,12 @@ async def test_real_erasure_rewrite_rechecks_a_native_child_after_account_count_
     before = await stored_row(client, "loom.namespaces", org, target)
     foreign_before = await stored_row(client, "loom.namespaces", other_org, target)
     tree_before = (
-        await stored_row(client, "loom.collections", org, target)
-        if kind == "collection" else None
+        await stored_row(client, "loom.collections", org, target) if kind == "collection" else None
     )
     foreign_tree_before = (
         await stored_row(client, "loom.collections", other_org, target)
-        if kind == "collection" else None
+        if kind == "collection"
+        else None
     )
     _, parsed, _ = scim_routes.user_name_and_email(
         {"userName": owner, "emails": [{"value": owner, "type": "work", "primary": True}]}
@@ -159,17 +161,28 @@ async def test_real_erasure_rewrite_rechecks_a_native_child_after_account_count_
     assert _PARENT_POLICY.__module__ == "server.auth.delegation"
     assert _PARENT_POLICY.__name__ == "_refuse_a_revoked_parent"
     parent = AuthInfo(
-        subject=owner, org=org, namespaces=(), roles=(Role.VIEWER,),
-        is_service_account=False, impersonated_by="https://issuer.example.test",
-        read_scope="own_user", read_user_id=user_id,
-        token_id="parent-" + people.run, issued_at=int(time.time()),
+        subject=owner,
+        org=org,
+        namespaces=(),
+        roles=(Role.VIEWER,),
+        is_service_account=False,
+        impersonated_by="https://issuer.example.test",
+        read_scope="own_user",
+        read_user_id=user_id,
+        token_id="parent-" + people.run,
+        issued_at=int(time.time()),
     )
     child = await delegation.delegate(
-        parent, org=org, requested={"*": None}, scoped=False,
-        ttl_seconds=300, is_service_account=True,
+        parent,
+        org=org,
+        requested={"*": None},
+        scoped=False,
+        ttl_seconds=300,
+        is_service_account=True,
     )
     expected_keys = sorted(
-        key for subject in (owner, parent.token_id)
+        key
+        for subject in (owner, parent.token_id)
         for key in (subject, revocation.CUTOFF_PREFIX + subject, revocation.SCIM_PREFIX + subject)
     )
     assert revocation_reads == [({"keys": expected_keys}, [])]
@@ -286,7 +299,10 @@ async def test_real_erasure_rewrite_rechecks_a_native_child_after_account_count_
     ]
     if kind == "collection":
         claim_keys.append("collections:" + json.dumps(org))
-    assert await client.query_all(
-        "SELECT name FROM loom._migration_lock WHERE name IN {names:Array(String)}",
-        params={"names": claim_keys},
-    ) == []
+    assert (
+        await client.query_all(
+            "SELECT name FROM loom._migration_lock WHERE name IN {names:Array(String)}",
+            params={"names": claim_keys},
+        )
+        == []
+    )

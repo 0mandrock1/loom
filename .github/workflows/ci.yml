@@ -315,7 +315,18 @@ jobs:
       - name: Ledger is a subset of the repo (strict dry-run)
         run: python -m server.core.schema.migrate --dry-run --strict
       - name: Verify schemas/schema.sql matches what migrations produce
+        id: schema_current
         run: make schema-check
+      - name: Export the generated schema after a mismatch
+        if: failure() && steps.schema_current.outcome == 'failure'
+        run: python -m scripts.ops.dump_schema --out "$RUNNER_TEMP/schema.sql"
+      - name: Upload the generated schema after a mismatch
+        if: failure() && steps.schema_current.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: generated-schema
+          path: ${{ runner.temp }}/schema.sql
+          if-no-files-found: error
 
   ts-typecheck:
     name: tsc (frontend)

@@ -156,6 +156,7 @@ def test_the_journal_files() -> None:
         "098_knowledge_mirrors.sql",
         "099_document_access_lists.sql",
         "100_knowledge_source_listings.sql",
+        "101_oauth_verified_email.sql",
     ]
 
 
