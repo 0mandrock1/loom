@@ -47,7 +47,7 @@ async def control_stores(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
         transport = httpx.ASGITransport(app=app.build_app())
         async with httpx.AsyncClient(
             transport=transport,
-            base_url="http://router",
+            base_url="http://test",
             headers={"Authorization": f"Bearer {TOKEN}"},
         ) as client:
             yield client, conn, own

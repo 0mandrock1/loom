@@ -353,7 +353,7 @@ def test_caller_cancellation_during_keeper_stop_is_not_swallowed(native, monkeyp
 
 def test_unfinished_role_producer_prevents_success_and_certificate(native, monkeypatch):
     producers = []
-    monkeypatch.setattr(command, "COMMAND_DRAIN_S", 0)
+    monkeypatch.setattr(command.settings, "native_command_drain_timeout_s", 0)
 
     async def work(_):
         async def producer():
@@ -399,7 +399,7 @@ def test_first_role_producer_failure_is_retrieved_and_does_not_skip_safe_drain(n
 
 
 def test_actual_retirement_refusal_stays_registered_and_refuses_success(native, monkeypatch):
-    monkeypatch.setattr(command, "COMMAND_DRAIN_S", 0.02)
+    monkeypatch.setattr(command.settings, "native_command_drain_timeout_s", 0.02)
     stopped = []
     monkeypatch.setattr(
         barrier,

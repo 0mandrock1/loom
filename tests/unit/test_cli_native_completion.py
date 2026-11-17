@@ -56,7 +56,7 @@ def test_healthy_heartbeat_finishes_after_native_owner_requests_stop(
 def test_permanent_heartbeat_respects_same_absolute_native_allowance(
     native, monkeypatch, first_class
 ):
-    monkeypatch.setattr(command, "COMMAND_DRAIN_S", 0.02)
+    monkeypatch.setattr(command.settings, "native_command_drain_timeout_s", 0.02)
     monkeypatch.setattr(
         barrier, "_HEARTBEAT", SimpleNamespace(signal_stop=lambda: None, running=True)
     )

@@ -8,6 +8,16 @@ from server.core.model_work_gate import ModelChangeInProgress, ModelWorkGate
 from server.insights.app import provider_command as command
 
 
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan")])
+def test_native_drain_budget_is_finite_and_positive(value):
+    from pydantic import ValidationError
+
+    from server.settings.catalog import RuntimeSettings
+
+    with pytest.raises(ValidationError):
+        RuntimeSettings(native_command_drain_timeout_s=value)
+
+
 @pytest.fixture
 def setup(monkeypatch):
     from server.core import retirement
