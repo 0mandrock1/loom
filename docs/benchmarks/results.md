@@ -563,7 +563,7 @@ diff <(jq -S . /tmp/summary.json) <(jq -S . bench/code_ask_cache_threshold/summa
 ```
 
 Embedding APIs are not bit-stable across provider revisions: expect cosines to agree to a
-few thousandths. A threshold is robust only when its margin exceeds that drift.
+few thousandths. A threshold's margin must exceed that drift.
 
 **With the guard on** (`sweep_with_guard`: paraphrase hits of 42 and false hits of 65
 different pairs):
@@ -1260,9 +1260,11 @@ PYTHONPATH=$PWD .venv/bin/python bench/cell_trigger_gate.py \
 
 The fixture owner supplies the exact source, launch, configuration and ownership receipts,
 excludes competing controllers and workers, and stops its processes before deleting its
-exact scratch databases. The output path must not exist. The driver verifies those
-receipts and the live fixture before native setup and every arm, restores the org triggers
-within its cleanup bound and emits a final verdict only after cleanup and artifact sync.
+exact scratch databases. The output path must not exist. The driver verifies source,
+launch and configuration identities and the live fixture before native setup and every
+arm, restores the org triggers within its cleanup bound and emits a final verdict only
+after cleanup and artifact sync. It records the ownership-receipt digest supplied by
+the fixture owner.
 Source tests and the diagnostic figures above are not evidence that this workload passes.
 
 ## Reference computations
