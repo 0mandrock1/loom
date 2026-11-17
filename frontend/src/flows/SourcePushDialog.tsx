@@ -195,7 +195,7 @@ export function SourcePushDialog({
             Restart setup
           </BusyButton>
         )}
-        {(active || pending) && (
+        {(active || pending || status?.status === "expired" || status?.status === "obsolete") && (
           <BusyButton
             type="secondary"
             htmlType="button"

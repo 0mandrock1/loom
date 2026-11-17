@@ -86,6 +86,34 @@ describe("SourcePushDialog", () => {
     expect(screen.getByRole("button", { name: "Refresh" })).toHaveFocus();
   });
 
+  it.each([
+    { status: "expired", enabled: true },
+    { status: "expired", enabled: false },
+    { status: "obsolete", enabled: true },
+    { status: "obsolete", enabled: false },
+  ])("retires $status Drive setup with deployment enabled=$enabled", async ({ status, enabled }) => {
+    const user = userEvent.setup();
+    vi.mocked(api.sourcePushStatus).mockResolvedValue({
+      ...disabled,
+      provider: "gdrive",
+      status,
+      enabled,
+      generation: status === "expired" ? "generation" : "",
+      channels: status === "expired" ? 1 : 0,
+      expires_at: status === "expired" ? 1 : 0,
+    });
+    vi.mocked(api.configureSourcePush).mockResolvedValue({ ...disabled, provider: "gdrive", enabled });
+    render(<SourcePushDialog {...source} kind="gdrive" onClose={() => {}} />);
+    await screen.findByText(
+      enabled ? (status === "expired" ? "Expired; set up again" : "Source changed; set up again") : "Paused",
+    );
+    expect(await axeViolations(document.body)).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "Disable push" }));
+    expect(api.configureSourcePush).toHaveBeenCalledWith(source, false);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Disable push" })).toBeNull());
+    expect(screen.getByRole("button", { name: "Refresh" })).toHaveFocus();
+  });
+
   it("moves focus to Refresh after disabling push", async () => {
     const user = userEvent.setup();
     vi.mocked(api.sourcePushStatus).mockResolvedValue({ ...pending, status: "active" });
