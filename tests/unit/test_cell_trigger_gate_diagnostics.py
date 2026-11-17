@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import dataclasses
 import json
 from unittest.mock import AsyncMock
 
@@ -150,9 +151,12 @@ def test_main_preserves_first_invalid_and_requires_successful_artifact_close(
     import server.settings
     import server.wiring
     from server.cli import _ch
-    from tests.unit.test_bench_cell_trigger_gate import args, fixture_config
+    from tests.unit.test_bench_cell_trigger_gate import args, fixture_config, launch_files
 
     fixture, config = fixture_config()
+    fixture, launch_path, _, _, _ = launch_files(tmp_path, fixture, config)
+    manifest_path = tmp_path / "fixture.json"
+    manifest_path.write_text(json.dumps(dataclasses.asdict(fixture)))
     prior = prior_kind("first native work failure") if prior_kind is not None else None
     output = output_kind("secondary artifact failure") if output_kind is not None else None
     events = []
@@ -182,15 +186,18 @@ def test_main_preserves_first_invalid_and_requires_successful_artifact_close(
 
     argv = ["driver"]
     for key, value in vars(
-        args(fixture_manifest="unused", output=str(tmp_path / "raw.jsonl"))
+        args(
+            fixture_manifest=str(manifest_path),
+            launch_manifest=str(launch_path),
+            output=str(tmp_path / "raw.jsonl"),
+        )
     ).items():
         argv += ["--" + key.replace("_", "-"), str(value)]
     monkeypatch.setattr(sys, "argv", argv)
     monkeypatch.setattr(server.settings, "settings", config)
     monkeypatch.setattr(server.wiring, "wire", lambda: None)
-    monkeypatch.setattr(gate.Fixture, "read", lambda _: fixture)
     monkeypatch.setattr(gate, "_source", lambda _: {})
-    monkeypatch.setattr(gate, "_launch", lambda *_: {})
+    monkeypatch.setattr(gate, "_owned_server", lambda _: None)
     monkeypatch.setattr(gate, "_preflight", AsyncMock())
     monkeypatch.setattr(gate, "Artifact", Artifact)
 

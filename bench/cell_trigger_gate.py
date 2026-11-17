@@ -123,6 +123,7 @@ def _digest(value: Any) -> str:
 class Fixture:
     """Nonsecret receipt from the owner that created and launched this exact fixture."""
 
+    schema: int
     base_url: str
     pg_host: str
     pg_port: int
@@ -141,22 +142,36 @@ class Fixture:
     source_tree: str
     launch_manifest_sha256: str
     ownership_receipt_sha256: str
-    configuration_sha256: str
+    api_configuration_sha256: str
+    cli_configuration_sha256: str
+    shared_configuration_sha256: str
     background_workers: str
     controller_excluded: bool
-    pg_internal_port: int | None = None
+    pg_internal_port: int | None
 
     @classmethod
     def read(cls, path: str) -> Fixture:
         try:
-            with Path(path).open("rb") as manifest_file:
-                raw = manifest_file.read(16_385)
-            _require(len(raw) <= 16_384, "manifest size")
-            return cls(**json.loads(raw))
+            value, _ = _receipt(path, max_bytes=16_384)
+            _require(set(value) == set(cls.__dataclass_fields__), "fixture fields")
+            _require(type(value["schema"]) is int and value["schema"] == 2, "fixture schema")
+            return cls(**value)
         except (TypeError, ValueError, OSError):
             raise Invalid("fixture manifest") from None
 
     def validate(self, args: argparse.Namespace, config: Any) -> int:
+        _require(type(self.schema) is int and self.schema == 2, "fixture schema")
+        integers = {"schema", "pg_port", "ch_port", "epoch"}
+        _require(
+            all(type(getattr(self, key)) is int for key in integers)
+            and type(self.controller_excluded) is bool
+            and all(
+                type(value) is str
+                for key, value in asdict(self).items()
+                if key not in integers | {"controller_excluded", "pg_internal_port"}
+            ),
+            "fixture field types",
+        )
         supplied = _endpoint(args.pg_dsn, pg=True)
         configured = _endpoint(config.pg_dsn, pg=True)
         _require(supplied == configured, "configured PG endpoint")
@@ -204,11 +219,24 @@ class Fixture:
         for value in (
             self.launch_manifest_sha256,
             self.ownership_receipt_sha256,
-            self.configuration_sha256,
+            self.api_configuration_sha256,
+            self.cli_configuration_sha256,
+            self.shared_configuration_sha256,
         ):
-            _require(bool(_SHA.fullmatch(value)), "fixture receipt digest")
+            _require(type(value) is str and bool(_SHA.fullmatch(value)), "fixture receipt digest")
+        actual = _configuration(config)
         _require(
-            self.configuration_sha256 == _digest(_configuration(config)), "fixture configuration"
+            actual["cell_router_token"] == actual["router_operator_token"] == "",
+            "empty native CLI credentials",
+        )
+        _require(
+            self.api_configuration_sha256 != self.cli_configuration_sha256,
+            "distinct API and CLI configurations",
+        )
+        _require(self.cli_configuration_sha256 == _digest(actual), "fixture CLI configuration")
+        _require(
+            self.shared_configuration_sha256 == _digest(_shared_configuration(config)),
+            "fixture shared configuration",
         )
         _require(type(self.epoch) is int and self.epoch > 0, "authority epoch")
         _require(
@@ -221,8 +249,17 @@ class Fixture:
 
 
 def _configuration(config: Any) -> dict[str, Any]:
-    # A complete digest catches a setting change without publishing credentials.
-    return cast(dict[str, Any], config.model_dump(mode="json"))
+    from server.settings import Settings
+
+    values = config.model_dump(mode="json")
+    _require(type(values) is dict and set(values) == set(Settings.model_fields), "Settings fields")
+    return cast(dict[str, Any], values)
+
+
+def _shared_configuration(config: Any) -> dict[str, Any]:
+    values = dict(_configuration(config))
+    del values["cell_router_token"]
+    return values
 
 
 def _source(fixture: Fixture) -> dict[str, Any]:
@@ -273,7 +310,15 @@ def _workload(config: Any) -> dict[str, Any]:
     }
 
 
-def _receipt(path: str) -> tuple[dict[str, Any], str]:
+def _receipt_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        _require(key not in result, "duplicate receipt field")
+        result[key] = value
+    return result
+
+
+def _receipt(path: str, *, max_bytes: int = 65_536) -> tuple[dict[str, Any], str]:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as source:
         metadata = os.fstat(source.fileno())
@@ -281,9 +326,9 @@ def _receipt(path: str) -> tuple[dict[str, Any], str]:
             stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.geteuid(),
             "owned regular receipt",
         )
-        raw = source.read(65_537)
-    _require(len(raw) <= 65_536, "receipt size")
-    value = json.loads(raw)
+        raw = source.read(max_bytes + 1)
+    _require(len(raw) <= max_bytes, "receipt size")
+    value = json.loads(raw, object_pairs_hook=_receipt_object)
     _require(isinstance(value, dict), "receipt object")
     return value, hashlib.sha256(raw).hexdigest()
 
@@ -325,6 +370,52 @@ def _owned_server(server: dict[str, Any]) -> None:
     _require(_start_ticks(pid) == birth, "stable process birth")
 
 
+_CREDENTIAL_POSTURE = {
+    "api_cell_router_token_present": True,
+    "cli_cell_router_token_present": False,
+    "api_router_operator_token_present": False,
+    "cli_router_operator_token_present": False,
+}
+
+
+def _attested_configuration(configuration: dict[str, Any], fixture: Fixture, config: Any) -> None:
+    from server.core import deployment_config
+
+    hashes = {
+        "api_configuration_sha256": fixture.api_configuration_sha256,
+        "cli_configuration_sha256": fixture.cli_configuration_sha256,
+        "shared_configuration_sha256": fixture.shared_configuration_sha256,
+    }
+    _require(
+        set(configuration) == {"schema", "workload", "fingerprints", "credential_posture", *hashes}
+        and type(configuration["schema"]) is int
+        and configuration["schema"] == 2,
+        "configuration artifact schema",
+    )
+    _require(all(configuration[key] == value for key, value in hashes.items()), "launch digests")
+    _require(
+        fixture.cli_configuration_sha256 == _digest(_configuration(config)),
+        "launch CLI configuration",
+    )
+    _require(
+        fixture.shared_configuration_sha256 == _digest(_shared_configuration(config)),
+        "launch shared configuration",
+    )
+    _require(
+        type(configuration["credential_posture"]) is dict
+        and all(type(value) is bool for value in configuration["credential_posture"].values())
+        and configuration["credential_posture"] == _CREDENTIAL_POSTURE,
+        "launch credential posture",
+    )
+    _require(
+        _digest(configuration["workload"]) == _digest(_workload(config)), "launch workload settings"
+    )
+    _require(
+        configuration["fingerprints"] == deployment_config.fingerprints(config),
+        "launch configuration fingerprints",
+    )
+
+
 def _launch(args: argparse.Namespace, fixture: Fixture, config: Any) -> dict[str, Any]:
     from server.core import deployment_config
 
@@ -333,7 +424,7 @@ def _launch(args: argparse.Namespace, fixture: Fixture, config: Any) -> dict[str
     _require(
         set(receipt) == {"schema", "server", "source", "configuration_artifact"}
         and type(receipt["schema"]) is int
-        and receipt["schema"] == 1,
+        and receipt["schema"] == 2,
         "launch receipt schema",
     )
     server, source, artifact = (
@@ -356,23 +447,8 @@ def _launch(args: argparse.Namespace, fixture: Fixture, config: Any) -> dict[str
     )
     configuration, artifact_digest = _receipt(artifact["path"])
     _require(artifact_digest == artifact["sha256"], "configuration artifact hash")
-    _require(
-        set(configuration) == {"schema", "configuration_sha256", "workload", "fingerprints"}
-        and type(configuration["schema"]) is int
-        and configuration["schema"] == 1,
-        "configuration artifact schema",
-    )
-    _require(
-        configuration["configuration_sha256"]
-        == fixture.configuration_sha256
-        == _digest(_configuration(config)),
-        "launch effective configuration",
-    )
-    _require(
-        _digest(configuration["workload"]) == _digest(_workload(config)), "launch workload settings"
-    )
+    _attested_configuration(configuration, fixture, config)
     fingerprints = deployment_config.fingerprints(config)
-    _require(configuration["fingerprints"] == fingerprints, "launch configuration fingerprints")
     _owned_server(server)
     return {
         "health_instance": server["health_instance"],
@@ -604,7 +680,12 @@ async def _proof(
         "epoch": fixture.epoch,
         "instance_id": fixture.instance_id,
         "fingerprint_sha256": _digest(current),
-        "configuration_sha256": fixture.configuration_sha256,
+        "api_configuration_sha256": fixture.api_configuration_sha256,
+        "cli_configuration_sha256": fixture.cli_configuration_sha256,
+        "shared_configuration_sha256": fixture.shared_configuration_sha256,
+        "shared_configuration_excludes": ["cell_router_token"],
+        "credential_posture": _CREDENTIAL_POSTURE,
+        "api_configuration_attested": True,
         "source": source,
         "launch": launch,
     }
@@ -1469,6 +1550,9 @@ def main() -> int:
         artifact.emit(
             "configuration",
             manifest=asdict(fixture),
+            shared_configuration_excludes=["cell_router_token"],
+            credential_posture=_CREDENTIAL_POSTURE,
+            api_configuration_attested=True,
             source=source,
             launch=launch,
             manifest_sha256=_digest(asdict(fixture)),

@@ -42,8 +42,13 @@ def args(**overrides):
     )
 
 
-def fixture_config():
-    config = SimpleNamespace(
+def role_config():
+    from server.settings import Settings
+
+    config = SimpleNamespace(**Settings.model_construct().model_dump(mode="json"))
+    vars(config).update(
+        cell_router_token="",
+        router_operator_token="",
         pg_dsn=args().pg_dsn,
         ch_host="127.0.0.1",
         ch_port=18790,
@@ -74,7 +79,13 @@ def fixture_config():
         }
 
     config.model_dump = dump
+    return config
+
+
+def fixture_config():
+    config = role_config()
     manifest = gate.Fixture(
+        schema=2,
         base_url=args().base_url,
         pg_host="127.0.0.1",
         pg_port=15790,
@@ -93,7 +104,13 @@ def fixture_config():
         source_tree="b" * 40,
         launch_manifest_sha256="c" * 64,
         ownership_receipt_sha256="d" * 64,
-        configuration_sha256=gate._digest(config.model_dump()),
+        api_configuration_sha256=gate._digest(
+            {**config.model_dump(), "cell_router_token": "lcr_" + "0" * 128}
+        ),
+        cli_configuration_sha256=gate._digest(config.model_dump()),
+        shared_configuration_sha256=gate._digest(
+            {k: v for k, v in config.model_dump().items() if k != "cell_router_token"}
+        ),
         background_workers="off",
         controller_excluded=True,
         pg_internal_port=5432,
@@ -1247,7 +1264,21 @@ async def test_review_composed_proof_matches_actual_server_fingerprints_and_heal
             await gate._proof(PG(), CH(), args(launch_manifest=str(launch_path)), fixture)
     else:
         proof = await gate._proof(PG(), CH(), args(launch_manifest=str(launch_path)), fixture)
-        assert proof["configuration_sha256"] == fixture.configuration_sha256
+        assert proof["api_configuration_sha256"] == fixture.api_configuration_sha256
+        assert proof["cli_configuration_sha256"] == fixture.cli_configuration_sha256
+        assert proof["shared_configuration_sha256"] == fixture.shared_configuration_sha256
+        assert proof["shared_configuration_excludes"] == ["cell_router_token"]
+        assert proof["credential_posture"] == receipt_posture()
+        assert proof["api_configuration_attested"] is True
+
+
+def receipt_posture():
+    return {
+        "api_cell_router_token_present": True,
+        "cli_cell_router_token_present": False,
+        "api_router_operator_token_present": False,
+        "cli_router_operator_token_present": False,
+    }
 
 
 def launch_files(tmp_path, fixture, config):
@@ -1280,8 +1311,11 @@ def launch_files(tmp_path, fixture, config):
         }
     }
     configuration = {
-        "schema": 1,
-        "configuration_sha256": fixture.configuration_sha256,
+        "schema": 2,
+        "api_configuration_sha256": fixture.api_configuration_sha256,
+        "cli_configuration_sha256": fixture.cli_configuration_sha256,
+        "shared_configuration_sha256": fixture.shared_configuration_sha256,
+        "credential_posture": receipt_posture(),
         "workload": public,
         "fingerprints": deployment_config.fingerprints(config),
     }
@@ -1290,7 +1324,7 @@ def launch_files(tmp_path, fixture, config):
     artifact_path.write_bytes(artifact_bytes)
     source_path = str(__import__("pathlib").Path(gate.__file__).resolve().parents[1])
     launch = {
-        "schema": 1,
+        "schema": 2,
         "server": {
             "pid": 4242,
             "start_ticks": "123",
@@ -1339,7 +1373,7 @@ def test_launch_receipt_binds_named_owned_process_settings_and_nonsecret_artifac
     monkeypatch.setattr(gate, "_owned_server", lambda server: checked.append(server), raising=False)
     if fault in {"config", "workload", "workload_type", "fingerprints"}:
         if fault == "config":
-            configuration["configuration_sha256"] = "0" * 64
+            configuration["cli_configuration_sha256"] = "0" * 64
         if fault == "workload":
             configuration["workload"]["pg_delivery_batch_rows"] = 501
         if fault == "workload_type":
@@ -1690,3 +1724,520 @@ async def test_successful_restoration_still_fails_when_artifact_write_fails():
         await gate._cleanup(triggers, conn, artifact)
     assert observed.value is first
     conn.close.assert_awaited_once()
+
+
+def rewrite_launch(fixture, path, artifact_path, launch, configuration, *, raw=None, level=None):
+    configuration_raw = raw if level == "configuration" else json.dumps(configuration).encode()
+    artifact_path.write_bytes(configuration_raw)
+    launch["configuration_artifact"]["sha256"] = gate.hashlib.sha256(configuration_raw).hexdigest()
+    launch_raw = raw if level == "launch" else json.dumps(launch).encode()
+    path.write_bytes(launch_raw)
+    return dataclasses.replace(
+        fixture, launch_manifest_sha256=gate.hashlib.sha256(launch_raw).hexdigest()
+    )
+
+
+def test_schema_two_local_pair_has_only_one_fixed_credential_difference(monkeypatch, tmp_path):
+    from server.core import deployment_config
+
+    fixture, config = fixture_config()
+    fixture, path, _, _, configuration = launch_files(tmp_path, fixture, config)
+    checked = []
+    monkeypatch.setattr(gate, "_owned_server", lambda value: checked.append(value))
+    assert fixture.validate(args(), config) == 45500
+    assert gate._launch(args(launch_manifest=str(path)), fixture, config)
+    actual = config.model_dump(mode="json")
+    api = {**actual, "cell_router_token": "lcr_" + "0" * 128}
+    assert gate._digest(api) == fixture.api_configuration_sha256
+    assert gate._digest(actual) == fixture.cli_configuration_sha256
+    assert fixture.api_configuration_sha256 != fixture.cli_configuration_sha256
+    assert gate._shared_configuration(config) == {
+        key: value for key, value in api.items() if key != "cell_router_token"
+    }
+    assert configuration["fingerprints"] == deployment_config.fingerprints(config)
+    assert len(checked) == 1
+
+
+@pytest.mark.parametrize("field", ["cell_router_token", "router_operator_token", "jwt_secret"])
+@pytest.mark.parametrize("shape", ["missing", "extra"])
+def test_complete_settings_shape_refuses_missing_or_extra_fields(field, shape):
+    config = role_config()
+    if shape == "missing":
+        delattr(config, field)
+    else:
+        config.unexpected_setting = "not-an-exclusion"
+    with pytest.raises(gate.Invalid, match="Settings fields"):
+        gate._configuration(config)
+
+
+def test_every_other_effective_setting_stays_in_the_common_digest():
+    from server.settings import Settings
+
+    fixture, config = fixture_config()
+    original = config.model_dump(mode="json")
+    fields = set(original) - {"cell_router_token"}
+    assert fields == set(Settings.model_fields) - {"cell_router_token"}
+    configuration = {
+        "schema": 2,
+        "api_configuration_sha256": fixture.api_configuration_sha256,
+        "cli_configuration_sha256": fixture.cli_configuration_sha256,
+        "shared_configuration_sha256": fixture.shared_configuration_sha256,
+        "workload": {},
+        "fingerprints": {},
+        "credential_posture": receipt_posture(),
+    }
+    for field in sorted(fields):
+        try:
+            setattr(config, field, ["changed-type-and-value", original[field]])
+            changed = dataclasses.replace(
+                fixture, cli_configuration_sha256=gate._digest(config.model_dump(mode="json"))
+            )
+            configuration["cli_configuration_sha256"] = changed.cli_configuration_sha256
+            with pytest.raises(gate.Invalid, match="launch shared configuration"):
+                gate._attested_configuration(configuration, changed, config)
+        finally:
+            setattr(config, field, original[field])
+
+
+@pytest.mark.parametrize("value", [True, 1, 1.0, "1", None, [], {}])
+def test_common_digest_keeps_json_value_types(value):
+    _, config = fixture_config()
+    config.pg_delivery_batch_rows = value
+    assert gate._digest(gate._shared_configuration(config)) != gate._digest(
+        {**gate._shared_configuration(config), "pg_delivery_batch_rows": "unchanged"}
+    )
+    hashes = {gate._digest({"value": v}) for v in [True, 1, 1.0, "1", None, [], {}]}
+    assert len(hashes) == 7
+
+
+@pytest.mark.parametrize("location", ["fixture", "launch", "configuration"])
+@pytest.mark.parametrize("version", [None, 1, True, 2.0, "2"])
+def test_old_missing_and_noninteger_receipt_versions_refuse(
+    monkeypatch, tmp_path, location, version
+):
+    fixture, config = fixture_config()
+    fixture, path, artifact_path, launch, configuration = launch_files(tmp_path, fixture, config)
+    manifest = dataclasses.asdict(fixture)
+    target = {"fixture": manifest, "launch": launch, "configuration": configuration}[location]
+    if version is None:
+        del target["schema"]
+    else:
+        target["schema"] = version
+    if location != "server":
+        monkeypatch.setattr(
+            gate, "_owned_server", lambda _: pytest.fail("invalid receipt reached birth")
+        )
+    if location == "fixture":
+        path.write_text(json.dumps(manifest))
+        with pytest.raises(gate.Invalid):
+            gate.Fixture.read(str(path))
+    else:
+        fixture = rewrite_launch(fixture, path, artifact_path, launch, configuration)
+        with pytest.raises(gate.Invalid):
+            gate._launch(args(launch_manifest=str(path)), fixture, config)
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "fixture",
+        "launch",
+        "server",
+        "source",
+        "configuration_artifact",
+        "configuration",
+        "workload",
+        "fingerprints",
+        "credential_posture",
+    ],
+)
+@pytest.mark.parametrize("fault", ["duplicate", "unknown", "missing"])
+def test_closed_receipt_objects_reject_duplicate_and_unknown_fields(
+    monkeypatch, tmp_path, location, fault
+):
+    fixture, config = fixture_config()
+    fixture, path, artifact_path, launch, configuration = launch_files(tmp_path, fixture, config)
+    manifest = dataclasses.asdict(fixture)
+    root = (
+        manifest
+        if location == "fixture"
+        else configuration
+        if location in {"configuration", "workload", "fingerprints", "credential_posture"}
+        else launch
+    )
+    target = root if location in {"fixture", "launch", "configuration"} else root[location]
+    if fault == "unknown":
+        target["unexpected"] = True
+        blob = json.dumps(root).encode()
+    elif fault == "missing":
+        del target[next(iter(target))]
+        blob = json.dumps(root).encode()
+    else:
+        key = next(iter(target))
+        original = json.dumps(target)
+        duplicate = original[:-1] + ", " + json.dumps(key) + ": " + json.dumps(target[key]) + "}"
+        blob = json.dumps(root).replace(original, duplicate, 1).encode()
+    if location != "server":
+        monkeypatch.setattr(
+            gate, "_owned_server", lambda _: pytest.fail("invalid receipt reached birth")
+        )
+    if location == "fixture":
+        path.write_bytes(blob)
+        with pytest.raises(gate.Invalid):
+            gate.Fixture.read(str(path))
+    else:
+        fixture = rewrite_launch(
+            fixture,
+            path,
+            artifact_path,
+            launch,
+            configuration,
+            raw=blob,
+            level="configuration" if root is configuration else "launch",
+        )
+        with pytest.raises(gate.Invalid):
+            gate._launch(args(launch_manifest=str(path)), fixture, config)
+
+
+@pytest.mark.parametrize("key", list(receipt_posture()))
+@pytest.mark.parametrize("fault", ["wrong", "integer", "missing"])
+def test_posture_requires_exact_boolean_literals(monkeypatch, tmp_path, key, fault):
+    fixture, config = fixture_config()
+    fixture, path, artifact_path, launch, configuration = launch_files(tmp_path, fixture, config)
+    if fault == "missing":
+        del configuration["credential_posture"][key]
+    else:
+        configuration["credential_posture"][key] = (
+            not receipt_posture()[key] if fault == "wrong" else int(receipt_posture()[key])
+        )
+    fixture = rewrite_launch(fixture, path, artifact_path, launch, configuration)
+    monkeypatch.setattr(gate, "_owned_server", lambda _: pytest.fail("bad posture reached birth"))
+    with pytest.raises(gate.Invalid, match="credential posture"):
+        gate._launch(args(launch_manifest=str(path)), fixture, config)
+
+
+@pytest.mark.parametrize("fault", ["equal", "cli", "shared", "swapped"])
+def test_role_digests_cannot_be_equal_swapped_or_mismatched(fault):
+    fixture, config = fixture_config()
+    if fault == "equal":
+        fixture = dataclasses.replace(
+            fixture, api_configuration_sha256=fixture.cli_configuration_sha256
+        )
+    elif fault == "swapped":
+        fixture = dataclasses.replace(
+            fixture,
+            api_configuration_sha256=fixture.cli_configuration_sha256,
+            cli_configuration_sha256=fixture.api_configuration_sha256,
+        )
+    else:
+        fixture = dataclasses.replace(fixture, **{fault + "_configuration_sha256": "0" * 64})
+    with pytest.raises(gate.Invalid):
+        fixture.validate(args(), config)
+
+
+@pytest.mark.parametrize("location", ["fixture", "configuration"])
+def test_removed_configuration_digest_is_not_a_compatibility_field(monkeypatch, tmp_path, location):
+    fixture, config = fixture_config()
+    fixture, path, artifact_path, launch, configuration = launch_files(tmp_path, fixture, config)
+    target = dataclasses.asdict(fixture) if location == "fixture" else configuration
+    target["configuration_sha256"] = fixture.cli_configuration_sha256
+    if location == "fixture":
+        path.write_text(json.dumps(target))
+        with pytest.raises(gate.Invalid):
+            gate.Fixture.read(str(path))
+    else:
+        fixture = rewrite_launch(fixture, path, artifact_path, launch, configuration)
+        with pytest.raises(gate.Invalid):
+            gate._launch(args(launch_manifest=str(path)), fixture, config)
+
+
+@pytest.mark.parametrize("location", ["fixture", "launch", "configuration"])
+def test_duplicate_json_fields_refuse_without_any_schema_assumption(tmp_path, location):
+    path = tmp_path / "receipt.json"
+    path.write_text('{"' + location + '":0,"' + location + '":1}')
+    with pytest.raises(gate.Invalid, match="duplicate receipt field"):
+        gate._receipt(str(path))
+
+
+@pytest.mark.parametrize(
+    "field", ["api_configuration_sha256", "cli_configuration_sha256", "shared_configuration_sha256"]
+)
+@pytest.mark.parametrize("value", [None, True, 64, "A" * 64, "f" * 63, "g" * 64])
+def test_role_digest_fields_are_lowercase_sha256_strings(field, value):
+    fixture, config = fixture_config()
+    reason = "fixture receipt digest" if type(value) is str else "fixture field types"
+    with pytest.raises(gate.Invalid, match=reason):
+        dataclasses.replace(fixture, **{field: value}).validate(args(), config)
+
+
+def test_schema_two_requires_explicit_internal_port_and_preserves_existing_bytes(tmp_path):
+    fixture, config = fixture_config()
+    value = dataclasses.asdict(fixture)
+    del value["pg_internal_port"]
+    original = json.dumps(value).encode()
+    path = tmp_path / "fixture.json"
+    path.write_bytes(original)
+    with pytest.raises(gate.Invalid):
+        gate.Fixture.read(str(path))
+    assert path.read_bytes() == original
+    value["pg_internal_port"] = None
+    path.write_text(json.dumps(value))
+    assert gate.Fixture.read(str(path)).validate(args(), config) == 45500
+
+
+@pytest.mark.parametrize("target", ["fixture", "launch", "configuration"])
+@pytest.mark.parametrize("fault", ["symlink", "oversize", "owner"])
+def test_all_receipt_roles_keep_file_safety(monkeypatch, tmp_path, target, fault):
+    import os
+
+    fixture, config = fixture_config()
+    fixture, path, artifact_path, launch, configuration = launch_files(tmp_path, fixture, config)
+    manifest_path = tmp_path / "fixture.json"
+    manifest_path.write_text(json.dumps(dataclasses.asdict(fixture)))
+    selected = {"fixture": manifest_path, "launch": path, "configuration": artifact_path}[target]
+    original = selected.read_bytes()
+    if fault == "symlink":
+        saved = tmp_path / "saved"
+        saved.write_bytes(original)
+        selected.unlink()
+        selected.symlink_to(saved)
+    elif fault == "oversize":
+        selected.write_bytes(b" " * 65_537)
+    else:
+        actual = os.fstat
+
+        def metadata(fd):
+            result = actual(fd)
+            return SimpleNamespace(st_mode=result.st_mode, st_uid=os.geteuid() + 1)
+
+        monkeypatch.setattr(gate.os, "fstat", metadata)
+    with pytest.raises((gate.Invalid, OSError, ValueError)):
+        if target == "fixture":
+            gate.Fixture.read(str(manifest_path))
+        else:
+            gate._launch(args(launch_manifest=str(path)), fixture, config)
+    if fault != "oversize":
+        assert selected.read_bytes() == original
+
+
+def native_guard_edges(monkeypatch, config, events):
+    from contextlib import asynccontextmanager
+
+    import server.settings
+    from server.auth import tenancy
+    from server.code.domain.index import repos
+    from server.core import background, cell, ch, pg, pg_profile
+    from server.insights.app import provider_command
+    from server.settings import Settings
+
+    class Client:
+        connected = False
+
+        async def connect(self):
+            events.append("native client")
+
+    @asynccontextmanager
+    async def model_command():
+        yield
+
+    native_settings = Settings.model_construct(**config.model_dump(mode="json"))
+
+    async def state(sql):
+        assert sql == cell._READ
+        return {
+            "first": {"is_first": True, "cell": config.cell},
+            "mode": "enforced",
+            "own": {"current_fp": cell.as_value(cell.mine()), "next_fp": None},
+            "tenancy": True,
+            "marked": True,
+        }
+
+    async def held(sql, org):
+        assert sql == tenancy._HOLDS and org == "org"
+        events.append("native held-org guard")
+        return 1
+
+    monkeypatch.setattr(server.settings, "settings", config)
+    monkeypatch.setattr(cell, "settings", native_settings)
+    monkeypatch.setattr(tenancy, "settings", native_settings)
+    monkeypatch.setattr(repos, "settings", native_settings)
+    monkeypatch.setattr(cell, "_view", cell._View())
+    monkeypatch.setattr(cell, "_deployment_id", "")
+    monkeypatch.setattr(cell, "_code_orgs", None)
+    monkeypatch.setattr(tenancy, "_held", set())
+    monkeypatch.setattr(tenancy, "_elsewhere", {})
+    monkeypatch.setattr(ch, "get_client", Client)
+    monkeypatch.setattr(pg_profile, "check_configured", AsyncMock())
+    monkeypatch.setattr(pg_profile, "deployment_id", AsyncMock(return_value="deployment"))
+    monkeypatch.setattr(pg, "fetchrow_reset", state)
+    monkeypatch.setattr(pg, "fetchval", held)
+    monkeypatch.setattr(provider_command, "model_command", model_command)
+    monkeypatch.setattr(background, "register_buffer_drainer", lambda *_: None)
+    monkeypatch.setattr("server.cli._ch.disconnect", AsyncMock())
+
+
+@pytest.mark.parametrize("credential", ["", "lcr_" + "0" * 128])
+def test_role_pair_enters_the_real_native_guard_without_changing_it(monkeypatch, credential):
+    from server.cli import _ch
+
+    fixture, config = fixture_config()
+    events = []
+    native_guard_edges(monkeypatch, config, events)
+    assert fixture.validate(args(), config) == 45500
+    config.cell_router_token = credential
+
+    async def work(_):
+        events.append("native work")
+        return 17
+
+    if credential:
+        with pytest.raises(_ch.OrgNotHeld, match="LOOM_CELL_ROUTER_TOKEN"):
+            _ch.run_connected(work, orgs=("org",))
+        assert events == ["native client"]
+    else:
+        assert _ch.run_connected(work, orgs=("org",)) == 17
+        assert events == ["native client", "native held-org guard", "native work"]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "",
+        "api_configuration",
+        "operator_token",
+        "arbitrary_setting",
+        "legacy_field",
+        "duplicate",
+        "schema_type",
+        "pg_port_type",
+    ],
+)
+def test_receipt_orchestration_refuses_before_clients_and_keeps_the_real_native_guard(
+    monkeypatch, tmp_path, capsys, fault
+):
+    import sys
+
+    import server.wiring
+
+    fixture, config = fixture_config()
+    fixture, launch_path, _, _, _ = launch_files(tmp_path, fixture, config)
+    manifest = dataclasses.asdict(fixture)
+    if fault == "api_configuration":
+        config.cell_router_token = "lcr_" + "0" * 128
+    elif fault == "operator_token":
+        config.router_operator_token = "lro_" + "1" * 128
+    elif fault == "arbitrary_setting":
+        config.instance_heartbeat_seconds += 1
+        manifest["cli_configuration_sha256"] = gate._digest(config.model_dump(mode="json"))
+    elif fault == "legacy_field":
+        manifest["configuration_sha256"] = fixture.cli_configuration_sha256
+    elif fault == "schema_type":
+        manifest["schema"] = 2.0
+    elif fault == "pg_port_type":
+        manifest["pg_port"] = float(manifest["pg_port"])
+    raw = json.dumps(manifest)
+    if fault == "duplicate":
+        raw = raw[:-1] + ', "schema":2}'
+    manifest_path = tmp_path / "fixture.json"
+    manifest_path.write_text(raw)
+    output = tmp_path / "output.jsonl"
+    argv = ["driver"]
+    for key, value in vars(
+        args(
+            launch_manifest=str(launch_path),
+            fixture_manifest=str(manifest_path),
+            output=str(output),
+        )
+    ).items():
+        argv += ["--" + key.replace("_", "-"), str(value)]
+    events = []
+    native_guard_edges(monkeypatch, config, events)
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(gate, "_source", lambda _: {"clean": True})
+    monkeypatch.setattr(gate, "_owned_server", lambda _: None)
+    monkeypatch.setattr(
+        gate, "_preflight", AsyncMock(side_effect=lambda *_: events.append("readonly"))
+    )
+    monkeypatch.setattr(server.wiring, "wire", lambda: events.append("wire"))
+    summary = {
+        "latency_within_limit": True,
+        "throughput_within_limit": True,
+        "p99_delta_ms": 0.0,
+        "throughput_loss": 0.0,
+    }
+
+    async def run(*_):
+        events.append("native work")
+        return summary
+
+    monkeypatch.setattr(gate, "_run", run)
+    assert gate.main() == int(bool(fault))
+    text = capsys.readouterr().out
+    assert json.loads(text)["verdict"] == ("INVALID" if fault else "PASS")
+    assert all(
+        value not in text
+        for value in [
+            args().pg_dsn,
+            "secret-token",
+            "test-only-root",
+            "lcr_" + "0" * 128,
+            "lro_" + "1" * 128,
+        ]
+    )
+    if fault:
+        assert events == [] and not output.exists()
+    else:
+        assert events == [
+            "readonly",
+            "wire",
+            "native client",
+            "native held-org guard",
+            "native work",
+        ]
+        record = json.loads(output.read_text().splitlines()[0])
+        assert record["manifest"]["schema"] == 2
+        assert record["shared_configuration_excludes"] == ["cell_router_token"]
+        assert record["credential_posture"] == receipt_posture()
+
+
+def test_unversioned_single_configuration_fixture_is_no_longer_accepted(tmp_path):
+    legacy = {
+        "base_url": args().base_url,
+        "pg_host": "127.0.0.1",
+        "pg_port": 15790,
+        "pg_database": "gate_cell",
+        "ch_host": "127.0.0.1",
+        "ch_port": 18790,
+        "ch_database": "gate_cell",
+        "ch_telemetry_database": "gate_cell_t",
+        "cell": "gate-cell",
+        "org": "org",
+        "namespace": "ns",
+        "deployment_id": "deployment",
+        "epoch": 1,
+        "instance_id": "instance",
+        "build_commit": "a" * 40,
+        "source_tree": "b" * 40,
+        "launch_manifest_sha256": "c" * 64,
+        "ownership_receipt_sha256": "d" * 64,
+        "configuration_sha256": "e" * 64,
+        "background_workers": "off",
+        "controller_excluded": True,
+        "pg_internal_port": 5432,
+    }
+    path = tmp_path / "legacy.json"
+    raw = json.dumps(legacy).encode()
+    path.write_bytes(raw)
+    with pytest.raises(gate.Invalid):
+        gate.Fixture.read(str(path))
+    assert path.read_bytes() == raw
+
+
+@pytest.mark.parametrize("field", ["pg_port", "ch_port", "epoch"])
+@pytest.mark.parametrize("kind", [bool, float, str])
+def test_fixture_integer_fields_never_coerce_json_types(field, kind):
+    fixture, config = fixture_config()
+    with pytest.raises(gate.Invalid, match="fixture field types"):
+        dataclasses.replace(fixture, **{field: kind(getattr(fixture, field))}).validate(
+            args(), config
+        )

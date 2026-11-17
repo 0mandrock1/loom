@@ -1,6 +1,7 @@
 """Driver work retains its error through secondary cleanup and artifact failures."""
 
 import asyncio
+import dataclasses
 import json
 import time
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ import pytest
 from asyncpg.transaction import Transaction
 
 from bench import cell_trigger_gate as gate
-from tests.unit.test_bench_cell_trigger_gate import args, fixture_config
+from tests.unit.test_bench_cell_trigger_gate import args, fixture_config, receipt_posture
 
 FIRST = [None, ValueError, asyncio.CancelledError, SystemExit, KeyboardInterrupt]
 SECOND = [None, OSError, asyncio.CancelledError, SystemExit, KeyboardInterrupt]
@@ -46,6 +47,14 @@ def artifact_output(monkeypatch, tmp_path):
     def configure(errors):
         artifact = gate.Artifact(str(tmp_path / f"raw-{len(artifacts)}.jsonl"))
         artifacts.append(artifact)
+        fixture, _ = fixture_config()
+        artifact.emit(
+            "configuration",
+            manifest=dataclasses.asdict(fixture),
+            shared_configuration_excludes=["cell_router_token"],
+            credential_posture=receipt_posture(),
+            api_configuration_attested=True,
+        )
         original = artifact.file
         events = []
 
@@ -73,6 +82,8 @@ def http_edges(monkeypatch):
     import server.settings
 
     fixture, config = fixture_config()
+    assert fixture.validate(args(), config) == 45500
+    assert config.cell_router_token == config.router_operator_token == ""
     monkeypatch.setattr(server.settings, "settings", config)
     monkeypatch.setattr(gate, "CALLS", 1)
     monkeypatch.setattr(gate, "WARMUP", 0)
