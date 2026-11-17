@@ -442,3 +442,61 @@ def test_live_raw_verifier_call_census_has_only_the_admission_and_logout_excepti
         ("server/auth/jwt.py", "authenticate_token"),
         ("server/auth/oauth.py", "revoke_token"),
     }
+
+
+@pytest.mark.parametrize("path", ["/v1/me/sharing-summary", "/v1/me/set-default-namespace"])
+@pytest.mark.parametrize("parent", ["", "missing@example.test"])
+async def test_caller_orgless_fallback_checks_the_complete_person_in_the_signup_org(
+    people, token, monkeypatch, path, parent
+):
+    import httpx
+
+    from server.auth import tenancy
+    from server.transport.tenancy_gate import TenancyMiddleware
+
+    monkeypatch.setattr(settings, "self_signup_org", "signups")
+    people.accounts.append(("signups", "alice", "alice@example.test", True))
+    people.provision("alice@example.test")
+    raw = jwt.mint_token(
+        "alice",
+        "",
+        ["*"],
+        ["writer"],
+        secret=SECRET,
+        ttl_seconds=60,
+        parent_subjects=[parent] if parent else [],
+        parent_iats=[int(time.time())] if parent else [],
+    )
+    held = []
+    admitted = []
+
+    async def ensure_held(org, principal):
+        held.append((org, principal))
+
+    monkeypatch.setattr(tenancy, "ensure_held", ensure_held)
+    app = FastAPI()
+    app.add_middleware(TenancyMiddleware)
+
+    @app.get(path)
+    async def caller(request: Request):
+        subject, org = await me_callers.caller_identity(request)
+        admitted.append((subject, org))
+        return {"subject": subject, "org": org}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            path, params={"org": "foreign"}, headers={"Authorization": f"Bearer {raw}"}
+        )
+    if parent:
+        assert response.status_code == 401
+        assert response.json()["detail"]["code"] == "AUTH_INVALID"
+        assert admitted == held == []
+    else:
+        assert response.status_code == 200
+        assert admitted == [("alice", "signups")]
+        assert held == [("signups", None)]
+        original = await jwt.authenticate_token(raw, secret=SECRET, fallback_org="signups")
+        assert original.subject == "alice" and original.org == ""
+    assert {p["org"] for p in people.reads if "org" in p} == {"signups"}

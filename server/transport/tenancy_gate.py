@@ -15,6 +15,7 @@ that does not verify passes to the route, which answers it.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from starlette.responses import JSONResponse
@@ -73,7 +74,14 @@ class TenancyMiddleware:
 
         try:
             token = _bearer(scope)
-            info = await authenticate_token(token) if token is not None else None
+            fallback = settings.self_signup_org if path in _SIGN_UP_ORG_ROUTES else None
+            info = None
+            if token is not None:
+                info = (
+                    await authenticate_token(token, fallback_org=fallback)
+                    if fallback is not None
+                    else await authenticate_token(token)
+                )
         except AuthUnavailable as e:
             # Cannot judge the token yet: refused, never passed on unchecked. The caller
             # gets the error's kind; the text is logged.
@@ -101,7 +109,10 @@ class TenancyMiddleware:
             org = acting_org(path, info)
             from server.auth.authz import check_acted_for
 
-            await check_acted_for(info, org)
+            caller = (
+                replace(info, org=org) if not info.org and path in _SIGN_UP_ORG_ROUTES else info
+            )
+            await check_acted_for(caller, org)
             # The sign-up org a route falls back to is not the token's: no principal, so
             # it is recorded or refused, never placed, as for a sign-up.
             await tenancy.ensure_held(org, info if org == info.org else None)

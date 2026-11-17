@@ -509,13 +509,24 @@ _NOT_FOR_END_USERS = (
 )
 
 
-async def authenticate_token(token: str, *, secret: str | None = None) -> AuthInfo:
-    """Verify the credential, then admit its complete person and ancestry graph."""
+async def authenticate_token(
+    token: str, *, secret: str | None = None, fallback_org: str | None = None
+) -> AuthInfo:
+    """Verify the credential, then admit its complete person and ancestry graph.
+
+    Caller routes supply their configured fallback for an org-less or wildcard bearer;
+    the returned token identity remains unchanged.
+    """
     from server.auth import login, scim
 
     auth = verify_token(token, secret=secret)
+    org = fallback_org if auth.org in ("", "*") else None
     try:
-        refused = await scim.refuses_auth(auth)
+        refused = (
+            await scim.refuses_auth(auth, org=org)
+            if org is not None
+            else await scim.refuses_auth(auth)
+        )
     except login.SignInUnavailable as e:
         raise AuthUnavailable(
             "SCIM provisioning cannot be checked yet; retry shortly", reason="provisioning"

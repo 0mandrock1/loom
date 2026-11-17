@@ -138,7 +138,9 @@ async def caller_identity(request: Request) -> tuple[str, str]:
     """The supplied bearer's identity, or the deliberate no-bearer dev identity."""
     from server.auth.bearer import missing_bearer, verify_bearer_header
 
-    info = await verify_bearer_header(request.headers.get("Authorization"))
+    info = await verify_bearer_header(
+        request.headers.get("Authorization"), fallback_org=settings.self_signup_org
+    )
     if info is None:
         if settings.auth_actually_required():
             raise missing_bearer()

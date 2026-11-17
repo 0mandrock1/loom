@@ -365,7 +365,7 @@ async def test_the_middleware_checks_a_raw_routes_token_org(
     from server.transport import tenancy_gate
 
     monkeypatch.setattr(settings, "cell", "eu-1")
-    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t: _auth("other"))
+    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t, *, secret=None: _auth("other"))
 
     async def _held(org: Any, auth: Any) -> None:
         if org != "held":
@@ -717,7 +717,7 @@ async def test_on_a_token_route_a_bearer_that_does_not_verify_passes_to_the_rout
     from server.auth import jwt as jwt_mod
     from server.transport import tenancy_gate
 
-    def _refuse(_token: str) -> AuthInfo:
+    def _refuse(_token: str, *, secret: str | None = None) -> AuthInfo:
         raise jwt_mod.TokenError("signature does not verify")
 
     monkeypatch.setattr(settings, "cell", "eu-1")
@@ -872,7 +872,7 @@ async def test_the_middleware_answers_503_while_it_cannot_judge_the_token(
 
     monkeypatch.setattr(settings, "cell", "eu-1")
 
-    def _unavailable(_t: str) -> None:
+    def _unavailable(_t: str, *, secret: str | None = None) -> None:
         raise jwt.KeyringUnavailable("the signing keyring is not loaded yet")
 
     monkeypatch.setattr("server.auth.jwt.verify_token", _unavailable)
@@ -1072,7 +1072,7 @@ async def test_an_org_wide_token_on_the_callers_own_routes_is_checked_in_its_fal
 
     monkeypatch.setattr(settings, "cell", "eu-1")
     monkeypatch.setattr(settings, "self_signup_org", "signups")
-    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t: _auth("*"))
+    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t, *, secret=None: _auth("*"))
     checked: list[str] = []
 
     async def _held(org: Any, auth: Any) -> None:
@@ -1128,7 +1128,9 @@ async def test_on_a_scim_route_the_middleware_answers_an_rfc_7644_error(
     from server.transport import tenancy_gate
 
     monkeypatch.setattr(settings, "cell", "eu-1")
-    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t: _auth("beta", Role.ORG_ADMIN))
+    monkeypatch.setattr(
+        "server.auth.jwt.verify_token", lambda _t, *, secret=None: _auth("beta", Role.ORG_ADMIN)
+    )
 
     async def _wrong(org: Any, auth: Any) -> None:
         raise errors.WrongCellError(str(org), cell="us-1")
@@ -1166,7 +1168,7 @@ async def test_an_org_less_or_org_wide_token_on_the_callers_routes_is_served_in_
 
     monkeypatch.setattr(settings, "cell", "eu-1")
     monkeypatch.setattr(settings, "self_signup_org", "signups")
-    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t: _auth(token_org))
+    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t, *, secret=None: _auth(token_org))
     seen: list[tuple[str, Any]] = []
 
     async def _held(org: Any, auth: Any) -> None:
@@ -1196,7 +1198,7 @@ async def test_an_org_wide_tokens_sign_up_org_is_recorded_or_refused_never_place
     cell_pg.mode = mode
     calls = _router(monkeypatch, {"cell": "eu-1", "deployment_id": "dep-eu-1"})
     monkeypatch.setattr(settings, "self_signup_org", "signups")
-    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t: _auth("*"))
+    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t, *, secret=None: _auth("*"))
     app, send = AsyncMock(), AsyncMock()
     scope = {
         "type": "http",
@@ -1226,7 +1228,7 @@ async def test_the_service_account_routes_act_in_the_tokens_own_org(
 
     cell_pg.down = True  # nothing is read for `*`
     monkeypatch.setattr(settings, "self_signup_org", "signups")
-    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t: _auth("*"))
+    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t, *, secret=None: _auth("*"))
     for path in ("/v1/me/service_accounts", "/v1/me/service_accounts.create"):
         app = AsyncMock()
         scope = {
@@ -1247,7 +1249,7 @@ async def test_the_middlewares_503_carries_the_errors_own_fields(
     from server.transport import tenancy_gate
 
     monkeypatch.setattr(settings, "cell", "eu-1")
-    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t: _auth("acme"))
+    monkeypatch.setattr("server.auth.jwt.verify_token", lambda _t, *, secret=None: _auth("acme"))
 
     async def _down(org: Any, auth: Any) -> None:
         raise errors.BackendUnavailableError("router down", operation="placement")

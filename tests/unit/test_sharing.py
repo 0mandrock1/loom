@@ -865,7 +865,7 @@ async def test_mcp_refuses_an_end_user_token_as_not_allowed_not_as_invalid(
     from server.auth import jwt
     from server.transport import mcp_auth
 
-    monkeypatch.setattr(jwt, "verify_token", lambda _token: _user("alice"))
+    monkeypatch.setattr(jwt, "verify_token", lambda _token, *, secret=None: _user("alice"))
     request = SimpleNamespace(headers={"authorization": "Bearer eu"})
     with pytest.raises(PermissionError) as refused:
         (await mcp_auth._verify_bearer(request))  # type: ignore[arg-type]
