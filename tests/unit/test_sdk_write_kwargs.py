@@ -55,7 +55,9 @@ async def test_a_coalesced_set_keeps_its_source_class(agent: Agent) -> None:
     assert entries and all(e["source_class"] == "imported" for e in entries)
 
 
-@pytest.mark.parametrize("precondition", [{"if_match_sha256": "abc"}, {"if_absent": True}])
+@pytest.mark.parametrize(
+    "precondition", [{"if_match_sha256": "abc"}, {"if_match_sha256": "absent"}]
+)
 async def test_pin_sends_what_set_sends(agent: Agent, precondition: dict[str, Any]) -> None:
     t: Any = agent.transport
     kw: dict[str, Any] = dict(
@@ -123,11 +125,13 @@ async def test_a_set_with_relations_is_never_coalesced(agent: Agent) -> None:
 
 async def test_create_only_sets_keep_their_precondition_on_the_point_path(agent: Agent) -> None:
     t: Any = agent.transport
-    await asyncio.gather(*[agent.memory.set(k, "v", if_absent=True) for k in "abcd"])
+    await asyncio.gather(*[agent.memory.set(k, "v", if_match_sha256="absent") for k in "abcd"])
     assert len(t.calls) == 4
-    assert all(op == "/v1/memory.set" and body["if_absent"] for op, body in t.calls)
+    assert all(
+        op == "/v1/memory.set" and body["if_match_sha256"] == "absent" for op, body in t.calls
+    )
     await agent.memory.set("ordinary", "v")
-    assert "if_absent" not in t.last("/v1/memory.set")
+    assert "if_match_sha256" not in t.last("/v1/memory.set")
 
 
 async def test_set_from_messages_sends_defer_only_when_given(agent: Agent) -> None:
