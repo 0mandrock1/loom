@@ -513,7 +513,11 @@ async def _prepare_locked(
     try:
         await _write_nonces(ch, body["nonces"])
         answer = await _register(args, router, body, transport)
-    finally:
+    except BaseException:  # Nonce cleanup preserves the first failure or cancellation.
+        with contextlib.suppress(BaseException):
+            await _delete_nonces(ch, body["nonces"])
+        raise
+    else:
         await _delete_nonces(ch, body["nonces"])
     # The processes may have changed while the probe was retried: judge the ones live now.
     beats = await _read_beats(ch)

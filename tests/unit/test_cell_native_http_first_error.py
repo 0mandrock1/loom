@@ -180,11 +180,7 @@ async def test_required_client_exit_failure_cannot_report_success(
 async def test_successful_client_neighbor(exchange, boundary):
     kind, result = await observed(lambda: invoke(boundary))
     assert kind == "value"
-    expected = (
-        None
-        if boundary == "placement"
-        else ("dep-eu-1" if boundary == "health" else exchange.answer)
-    )
+    expected = "dep-eu-1" if boundary == "health" else exchange.answer
     assert result == expected
     assert exchange.events == ["construct", "enter", "request", "exit-call", "exit-await"]
 

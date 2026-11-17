@@ -376,7 +376,11 @@ class Run:
             await _write_nonces(self.ch, nonces)
             self.row = {**self.row, **await self.mutate("/attach/begin", body)}
             self.begun_keys_fp = self.keys_fp
-        finally:
+        except BaseException:  # Nonce cleanup preserves the first failure or cancellation.
+            with contextlib.suppress(BaseException):
+                await _delete_nonces(self.ch, nonces)
+            raise
+        else:
             await _delete_nonces(self.ch, nonces)
 
     # -- the scans ---------------------------------------------------------------------
@@ -542,11 +546,16 @@ class Run:
         nonces = _new_nonces()
         try:
             await _write_nonces(self.ch, nonces)
-            return await self.mutate(
+            answer = await self.mutate(
                 "/attach/serving", {"deployment_id": self.row["deployment_id"], "nonces": nonces}
             )
-        finally:
+        except BaseException:  # Nonce cleanup preserves the first failure or cancellation.
+            with contextlib.suppress(BaseException):
+                await _delete_nonces(self.ch, nonces)
+            raise
+        else:
             await _delete_nonces(self.ch, nonces)
+        return answer
 
     # -- the run -----------------------------------------------------------------------
 
