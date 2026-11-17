@@ -187,7 +187,7 @@ def update(every: bool, codes: list[str] | None) -> int:
             os.environ["LOOM_I18N_MAX_USD"] = previous
 
 
-def generated_path(path: str, text: str, *, deleted: bool) -> bool:
+def generated_path(path: str, text: str, *, deleted: bool, readme_blob: str | None) -> bool:
     if path == refresh.PATH:
         try:
             refresh.parse(text)
@@ -214,12 +214,29 @@ def generated_path(path: str, text: str, *, deleted: bool) -> bool:
     return (
         (checkpoint or source not in t.sources())
         if deleted
-        else (source in t.sources() and blob == t.blob(source))
+        else (
+            source in t.sources()
+            and blob == (readme_blob if source == "README.md" else t.blob(source))
+        )
     )
+
+
+def readme_blobs(candidate: str) -> dict[str, str]:
+    paths = ["README.md"] + [t.target_path(lang.code, "README.md") for lang in t.LANGUAGES]
+    objects = {}
+    for entry in git("ls-tree", "-z", candidate, "--", *paths).split("\0"):
+        if not entry:
+            continue
+        metadata, path = entry.split("\t", 1)
+        mode, kind, blob = metadata.split()
+        if mode in {"100644", "100755"} and kind == "blob":
+            objects[path] = blob
+    return objects
 
 
 def validate_changes(base: str, candidate: str) -> None:
     """Only generated data may differ from the trusted main tree."""
+    readmes = readme_blobs(candidate)
     fields = git("diff", "--name-status", "--no-renames", "-z", base, candidate).split("\0")[:-1]
     for status, path in zip(fields[::2], fields[1::2], strict=True):
         mode_ref = base if status == "D" else candidate
@@ -231,13 +248,17 @@ def validate_changes(base: str, candidate: str) -> None:
             before = file_at(base, path)
             match = t.LANGUAGE_LINE.search(before)
             expected = (
-                before[: match.start()] + t.language_line(path) + before[match.end() :]
+                before[: match.start()]
+                + t.language_line(path, available=set(readmes))
+                + before[match.end() :]
                 if match
                 else before
             )
             if text == expected:
                 continue
-        if not path.startswith("i18n/") or not generated_path(path, text, deleted=status == "D"):
+        if not path.startswith("i18n/") or not generated_path(
+            path, text, deleted=status == "D", readme_blob=readmes.get("README.md")
+        ):
             raise ValueError(f"translation publisher refuses path: {path}")
     workflow = ".github/workflows/ci.yml"
     if git("rev-parse", f"{base}:{workflow}") != git("rev-parse", f"{candidate}:{workflow}"):

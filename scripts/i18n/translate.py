@@ -301,15 +301,16 @@ def _is_image(text: str, close: int) -> bool:
     return False
 
 
-def language_line(current: str) -> str:
+def language_line(current: str, *, available: set[str] | None = None) -> str:
     """The README's language links as seen from `current` (a path relative to the root)."""
+    present = lifecycle.regular if available is None else available.__contains__
     here = posixpath.dirname(current)
     items = [("README.md", "English")] + [
         (target_path(lg.code, "README.md"), lg.name) for lg in LANGUAGES
     ]
     links = [
         name
-        if path == current or not lifecycle.regular(path)
+        if path == current or not present(path)
         else f'<a href="{posixpath.relpath(path, here) if here else "./" + path}">{name}</a>'
         for path, name in items
     ]

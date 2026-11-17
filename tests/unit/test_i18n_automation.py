@@ -779,3 +779,69 @@ def test_requested_batch_preserves_excluded_data_through_prepare_update_and_fina
     a.validate_changes(base, candidate)
     assert a.rollout_changes_allowed(base, candidate, a.approved_languages())
     assert "i18n/es/README.md" not in a.t.lifecycle.current_checkpoints()
+
+
+def readme_candidate(
+    repository: Path, *, existing: bool = False, invalid: str = ""
+) -> tuple[str, str]:
+    readme = repository / "README.md"
+    japanese = repository / "i18n/ja/README.md"
+    japanese.parent.mkdir(parents=True, exist_ok=True)
+    if existing:
+        japanese.write_text("temporary")
+    readme.write_text("# Loom\n\n" + a.t.language_line("README.md") + "\n")
+    lang = next(item for item in a.t.LANGUAGES if item.code == "ja")
+    if existing:
+        japanese.write_text(
+            a.t.header("README.md", lang, a.t.DEFAULT_MODEL, a.t.blob("README.md"))
+            + "# 日本語\n\n"
+            + a.t.language_line("i18n/ja/README.md")
+            + "\n"
+        )
+    base = commit_all()
+    old_blob = a.t.blob("README.md")
+    japanese.write_text("temporary")
+    bar = a.t.language_line("README.md")
+    if invalid == "bar":
+        bar = bar.replace("日本語", "Invalid generated link")
+    heading = "# Changed prose" if invalid == "prose" else "# Loom"
+    readme.write_text(heading + "\n\n" + bar + "\n")
+    blob = old_blob if invalid == "stamp" else a.t.blob("README.md")
+    japanese.write_text(
+        a.t.header("README.md", lang, a.t.DEFAULT_MODEL, blob)
+        + "# 日本語の文書\n\n"
+        + a.t.language_line("i18n/ja/README.md")
+        + "\n"
+    )
+    return base, commit_all()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("untracked_readme", [False, True])
+def test_generated_readme_validation_uses_candidate_data_from_clean_main(
+    repository: Path, existing: bool, untracked_readme: bool
+) -> None:
+    base, candidate = readme_candidate(repository, existing=existing)
+    a.validate_changes(base, candidate)
+    a.git("switch", "--detach", "-q", base)
+    if untracked_readme and not existing:
+        path = repository / "i18n/ja/README.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Untracked data must not control candidate validation")
+    before = a.git("status", "--porcelain")
+    a.validate_changes(base, candidate)
+    assert a.git("rev-parse", "HEAD") == base
+    assert a.git("status", "--porcelain") == before
+
+
+@pytest.mark.parametrize("invalid", ["prose", "bar", "stamp"])
+@pytest.mark.parametrize("checkout", ["candidate", "main"])
+def test_candidate_readme_projection_refuses_prose_bars_and_stale_stamps(
+    repository: Path, invalid: str, checkout: str
+) -> None:
+    base, candidate = readme_candidate(repository, invalid=invalid)
+    if checkout == "main":
+        a.git("switch", "--detach", "-q", base)
+    path = "i18n/ja/README.md" if invalid == "stamp" else "README.md"
+    with pytest.raises(ValueError, match=f"refuses path: {path}"):
+        a.validate_changes(base, candidate)
