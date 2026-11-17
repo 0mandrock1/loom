@@ -11,14 +11,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from server.cli.cell_ch import Refusal, Refused
 from server.core import cell, cell_triggers, pg
 from server.core.cell import ATTACH_LOCK_KEY
+
+if TYPE_CHECKING:
+    from server.cli.cell_control import Owner
 
 _sleep = asyncio.sleep  # the seam the wait tests replace
 
@@ -134,56 +138,6 @@ async def supervise[T](conn: Any, work: Coroutine[Any, Any, T], *, end: float) -
             except BaseException:  # noqa: BLE001 — abort cannot replace the work failure.
                 pass
         raise
-
-
-async def close_context(
-    cm: contextlib.AbstractAsyncContextManager[Any],
-    conn: Any,
-    *,
-    error: BaseException | None = None,
-) -> None:
-    """Close an owned session and its context without replacing its first failure.
-
-    Work supervision may have closed it already; context exit then gets no fresh
-    allowance. Both exit invocation and awaiting run inside the fatal capture.
-    """
-    closed = pg._lost(conn)
-    end = time.monotonic() + (0.0 if closed else pg._RELEASE_TIMEOUT_S)
-    failure = error
-    try:
-        if not closed:
-            await pg.close_owned(conn, end=end)
-    except BaseException as caught:  # noqa: BLE001 — keep the first operation failure.
-        if failure is None:
-            failure = caught
-    task = asyncio.create_task(
-        _work_result(
-            lambda: cm.__aexit__(
-                type(failure) if failure is not None else None,
-                failure,
-                failure.__traceback__ if failure is not None else None,
-            )
-        )
-    )
-    try:
-        done, _ = await asyncio.wait({task}, timeout=max(0.0, end - time.monotonic()))
-        if not done:
-            raise TimeoutError("attach context cleanup deadline expired")
-        if isinstance(result := task.result(), _Interrupted):
-            raise result.error
-    except BaseException as caught:  # noqa: BLE001 — exit cannot replace the first failure.
-        if failure is None:
-            failure = caught
-        try:
-            pg._terminate(conn)
-        except BaseException:  # noqa: BLE001 — abort cannot replace the selected failure.
-            pass
-    finally:
-        if not task.done():
-            task.cancel()
-        task.add_done_callback(pg._retrieve_task)
-    if failure is not None:
-        raise failure
 
 
 def _split(key: int) -> str:
@@ -492,8 +446,6 @@ _OWN_GRANTS = """
 SELECT need, held FROM (VALUES
   ('effective privileges of pg_read_all_stats',
    pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')),
-  ('effective privileges of pg_signal_backend',
-   pg_has_role(current_user, 'pg_signal_backend', 'USAGE')),
   ('USAGE on schema loom', has_schema_privilege('loom', 'USAGE')),
   ('SELECT on loom.cell_first', has_table_privilege('loom.cell_first', 'SELECT')),
   ('SELECT on loom.tenancy_mode', has_table_privilege('loom.tenancy_mode', 'SELECT')),
@@ -552,12 +504,13 @@ _MIGRATION_LOCK = "SELECT pg_advisory_lock($1)"
 _MIGRATION_UNLOCK = "SELECT pg_advisory_unlock($1)"
 
 
-async def ensure_triggers(conn: Any, wait: Wait, log: Callable[[str], None]) -> list[Refusal]:
+async def ensure_triggers(owner: Owner, wait: Wait, log: Callable[[str], None]) -> list[Refusal]:
     """Give every planned table its triggers (`cell_triggers.ensure_table` with
     `recording_first`), one try at a time under the migration lock, retrying a table whose
     lock is busy a second apart within `wait`; one autovacuum holding it is asked to yield
     by one try just past `deadlock_timeout`. A table this role cannot alter refuses at once.
     Then `missing`: any defect refuses."""
+    conn = owner.conn
     deadlock_ms = int(
         await conn.fetchval(
             "SELECT setting::int * CASE unit WHEN 's' THEN 1000 ELSE 1 END "
@@ -566,14 +519,15 @@ async def ensure_triggers(conn: Any, wait: Wait, log: Callable[[str], None]) -> 
     )
     with wait.counting():
         for table in await cell_triggers.planned_tables(conn):
-            if refusal := await _ensure_table(conn, table, deadlock_ms, wait, log):
+            if refusal := await _ensure_table(owner, table, deadlock_ms, wait, log):
                 return [refusal]
     return [Refusal("postgres triggers", d.text) for d in await cell_triggers.missing(conn)]
 
 
 async def _ensure_table(
-    conn: Any, table: str, deadlock_ms: int, wait: Wait, log: Callable[[str], None]
+    owner: Owner, table: str, deadlock_ms: int, wait: Wait, log: Callable[[str], None]
 ) -> Refusal | None:
+    conn = owner.conn
     yielded = False
     said = ""
     while True:
@@ -581,7 +535,7 @@ async def _ensure_table(
         holders = await cell_triggers.holders(conn, table)
         if not yielded and any(h["backend_type"] == "autovacuum worker" for h in holders):
             most_ms, yielded = deadlock_ms + 500, True
-        outcome = await _ensure_one(conn, table, most_ms, wait)
+        outcome = await _ensure_one(owner, table, most_ms, wait)
         if outcome.answer == "applied":
             return None
         if outcome.answer == "denied":
@@ -619,7 +573,7 @@ async def _migration_holder(conn: Any, key: int) -> str:
     return f"{_MIGRATION_HELD} (held by {held or 'a session that just ended'})"
 
 
-async def _ensure_one(conn: Any, table: str, most_ms: int, wait: Wait) -> cell_triggers.Outcome:
+async def _ensure_one(owner: Owner, table: str, most_ms: int, wait: Wait) -> cell_triggers.Outcome:
     """One try under the migration lock: the migration lock's wait, and then the DDL's lock
     wait (at most `most_ms`), each bounded by what `wait` has left when it starts, with the
     try floor. One client deadline covers the lock, DDL and cleanup, including COMMIT or
@@ -629,8 +583,8 @@ async def _ensure_one(conn: Any, table: str, most_ms: int, wait: Wait) -> cell_t
     bound_s = (
         wait.bound_ms(_MIGRATION_LOCK_MS) + wait.bound_ms(most_ms)
     ) / 1000 + _TRIGGER_TRY_MARGIN_S
-    return await supervise(
-        conn, _trigger_try(conn, table, most_ms, wait, _LOCK_KEY), end=time.monotonic() + bound_s
+    return await owner.call(
+        lambda: _trigger_try(owner.conn, table, most_ms, wait, _LOCK_KEY), total_s=bound_s
     )
 
 
@@ -673,56 +627,33 @@ def _busy_refusal(table: str, holders: list[Any]) -> Refusal:
 
 # -- step 3: the mode commit ------------------------------------------------------------
 
-# The mode transaction in flight: the backend holding or waiting for the ExclusiveLock on
-# loom.tenancy_mode in this database, which only attach takes.
-_MODE_HOLDERS = """
-SELECT l.pid, a.application_name, a.xact_start, r.rolsuper, l.granted
-FROM pg_locks l
-JOIN pg_stat_activity a ON a.pid = l.pid
-LEFT JOIN pg_roles r ON r.oid = a.usesysid
-WHERE l.locktype = 'relation' AND l.relation = 'loom.tenancy_mode'::regclass
-  AND l.mode = 'ExclusiveLock'
-  AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
-  AND l.pid <> pg_backend_pid()
-"""
-
+# Only acknowledged pre-COMMIT contention permits another try on the same session.
 _TIMED_OUT = frozenset({"55P03", "57014"})
-# How long attach waits for an ended mode transaction's lock to clear.
-_END_ROUNDS = 30  # not a setting: checks of the lock
-_END_PAUSE_S = 0.1  # not a setting: the pause between them
 
 
 async def commit_enforced(
-    conn: Any,
+    owner: Owner,
     confirm_lock: Callable[[], Any],
     ready: Callable[[], Awaitable[list[str]]],
     wait: Wait,
     log: Callable[[str], None],
     mark: Callable[[str], None],
+    *,
+    expected_cell: str,
+    expected_fp: tuple[dict[str, Any] | None, dict[str, Any] | None],
 ) -> None:
-    """Raise the mode to `enforced` on `conn` (a session of its own, never the lock
-    session): an EXCLUSIVE lock on loom.tenancy_mode a try, `_MODE_LOCK_MS` each (less
-    when `wait` has less left), within `wait`; `confirm_lock` before each try and each
-    termination (it refuses when another run holds the attach lock), and `ready` before
-    each try (the booting process ids skip the try). After a failed try the in-flight
-    mode transaction, found by its lock, is ended. `mark` hears `unknown` just before a try
-    sends its UPDATE and `recording` when that try rolled back. Raises Refused when `wait`
-    runs out; whether the commit landed is the durable read's to say."""
+    """Raise mode on the exact ATTACH-lock backend; an unknown COMMIT ends this run."""
     with wait.counting():
         while True:
             await confirm_lock()
             booting = await ready()
             if not booting:
-                try:
-                    done = await _mode_try(conn, wait.bound_ms(_MODE_LOCK_MS), mark)
-                except Refused:
-                    mark("recording")  # the UPDATE's transaction rolled back
-                    raise
+                done = await _mode_try(
+                    owner, wait.bound_ms(_MODE_LOCK_MS), mark, expected_cell, expected_fp
+                )
                 if done:
                     return
-                mark("recording")
                 log("the mode's lock is busy; retrying")
-                await end_mode_transactions(conn, confirm_lock)
             if not await wait.pause():
                 if booting:
                     raise Refused(
@@ -742,85 +673,70 @@ async def commit_enforced(
                 )
 
 
-async def _mode_try(conn: Any, lock_ms: int, mark: Callable[[str], None]) -> bool:
-    """One try including rollback or COMMIT, bounded by its lock and statement waits plus
-    the standby allowance; False after a statement timeout rolls back, TimeoutError at
-    the try's deadline."""
+async def _mode_try(
+    owner: Owner,
+    lock_ms: int,
+    mark: Callable[[str], None],
+    expected_cell: str,
+    expected_fp: tuple[dict[str, Any] | None, dict[str, Any] | None],
+) -> bool:
+    """Keep work, acknowledged contention rollback and cleanup in one try budget."""
     bound_s = (lock_ms + _MODE_STATEMENT_MARGIN_MS) / 1000 + _MODE_STANDBY_S
-    return await supervise(
-        conn, _mode_transaction(conn, lock_ms, mark), end=time.monotonic() + bound_s
+    return await owner.call(
+        lambda: _mode_transaction(owner.conn, lock_ms, mark, expected_cell, expected_fp),
+        total_s=bound_s,
     )
 
 
-async def _mode_transaction(conn: Any, lock_ms: int, mark: Callable[[str], None]) -> bool:
+async def _mode_transaction(
+    conn: Any,
+    lock_ms: int,
+    mark: Callable[[str], None],
+    expected_cell: str,
+    expected_fp: tuple[dict[str, Any] | None, dict[str, Any] | None],
+) -> bool:
+    from server.cli import cell_control
+
     tx = conn.transaction()
     await tx.start()
+    updated = False
     try:
         await conn.execute(f"SET LOCAL lock_timeout = '{lock_ms}ms'")
         await conn.execute(
             f"SET LOCAL statement_timeout = '{lock_ms + _MODE_STATEMENT_MARGIN_MS}ms'"
         )
+        await cell_control.check_lock(conn)
         await conn.execute("LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE")
+        state, first = await read_mode(conn)
+        own = await conn.fetchrow("SELECT current_fp, next_fp FROM loom.cell_self")
+        observed = None if own is None else (own["current_fp"], own["next_fp"])
+        if (
+            state != "recording"
+            or first != (True, expected_cell)
+            or json.dumps(observed, sort_keys=True) != json.dumps(expected_fp, sort_keys=True)
+        ):
+            raise Refused([Refusal("postgres acceptance rows", "changed: stop and rerun attach")])
         mark("unknown")
+        updated = True
         status = await conn.execute("UPDATE loom.tenancy_mode SET mode = 'enforced', since = now()")
         if status != "UPDATE 1":
             raise Refused([Refusal("postgres loom.tenancy_mode", f"the mode update read {status}")])
-    except Exception as e:
+    except Exception as error:
+        if getattr(error, "sqlstate", None) not in _TIMED_OUT:
+            raise
         await tx.rollback()
-        if getattr(e, "sqlstate", None) in _TIMED_OUT:
-            return False
-        raise
+        await cell_control.check_lock(conn)
+        if updated:
+            mark("recording")
+        return False
     await tx.commit()
-
+    mark("enforced")
     return True
-
-
-async def end_mode_transactions(conn: Any, confirm_lock: Callable[[], Any]) -> None:
-    """End an earlier run's mode transaction still in flight and wait, for up to
-    `_END_ROUNDS` checks `_END_PAUSE_S` apart, until its lock clears; Refused when its role
-    is a superuser and attach's is not, or when a backend still holds the lock after the
-    last check, naming it."""
-    rows: list[Any] = []
-    for _ in range(_END_ROUNDS):
-        rows = list(await conn.fetch(_MODE_HOLDERS))
-        if not rows:
-            return
-        superuser = bool(
-            await conn.fetchval("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
-        )
-        for r in rows:
-            if r["rolsuper"] and not superuser:
-                raise Refused(
-                    [
-                        Refusal(
-                            f"postgres backend {r['pid']}",
-                            f"an earlier mode transaction ({r['application_name'] or 'no name'}, "
-                            f"since {r['xact_start']}) runs as a superuser: a superuser must "
-                            "end it (pg_terminate_backend)",
-                        )
-                    ]
-                )
-            await confirm_lock()
-            await conn.fetchval("SELECT pg_terminate_backend($1)", r["pid"])
-        await _sleep(_END_PAUSE_S)
-    if not (rows := list(await conn.fetch(_MODE_HOLDERS))):
-        return
-    raise Refused(
-        [
-            Refusal(
-                f"postgres backend {r['pid']}",
-                f"still holds loom.tenancy_mode's lock after it was ended "
-                f"({r['application_name'] or 'no name'}, since {r['xact_start']}): rerun attach "
-                "once it has gone",
-            )
-            for r in rows
-        ]
-    )
 
 
 # -- the durable read -------------------------------------------------------------------
 
-_DURABLE_TRY_S = 10.0  # not a setting: one try's bound; a cancelled one is retried
+_DURABLE_TRY_S = 10.0  # not a setting: the state/WAL/COMMIT phase includes its cleanup
 
 
 @dataclass(frozen=True)
@@ -833,22 +749,26 @@ class Durable:
     xid: int
 
 
-async def durable_read() -> Durable:
-    """The mode and the `first` row read in a transaction that emits a transactional
-    logical message, whose commit waits for the synchronous standbys: once it returns, the
-    mode read is on them. Refused when the message took no xid."""
-    async with asyncio.timeout(_DURABLE_TRY_S), pg.durable_transaction() as conn:
+async def durable_read(owner: Owner) -> Durable:
+    """Read and synchronously fence state on the owner's exact ATTACH backend."""
+    from server.cli import cell_control
+
+    conn = owner.conn
+
+    async def read() -> Durable:
         await conn.execute("SELECT pg_logical_emit_message(true, 'loom.attach', '')")
         xid = await conn.fetchval("SELECT pg_current_xact_id_if_assigned()::text")
         mode = await conn.fetchval("SELECT mode FROM loom.tenancy_mode")
         first = await conn.fetchrow("SELECT is_first, cell FROM loom.cell_first")
-    if xid is None:
-        raise Refused([Refusal("postgres durable read", "its logical message took no xid")])
-    return Durable(
-        mode=str(mode or ""),
-        first=None if first is None else (bool(first["is_first"]), str(first["cell"])),
-        xid=int(xid),
-    )
+        if xid is None:
+            raise Refused([Refusal("postgres durable read", "its logical message took no xid")])
+        return Durable(
+            mode=str(mode or ""),
+            first=None if first is None else (bool(first["is_first"]), str(first["cell"])),
+            xid=int(xid),
+        )
+
+    return await owner.call(lambda: cell_control.transaction(conn, read), total_s=_DURABLE_TRY_S)
 
 
 async def snapshot_xmax(conn: Any) -> int:

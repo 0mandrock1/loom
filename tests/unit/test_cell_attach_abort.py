@@ -7,7 +7,7 @@ import textwrap
 import pytest
 
 
-@pytest.mark.parametrize("owner", ["context", "supervise"])
+@pytest.mark.parametrize("owner", ["native", "supervise"])
 @pytest.mark.parametrize(
     "first_kind", ["ValueError", "CancelledError", "SystemExit", "KeyboardInterrupt"]
 )
@@ -21,6 +21,7 @@ def test_actual_attach_owner_preserves_first_error_through_abort(owner, first_ki
         import sys
         import time
         from server.cli import cell_attach_pg as apg
+        from server.cli import cell_control
         from server.core import pg
 
         owner, first_kind, abort_kind = sys.argv[1:]
@@ -36,11 +37,6 @@ def test_actual_attach_owner_preserves_first_error_through_abort(owner, first_ki
             def terminate(self):
                 events.append('abort')
                 if abort_kind != 'none': raise kinds[abort_kind]('secondary abort')
-        class Context:
-            async def __aexit__(self, kind, error, tb):
-                assert kind is type(first) and error is first and tb is not None
-                events.append('exit')
-                raise RuntimeError('secondary exit')
 
         async def main():
             reaping, release, entered = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -49,17 +45,20 @@ def test_actual_attach_owner_preserves_first_error_through_abort(owner, first_ki
                 children.append(asyncio.current_task())
                 entered.set()
                 try:
-                    if first_kind != 'CancelledError': raise first
+                    if owner == 'native' or first_kind != 'CancelledError': raise first
                     await asyncio.Future()
                 finally:
-                    if first_kind == 'CancelledError':
+                    if owner == 'supervise' and first_kind == 'CancelledError':
                         reaping.set()
                         await release.wait()
             async def close(conn, *, end):
                 deadlines.append(end)
                 events.append('public close')
+                if owner == 'native':
+                    children.append(asyncio.current_task())
+                    raise RuntimeError('secondary close')
             original_close = pg.close_owned
-            if owner == 'supervise': pg.close_owned = close
+            pg.close_owned = close
             original_wait = asyncio.wait
             waits = []
             async def wait(tasks, *, timeout):
@@ -71,12 +70,15 @@ def test_actual_attach_owner_preserves_first_error_through_abort(owner, first_ki
                 return await original_wait(tasks, timeout=timeout)
             if owner == 'supervise': asyncio.wait = wait
             end = time.monotonic() + 1
+            owned = cell_control.Owner()
+            owned.conn = Conn()
             async def operation():
                 try:
-                    if owner == 'context':
-                        try: raise first
-                        except BaseException:
-                            await apg.close_context(Context(), Conn(), error=first)
+                    if owner == 'native':
+                        result = await cell_control._captured(
+                            lambda: owned.call(work, total_s=1)
+                        )
+                        if isinstance(result, cell_control._Fatal): raise result.error
                     else:
                         await apg.supervise(Conn(), work(), end=end)
                 except BaseException as error:
@@ -97,13 +99,16 @@ def test_actual_attach_owner_preserves_first_error_through_abort(owner, first_ki
                 if isinstance(result, apg._Interrupted): raise result.error
                 assert events.count('abort') == 1, events
                 assert events.index('public close') < events.index('abort'), events
-                if deadlines: assert deadlines == [end], deadlines
+                expected_end = owned.phase_end if owner == 'native' else end
+                assert deadlines == [expected_end], deadlines
+                if owner == 'native': assert owned.close_end == owned.phase_end
                 assert all(0 <= bound <= 1 for bound in waits), waits
             finally:
                 pg.close_owned = original_close
                 asyncio.wait = original_wait
                 release.set()
                 await asyncio.gather(*children, return_exceptions=True)
+                assert all(child.done() and not child._log_traceback for child in children)
             print('first preserved and children reaped')
         asyncio.run(main())
         """

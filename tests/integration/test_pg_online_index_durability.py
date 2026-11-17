@@ -158,7 +158,11 @@ async def test_online_ledger_retry_survives_physical_standby_promotion(
         await _waiting(observer, retry)
         await _docker("unpause", STANDBY)
         paused = False
-        assert await asyncio.wait_for(retry, 8) == []
+        assert await asyncio.wait_for(retry, 8) == sorted(
+            path.name
+            for path in ROUTER_MIGRATIONS_DIR.glob("*.sql")
+            if path.name > "004_placements_by_cell_org.sql"
+        )
         observer.terminate()
         await _docker("kill", "--signal", "KILL", PRIMARY)
         await _docker(

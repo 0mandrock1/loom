@@ -35,6 +35,7 @@ from server.router import app as router_app
 from server.router import directory
 from server.settings import settings
 from tests.integration._pg_database import create_database, drop_database
+from tests.unit.cell_control_owner import owner as _owner
 
 OPERATOR = "lco_" + "2" * 128
 CREDENTIAL_SHA = hashlib.sha256(b"lcr_first").hexdigest()
@@ -532,8 +533,17 @@ async def test_the_mode_commit_waits_out_a_for_share_holder(cell_stores) -> None
             await tx.rollback()
 
         task = asyncio.create_task(release())
+        await cell_attach_pg.take_lock(conn, "mode test")
+        own = await conn.fetchrow("SELECT current_fp, next_fp FROM loom.cell_self")
         await cell_attach_pg.commit_enforced(
-            conn, ok, ok, cell_attach_pg.Wait(20), logged.append, lambda _m: None
+            _owner(conn),
+            ok,
+            ok,
+            cell_attach_pg.Wait(20),
+            logged.append,
+            lambda _m: None,
+            expected_cell="first",
+            expected_fp=(own["current_fp"], own["next_fp"]),
         )
         await task
     assert await _mode() == "enforced"
@@ -799,35 +809,33 @@ async def test_signaling_another_role_requires_an_effective_signal_grant(cell_st
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("capability", ["pg_read_all_stats", "pg_signal_backend"])
+@pytest.mark.parametrize("capability", ["pg_read_all_stats"])
 async def test_attach_needs_its_predefined_capabilities_without_set_role(
     cell_stores, monkeypatch, capsys, capability: str
 ) -> None:
-    from contextlib import asynccontextmanager
-
     stores, network = cell_stores, _Network()
     await _prepare(stores, network)
     role = f"it_caps_{uuid.uuid4().hex[:6]}"
     await _admin(f"CREATE ROLE {role} LOGIN")
     real_dedicated = pg.dedicated
+    real_connect = pg._connect_dedicated
 
-    @asynccontextmanager
-    async def as_attacher(**kwargs: Any) -> AsyncIterator[Any]:
-        async with real_dedicated(**kwargs) as conn:
-            await conn.execute(f"SET SESSION AUTHORIZATION {role}")
-            yield conn
+    async def as_attacher(**kwargs: Any) -> Any:
+        conn = await real_connect(**kwargs)
+        await conn.execute(f"SET SESSION AUTHORIZATION {role}")
+        return conn
 
     try:
         async with real_dedicated() as conn:
             owner = await conn.fetchval("SELECT current_user")
             await conn.execute(f"GRANT {owner} TO {role} WITH INHERIT TRUE, SET FALSE")
-            await conn.execute(f"GRANT pg_read_all_stats, pg_signal_backend TO {role}")
+            await conn.execute(f"GRANT pg_read_all_stats TO {role}")
             await conn.execute(f"GRANT {capability} TO {role} WITH INHERIT FALSE")
             assert await conn.fetchval("SELECT pg_has_role($1, $2, 'MEMBER')", role, capability)
             assert not await conn.fetchval("SELECT pg_has_role($1, $2, 'USAGE')", role, capability)
         before = await _row()
         with monkeypatch.context() as own:
-            own.setattr(pg, "dedicated", as_attacher)
+            own.setattr(pg, "_connect_dedicated", as_attacher)
             assert await _attach(stores, network) == 1
         assert (
             f"attach's role lacks effective privileges of {capability}" in capsys.readouterr().err
@@ -839,7 +847,7 @@ async def test_attach_needs_its_predefined_capabilities_without_set_role(
         async with real_dedicated() as conn:
             await conn.execute(f"GRANT {capability} TO {role} WITH INHERIT TRUE")
         with monkeypatch.context() as own:
-            own.setattr(pg, "dedicated", as_attacher)
+            own.setattr(pg, "_connect_dedicated", as_attacher)
             assert await _attach(stores, network) == 0, capsys.readouterr().err
         assert (await _row()).state == "serving"
     finally:

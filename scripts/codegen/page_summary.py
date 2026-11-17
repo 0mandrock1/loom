@@ -46,7 +46,7 @@ def shorten(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     head = text[: limit - 1]
-    if text[limit - 1] != " ":
+    if text[limit - 1] not in " ,;:":  # a word that ends at a space or punctuation fits
         head = head.rsplit(" ", 1)[0]  # the slice ends inside a word: drop that word
     return head.rstrip(",;:—-/ ") + "…"
 

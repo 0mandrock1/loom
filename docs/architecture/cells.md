@@ -18,6 +18,53 @@ that every transport enforces (`auth_actually_required()`, and `LOOM_MCP_AUTH_MO
 refuses to boot without them. [Storage authority](storage-authority.md) describes what a
 cell holds and how its two stores agree.
 
+## Participant lifecycle baseline
+
+A participant advertising the ninth `host_proof` field `cell-retirement-v1`
+enrolls before its first fresh primary acceptance read and uses permanent guarded
+retirement. A serving cell heartbeat includes its `participant_id` beside the
+fingerprint, allowing a replacement to be joined to the participant registry.
+Workers children enroll independently and do not publish serving instance rows.
+Native commands hold one admission scope through their complete org or principal
+work and drain: claim lookup and release share that scope; token readiness, keyring
+read, signing and audit share another. Connections and helper calls do not retire
+a command that still has principal work to perform. Store pairing is verified
+before enrollment and fresh acceptance. Org-free diagnostics do not install an
+accepting view. The pre-schema `ch-setup` ownership probe discards its diagnostic
+mode result and checks only store/cell identity before raw database user/profile
+setup; its optional analyst-row work opens a separate verified, enrolled scope
+and obtains fresh acceptance. That bootstrap exception admits no tenant or token
+work.
+
+The capability identifies installed code; it does not prove that every older
+process or unsafe retirement client has disappeared.
+
+Before online configuration finalization is supported, stop every unsafe manual
+retirement and pruning writer and prevent its binary/image from restarting.
+Inventory and positively terminate every accepting server, workers child,
+standalone worker and native command that overlapped those writers. Include paused
+boots, already retired/pruned identities and lifecycle-capable processes started
+during the overlap: old maintenance code could have hidden their rows too. Only
+then start replacement accepting and maintenance processes with this lifecycle.
+A shared image tag, pod deletion, readiness or heartbeat expiry is insufficient.
+Keep exact PID/boot/namespace/start or trusted runtime termination evidence with
+the deployment's upgrade record. No CLI flag or stored acknowledgement substitutes
+for that evidence, and the runtime census does not verify the external inventory.
+
+Census retained legacy rows while unsafe writers are stopped. Recertify a retained
+identity only after exact verifiable physical death and known-zero cross-replica
+queries. Keep empty or unknown proofs quarantined. If the legacy inventory is
+incomplete, stop all accepting/native-command and retirement/pruning processes,
+positively terminate or fence every runtime that could execute an old binary, and
+prevent old restarts. Only after that physical quiescence may the operator request
+an exact audited cleanup of selected unknown legacy participant identities. There
+is no automatic age-based cleanup or affirmation bypass. Restart only guarded
+lifecycle processes afterward. Unknown or partitioned runtimes remain blockers.
+
+This baseline is an operational prerequisite, not a release-cut requirement.
+Configuration finalization also needs the directory's controller-fencing protocol;
+the lifecycle certificate alone cannot authorize reservation release.
+
 ## Why whole deployments
 
 A cell shares no store, key, lease or worker with another. Every guarantee a single
@@ -486,11 +533,13 @@ with the same configuration, or `--finish`, first writes `next` wherever it is m
 It reruns attach's overlap refusals against every other cell's directory row, counting
 both values of each, writes the new fingerprint as `next` to the directory and then to
 `loom.cell_self`, so old and new processes both serve while the new configuration rolls
-out. `loom cell update --finish` waits, at most `--wait` (default 10 minutes), until
-every live process reports `next` and the longest request deadline has passed; when the
-change turns SCIM on or changes the cell's OIDC client it then runs attach's SCIM
-precondition (refusing, or `--revoke-unprovisioned`); only then does it make `next` the
-only value, in `loom.cell_self` first and the directory last. A widened issuer or
+out. Finalization first narrows the cell's accepted value durably while the directory
+keeps both reservations. It then requires a complete post-cutoff participant census,
+permanent guarded retirement or verified exact death for every captured identity,
+and a serving target replacement outside that captured set. Heartbeat expiry and
+request deadlines do not prove this. Only afterward may the directory release its
+old reservation. Online finalization needs the [lifecycle baseline](#participant-lifecycle-baseline)
+and controller fencing; SCIM-on changes remain gated on actual per-cell SCIM support. A widened issuer or
 pattern is reserved in the directory before any process accepts it, and a narrowed one
 is released only after none does. A refusal or a wait that runs out keeps both values
 and prints the processes not yet reporting `next`; rerunning resumes, and
@@ -515,6 +564,8 @@ version and fields, and beside them keys that no fingerprint compares: they are 
 needs no column for them (`server.core.instances.cell_row`). Their presence proves the build
 that reports them; there is no generation key.
 
+- `participant_id`: this server's provider participant UUID, for joining its actual
+  process lifecycle to the serving instance row. A workers child publishes no instance row.
 - `serves`: `LOOM_SERVES_TRAFFIC`.
 - `marked`: whether this process's pooled Postgres sessions keep the tenancy marker
   (`loom.tenancy_checked`). The cell refresh reads it with the state rows, after `RESET ALL`
@@ -677,13 +728,13 @@ inserts cannot hold the write off, a new-org request waits on attach for a few s
 at most, and an attach that stalls holding the write's lock releases it within seconds.
 Attach takes `LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE` (which waits for running
 inserts and queues later ones behind it) in short tries, in one transaction with
-server-side timeouts, then writes the mode and commits; after a failed try it ends the
-mode transaction still in flight, found by its `ExclusiveLock` on `loom.tenancy_mode` in
-this database (a pid captured at connect is wrong behind a connection path that swaps
-backends), and waits until the lock clears. Whether the commit landed is decided by a
-durable read of the mode, whose commit waits for the standby, since a commit ended while
-it waited is on the primary alone ([attaching a cell](#attaching-a-cell): step 3 and the
-durable read).
+server-side timeouts, then writes the mode and commits on its exact ATTACH backend.
+Only recognized pre-COMMIT contention can retry, after acknowledged rollback and a check
+that this backend still holds ATTACH. Unexpected failure or an uncertain COMMIT closes
+the owned session and ends the run. Attach neither finds nor ends another backend. A
+fresh run takes the lock and claims again; whether an earlier commit landed is decided
+by a durable mode read whose COMMIT waits for the standby
+([attaching a cell](#attaching-a-cell): step 3 and the durable read).
 The mode cache reads the mode with a plain `SELECT`, which takes no row lock and never
 waits on attach. An insert that finds `enforced` (a process whose cache
 still reads `recording`) writes nothing: the request goes on to the placement call as in
@@ -990,10 +1041,12 @@ advisory lock, `cell.ATTACH_LOCK_KEY`, on a session of its own for its life (pre
 takes the same lock), after checking that the session is one direct
 backend that keeps the tenancy marker: a lock left on a pooler's server connection would
 refuse every later run, and attach's tenancy rows would be refused as an unchecked
-writer's. A lock found lost between steps is taken again (refusing when another run holds
-it), and the cell's state is read again. The lock does not make a run safe, since every
-step is idempotent and the mode only rises; it keeps a second run's scans from holding the
-snapshot horizon that step 4 waits on.
+writer's. A lost or unreadable lock session ends the run: it never reconnects or
+reacquires the lock. Rerun attach to obtain a fresh directory claim and recompute the
+remaining work. Every local acceptance write uses this exact backend, so losing the
+lock also ends its authority to change acceptance. The lock serializes prepare, attach
+and update, and keeps concurrent scans from holding the snapshot horizon that step 4
+waits on.
 
 It refuses, before any write, naming each:
 
@@ -1063,7 +1116,7 @@ Then, in order (the step numbers are the ones the rest of this page uses):
   checks and the standbys again, and the scan's elapsed time within half of `--scan-budget`,
   since step 4 reads the same tables again. Each refuses in `recording`, which can still be
   backed out.
-- **Step 3, the mode commit**: `attach/enforced`, then on a session of its own an EXCLUSIVE
+- **Step 3, the mode commit**: `attach/enforced`, then on the same ATTACH session an EXCLUSIVE
   lock on `loom.tenancy_mode`, 2 s a try within `--wait`, the attach lock confirmed and the
   cheap heartbeat refusals run before each try (a booting process skips the try). Each try,
   including COMMIT, has a client deadline: the lock wait plus a 3 s statement margin and
@@ -1075,10 +1128,11 @@ Then, in order (the step numbers are the ones the rest of this page uses):
   failure or exhausted cleanup time aborts the transport and preserves the original
   failure; abort alone does not prove that server locks disappeared. A commit past
   its deadline has an unknown outcome until the durable read.
-  After a failed try, the mode transaction an earlier run left in flight is found by its lock (only
-  attach takes `ExclusiveLock` there; a relation's OID is matched in this database alone)
-  and ended. From the commit on the mode only rises: every later refusal leaves the cell
-  `enforced` and `attaching`, and a rerun resumes from the durable read.
+  Only acknowledged pre-COMMIT rollback with ATTACH still held permits another try on
+  that backend. Any other failure ends the run without terminating another backend;
+  rerun to take the lock and claim afresh. From an acknowledged commit on, the mode
+  only rises: every later refusal leaves the cell `enforced` and `attaching`, and a
+  rerun resumes from the durable read.
 - **The durable read**, in every run that reads `enforced`: the mode and the `first` row
   read in a transaction that emits a transactional logical message, whose commit waits for
   the synchronous standbys, with the standbys checked attached just before and after. Then
@@ -1210,7 +1264,106 @@ one command,
 `loom cell limit --cell <cell> [--closed | --open] [--placements-max (<n> | none)]`,
 which writes the directory alone, with the router's operator credential and none of the
 cell's stores, so it works while the cell is down; the router judges a placement from
-the directory row.
+the directory row. An explicit `--open` refuses while the cell is `attaching`, including
+an already-open row and a combined quota edit. This behavior break preserves the closed,
+zero-placement boundary used by state cleanup. Close and quota-only edits still work;
+an attaching cell can complete attach while closed, then reopen once `serving`.
+
+## Control mutation fencing
+
+A cell controller holds the session-level attach lock on one direct, marked, UTF8
+Postgres connection for its whole run. Every write to `loom.cell_self`, `loom.cell_first`
+or `loom.tenancy_mode` checks that lock and its observed local state, then writes and
+commits on that exact connection. Prepare passes its lock connection to its row writer;
+attach commits mode on its lock connection. A lost connection ends the run. It cannot
+reconnect and continue an earlier claim. Terminating the client does not prove its
+server backend ended: another controller must actually acquire the attach lock before
+it starts, and an unresponsive backend can keep that lock until it is positively ended.
+
+The directory stores one opaque UUID, `cells.mutation_generation`, for each cell.
+`POST /cells/v1/operator/cells/<cell>/claim` takes the directory advisory lock and cell
+row lock, compares the full observed registration and exact current/next JSON pair,
+generates a fresh UUID on the server, audits it and commits synchronously before
+answering. Every execution generates another UUID, including a repeated HTTP request.
+The caller never proposes a replacement UUID. Registration assigns a fresh default;
+a registration rerun reads the existing value without resetting it. Removing and
+registering the same name therefore cannot restore an earlier generation.
+
+Before its first local acceptance write, prepare, attach or a recovery controller
+claims the generation while holding its local lock. Every subsequent directory
+mutation carries `expected`: cell, first-cell flag, host, deployment id, bucket, prefix,
+probe/upstream addresses, exact current/next pair and the claimed generation. The claim
+carries the same fields without a generation. The directory compares them under its
+locks before any mutation or no-op success. Canonical JSON comparison distinguishes
+`false`, `0` and `0.0`. A stale request cannot release a reservation after its local
+backend dies and another controller claims and widens acceptance, even if the directory
+pair later returns to its earlier values. A delayed claim can invalidate another
+controller's work; it cannot let a dead local session write acceptance state.
+
+A lost acknowledgement is an unknown outcome. Stop the attempt and rerun: obtain the
+local lock, read current state and claim a fresh UUID before recomputing the action.
+Do not copy a latest UUID onto an old action. A successful claim or control transaction
+waits through synchronous COMMIT. A no-op transaction emits transactional WAL so it
+also proves an observed earlier write durable. Acquisition, statements, COMMIT and
+cleanup have explicit bounds; an interrupted or uncertain local transaction never
+continues on another connection. No operation record, persistent census, phase or lease
+is added. The UUID is coordination metadata and holds no memory content.
+
+One ephemeral owner supervises the command's raw session and child work. Opening keeps
+its 75-second bound and each local control transaction keeps its 60-second bound,
+reserving cleanup time inside that bound. On failure it sends public connection close
+before cancelling child work, so active statements and rollback cannot prevent bounded
+cleanup. An unexpected transaction error propagates immediately; it never waits for
+rollback on a session the owner will discard. Uncapped command work retains the existing
+one-second session-exit allowance, which cannot extend an expired bounded phase. A
+transport abort remains an unknown outcome, not proof that the server backend ended.
+Mode-lock contention retries only after an acknowledged pre-COMMIT rollback and a check
+that the same backend still holds ATTACH. A COMMIT, rollback or ownership-check failure
+never becomes a busy retry. After attempting the mode update, the diagnostic stays
+unknown until rollback plus ownership or COMMIT is acknowledged.
+
+Directory control mutations supervise the complete callback transaction independently,
+including acquisition and COMMIT. One 131-second bound includes public close, child
+settlement and pool-context exit, with cleanup time reserved inside it. Both a failed
+attempt and an acknowledged successful transaction close only their own acquired
+connection before releasing the pool context. Unexpected errors never wait for rollback
+on that discarded session. A late acquisition cannot start mutation work or obtain a
+fresh cleanup allowance; acquisition without a known proxy remains an unknown outcome.
+Ordinary live placement retains its separate transaction and connection handling.
+Repeated interruption keeps the same close task and original end; a completed child
+cancellation remains a terminal failure. Fallback abort errors cannot replace the first
+operation or cleanup failure.
+
+The shared directory pool opens physical sessions only for foreground acquisitions;
+pool object creation does not establish connectivity. Healthy released sessions are
+cached under the existing size cap, recycling and idle expiry. A later cold acquisition
+opens a new session. Fixed JSON codec initialization quarantines its never-borrowed raw
+session on failure; native interruptions return to that foreground consumer after driver
+cleanup, with no autonomous opening or replenishment task. If quarantine fails, the
+original failure records that session closure is unknown.
+
+The source census for acceptance and operator directory writes is checked by
+`tests/unit/test_cell_control_census.py`, including dynamic cleanup tables, guarded
+entry points and the named exceptions:
+
+| Writer                                                                                  | Fence                                                                                              |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `cell_prepare._write_rows`                                                              | Fresh claim, observed local rows, exact lock backend                                               |
+| `cell_attach_pg._mode_transaction`                                                      | Attach's claim, supervised mode try, recording/first/fingerprint comparison, exact lock backend    |
+| `cell_control.backout`                                                                  | Fresh claim, fenced close and zero-placement read, observed local rows, exact lock backend         |
+| `directory.attach_begin`, `attach_place`, `attach_enforced`, `attach_serving`, `remove` | Claimed generation, full registration and exact pair, including retries/no-ops                     |
+| `directory.set_limit`, `rotate_credential`                                              | Read and compare the current generation/registration/pair; do not claim or rotate                  |
+| `directory.register`                                                                    | Bootstrap default or immutable rerun lookup; never replaces existing acceptance or generation      |
+| `directory.place`                                                                       | Immutable placement only; keeps its org/cell locks and quota checks; never writes local acceptance |
+
+Read-only routes are exempt. Router migrations and an offline directory restore are
+maintenance operations. Future restore/update acceptance writers must use the same
+claim and lock-session helpers; a new directory mutation must use the common comparison
+before its no-op branch as well. Direct privileged SQL is not an online control writer.
+The [control upgrade and recovery procedure](../operations/cell-control.md) defines the
+required fleet turnover and offline restore of generations. N-1 data-plane builds can
+read and insert on the additive schema; old control clients and router handlers cannot
+participate in this protocol.
 
 ## Operations
 
@@ -1220,19 +1373,20 @@ the directory row.
   there); for an org with no placement it names the first cell, which the lookup does
   not tell apart.
 - `loom cell limit --cell <cell> --closed` closes a cell to new orgs, `--open` reopens
-  it, and `--placements-max <n>` sets its placement quota (`--placements-max none`
+  a serving cell, and `--placements-max <n>` sets its placement quota (`--placements-max none`
   clears it).
-- `loom cell remove --cell <cell>` removes the directory row of a cell that is `attaching`
-  with no placement (`--cell` is the cell's `LOOM_CELL`, unset by then). For the first cell
-  it reads the cell's Postgres alone, on one session from `LOOM_PG_DSN` with no ClickHouse,
-  and refuses unless it reads `open` and records the row's deployment id, which enforces the
-  back-out order: unset `LOOM_CELL` on every process (each serves as in `recording`), then
-  the full-state cleanup, then the removal
+- `loom cell remove --cell <cell>` removes the directory row of an `attaching` cell
+  with no placement. For both first and later cells, keep `LOOM_CELL=<cell>` and the
+  registered store settings on the control client. Removal takes the direct marked
+  ATTACH backend, verifies the paired deployment and registration, and claims a fresh
+  directory generation before deleting the row. The first cell must also read `open`,
+  enforcing the back-out order: stop or unset `LOOM_CELL` on the accepting processes,
+  complete full-state cleanup, then remove the directory row
   ([troubleshooting](../operations/troubleshooting.md#a-process-with-loom_cell-unset-is-gated)).
   Removing the row first answers every new org 503; clearing the state first gates every
-  process with `LOOM_CELL` set. A first cell with a placement goes forward, never back. A
-  removed cell's stores keep whatever state rows they hold, so the full-state cleanup runs
-  before they are prepared again.
+  accepting process with `LOOM_CELL` set. A first cell with a placement goes forward,
+  never back. Removal leaves the stores' state rows intact; full-state cleanup must
+  precede preparing those stores again.
 - The router's operator credential is `lco_` and 128 lowercase hex (a router with no
   `LOOM_ROUTER_OPERATOR_SHA256` answers the operator API 503 with
   `NO_OPERATOR_CREDENTIAL`), which `loom cell credential new --operator` makes; the

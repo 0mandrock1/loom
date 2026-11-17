@@ -1,4 +1,4 @@
-"""Owned attach contexts finish before an error reaches the command boundary."""
+"""The shared attach owner finishes before errors reach the command boundary."""
 
 import subprocess
 import sys
@@ -9,18 +9,17 @@ import pytest
 
 @pytest.mark.parametrize("owner", ["lock", "mode"])
 @pytest.mark.parametrize("secondary", ["RuntimeError", "SystemExit", "KeyboardInterrupt"])
-def test_actual_owned_context_keeps_first_failure(owner, secondary):
+def test_actual_attach_owner_keeps_first_failure(owner, secondary):
     program = textwrap.dedent(
         """
         import argparse
         import asyncio
         import sys
         from unittest.mock import AsyncMock
-        import asyncpg
         from server.cli.cell_attach import Run
         from server.cli import cell_attach_pg as apg
-        from server.core import pg
-        from server.settings import settings
+        from server.cli import cell_control
+        from tests.unit.test_cell_control import snapshot
 
         owner, kind = sys.argv[1:]
         original = ValueError('operation failed')
@@ -37,39 +36,34 @@ def test_actual_owned_context_keeps_first_failure(owner, secondary):
                 self.closes += 1
                 events.append('close')
                 self.closed = True
-                if self.closes == 2:
-                    raise secondary
+                raise secondary
             def terminate(self):
                 self.closed = True
                 events.append('abort')
 
         async def main():
             conn = Conn()
-            async def raw(*args, **kwargs): return conn
-            async def checked(*args): pass
+            async def opening(owned, what): owned.conn = conn
             async def fail(*args): raise original
-            asyncpg.connect = raw
-            pg._check_deployment = checked
-            pg.init_connection = checked
-            settings.pg_dsn = 'postgresql://unused/test'
+            cell_control.Owner._open = opening
             router = AsyncMock()
-            router.call.return_value = {'state': 'attaching'}
+            router.call.return_value = {**snapshot(), 'state': 'attaching'}
             run = Run(None, argparse.Namespace(cell='test', wait=0), router, lambda _: None)
             run.row = {'deployment_id': 'test'}
             run.mode = 'recording'
             run.confirm_lock = AsyncMock()
             run.ready_for_commit = AsyncMock(return_value=[])
-            async def open_lock():
-                run._lock_cm = pg.dedicated()
-                run.lock_conn = await run._lock_cm.__aenter__()
-            run.open_lock = open_lock
+            run.mutate = AsyncMock()
             run.read_own_row = AsyncMock(side_effect=original)
             apg._mode_transaction = fail
+            async def mode(owned):
+                run.owner, run.lock_conn = owned, owned.conn
+                return await run.commit_mode()
             try:
-                await (run.run() if owner == 'lock' else run.commit_mode())
+                await (run.run() if owner == 'lock' else cell_control.run('attach', mode))
             except BaseException as error:
                 assert error is original, (type(error).__name__, events)
-                assert events.count('close') == 2, events
+                assert events.count('close') == 1, events
                 await asyncio.sleep(0)
                 print('original-after-owned-exit')
                 return
@@ -90,11 +84,14 @@ def test_actual_owned_context_keeps_first_failure(owner, secondary):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("factory_failure", [False, True])
-async def test_mode_failure_context_receives_the_actual_exception(monkeypatch, factory_failure):
+async def test_mode_failure_survives_close_construction_and_await_failures(
+    monkeypatch, factory_failure
+):
     import argparse
     from unittest.mock import AsyncMock
 
     from server.cli import cell_attach_pg as apg
+    from server.cli import cell_control
     from server.cli.cell_attach import Run
     from server.core import pg
 
@@ -103,58 +100,66 @@ async def test_mode_failure_context_receives_the_actual_exception(monkeypatch, f
     conn = AsyncMock()
     conn.is_closed = lambda: False
     conn.terminate = lambda: None
+    owned = cell_control.Owner()
 
-    class Context:
-        async def __aenter__(self):
-            return conn
+    async def opening():
+        owned.conn = conn
 
-        def __aexit__(self, kind, error, traceback):
-            observed.append((kind, error, traceback))
-            if factory_failure:
-                raise RuntimeError("exit construction failed")
-            return AsyncMock(side_effect=RuntimeError("exit failed"))()
+    async def failed_close():
+        raise RuntimeError("close failed")
 
-    monkeypatch.setattr(pg, "dedicated", lambda **_: Context())
-    monkeypatch.setattr(apg, "commit_enforced", AsyncMock(side_effect=original))
+    def close(actual, *, end):
+        observed.append((actual, end))
+        if factory_failure:
+            raise RuntimeError("close construction failed")
+        return failed_close()
+
+    monkeypatch.setattr(pg, "close_owned", close)
+    commit = AsyncMock(side_effect=original)
+    monkeypatch.setattr(apg, "commit_enforced", commit)
     run = Run(None, argparse.Namespace(cell="test", wait=0), AsyncMock(), lambda _: None)
+    run.owner, run.lock_conn = owned, conn
     run.row = {"deployment_id": "test"}
     run.mode = "recording"
+    run.mutate = AsyncMock()
     with pytest.raises(ValueError) as result:
-        await run.commit_mode()
-    assert result.value is original
-    assert len(observed) == 1
-    assert observed[0][0] is ValueError and observed[0][1] is original
-    assert observed[0][2] is not None
+        await owned.run(opening, run.commit_mode, opening_s=0.3)
+    assert result.value is original and original.__traceback__ is not None
+    commit.assert_awaited_once()
+    assert observed == [(conn, owned.close_end)]
+    assert owned.closed and owned._close_task.done()
+    assert not owned._close_task._log_traceback
 
 
 @pytest.mark.asyncio
 async def test_successful_mode_work_still_fails_when_required_close_fails(monkeypatch):
     import argparse
-    from contextlib import asynccontextmanager
     from unittest.mock import AsyncMock
 
     from server.cli import cell_attach_pg as apg
+    from server.cli import cell_control
     from server.cli.cell_attach import Run
-    from server.core import pg
 
     original = OSError("public close failed")
     conn = AsyncMock()
     conn.is_closed = lambda: False
     conn.terminate = lambda: None
     conn.close.side_effect = original
+    owned = cell_control.Owner()
 
-    @asynccontextmanager
-    async def dedicated(**_):
-        yield conn
+    async def opening():
+        owned.conn = conn
 
-    monkeypatch.setattr(pg, "dedicated", dedicated)
-
-    async def committed(*args):
+    async def committed(*args, **kwargs):
         args[-1]("unknown")
 
     monkeypatch.setattr(apg, "commit_enforced", committed)
     run = Run(None, argparse.Namespace(cell="test", wait=0), AsyncMock(), lambda _: None)
+    run.owner, run.lock_conn = owned, conn
     run.row = {"deployment_id": "test"}
+    run.mutate = AsyncMock()
     with pytest.raises(OSError) as result:
-        await run.commit_mode()
+        await owned.run(opening, run.commit_mode, opening_s=0.3)
     assert result.value is original
+    assert run.mode == "unknown"
+    conn.close.assert_awaited_once()

@@ -105,6 +105,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Exporting usage to a data warehouse](docs/operations/analytics-export.md): `loom export-analytics` writes one UTC day of usage and a snapshot of the namespaces to an S3 bucket as Parquet files, one file per entity per day, for a data warehouse to load.
 - [Backup and recovery](docs/operations/backup-and-recovery.md): A Loom backup is a ClickHouse backup, plus the document bucket while any catalog row names an object in it, and under the Postgres authority a backup of Postgres too.
 - [Attaching the first cell](docs/operations/cell-attach.md): `loom cell attach` turns a prepared first cell (`loom cell prepare`, mode `recording`, directory row `attaching`) into a `serving` one: it places every org the cell holds in the router's directory, raises the cell's mode to `enforced` and…
+- [Cell control upgrades and recovery](docs/operations/cell-control.md): Cell control mutations require generation-aware clients and router handlers, and direct access to the cell's Postgres.
 - [ClickHouse Cloud and Managed Postgres](docs/operations/clickhouse-cloud.md): This guide runs Loom on Kubernetes over two managed services: ClickHouse Cloud for projections, vectors, history and analytics, and ClickHouse Managed Postgres as the memory authority.
 - [Code index operations](docs/operations/code-index-operations.md): This page covers how to enable the code index workers, configure repositories and keep the index current; the code index runs only when an operator enables its workers and configures repositories.
 - [Deployment](docs/operations/deployment.md): Loom is one server image plus ClickHouse (and Postgres, under `LOOM_STORAGE_AUTHORITY=postgres`), with the document extractor service as an image of its own (container images).
@@ -140,8 +141,10 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 
 ## Architecture
 
+- [Microsoft Agent Framework context provider](docs/architecture/agent-framework-adapter.md): `LoomContextProvider` implements the framework's context-provider interface over the asynchronous Python SDK.
 - [Assistant design](docs/architecture/assistant.md): This page is the design of Loom's assistant, which answers questions about what a namespace holds and how it is used, with a citation for every claim.
 - [Cells](docs/architecture/cells.md): A deployment's memory can outgrow one Postgres primary and one ClickHouse service, and an org may want its memory in services of its own.
+- [Claude API memory file tree](docs/architecture/claude-memory-adapter.md): The Claude API memory adapter implements the framework's Python memory-tool bases and TypeScript memory handlers through Loom knowledge documents.
 - [ClickHouse](docs/architecture/clickhouse.md): Durable Loom state lives in ClickHouse, except document bytes in an optional S3-compatible bucket and, under the Postgres memory authority, the Postgres tables: live memory, knowledge state and the records beside them.
 - [Code index architecture](docs/architecture/code-index-architecture.md): This page is the inside view of the code index: how files become chunks, symbols and edges, and how the two tiers stay current.
 - [Document extraction](docs/architecture/document-extraction.md): An uploaded original is parsed into one shape, the extraction artifact, by an extractor service: a separate process with its own dependencies, never the Loom server.
@@ -182,6 +185,6 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Extend Loom](docs/development/extending-loom.md): Loom has one registry per kind of thing: operations, workers, settings, providers, language lanes, extraction steps and tracker sources.
 - [Local development](docs/development/local-development.md): This page sets up a checkout for working on Loom's code.
 - [Migrations](docs/development/migrations.md): This page holds the rules for writing a migration.
-- [Release process](docs/development/release-process.md): Loom follows SemVer: the server, both SDKs, the web app, the root skills (`loom-code`, `loom`), the Cursor plugin that ships them and the Gemini CLI extension share one version `X.Y.Z`.
+- [Release process](docs/development/release-process.md): Loom follows SemVer: the server, both SDKs, the web app, the root skills (`loom-code`, `loom`), the Cursor plugin and the Agent Plugins package that ship them, and the Gemini CLI extension share one version `X.Y.Z`.
 - [Repository guide](docs/development/repository-guide.md): What every top-level directory holds, where a concern lives inside `server/`, the order to read the code in, and the conventions a pull request fails without.
 - [Testing](docs/development/testing.md): Which suite a test belongs in, what each suite needs to run, how tests skip when their environment is missing, which gates CI enforces, and how to regenerate what they pin.
