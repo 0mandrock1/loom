@@ -923,7 +923,7 @@ describe("ReviewQueue", () => {
       await user.click(screen.getByRole("button", { name: "Hide full definition" }));
       expect(screen.queryByText(/Do not count refunded orders/)).toBeNull();
       await user.click(screen.getByRole("button", { name: "Review full definition" }));
-      await user.click(screen.getByRole("button", { name: "Promote", exact: true }));
+      await user.click(screen.getByRole("button", { name: /^Promote$/ }));
       await waitFor(
         () =>
           expect(reviewLearning).toHaveBeenCalledWith(

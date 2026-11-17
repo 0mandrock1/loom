@@ -98,7 +98,9 @@ it("does not show the old namespace's late source response", async () => {
 
 it("delays its initial loading label for 300 ms and removes it when sources arrive", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   let finish!: (value: { enabled: boolean; sources: QueryHistorySource[] }) => void;
   vi.mocked(listQueryHistory).mockReturnValue(
     new Promise((resolve) => {
@@ -119,7 +121,9 @@ it("delays its initial loading label for 300 ms and removes it when sources arri
 
 it("never flashes a loading label for a fast source response", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   vi.mocked(listQueryHistory).mockResolvedValue({ enabled: true, sources: [source] });
   render(<QueryHistorySources org="o" namespace="n" />);
   fireEvent.click(screen.getByRole("button", { name: "Query history" }));
