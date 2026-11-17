@@ -25,7 +25,6 @@ class People:
         self.org = unique_org("scim-person")
         self.run = uuid.uuid4().hex[:10]
         self.emails: list[str] = []
-        self.bots: list[str] = []
         self.results: list[tuple[str, dict[str, Any], Any]] = []
 
     def email(self, label: str) -> str:
@@ -145,12 +144,6 @@ async def people(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[People]:
                 "ALTER TABLE loom.scim_users DELETE WHERE id IN {ids:Array(String)} "
                 "SETTINGS mutations_sync = 2",
                 params={"ids": [scim.user_id(e) for e in made.emails]},
-            )
-        if made.bots:
-            await client.execute(
-                "ALTER TABLE loom.machine_identities DELETE WHERE name IN {names:Array(String)} "
-                "SETTINGS mutations_sync = 2",
-                params={"names": made.bots},
             )
         await client.disconnect()
 
