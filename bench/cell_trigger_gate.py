@@ -400,7 +400,13 @@ class Artifact:
         try:
             self.file.flush()
             os.fsync(self.file.fileno())
-        finally:
+        except BaseException:  # Retain the flush or sync failure through final close.
+            try:
+                self.file.close()
+            except BaseException:  # noqa: BLE001 — close cannot replace failed artifact sync.
+                pass
+            raise
+        else:
             self.file.close()
 
 
