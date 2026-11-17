@@ -18,7 +18,7 @@ class RememberTool(Tool):
                     {"memory_key": text(tool_parameters, "memory_key"), "value": value},
                     user_id=user_id,
                 )
-        except LoomError:
+        except (LoomError, TimeoutError):
             raise ValueError(
                 "Loom request failed; check the provider connection and token grants"
             ) from None

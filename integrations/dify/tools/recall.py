@@ -24,7 +24,7 @@ class RecallTool(Tool):
                     user_id=user_id,
                     agent_id="*",
                 )
-        except LoomError:
+        except (LoomError, TimeoutError):
             raise ValueError(
                 "Loom request failed; check the provider connection and token grants"
             ) from None

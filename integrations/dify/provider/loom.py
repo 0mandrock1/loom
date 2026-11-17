@@ -11,7 +11,7 @@ class LoomProvider(ToolProvider):
         try:
             with client(credentials) as agent:
                 agent.call("memory.list", {"limit": 1})
-        except (LoomError, ValueError):
+        except (LoomError, TimeoutError, ValueError):
             raise ToolProviderCredentialValidationError(
                 "Loom connection failed; check the endpoint, identity and token grants"
             ) from None

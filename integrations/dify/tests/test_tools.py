@@ -196,3 +196,38 @@ def test_rate_limit_is_not_retried_or_exposed(fake):
     with pytest.raises(ValueError, match="Loom request failed") as caught:
         output(RecallTool, {"user_id": "alice", "query": "seat"})
     assert len(calls) == 1 and "test-token" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "cls,parameters",
+    [
+        (RememberTool, {"user_id": "alice", "memory_key": "seat", "value": "aisle"}),
+        (RecallTool, {"user_id": "alice", "query": "seat"}),
+        (SearchKnowledgeTool, {"user_id": "alice", "query": "guide"}),
+    ],
+)
+def test_sdk_deadline_becomes_a_sanitized_tool_failure(monkeypatch, cls, parameters):
+    from loom import SyncAgent
+
+    def expired(*args, **kwargs):
+        raise TimeoutError("test-token")
+
+    monkeypatch.setattr(SyncAgent, "call", expired)
+    with pytest.raises(ValueError, match="Loom request failed") as caught:
+        output(cls, parameters)
+    assert "test-token" not in str(caught.value)
+
+
+def test_sdk_deadline_becomes_a_credential_validation_failure(monkeypatch):
+    from dify_plugin.errors.tool import ToolProviderCredentialValidationError
+    from loom import SyncAgent
+
+    def expired(*args, **kwargs):
+        raise TimeoutError("test-token")
+
+    monkeypatch.setattr(SyncAgent, "call", expired)
+    with pytest.raises(
+        ToolProviderCredentialValidationError, match="Loom connection failed"
+    ) as caught:
+        LoomProvider().validate_credentials(CREDENTIALS)
+    assert "test-token" not in str(caught.value)
