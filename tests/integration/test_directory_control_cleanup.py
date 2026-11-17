@@ -301,3 +301,125 @@ asyncio.run(main())
     )
     stdout, stderr = await asyncio.wait_for(process.communicate(), 10)
     assert process.returncode == 0, (stdout.decode(), stderr.decode())
+
+
+@pytest.mark.parametrize("kind", ["ordinary", "cancel", "exit", "keyboard"])
+@pytest.mark.parametrize("healthy_loan", [False, True])
+@pytest.mark.parametrize("driver_close", ["normal", "exit", "keyboard"])
+async def test_failed_codec_raw_session_is_disposed_without_touching_other_loans(
+    directory_database, monkeypatch, kind, healthy_loan, driver_close
+):
+    import asyncpg
+
+    original = {
+        "ordinary": ValueError("fixed codec failed"),
+        "cancel": asyncio.CancelledError("fixed codec cancelled"),
+        "exit": SystemExit(17),
+        "keyboard": KeyboardInterrupt("fixed codec interrupted"),
+    }[kind]
+    pool = await directory.pool()
+    assert pool.get_size() == 0  # Pool object creation does not open a backend.
+    healthy = await pool.acquire() if healthy_loan else None
+    healthy_pid = healthy.get_server_pid() if healthy else None
+    real_codec, real_close = asyncpg.Connection.set_type_codec, asyncpg.Connection.close
+    failed = {}
+    attempts = 0
+
+    async def codec(self, *args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        failed["raw"], failed["pid"] = self, self.get_server_pid()
+        raise original
+
+    async def close(self, **kwargs):
+        if self is failed.get("raw"):
+            # This is the failed, never-borrowed raw codec session, not an active
+            # command session: synchronous quarantine must precede driver cleanup.
+            assert self.is_closed()
+            failed["driver close"] = True
+            if driver_close == "exit":
+                raise SystemExit(21)
+            if driver_close == "keyboard":
+                raise KeyboardInterrupt("secondary closed-raw cleanup failure")
+        return await real_close(self, **kwargs)
+
+    async def acquire():
+        async with directory._connection() as conn:
+            pytest.fail(f"failed initializer admitted backend {conn.get_server_pid()}")
+
+    monkeypatch.setattr(asyncpg.Connection, "set_type_codec", codec)
+    monkeypatch.setattr(asyncpg.Connection, "close", close)
+    try:
+        if kind in {"exit", "keyboard"}:
+            result = await directory._control_result(acquire)
+            assert isinstance(result, directory._ControlFatal) and result.error is original
+        else:
+            with pytest.raises(type(original)) as caught:
+                await acquire()
+            assert caught.value is original
+        assert failed["driver close"] and attempts == 1
+        await released(directory_database, failed["pid"])
+        # Driver background replenishment must not swallow/retry control intent.
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert attempts == 1
+        if healthy:
+            assert healthy.get_server_pid() == healthy_pid
+            assert await healthy.fetchval("SELECT 1") == 1
+        monkeypatch.setattr(asyncpg.Connection, "set_type_codec", real_codec)
+        async with directory._connection() as recovered:
+            recovered_pid = recovered.get_server_pid()
+            assert recovered_pid not in {failed["pid"], healthy_pid}
+            assert await recovered.fetchval("SELECT 1") == 1
+        async with directory._connection() as cached:
+            assert cached.get_server_pid() == recovered_pid
+    finally:
+        monkeypatch.setattr(asyncpg.Connection, "set_type_codec", real_codec)
+        if healthy:
+            await pool.release(healthy)
+
+
+@pytest.mark.parametrize("kind", ["exit", "keyboard"])
+@pytest.mark.parametrize("secondary", ["ordinary", "exit", "keyboard"])
+async def test_codec_quarantine_failure_keeps_native_original_and_unknown_diagnostic(
+    directory_database, monkeypatch, kind, secondary
+):
+    import asyncpg
+
+    original = SystemExit(17) if kind == "exit" else KeyboardInterrupt("codec interrupted")
+    second = {
+        "ordinary": ValueError("termination failed"),
+        "exit": SystemExit(19),
+        "keyboard": KeyboardInterrupt("termination interrupted"),
+    }[secondary]
+    real_codec, real_terminate = asyncpg.Connection.set_type_codec, asyncpg.Connection.terminate
+    failed = {}
+
+    async def codec(self, *args, **kwargs):
+        failed["raw"], failed["pid"] = self, self.get_server_pid()
+        raise original
+
+    def terminate(self):
+        if self is failed.get("raw"):
+            raise second
+        return real_terminate(self)
+
+    async def acquire():
+        async with directory._connection():
+            pytest.fail("failed initialization returned success")
+
+    monkeypatch.setattr(asyncpg.Connection, "set_type_codec", codec)
+    monkeypatch.setattr(asyncpg.Connection, "terminate", terminate)
+    try:
+        result = await directory._control_result(acquire)
+        assert isinstance(result, directory._ControlFatal) and result.error is original
+        assert original.__notes__ == ["directory initialization session closure is unknown"]
+        # Termination's request is not the proof; here the driver's subsequent
+        # ordinary-error public close really completes and the observer proves it.
+        await released(directory_database, failed["pid"])
+    finally:
+        monkeypatch.setattr(asyncpg.Connection, "set_type_codec", real_codec)
+        monkeypatch.setattr(asyncpg.Connection, "terminate", real_terminate)
+        raw = failed.get("raw")
+        if raw is not None:
+            real_terminate(raw)

@@ -159,13 +159,37 @@ def _require_dsn() -> str:
     return settings.router_pg_dsn
 
 
+class _PoolInitFailure(Exception):
+    """Carry native control intent through the driver's ordinary-error cleanup."""
+
+    def __init__(self, error: SystemExit | KeyboardInterrupt) -> None:
+        super().__init__("directory codec initialization interrupted")
+        self.error = error
+
+
 async def _init(conn: Any) -> None:
-    for typ in ("json", "jsonb"):
-        await conn.set_type_codec(typ, encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+    try:
+        for typ in ("json", "jsonb"):
+            await conn.set_type_codec(
+                typ, encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+            )
+    except BaseException as original:
+        # Only builtin codecs run here: this raw session has never been borrowed or
+        # held command locks. Quarantine before the driver can lose its ownership.
+        try:
+            conn.terminate()
+        except BaseException:  # noqa: BLE001 — disposal must preserve the first init failure.
+            try:
+                original.add_note("directory initialization session closure is unknown")
+            except BaseException:  # noqa: BLE001 — diagnostics must preserve the first failure.
+                pass
+        if isinstance(original, (SystemExit, KeyboardInterrupt)):
+            raise _PoolInitFailure(original) from None
+        raise
 
 
 async def pool() -> Any:
-    """The directory's pool, opened on first use."""
+    """The directory's pool; physical sessions open only for foreground consumers."""
     global _pool
     if _pool is not None:
         return _pool
@@ -173,19 +197,22 @@ async def pool() -> Any:
 
     async with _opening:
         if _pool is None:
-            _pool = await asyncpg.create_pool(
-                _require_dsn(),
-                min_size=1,
-                max_size=POOL_MAX,
-                init=_init,
-                server_settings={
-                    **_SESSION,
-                    "statement_timeout": str(STATEMENT_TIMEOUT_S * 1000),
-                    "idle_in_transaction_session_timeout": str(STATEMENT_TIMEOUT_S * 2000),
-                },
-                command_timeout=STATEMENT_TIMEOUT_S + 1,
-                timeout=STATEMENT_TIMEOUT_S,
-            )
+            try:
+                _pool = await asyncpg.create_pool(
+                    _require_dsn(),
+                    min_size=0,
+                    max_size=POOL_MAX,
+                    init=_init,
+                    server_settings={
+                        **_SESSION,
+                        "statement_timeout": str(STATEMENT_TIMEOUT_S * 1000),
+                        "idle_in_transaction_session_timeout": str(STATEMENT_TIMEOUT_S * 2000),
+                    },
+                    command_timeout=STATEMENT_TIMEOUT_S + 1,
+                    timeout=STATEMENT_TIMEOUT_S,
+                )
+            except _PoolInitFailure as failed:
+                raise failed.error from None
     return _pool
 
 
@@ -202,13 +229,17 @@ async def _connection(*, lookup: bool = False) -> AsyncIterator[Any]:
     slot, the pool's opening and the connection); a lookup's also takes one of
     LOOKUP_SLOTS. A wait past the bound raises TimeoutError, an OSError, which `_reading`
     answers as the directory unavailable."""
-    async with AsyncExitStack() as stack:
-        async with asyncio.timeout(STATEMENT_TIMEOUT_S):
-            if lookup:
-                await _lookups.acquire()
-                stack.callback(_lookups.release)
-            conn = await stack.enter_async_context((await pool()).acquire())
-        yield conn
+    try:
+        async with AsyncExitStack() as stack:
+            async with asyncio.timeout(STATEMENT_TIMEOUT_S):
+                if lookup:
+                    await _lookups.acquire()
+                    stack.callback(_lookups.release)
+                conn = await stack.enter_async_context((await pool()).acquire())
+            yield conn
+    except _PoolInitFailure as failed:
+        # Driver acquisition and context cleanup finish before control intent returns.
+        raise failed.error from None
 
 
 @asynccontextmanager

@@ -749,17 +749,17 @@ async def main():
  backend = {}
  real_close = asyncpg.Connection.close
  real_execute = asyncpg.Connection.execute
- real_connection, real_audit, real_init = directory._connection, directory._audit, directory._init
- async def initialize(conn):
-  await real_init(conn)
-  if stage == 'initialize':
-   backend['pid'] = conn.get_server_pid()
-   raise original
+ real_connection, real_audit = directory._connection, directory._audit
+ real_codec = asyncpg.Connection.set_type_codec
+ async def codec(self, *args, **kw):
+  backend['raw'], backend['pid'] = self, self.get_server_pid()
+  if stage == 'initialize': raise original
+  return await real_codec(self, *args, **kw)
  async def execute(self, sql, *args, **kw):
   if stage == 'commit' and sql.startswith('COMMIT') and self.get_server_pid() == backend.get('pid'): raise original
   return await real_execute(self, sql, *args, **kw)
  async def close(self, **kw):
-  ours = self.get_server_pid() == backend.get('pid')
+  ours = self is backend.get('raw')
   await real_close(self, **kw)
   if ours and stage == 'close': raise original
  @contextlib.asynccontextmanager
@@ -775,7 +775,8 @@ async def main():
   await real_audit(conn, action, detail)
  asyncpg.Connection.close = close
  asyncpg.Connection.execute = execute
- directory._connection, directory._audit, directory._init = connection, audit, initialize
+ asyncpg.Connection.set_type_codec = codec
+ directory._connection, directory._audit = connection, audit
  try:
   try: await directory.restore_read('first', 'dep-first', None, None)
   except (SystemExit, KeyboardInterrupt) as caught: assert caught is original
@@ -789,6 +790,7 @@ async def main():
  finally:
   asyncpg.Connection.close = real_close
   asyncpg.Connection.execute = real_execute
+  asyncpg.Connection.set_type_codec = real_codec
   await directory.close()
   await observer.close(timeout=1)
 asyncio.run(main())

@@ -1359,6 +1359,14 @@ budget. The owner begins and commits one audited transaction, closes that proxy 
 pool release and reserves cleanup inside the same deadline. A page locks its named cell
 row; it does not take the directory-wide control lock.
 
+The shared directory pool opens physical sessions only for foreground acquisitions;
+pool object creation does not establish connectivity. Healthy released sessions are
+cached under the existing size cap, recycling and idle expiry. A later cold acquisition
+opens a new session. Fixed JSON codec initialization quarantines its never-borrowed raw
+session on failure; native interruptions return to that foreground consumer after driver
+cleanup, with no autonomous opening or replenishment task. If quarantine fails, the
+original failure records that session closure is unknown.
+
 Pages have fixed row and byte bounds and use the directory's `(cell, org)` index. A
 placement added during the scan restarts it; a configuration change refuses the run.
 There is no maximum number of orgs. Select a longer `--wait` for a larger cell. Every
