@@ -704,6 +704,13 @@ configured issuer and its signed hosted-domain claim. Empty defaults, missing cl
 issuer changes and generic link changes deny domain access. Neither a linked password
 account's email nor a bare verified address proves domain membership. These identity
 inputs alone expose no mirrored document.
+A request keeps a monotonic mirror mark in its existing work bag, shared with child
+legs. An unbound direct helper serves no mirrored content. Active registrations, mirror
+bindings and listing starts are read in sequence before candidate permissions. A failed
+unconditional read marks `mirror_unread`; a failed candidate read invalidates the whole
+mirror plan without that marker. The checked planner is internal; public read wiring,
+marked-request sinks and session protections remain prerequisites to serving mirrors.
+
 A token reads as one person, for both the `owner` entry and the emails, or as nobody:
 
 - a person's own session token (a primary token whose own `sid` claim names a sign-in

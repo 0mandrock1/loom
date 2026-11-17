@@ -103,6 +103,34 @@ def from_json(text: str) -> AccessList:
     )
 
 
+def allows(
+    access: AccessList,
+    *,
+    subject: str,
+    emails: frozenset[str] = frozenset(),
+    domains: frozenset[str] = frozenset(),
+    groups: frozenset[str] = frozenset(),
+    canonical_owner: str = "",
+) -> bool:
+    """Match verified identity and fresh source-scoped group evidence to a strict list.
+
+    The caller canonicalizes `access.owner` uncached. A subject-shaped email proves
+    no email or domain, and a caller with no person can match only `anyone`.
+    """
+    if access.unread:
+        return False
+    if access.anyone:
+        return True
+    if not subject:
+        return False
+    return bool(
+        (access.owner and canonical_owner and canonical_owner.lower() == subject.lower())
+        or emails.intersection(access.emails)
+        or domains.intersection(access.domains)
+        or groups.intersection(access.groups)
+    )
+
+
 def from_drive_permissions(permissions: list[dict[str, Any]] | None) -> AccessList:
     """The list a `shared` source reads from a Drive file's `permissions`; `unread` when
     the file has no `permissions` field. A deleted, link-only or one-view (`view`)
@@ -131,4 +159,12 @@ def from_drive_permissions(permissions: list[dict[str, Any]] | None) -> AccessLi
     )
 
 
-__all__ = ["UNREAD", "AccessList", "common", "from_drive_permissions", "from_json", "to_json"]
+__all__ = [
+    "UNREAD",
+    "AccessList",
+    "allows",
+    "common",
+    "from_drive_permissions",
+    "from_json",
+    "to_json",
+]

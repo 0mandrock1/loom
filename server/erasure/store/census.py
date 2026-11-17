@@ -319,6 +319,8 @@ _CENSUS: tuple[Substrate, ...] = (
     Substrate(
         "loom.knowledge_source_listings", "1", None, "knowledge_source_listings.delete", None
     ),
+    # Source-scoped ACL evidence, under the mirror: retain none after its erasure.
+    Substrate("loom.knowledge_group_members", "1", None, "knowledge_group_members.delete", None),
     # A replayed response body quotes whatever the op returned. The rows name
     # the caller's org and subject but no namespace and no end user, so both
     # scopes clear and count the org's rows (a cache — the cost is one miss

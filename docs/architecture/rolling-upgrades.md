@@ -885,6 +885,14 @@ schema. These rules keep that safe. The operator procedure is in
     implements the document and session protections. `tests/unit/test_mirror_reader_identity.py`
     checks the claim and delegation boundaries.
 
+60. **Checked mirror reads use source-scoped group evidence** (migration
+    `103_knowledge_group_members.sql`): N reads each membership snapshot by org,
+    mirror, source id and group, and admits only a nondeleted snapshot within
+    `LOOM_KNOWLEDGE_SOURCE_ACL_STALE_SECONDS`. An empty table admits no group. N-1
+    ignores the table; namespace erasure removes its rows with the mirror. Mirrored
+    source creation remains refused until every process implements the read, marked
+    request, session and enablement protections.
+
 ## What checks them
 
 `scripts/gates/mixed_version.py` (`make test-mixed-version`, the `mixed-version` CI job,

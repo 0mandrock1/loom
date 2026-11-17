@@ -159,6 +159,7 @@ def test_the_journal_files() -> None:
         "101_erasure_mirror_mark.sql",
         "102_query_history_sources.sql",
         "102_sso_domain_evidence.sql",
+        "103_knowledge_group_members.sql",
     ]
 
 
