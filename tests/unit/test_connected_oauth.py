@@ -473,3 +473,44 @@ async def test_body_read_cancellation_propagates_and_closes_without_retry(
             call.cancel()
             await asyncio.gather(call, return_exceptions=True)
     assert len(seen) == 1 and body.closed
+
+
+@pytest.mark.asyncio
+async def test_operator_response_bound_limits_stream_without_reading_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(oauth.settings, "knowledge_connected_oauth_response_max_bytes", 1024)
+
+    class Body(httpx.AsyncByteStream):
+        pieces = 0
+        closed = False
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for chunk in (b"x" * 1024, b"x", b"unread-tail"):
+                self.pieces += 1
+                yield chunk
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    body = Body()
+    async with _wire(monkeypatch, lambda _request: httpx.Response(200, stream=body)) as seen:
+        with pytest.raises(oauth.OAuthError, match="^response_too_large$"):
+            await _client("linear").refresh("refresh-private", scopes=("read",), deadline=130)
+    assert len(seen) == 1
+    assert body.pieces == 2 and body.closed
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_obeys_operator_bound_and_shorter_caller_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(oauth.settings, "knowledge_connected_oauth_timeout_s", 2.5)
+    async with _wire(
+        monkeypatch, lambda _request: httpx.Response(200, json=_tokens("linear"))
+    ) as seen:
+        await _client("linear").refresh("refresh-private", scopes=("read",), deadline=130)
+        await _client("linear").refresh("refresh-private", scopes=("read",), deadline=101)
+    assert len(seen) == 2
+    assert all(value == 2.5 for value in seen[0].extensions["timeout"].values())
+    assert all(value == 1.0 for value in seen[1].extensions["timeout"].values())

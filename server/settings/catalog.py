@@ -42,8 +42,7 @@ from server.settings._env import (
 )
 from server.settings._live import LIVE
 
-# ===== Assistant ==============================================================
-
+# ===== Assistant =======================================================
 
 class AssistantSettings(BaseModel):
     """The assistant: LibreChat run headless beside Loom, and the agent Loom seeds in it."""
@@ -72,8 +71,7 @@ class AssistantSettings(BaseModel):
     assistant_answer_ceiling_usd: float = Field(default=0.10, ge=0, le=10)
 
 
-# ===== Auth ===================================================================
-
+# ===== Auth ============================================================
 
 @functools.lru_cache(maxsize=4)
 def _end_user_issuers(raw: str) -> dict[str, EndUserIssuer]:
@@ -640,8 +638,7 @@ class AuthSettings(BaseModel):
     auth_oidc_discovery_ttl_s: Annotated[float, LIVE] = Field(default=3600.0, gt=0)
 
 
-# ===== ClickHouse =============================================================
-
+# ===== ClickHouse ======================================================
 # A database name Loom writes into statements and KeeperMap paths unescaped.
 _DATABASE_NAME = r"^[A-Za-z_][A-Za-z0-9_-]*$"
 # Databases a ClickHouse server or other applications on it own.
@@ -858,8 +855,7 @@ class ClickHouseSettings(BaseModel):
         return self
 
 
-# ===== Code ===================================================================
-
+# ===== Code ============================================================
 
 class CodeSettings(BaseModel):
     """The code plane: ingest, indexes, search, ask, review."""
@@ -1906,8 +1902,7 @@ class CodeSettings(BaseModel):
     code_review_brief_rationale_tokens: Annotated[int, LIVE] = Field(default=250, ge=50)
 
 
-# ===== Context ================================================================
-
+# ===== Context =========================================================
 
 class ContextSettings(BaseModel):
     """context.pack, context offload, session briefs and the mentor's hints."""
@@ -1937,8 +1932,7 @@ class ContextSettings(BaseModel):
     mentor_max_hints_per_session: Annotated[int, LIVE] = 6
 
 
-# ===== Erasure ================================================================
-
+# ===== Erasure =========================================================
 
 class ErasureSettings(BaseModel):
     """Erasure: saga recovery, reclaim, purge and the external backends it cascades to."""
@@ -1989,8 +1983,7 @@ class ErasureSettings(BaseModel):
     external_erasure_timeout_s: float = 30.0
 
 
-# ===== Extraction =============================================================
-
+# ===== Extraction ======================================================
 
 class ExtractionSettings(BaseModel):
     """Fact extraction from messages and observed events."""
@@ -2155,8 +2148,7 @@ class ExtractionSettings(BaseModel):
     extraction_policy_max_namespaces: Annotated[int, LIVE] = Field(default=1000, ge=1)
 
 
-# ===== Knowledge ==============================================================
-
+# ===== Knowledge =======================================================
 
 class KnowledgeSettings(BaseModel):
     """Knowledge documents and conversations: chunking, search floor, thread titles."""
@@ -2353,6 +2345,12 @@ class KnowledgeSettings(BaseModel):
     knowledge_connected_registry_scan_limit: int = Field(default=4096, ge=1)
     # Registrations per page during root-secret resealing.
     knowledge_connected_registry_page_size: int = Field(default=256, ge=1, le=4096)
+    # Seconds one connected-account OAuth request may take, including its response.
+    # The caller's remaining deadline can shorten this bound.
+    knowledge_connected_oauth_timeout_s: float = Field(default=30.0, gt=0)
+    # Bytes read from a connected-account token or identity response; larger metadata
+    # replies are refused before parsing.
+    knowledge_connected_oauth_response_max_bytes: int = Field(default=64 * 1024, ge=1024)
     # Active document sources (knowledge.source.add) one namespace may register; an
     # add past it is refused with SOURCE_QUOTA.
     knowledge_sources_max_per_namespace: Annotated[int, LIVE] = Field(default=8, ge=1)
@@ -2505,8 +2503,7 @@ class KnowledgeSettings(BaseModel):
         return self
 
 
-# ===== Mcp ====================================================================
-
+# ===== Mcp =============================================================
 
 class McpSettings(BaseModel):
     """The MCP transport: tool listing, lean results, session runs."""
@@ -2595,8 +2592,7 @@ class McpSettings(BaseModel):
     mcp_code_tools: bool = False
 
 
-# ===== Memory =================================================================
-
+# ===== Memory ==========================================================
 
 class MemorySettings(BaseModel):
     """The memory plane outside search/ask/extraction: writes, conflicts, lifecycle, workers."""
@@ -3214,8 +3210,7 @@ class MemorySettings(BaseModel):
     # on a large table can expire replicas' Keeper sessions and leave them read-only.
     memory_usage_fold_max_pending_mutations: int = Field(default=20, ge=1)
 
-    # ===== MemoryAsk ==============================================================
-
+    # ===== MemoryAsk =======================================================
     @model_validator(mode="after")
     def _check_resolver_settings(self) -> MemorySettings:
         """Retiring takes more confidence than flagging, and flagging than clearing: the
@@ -3531,8 +3526,7 @@ class MemoryAskSettings(BaseModel):
     memory_ask_recent_block_max_chars: Annotated[int, LIVE] = Field(default=12000, ge=100)
 
 
-# ===== MemorySearch ===========================================================
-
+# ===== MemorySearch ====================================================
 
 class MemorySearchSettings(BaseModel):
     """memory.search: legs, fusion, ranking and gates."""
@@ -3845,8 +3839,7 @@ class MemorySearchSettings(BaseModel):
     memory_search_spelling_lookup_timeout_s: Annotated[float, LIVE] = Field(default=0.4, gt=0)
 
 
-# ===== MemoryWebhook ==========================================================
-
+# ===== MemoryWebhook ===================================================
 
 def parse_backoff_steps(raw: str) -> tuple[float, ...]:
     """`memory_webhook_backoff_steps_seconds` as seconds, in order; ValueError when a
@@ -3955,8 +3948,7 @@ class MemoryWebhookSettings(BaseModel):
         return self
 
 
-# ===== Model ==================================================================
-
+# ===== Model ===========================================================
 # `local:<alias>` embedding models: alias -> (Hugging Face id, the width it emits).
 # `local` alone is DEFAULT_LOCAL_EMBEDDING_MODEL.
 LOCAL_EMBEDDING_MODELS: dict[str, tuple[str, int]] = {
@@ -4073,8 +4065,7 @@ class ModelSettings(BaseModel):
         return self
 
 
-# ===== Namespace ==============================================================
-
+# ===== Namespace =======================================================
 
 class NamespaceSettings(BaseModel):
     """Namespace registration, write marks and bench-namespace GC."""
@@ -4134,8 +4125,7 @@ class NamespaceSettings(BaseModel):
     namespace_taxonomy_ttl_s: Annotated[float, LIVE] = Field(default=300.0, gt=0)
 
 
-# ===== Observability ==========================================================
-
+# ===== Observability ===================================================
 
 def parse_latency_budgets(raw: str) -> dict[str, int | float]:
     """`latency_budget_overrides` as {op: ms | factor}; ValueError names the op whose
@@ -4357,8 +4347,7 @@ class ObservabilitySettings(BaseModel):
     audit_verify_max_rows_per_pass: Annotated[int, LIVE] = Field(default=500000, ge=1)
 
 
-# ===== Provider ===============================================================
-
+# ===== Provider ========================================================
 
 def ascii_host(host: str) -> str:
     """`host` as a host list names it: lower-case, no trailing dot, a non-ASCII name as
@@ -5145,8 +5134,7 @@ class ProviderSettings(ModelSettings):
     llm_response_cache_table: str = "loom.llm_response_cache"
 
 
-# ===== RateLimit ==============================================================
-
+# ===== RateLimit =======================================================
 
 class RateLimitSettings(BaseModel):
     """Rate limits: per-actor and per-traffic-class buckets, shared across web workers."""
@@ -5178,8 +5166,7 @@ class RateLimitSettings(BaseModel):
     tenant_max_concurrent_requests: int = Field(default=256, ge=0)
 
 
-# ===== Runtime ================================================================
-
+# ===== Runtime =========================================================
 
 class RuntimeSettings(BaseModel):
     """Process shape, deployment, event stream and cost budgets."""
@@ -5350,8 +5337,7 @@ class RuntimeSettings(BaseModel):
     readiness_check_timeout_s: Annotated[float, LIVE] = Field(default=2.0, gt=0)
 
 
-# ===== Storage ================================================================
-
+# ===== Storage =========================================================
 
 class StorageSettings(BaseModel):
     """Storage: document originals, per-table retention and warm-tier moves."""
@@ -5599,8 +5585,7 @@ class StorageSettings(BaseModel):
         return self
 
 
-# ===== Task ===================================================================
-
+# ===== Task ============================================================
 
 class TaskSettings(BaseModel):
     """The task inbox workers and what run.complete does to a run's rows."""
@@ -5641,8 +5626,7 @@ class TaskSettings(BaseModel):
     memory_run_complete_expire_days: int = 7
 
 
-# ===== Tracker ================================================================
-
+# ===== Tracker =========================================================
 
 class TrackerSettings(BaseModel):
     """The tracker plane: records, duplicate checks, bisect."""
@@ -5977,8 +5961,7 @@ class TrackerSettings(BaseModel):
     tracker_test_candidates_timeout_s: Annotated[float, LIVE] = Field(default=3.0, gt=0)
 
 
-# ===== Operation latency budgets ===============================================
-#
+# ===== Operation latency budgets ========================================#
 # Each operation's p99 latency target in milliseconds, keyed by op name: a request
 # that runs longer emits a `budget.violated` event (`memory.budget_violations`). Every
 # registered op has an entry (tests/unit/test_op_budgets.py). A deployment tunes them
@@ -6611,8 +6594,7 @@ OP_SHAPE_BUDGETS_P99_MS: dict[str, dict[str, int]] = {
 }
 
 
-# ===== LLM output budgets ======================================================
-#
+# ===== LLM output budgets ===============================================#
 # The most tokens each LLM call may write, keyed by what the call does (its
 # `llm_stage` where it has one, the series the cost ledger reports spend under).
 # A call with a fixed cap reads it through `server.settings.budgets.llm_max_tokens`;

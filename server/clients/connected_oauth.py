@@ -24,11 +24,10 @@ import httpx
 from server.clients._http import get_client
 from server.clients._vendor import read_capped
 from server.clients.notion import API_VERSION
+from server.settings import settings
 
 Kind = Literal["gdrive", "notion", "linear"]
 _now = time.monotonic
-_MAX_BYTES = 64 * 1024  # Token and identity replies contain metadata, not documents.
-_MAX_SECONDS = 30.0  # A provider call must also fit the caller's remaining deadline.
 _DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 _EMAIL_SCOPE = "https://www.googleapis.com/auth/userinfo.email"
 _SCOPES = {"gdrive": frozenset({_DRIVE_SCOPE, "openid", "email"}), "linear": frozenset({"read"})}
@@ -187,7 +186,7 @@ class OAuthClient:
         remaining = deadline - _now()
         if not math.isfinite(remaining) or remaining <= 0:
             raise OAuthError("deadline")
-        remaining = min(remaining, _MAX_SECONDS)
+        remaining = min(remaining, settings.knowledge_connected_oauth_timeout_s)
         try:
             async with asyncio.timeout(remaining):
                 async with get_client().stream(
@@ -198,7 +197,9 @@ class OAuthClient:
                         raise OAuthError("provider_refused")
                     if empty:
                         return {}
-                    raw = await read_capped(response, _MAX_BYTES)
+                    raw = await read_capped(
+                        response, settings.knowledge_connected_oauth_response_max_bytes
+                    )
         except (httpx.RequestError, TimeoutError):
             raise OAuthError("unavailable") from None
         if raw is None:
