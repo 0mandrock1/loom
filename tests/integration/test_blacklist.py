@@ -154,10 +154,17 @@ async def test_restore_cannot_revive_a_value_blacklisted_after_delete(
     async with Agent(
         org=ORG, namespace=ns, agent="t", base_url=control_plane_url, api_key=token
     ) as agent:
-        await agent.memory.set("blocked", pattern, memory_type=memory_type, sensitivity=sensitivity)
+        await agent.call(
+            "memory.set",
+            memory_key="blocked",
+            value=pattern,
+            memory_type=memory_type,
+            sensitivity=sensitivity,
+        )
         await agent.memory.delete("blocked")
         before = [await persisted(table) for table in ("memory", "memory_embeddings")]
         assert before[0] and before[0][0]["tombstoned_at"] is not None
+        assert before[0][0]["sensitivity"] == sensitivity
         await agent.blacklist.add(pattern, scope="namespace", reason="refuse future copies")
 
         with pytest.raises(LoomError, match="BLACKLISTED"):
