@@ -30,6 +30,10 @@ SUPERVISOR = [
 ]
 
 
+class _WorkersPending(AssertionError):
+    """A supervised replacement has not spawned or enrolled yet."""
+
+
 def _process(pid: int) -> dict:
     root = Path(f"/proc/{pid}")
     stat = (root / "stat").read_text().rsplit(")", 1)[1].split()
@@ -107,6 +111,8 @@ def _kernel_workers() -> dict[int, dict]:
         assert process["parent"] == 1, f"Kernel child PID {pid} parent changed during census"
         assert pid > 1 and pid not in found, "Invalid supervisor child PID census"
         found[pid] = process
+    if len(found) < 2:
+        raise _WorkersPending("Expected two live supervisor spawn children")
     assert len(found) == 2, f"Expected two live supervisor spawn children; found {len(found)}"
     return found
 
@@ -127,6 +133,8 @@ def _workers(rows: list[dict], parent: dict) -> list[dict]:
                 and proof[5] == process["start"]
             ):
                 matches.append(row)
+        if not matches:
+            raise _WorkersPending(f"Worker PID {pid} exact registrations: 0; expected 1")
         assert len(matches) == 1, (
             f"Worker PID {pid} exact registrations: {len(matches)}; expected 1"
         )
@@ -247,7 +255,12 @@ async def crash_worker(client) -> None:
         stopped = provider_process.proves_stopped(victim["host_proof"])
         observation = {"death": "proved" if stopped else "unproved", "retirement": "not_checked"}
         if stopped and await retired(client, [victim], observation=observation):
-            after = _workers(await _worker_rows(client), parent)
+            try:
+                after = _workers(await _worker_rows(client), parent)
+            except _WorkersPending:
+                observation["replacement"] = "pending"
+                await asyncio.sleep(1)
+                continue
             old = {row["participant_id"] for row in before}
             new = {row["participant_id"] for row in after}
             observation.update(

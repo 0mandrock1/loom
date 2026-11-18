@@ -580,3 +580,67 @@ def test_worker_census_omits_only_proved_exited_children(monkeypatch, fault):
     else:
         with pytest.raises((OSError, IndexError, AssertionError)):
             data._workers(rows, parent)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault", ["spawn", "registration", "timeout", "duplicate", "certificate", "namespace"]
+)
+async def test_crash_waits_only_for_incomplete_replacement_census(monkeypatch, fault):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    parent, processes, rows = _process_fixture(monkeypatch)
+    replacement = {
+        **rows[0],
+        "participant_id": "replacement",
+        "host_proof": "h|b|c|1|10|100|||cell-retirement-v1",
+    }
+    processes[10] = {**processes[8], "pid": 10, "start": "100"}
+    if fault == "certificate":
+        replacement["host_proof"] = "h|b|c|1|10|100|||unknown"
+    if fault == "namespace":
+        processes[10]["namespace"] = 2
+    stage = 0
+
+    def children(_path):
+        pending = fault in {"spawn", "timeout"} and stage == 0
+        return SimpleNamespace(read_text=lambda: "9" if pending else "9 10")
+
+    async def registered(_client):
+        if fault == "registration" and stage == 0:
+            return [rows[1]]
+        if fault == "duplicate":
+            return [rows[1], replacement, {**replacement, "participant_id": "ambiguous"}]
+        return [rows[1], replacement]
+
+    async def pause(_seconds):
+        nonlocal stage
+        stage += 1
+
+    monkeypatch.setattr(data, "Path", children)
+    monkeypatch.setattr(data, "_supervisor", lambda: parent)
+    monkeypatch.setattr(data, "workers", AsyncMock(return_value=rows))
+    monkeypatch.setattr(data, "_worker_rows", registered)
+    monkeypatch.setattr(data, "_retirement_rows", AsyncMock(side_effect=[[rows[0]], [rows[1]]]))
+    monkeypatch.setattr(data, "retired", AsyncMock(return_value=True))
+    monkeypatch.setattr(data.provider_process, "proves_stopped", lambda _proof: True)
+    signals = []
+    monkeypatch.setattr(data, "_kill_worker", lambda victim, _parent: signals.append(victim))
+    ticks = iter([0, 0, 241] if fault == "timeout" else [0, 0, 1, 241])
+    monkeypatch.setattr(data, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    monkeypatch.setattr(data.asyncio, "sleep", pause)
+    if fault in {"spawn", "registration"}:
+        await data.crash_worker(object())
+        assert stage == 1
+    else:
+        pattern = {
+            "timeout": "supervised replacement was not proved",
+            "duplicate": "exact registrations: 2",
+            "certificate": "certificate invalid",
+            "namespace": "namespace mismatch",
+        }[fault]
+        with pytest.raises(AssertionError, match=pattern):
+            await data.crash_worker(object())
+        assert stage == int(fault == "timeout")
+    assert signals == [rows[0]]
