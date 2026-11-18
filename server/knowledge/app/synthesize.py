@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, get_args
 
 import pydantic
 
+from server.core import request_tail
 from server.core.ch import set_query_tag
 from server.core.diagnostics import private_work
 from server.core.errors import NotFoundError, ValidationError
@@ -49,7 +50,10 @@ async def handle_knowledge_synthesize(
     plan = await source_access.prepare(input.org, [input.namespace])
     with private_work() if plan.marked else nullcontext():
         try:
-            return await _synthesize(input, plan)
+            with request_tail.publication_group() as publication:
+                result = await _synthesize(input, plan)
+                publication.commit()
+                return result
         except source_corpus.LostCorpus:
             return _abstain("no_chunks")
 
@@ -123,6 +127,9 @@ async def _synthesize(
     if not any(ch.isalnum() for ch in answer):
         answer = ""
     located = _located(by_key, [k for k in cs.cited_chunks(cited, read) if k in by_key])
+    from server.knowledge.app import source_publication
+
+    source_publication.retain(proofs)
     return KnowledgeSynthesizeOutput(
         answer=answer,
         windows=len(wins),

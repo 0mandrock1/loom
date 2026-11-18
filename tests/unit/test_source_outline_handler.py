@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -24,11 +25,18 @@ def world(monkeypatch):
     input = KnowledgeOutlineInput(
         org="acme", namespace="team", source_uri="gdrive:file#native", section_path=["Pending"]
     )
+    metadata = {
+        "namespace": "acl-" + "a" * 24,
+        "source_uri": input.source_uri,
+        "version": 1,
+        "revision": 0,
+        "ingested_at": datetime.now(UTC),
+    }
     checked = source_documents.CheckedDocument(
-        Admitted("team", {}, {}), SimpleNamespace(title="Checked title")
+        Admitted("team", dict(metadata), dict(metadata)), SimpleNamespace(title="Checked title")
     )
     chunk = Hydrated(
-        Admitted("team", {"chunk_idx": 1}, {}),
+        Admitted("team", {**metadata, "chunk_idx": 1, "doc_version": 1}, dict(metadata)),
         {
             "content": "Unembedded section.",
             "chunk_metadata": json.dumps(

@@ -13,6 +13,7 @@ from server.knowledge.app import knowledge_search
 from server.knowledge.app.knowledge_search import CheckedSearch, SearchRequest
 from server.knowledge.app.source_access import ReadPlan
 from server.knowledge.app.source_corpus import LostCorpus
+from server.knowledge.app.source_search_proofs import SearchProofs
 from server.memory.app.agent_rules import request_rule_agent, served_hits
 from server.memory.domain.assistant_rules import hits_to_ask
 
@@ -26,6 +27,7 @@ class CheckedPassages:
     _keep: Callable[[_SearchHit], bool] | None
     hits: list[_SearchHit]
     lost: bool = False
+    _used_wide: bool = field(default=False, init=False)
     _ordinary_mode: bool = field(default=False, init=False)
     _failed: bool = field(default=False, init=False)
     _ordinary_ready: bool = field(default=False, init=False)
@@ -52,17 +54,31 @@ class CheckedPassages:
             not child.lost and (child.proofs is None or child.proofs.fresh()) for child in children
         )
 
+    def publication_proofs(self) -> tuple[SearchProofs, ...]:
+        if self._ordinary_mode or self.lost or self._failed:
+            return ()
+        children = (self._first, self._wide) if self._used_wide else (self._first,)
+        return tuple(
+            child.proofs for child in children if child is not None and child.proofs is not None
+        )
+
     async def _select(
         self, first: list[_SearchHit], wide: list[_SearchHit] | None
     ) -> list[_SearchHit]:
+        used_wide = False
+
         async def saved(_width: int) -> list[_SearchHit]:
+            nonlocal used_wide
+            used_wide = True
             if wide is None:
                 raise LostCorpus()
             return wide
 
-        return await served_hits(
+        result = await served_hits(
             first, saved, lambda hit: hit.tags, self._agent, self._top_k, keep=self._keep
         )
+        self._used_wide = used_wide
+        return result
 
     async def _fallback(self) -> list[_SearchHit]:
         if self._failed:

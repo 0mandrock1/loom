@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from server.knowledge.app.knowledge_search import SearchRequest
     from server.knowledge.app.source_access import ReadPlan
     from server.knowledge.app.source_passages import CheckedPassages
+    from server.knowledge.app.source_search_proofs import SearchProofs
     from server.memory.api.models_lifecycle import MemoryStackOutput
     from server.memory.app.stack import CheckedStack
 
@@ -977,24 +978,39 @@ def _clone_pack(prefix: _PackState) -> _PackState:
     )
 
 
-def _put_optional(st: _PackState, name: str, put: Callable[[_PackState], None]) -> _PackState:
+def _put_optional(
+    st: _PackState,
+    name: str,
+    put: Callable[[_PackState], None],
+    contributions: set[str] | None = None,
+) -> _PackState:
     staged = _clone_pack(st)
     try:
         put(staged)
     except Exception as error:  # noqa: BLE001 — a failed optional renderer leaves its prefix intact
         log.warning("context.pack: section %s failed: %s", name, error)
         return st
+    if contributions is not None and staged != st:
+        contributions.add(name)
     return staged
 
 
 def _render_checked_pack(
-    prefix: _PackState, stack: MemoryStackOutput | None, hits: list[_SearchHit] | None
+    prefix: _PackState,
+    stack: MemoryStackOutput | None,
+    hits: list[_SearchHit] | None,
+    *,
+    contributions: set[str] | None = None,
 ) -> ContextPackOutput:
     st = _clone_pack(prefix)
     if stack is not None:
-        st = _put_optional(st, "memory_stack", lambda target: _put_memory_stack(target, stack))
+        st = _put_optional(
+            st, "memory_stack", lambda target: _put_memory_stack(target, stack), contributions
+        )
     if hits is not None:
-        st = _put_optional(st, "knowledge", lambda target: _put_knowledge(target, hits))
+        st = _put_optional(
+            st, "knowledge", lambda target: _put_knowledge(target, hits), contributions
+        )
     input = st.input
     char_budget = int(input.token_budget) * 4
     sections, section_meta, ordered = _in_block_order(st)
@@ -1035,11 +1051,22 @@ class CheckedPack:
     _direct: CheckedPassages | None
     marked: bool
     lost: bool = False
+    _contributions: set[str] = field(default_factory=set, init=False)
     _ordinary_mode: bool = field(default=False, init=False)
     _failed: bool = field(default=False, init=False)
     _ordinary_ready: bool = field(default=False, init=False)
     _output: ContextPackOutput | None = field(default=None, init=False)
     _checking: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+
+    def publication_proofs(self) -> tuple[SearchProofs, ...]:
+        if self._ordinary_mode or self.lost or self._failed:
+            return ()
+        proofs: list[SearchProofs] = []
+        if "knowledge" in self._contributions and self._direct is not None:
+            proofs.extend(self._direct.publication_proofs())
+        if "memory_stack" in self._contributions and self._stack is not None:
+            proofs.extend(self._stack.publication_proofs())
+        return tuple(proofs)
 
     def fresh(self) -> bool:
         if self._failed:
@@ -1106,9 +1133,13 @@ class CheckedPack:
                             self._stack, failed = None, True
                     if failed or not self.fresh():
                         return await self._fallback()
-                    output = _render_checked_pack(self._prefix, stack, direct)
+                    contributions: set[str] = set()
+                    output = _render_checked_pack(
+                        self._prefix, stack, direct, contributions=contributions
+                    )
                     if not self.fresh():
                         return await self._fallback()
+                    self._contributions = contributions
                     return output
                 except BaseException:
                     self._failed = True
@@ -1151,7 +1182,13 @@ async def run_checked_pack(input: ContextPackInput) -> CheckedPack:
 
 
 async def handle_context_pack(input: ContextPackInput) -> ContextPackOutput:
-    return await (await run_checked_pack(input)).current()
+    from server.knowledge.app import source_publication
+
+    checked = await run_checked_pack(input)
+    output = await checked.current()
+    for proof in checked.publication_proofs():
+        source_publication.retain(proof)
+    return output
 
 
 async def _working_memory_layers(input: Any) -> tuple[list[Any], str]:
