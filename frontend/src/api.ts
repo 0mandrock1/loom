@@ -1116,7 +1116,7 @@ export async function resolveConflict(
 
 export interface BudgetStatus {
   namespace: string;
-  spent_24h_usd: number;
+  spent_24h_usd: number | null;
   cap_usd: number;
   cap_source: "namespace" | "global" | "namespace_user" | "global_user" | "uncapped" | "org";
   user_id?: string | null;

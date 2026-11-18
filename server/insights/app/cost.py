@@ -40,13 +40,18 @@ _SCAN_DIMS = ("memory_key", "user_id", "model", "traffic_class", "instance_label
 _AHEAD_SLACK = timedelta(seconds=5)
 
 
-def _marked_costs_allowed(input: CostSummaryInput) -> bool:
-    """Only a verified operator or complete namespace-day totals include marked spend."""
+def _flat_platform_admin() -> bool:
+    """A narrowed token or missing auth grants no private spend detail."""
     from server.auth.context import current_auth
     from server.operations.base import Role
 
     auth = current_auth()
-    if auth is not None and auth.has_role(Role.PLATFORM_ADMIN) and not auth.has_ns_roles():
+    return auth is not None and auth.has_role(Role.PLATFORM_ADMIN) and not auth.has_ns_roles()
+
+
+def _marked_costs_allowed(input: CostSummaryInput) -> bool:
+    """Only a verified operator or complete namespace-day totals include marked spend."""
+    if _flat_platform_admin():
         return True
     dims = set(input.group_by)
     return (
@@ -200,17 +205,18 @@ async def handle_budget_status(input: BudgetStatusInput) -> BudgetStatusOutput:
         cap = snapshot.user_cap if user_id else snapshot.cap
         spent = snapshot.user_spent if user_id else snapshot.spent
         source = snapshot.user_cap_source if user_id else snapshot.cap_source
+        disclose_spend = not user_id or _flat_platform_admin()
         return BudgetStatusOutput(
             namespace=input.namespace,
             user_id=user_id or None,
             namespace_over_cap=(snapshot.cap > 0 and snapshot.spent >= snapshot.cap)
             if user_id
             else None,
-            spent_24h_usd=round(spent, 6),
+            spent_24h_usd=round(spent, 6) if disclose_spend else None,
             cap_usd=round(cap, 4),
             cap_source=source,
             over_cap=(cap > 0 and spent >= cap),
-            pct_of_cap=(round(min(1.0, spent / cap), 4) if cap > 0 else None),
+            pct_of_cap=(round(min(1.0, spent / cap), 4) if cap > 0 and disclose_spend else None),
         )
 
     # Org-wide rollup. Same scoping as cost.summary: a regular user

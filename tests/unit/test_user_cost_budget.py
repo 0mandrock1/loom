@@ -16,6 +16,7 @@ class BudgetCH:
         self.namespace_cap, self.user_cap, self.spent = namespace_cap, user_cap, spent
         self.reads: list[dict[str, Any]] = []
         self.inbox = ""
+        self.marked_spent = 0.0
 
     async def query_one(self, sql: str, params: dict[str, Any]) -> dict[str, Any]:
         self.reads.append(params)
@@ -25,10 +26,11 @@ class BudgetCH:
                 "daily_user_cost_cap_usd": self.user_cap,
                 "budget_alert_inbox": self.inbox,
             }
+        assert "mirror_marked" not in sql, "budget verdicts count marked spend too"
         return {
             "spent": 10.0,
             "own": 0.0,
-            "user_spent": self.spent if params.get("uid") == "alice" else 0.0,
+            "user_spent": self.spent + self.marked_spent if params.get("uid") == "alice" else 0.0,
             "user_own": 0.0,
         }
 
@@ -41,6 +43,7 @@ def ch(monkeypatch: pytest.MonkeyPatch) -> BudgetCH:
     monkeypatch.setattr("server.core.ch.get_client", lambda: client)
     monkeypatch.setattr(cost, "get_client", lambda: client)
     monkeypatch.setattr(settings, "default_daily_cost_cap_usd", 0)
+    monkeypatch.setattr("server.auth.context.current_auth", lambda: None)
     return client
 
 
@@ -66,13 +69,82 @@ async def test_an_unattributed_check_does_not_guess_a_user(ch: BudgetCH) -> None
     assert len(ch.reads) == 2, "uncapped anonymous checks need only their cap reads"
 
 
-async def test_user_budget_status_uses_the_named_users_spend(ch: BudgetCH) -> None:
+async def test_user_budget_status_uses_the_named_users_spend(
+    ch: BudgetCH, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.auth.jwt import AuthInfo
+    from server.operations.base import Role
+
+    auth = AuthInfo(
+        subject="operator",
+        org="o",
+        namespaces=("*",),
+        roles=(Role.PLATFORM_ADMIN,),
+        is_service_account=False,
+    )
+    monkeypatch.setattr("server.auth.context.current_auth", lambda: auth)
     out = await cost.handle_budget_status(
         BudgetStatusInput(org="o", namespace="n", user_id="alice")
     )
     assert out.user_id == "alice"
     assert (out.cap_usd, out.spent_24h_usd, out.cap_source) == (2.0, 3.0, "namespace_user")
-    assert out.over_cap is True
+    assert out.over_cap is True and out.pct_of_cap == 1.0
+
+
+@pytest.mark.parametrize(
+    "principal", ["none", "viewer", "org_admin", "narrow_operator", "operator"]
+)
+@pytest.mark.parametrize("marked_spent", [0.0, 2.0])
+async def test_user_spend_is_operator_only_even_when_every_event_is_ordinary(
+    ch: BudgetCH, monkeypatch: pytest.MonkeyPatch, principal: str, marked_spent: float
+) -> None:
+    from server.auth.jwt import AuthInfo
+    from server.observability import budget_notifications
+    from server.operations.base import Role
+    from server.settings import settings
+
+    role = {"viewer": Role.VIEWER, "org_admin": Role.ORG_ADMIN}.get(principal, Role.PLATFORM_ADMIN)
+    auth = (
+        None
+        if principal == "none"
+        else AuthInfo(
+            subject="reader",
+            org="o",
+            namespaces=("n",),
+            roles=(role,),
+            is_service_account=False,
+            ns_roles=(("n", "admin"),) if principal == "narrow_operator" else (),
+        )
+    )
+    assert auth is None or not auth.read_user_id
+    monkeypatch.setattr("server.auth.context.current_auth", lambda: auth)
+    warnings: list[budget_notifications.BudgetWarning] = []
+    monkeypatch.setattr(budget_notifications, "_observer", warnings.append)
+    monkeypatch.setattr(settings, "cost_budget_alert_share", 0.8)
+    ch.inbox = "warnings"
+    ch.spent, ch.marked_spent = 1.0, marked_spent
+    out = await cost.handle_budget_status(
+        BudgetStatusInput(org="o", namespace="n", user_id="alice")
+    )
+    real_spent = 1.0 + marked_spent
+    assert out.spent_24h_usd == (real_spent if principal == "operator" else None)
+    assert out.pct_of_cap == (min(1.0, real_spent / 2) if principal == "operator" else None)
+    assert out.cap_usd == 2 and out.cap_source == "namespace_user"
+    assert out.over_cap is (real_spent >= 2) and out.namespace_over_cap is False
+    assert len(warnings) == (1 if marked_spent else 0)
+    if warnings:
+        assert warnings[0].user_id == "alice" and warnings[0].spent == real_spent
+    snapshot = await budget.budget_snapshot("o", "n", user_id="alice", read_uncapped=True, ch=ch)
+    assert snapshot.user_spent == real_spent
+    assert await budget.namespace_over_cap("o", "n", user_id="alice") is (real_spent >= 2)
+    assert await budget.namespace_budget_ratio("o", "n", user_id="alice") == real_spent / 2
+    total = await cost.handle_budget_status(BudgetStatusInput(org="o", namespace="n"))
+    assert total.spent_24h_usd == 10 and total.pct_of_cap is None
+    ch.namespace_cap = 5
+    out = await cost.handle_budget_status(
+        BudgetStatusInput(org="o", namespace="n", user_id="alice")
+    )
+    assert out.namespace_over_cap is True and out.over_cap is (real_spent >= 2)
 
 
 async def test_user_status_reports_the_namespace_gate_too(ch: BudgetCH) -> None:

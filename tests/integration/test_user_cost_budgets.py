@@ -115,7 +115,8 @@ async def test_budget_policy_status_warning_stream_and_user_erasure(
         spend("alice", 1.7)
         spend("bob", 0.1)
         alice = await post("cost.budget_status", namespace=namespace, user_id="alice")
-        assert alice["cap_source"] == "namespace_user" and alice["spent_24h_usd"] == 1.7
+        assert alice["cap_source"] == "namespace_user" and alice["spent_24h_usd"] is None
+        assert alice["pct_of_cap"] is None
         assert not alice["over_cap"] and not alice["namespace_over_cap"]
         await wait_warnings({"alice"})
         for _ in range(3):
@@ -124,7 +125,13 @@ async def test_budget_policy_status_warning_stream_and_user_erasure(
         rows = warnings()
         assert len(rows) == 1
         assert rows[0]["actor"] == "process:budget_warning" and rows[0]["source_class"] == "derived"
-        assert json.loads(rows[0]["patch"])["user_id"] == "alice"
+        assert json.loads(rows[0]["patch"]) == {
+            "namespace": namespace,
+            "user_id": "alice",
+            "cap_usd": 2,
+            "spent_24h_usd": None,
+            "share": 0.8,
+        }
 
         spend("alice", 0.5)
         alice = await post("cost.budget_status", namespace=namespace, user_id="alice")
