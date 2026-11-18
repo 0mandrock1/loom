@@ -221,3 +221,191 @@ async def test_better_attested_canonical_keeps_direction() -> None:
     assert len(rows) == 1
     assert rows[0]["strategy"] == "existing"
     assert rows[0]["canonical_text"] == "naomi alderdman"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("novel", [False, True], ids=["known", "novel-uuid"])
+async def test_payload_map_normalization_work_is_linear_once(monkeypatch, novel) -> None:
+    """A map row needs its two text fields normalized, not six full parses."""
+    from copy import deepcopy
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from bench.cell_trigger_gate import _payload
+    from server.core.ch_writes import committed_insert_settings
+    from server.memory.app import entity_resolution as owner
+    from server.memory.app.projections import resolve_projection_entity_map
+    from server.memory.app.set_entities import set_entities_for_projection
+
+    input = SimpleNamespace(
+        org="clickhouse", namespace="private-agent", entities=None, tags=None, source_trace=""
+    )
+    created, now = datetime(2024, 1, 2), datetime(2025, 1, 2)
+    seed = f"gate-{'0' * 32}-0-0"
+    known = set_entities_for_projection(input, _payload(seed))
+    mentions = dict.fromkeys(known)
+    for index in range(1, 33):
+        key = f"gate-{'0' * 32}-0-{index}"
+        mentions.update(dict.fromkeys(set_entities_for_projection(input, _payload(key))))
+        if len(mentions) >= 32:
+            break
+    map_mentions = list(mentions)[:32]
+    assert len(map_mentions) == 32 and set(known) <= set(map_mentions)
+    rows = [
+        {
+            "mention_text": mention,
+            "canonical_text": mention,
+            "confidence": 1.0,
+            "evidence_count": 2,
+            "created_at": created,
+        }
+        for mention in map_mentions
+    ]
+    before = deepcopy(rows)
+    entities = (
+        set_entities_for_projection(input, _payload(f"gate-{'f' * 32}-7-607")) if novel else known
+    )
+    assert bool(set(entities) - set(map_mentions)) is novel
+    ch = StubCH()
+    ch.query_all_returns.append(rows)
+    normalize = owner.canonical_entity_text
+    calls = 0
+
+    def counted_normalize(raw):
+        nonlocal calls
+        calls += 1
+        return normalize(raw)
+
+    monkeypatch.setattr(owner, "canonical_entity_text", counted_normalize)
+    monkeypatch.setattr(owner, "naive_utc_now", lambda: now)
+    resolved = await resolve_projection_entity_map(input, entities, ch=ch)
+    assert resolved == {mention: mention for mention in entities}
+    expected = [
+        {
+            "org": "clickhouse",
+            "namespace": "private-agent",
+            "mention_text": mention,
+            "canonical_text": mention,
+            "confidence": 1.0,
+            "strategy": "existing" if mention in map_mentions else "self",
+            "evidence_count": 3 if mention in map_mentions else 1,
+            "created_at": created if mention in map_mentions else now,
+            "updated_at": now,
+            "tombstoned_at": None,
+        }
+        for mention in sorted(set(entities))
+    ]
+    assert ch.insert_calls == [("loom.entity_canonical_map", expected, committed_insert_settings())]
+    sql, params = ch.query_all_calls[0]
+    assert len(ch.query_all_calls) == 1
+    assert "FROM loom.entity_canonical_map FINAL" in sql
+    assert "org = {org:String}" in sql and "namespace = {ns:String}" in sql
+    assert "tombstoned_at IS NULL" in sql and "LIMIT {lim:UInt32}" in sql
+    assert params == {"org": "clickhouse", "ns": "private-agent", "lim": 5000}
+    assert rows == before
+    # Each fetched row contributes two normalized text fields. Mentions retain
+    # their existing normalization, matching and similarity work allowance.
+    assert calls <= 2 * len(rows) + 8 * len(entities) + 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("self_evidence", [1, 5], ids=["flip-cluster", "keep-best-attested"])
+async def test_normalized_map_preserves_duplicate_rows_and_attestation(
+    monkeypatch, self_evidence
+) -> None:
+    from copy import deepcopy
+    from datetime import datetime
+
+    from server.core.ch_writes import committed_insert_settings
+    from server.memory.app import entity_resolution as owner
+
+    created, duplicate_created, now = (
+        datetime(2024, 1, 2),
+        datetime(2024, 2, 3),
+        datetime(2025, 1, 2),
+    )
+    rows = [
+        {
+            "mention_text": "naomi alderdman",
+            "canonical_text": "naomi alderdman",
+            "confidence": 1.0,
+            "evidence_count": self_evidence,
+            "created_at": created,
+        },
+        {
+            "mention_text": "naomi alderdman",
+            "canonical_text": "naomi alderdman",
+            "confidence": 1.0,
+            "evidence_count": 1,
+            "created_at": duplicate_created,
+        },
+        {
+            "mention_text": "naomi alderman",
+            "canonical_text": "naomi alderdman",
+            "confidence": 0.85,
+            "evidence_count": 0,
+            "created_at": created,
+        },
+        {
+            "mention_text": " Naomi Alderman ",
+            "canonical_text": "naomi alderdman",
+            "confidence": 0.96,
+            "evidence_count": 1,
+            "created_at": duplicate_created,
+        },
+        {
+            "mention_text": "",
+            "canonical_text": "",
+            "confidence": 1.0,
+            "evidence_count": 0,
+            "created_at": None,
+        },
+    ]
+    before = deepcopy(rows)
+    ch = StubCH()
+    ch.query_all_returns.append(rows)
+    monkeypatch.setattr(owner, "naive_utc_now", lambda: now)
+    resolved = await owner.resolve_entities_for_write(
+        ch, org="clickhouse", namespace="private-agent", entity_texts=["Naomi Alderman"]
+    )
+    flip = self_evidence == 1
+    expected_canonical = "naomi alderman" if flip else "naomi alderdman"
+    assert resolved == {"naomi alderman": expected_canonical}
+    expected = [
+        {
+            "org": "clickhouse",
+            "namespace": "private-agent",
+            "mention_text": "naomi alderman",
+            "canonical_text": expected_canonical,
+            "confidence": 1.0 if flip else 0.96,
+            "strategy": "self" if flip else "existing",
+            "evidence_count": 2,
+            "created_at": duplicate_created,
+            "updated_at": now,
+            "tombstoned_at": None,
+        }
+    ]
+    if flip:
+        expected.extend(
+            {
+                "org": "clickhouse",
+                "namespace": "private-agent",
+                "mention_text": "naomi alderdman",
+                "canonical_text": "naomi alderman",
+                "confidence": 28 / 29,
+                "strategy": "fuzzy",
+                "evidence_count": 1,
+                "created_at": born,
+                "updated_at": now,
+                "tombstoned_at": None,
+            }
+            for born in (created, duplicate_created)
+        )
+    assert ch.insert_calls == [("loom.entity_canonical_map", expected, committed_insert_settings())]
+    assert rows == before
+    assert ch.query_all_calls[0][1] == {"org": "clickhouse", "ns": "private-agent", "lim": 5000}
+    fuzzy = owner.choose_canonical_candidate("Northwind AI", ["northwindai", "unrelated product"])
+    assert fuzzy.canonical_text == "northwindai" and fuzzy.strategy == "fuzzy"
+    assert fuzzy.confidence >= 0.95
+    ambiguous = owner.choose_canonical_candidate("acme", ["acme labs", "acme corp"])
+    assert ambiguous.canonical_text == "acme" and ambiguous.strategy == "self"
