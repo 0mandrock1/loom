@@ -51,7 +51,7 @@ def _parent(ch, ns, key, status, *, user="reader", session="session", invalid_at
     )
 
 
-def _chunk(ch, ns, key, index, *, session="session", content=None):
+def _chunk(ch, ns, key, index, *, user="reader", session="session", content=None):
     content = content or key
     columns = [
         "org",
@@ -71,7 +71,7 @@ def _chunk(ch, ns, key, index, *, session="session", content=None):
                 ORG,
                 ns,
                 "writer",
-                "reader",
+                user,
                 session,
                 index,
                 hashlib.sha256(content.encode()).hexdigest(),
@@ -184,3 +184,12 @@ def test_knowledge_time_keeps_only_parents_that_were_served_at_the_anchor(ch_cli
         "active",
         "retired-after",
     }
+
+
+@pytest.mark.parametrize("user,session", [("", "session"), ("reader", ""), ("", "")])
+def test_explicit_blank_parent_identity_still_excludes_rejected_text(ch_client, user, session):
+    ns = "blank-parent-" + uuid.uuid4().hex
+    for index, status in enumerate(["active", "rejected"]):
+        _parent(ch_client, ns, status, status, user=user, session=session)
+        _chunk(ch_client, ns, status, index, user=user, session=session)
+    assert _read(ch_client, ns) == {"active"}

@@ -311,7 +311,8 @@ async def write_memory_chunks(
     # or user-bounded search can keep to its own passages. '-' is the
     # identity sentinel.
     run_id = str(getattr(input, "run_id", "") or "-")
-    user_id = str(getattr(input, "user_id", "") or "-")
+    # Keep explicit spellings aligned with the canonical parent identity.
+    user_id = str(getattr(input, "user_id", "-"))
 
     text = _conversation_text(msgs)
     chunks, ranges, truncated_chars = chunk_text_with_ranges(text)
@@ -325,7 +326,9 @@ async def write_memory_chunks(
 
     # Caller need not provide a session_id; generate a per-call UUID so chunks
     # from one ingest are co-grouped.
-    session_id = getattr(input, "session_id", "") or uuid.uuid4().hex
+    session_id = getattr(input, "session_id", None)
+    if session_id is None:
+        session_id = uuid.uuid4().hex
     parent_keys = list(dict.fromkeys(k for k in (parent_memory_keys or []) if k))
     parent_memory_key = next((k for k in parent_keys if k), "")
     source_resource_id = (
