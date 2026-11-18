@@ -230,6 +230,7 @@ async def test_section_gather_preserves_typed_refusal(
         page="",
         explain=False,
         repo_namespace="",
+        tracker_plan=None,
     )
     if isinstance(failure, VectorInputTooLargeError):
         with pytest.raises(VectorInputTooLargeError) as raised:
