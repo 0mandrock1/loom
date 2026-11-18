@@ -7,7 +7,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -82,6 +82,16 @@ async def apply_rollback(
     from server.memory.domain.memory_types import is_embedded
     from server.memory.domain.trust import attests
 
+    from server.memory.app import blacklist_guard
+
+    # Check the complete reinstatement plan before its first batch writes. Each batch
+    # still reads its heads afresh, and its commit holds this policy generation.
+    values = [
+        {"org": org, "namespace": namespace, "value": historical.value}
+        for historical, head in await _reinstated(org, namespace, plan.reinstate, ch=ch)
+        if head is not None and historical.tombstoned_at is None
+    ]
+    policy = await blacklist_guard.enforce_rows(values)
     embedder = get_embedder()
     # Empty: the insert gives it the width its coded column takes.
     stub_vector: list[float] = []
@@ -163,7 +173,7 @@ async def apply_rollback(
             )
             source = None if h.redacted_at else (str(h.memory_id), h.version)
             batch.append(_Planned(row, head, _reinstate_event(h, head), stub, source))
-        await _write(batch, ch=ch, landed=applied.add_reinstated)
+        await _write(batch, ch=ch, landed=applied.add_reinstated, policy=policy)
 
     # --- remove: keys born after as_of are tombstoned ----------------------
     for i in range(0, len(plan.remove), _INSERT_BATCH):
@@ -222,7 +232,13 @@ class _Planned:
     source: tuple[str, int] | None = None
 
 
-async def _write(batch: list[_Planned], *, ch: Any, landed: Callable[[int], None]) -> None:
+async def _write(
+    batch: list[_Planned],
+    *,
+    ch: Any,
+    landed: Callable[[int], None],
+    policy: Mapping[tuple[str, str], int] | None = None,
+) -> None:
     """Commit the batch over its heads; `landed` counts and announces it, `_follow_ups`
     retires and fences (ClickHouse) and inserts its stubs; under Postgres the publish
     retires the vectors and `fenced_once_committed` fences the batch's 'high' rows."""
@@ -259,6 +275,7 @@ async def _write(batch: list[_Planned], *, ch: Any, landed: Callable[[int], None
             # A reinstated live row's document is owed until its stub lands.
             documented=[p.stub is not None and p.row["tombstoned_at"] is None for p in batch],
             sources=[p.source for p in batch if p.source is not None],
+            policy=policy,
             on_commit=answer.mark_committed,
         )
 

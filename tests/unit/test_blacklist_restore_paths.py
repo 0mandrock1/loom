@@ -44,6 +44,10 @@ def row(value="blocked", **kw):
         agent="a",
         memory_key="k",
         memory_type="semantic",
+        user_id="-",
+        session_id="-",
+        pinned=False,
+        expires_at=None,
         value=value,
         confidence=1,
         version=1,
@@ -136,7 +140,7 @@ async def test_rollback_checks_later_batches_before_writing_the_first(monkeypatc
 
 
 async def test_consolidation_refuses_generated_value_before_embedding(monkeypatch, guarded):
-    embedder = SimpleNamespace(embed=AsyncMock())
+    embedder = SimpleNamespace(embed=AsyncMock(side_effect=RuntimeError("embedding was attempted")))
     target = AsyncMock()
     written = AsyncMock()
     monkeypatch.setattr(consolidate, "_summary_target", target)

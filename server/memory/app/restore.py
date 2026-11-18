@@ -7,7 +7,7 @@ import asyncio
 import functools
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -22,7 +22,7 @@ from server.memory.api.models_crud import (
     MemoryRestoreInput,
     MemoryRestoreOutput,
 )
-from server.memory.app import webhooks
+from server.memory.app import blacklist_guard, webhooks
 from server.memory.app.provenance import writer_actor
 from server.memory.domain.excerpt import build_excerpt
 from server.memory.domain.temporal_sql import SERVED_STATUSES
@@ -89,6 +89,7 @@ async def _insert_restore(
     mirror: Callable[[], Awaitable[None]],
     landed: Callable[[], Awaitable[None]] | None = None,
     on_commit: Callable[[], None] | None = None,
+    policy: Mapping[tuple[str, str], int] | None = None,
 ) -> None:
     """Write the restore's row over the head it was built from (`existing`), then its
     search document (`mirror`), under Postgres within the commit's lease; `landed` runs
@@ -98,6 +99,8 @@ async def _insert_restore(
     have landed, so the key is read again."""
     import server.memory.store as memory_repo
 
+    if policy is None:
+        policy = await blacklist_guard.enforce_rows([row])
     key = str(row["memory_key"])
     owes_document = pg_memory.embedded(row)
     mirrored = functools.partial(_mirror_landed, what, key, mirror)
@@ -109,6 +112,7 @@ async def _insert_restore(
             then=mirrored,
             landed=landed,
             documented=[owes_document],
+            policy=policy,
             on_commit=on_commit,
         )
     except _DocumentFailed as failed:  # it carries its cause's summary
@@ -349,6 +353,9 @@ async def _write_restore(
     import server.memory.store as memory_repo
     from server.observability import audit
 
+    policy = await blacklist_guard.enforce_rows(
+        [{"org": input.org, "namespace": input.namespace, "value": existing.value}]
+    )
     new_version = version_over(existing)
     # The search row takes the same status: ranking reads its own copy.
     status = await _status_before_retirement(existing, ch=ch)
@@ -386,7 +393,9 @@ async def _write_restore(
             operation="memory.restore",
         ) from e
     mirror = functools.partial(_unsupersede, input, status, ch=ch)
-    await _insert_restore(input, restore_row, existing, ch=ch, what="the Undo", mirror=mirror)
+    await _insert_restore(
+        input, restore_row, existing, ch=ch, what="the Undo", mirror=mirror, policy=policy
+    )
     return new_version, status
 
 

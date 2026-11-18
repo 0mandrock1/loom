@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import logging
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -465,6 +466,33 @@ async def flush_hits() -> int:
     for pid, n in pending.items():
         await _write_hits(pid, n)
     return len(pending)
+
+
+async def enforce_rows(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], int]:
+    """Check every live value before a copy writes anything; return the policy its
+    Postgres commit must still hold. Tombstones remove values and never revive them."""
+    from server.core import pg
+    from server.memory.store import pg_memory
+
+    policy: dict[tuple[str, str], int] = {}
+    captured: set[str] = set()
+    for row in rows:
+        if row.get("tombstoned_at") is not None:
+            continue
+        org, namespace = str(row["org"]), str(row["namespace"])
+        if pg.enabled() and org not in captured:
+            policy.update(await pg_memory.policy_generations(org))
+            captured.add(org)
+        value = row["value"]
+        await enforce_on_insert(
+            org=org,
+            namespace=namespace,
+            value=value
+            if isinstance(value, str)
+            else json.dumps(value, ensure_ascii=False, default=str),
+            policy=policy if pg.enabled() else None,
+        )
+    return policy
 
 
 async def enforce_on_insert(

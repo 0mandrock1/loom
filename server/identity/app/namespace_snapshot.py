@@ -27,6 +27,7 @@ from server.identity.app import namespace as _registry
 from server.identity.app import registration
 from server.identity.store import grants as grants_repo
 from server.identity.store import namespaces as namespaces_repo
+from server.memory.app import blacklist_guard
 from server.memory.app import snapshot_rows as memory_snapshot
 from server.memory.app.provenance import writer_actor
 from server.observability import audit
@@ -245,6 +246,7 @@ async def handle_namespace_restore(
                 actor=writer_actor(),
             )
         )
+        policy = await blacklist_guard.enforce_rows(rows)
         now = naive_utc_now_seconds()
 
         # Only CREATE the namespace row when absent — an RMT insert over an
@@ -279,7 +281,9 @@ async def handle_namespace_restore(
             )
     await _registry.insert_admin_grant(ch, input.org, input.target_namespace, caller)
 
-    pending = await memory_snapshot.insert_version_rows(rows, ch=ch) if rows else False
+    pending = (
+        await memory_snapshot.insert_version_rows(rows, ch=ch, policy=policy) if rows else False
+    )
 
     # Per-type configs.
     if payload.types:
