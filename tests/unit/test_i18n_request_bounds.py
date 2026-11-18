@@ -1,10 +1,14 @@
 """Translation requests bound source bytes without breaking Markdown units."""
 
 from collections import Counter
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
+from scripts.i18n import chunks
 from scripts.i18n import translate as t
+from scripts.i18n.context import Label
 
 MAXIMUM = 16_384
 
@@ -295,3 +299,87 @@ def test_valid_table_reflow_is_written_in_each_supported_container(
         ).read_text()
     )
     assert not (tmp_path / t.target_path(t.LANGUAGES[0].code, "docs/example.md")).exists()
+
+
+@pytest.mark.parametrize(
+    ("text", "protected", "expected"),
+    [
+        (
+            "- one\n  continued\n\noutside\n- two\n",
+            [(10, 11), (7, 27), (0, 0), (23, 22)],
+            [(0, 27), (27, 33)],
+        ),
+        (
+            "- one\n  continued\n\n> outside\n- two\n",
+            [(19, 19), (10, 11), (7, 29)],
+            [(0, 19), (29, 35)],
+        ),
+        (
+            "- one\n\noutside\n- two\n",
+            [(7, 15)],
+            [(0, 7), (15, 21)],
+        ),
+    ],
+)
+def test_site_list_boundaries_keep_overlaps_and_exact_starts(text, protected, expected):
+    assert chunks._site_lists(text, protected) == expected
+
+
+def test_site_lists_do_not_revisit_every_interval_for_each_line():
+    class Intervals(list):
+        visits = 0
+
+        def __iter__(self):
+            for interval in super().__iter__():
+                self.visits += 1
+                yield interval
+
+    protected = Intervals((i * 6 + 1, i * 6 + 2) for i in range(64))
+    assert chunks._site_lists("plain\n" * 64, protected) == []
+    assert protected.visits <= 4 * len(protected)
+
+
+def test_table_labels_keep_first_duplicate_offsets_and_unmatched_dialect_rows(monkeypatch):
+    def row(text, start=0, end=0):
+        return [Label(text, minimum=2, start=start, end=end)]
+
+    github = [
+        row("one", 1, 2),
+        row("repeat", 3, 4),
+        row("unmatched", 5, 6),
+        row("repeat", 7, 8),
+        row("last", 9, 10),
+    ]
+    site = [row("repeat"), row("site"), row("one"), row("repeat"), row("repeat")]
+    monkeypatch.setattr(chunks, "_github_rows", lambda text: github)
+    monkeypatch.setattr(chunks, "_site_tables", lambda text: SimpleNamespace(rows=site))
+    assert list(chunks.table_labels("x" * 20).values()) == [
+        Label("repeat", minimum=2, start=3, end=4),
+        Label("site", minimum=2, end=20),
+        Label("one", minimum=2, start=1, end=2),
+        Label("repeat", minimum=2, start=7, end=8),
+        Label("repeat", minimum=2, end=20),
+        Label("unmatched", minimum=2, start=5, end=6),
+        Label("last", minimum=2, start=9, end=10),
+    ]
+
+
+def test_table_labels_copy_cells_in_proportion_to_rows(monkeypatch):
+    github = [[Label(f"github {i}", start=i, end=i + 1)] for i in range(64)]
+    site = [[Label(f"site {i}")] for i in range(64)]
+    copies = 0
+
+    def counted_replace(*args, **kwargs):
+        nonlocal copies
+        copies += 1
+        return replace(*args, **kwargs)
+
+    monkeypatch.setattr(chunks, "_github_rows", lambda text: github)
+    monkeypatch.setattr(chunks, "_site_tables", lambda text: SimpleNamespace(rows=site))
+    monkeypatch.setattr(chunks, "replace", counted_replace)
+    labels = chunks.table_labels("example")
+    assert list(labels.values()) == [
+        *[Label(f"site {i}", end=7) for i in range(64)],
+        *[row[0] for row in github],
+    ]
+    assert copies <= 4 * (len(github) + len(site))
