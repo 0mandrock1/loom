@@ -9,6 +9,7 @@ import sys
 import time
 from multiprocessing import spawn
 from pathlib import Path
+from uuid import UUID
 
 from server.core import provider_process
 from server.core.ch import get_client
@@ -340,11 +341,77 @@ async def verify(model: str, dimensions: int) -> None:
     print(f"PASS provider data: {model}/{dimensions}, memory + code metadata, no retained copies")
 
 
+async def diagnostic(client, transition: str) -> None:
+    """Read capped aggregate evidence; never acknowledge or retire a participant."""
+    from server.insights.store.provider_participants import PARTICIPANTS_SQL
+
+    scope = provider_process.host_proof().split("|")[:4]
+    if len(scope) != 4 or not all(scope):
+        raise ValueError("Unavailable provider diagnostic scope")
+    sql = (
+        "WITH retained AS (" + PARTICIPANTS_SQL + "), "
+        "lease AS (SELECT holder, renewed_at + toIntervalSecond(ttl_s) < now64(3) AS expired "
+        "FROM loom._migration_lock WHERE name = {name:String} LIMIT 2) "
+        "SELECT count() AS retained, "
+        "countIf(p.state = 'running') AS running, "
+        "countIf(p.state = 'drained' AND p.transition_id = {transition:UUID}) AS matching_drained, "
+        "countIf(p.state = 'drained' AND p.transition_id != {transition:UUID}) AS other_drained, "
+        "countIf(p.state = 'retired') AS retained_retired, "
+        "countIf(p.expired) AS expired, "
+        "countIf(arraySlice(splitByChar('|', p.host_proof), 1, 4) = {scope:Array(String)}) "
+        "AS same_scope, "
+        "(SELECT count() FROM lease) AS lease_rows, "
+        "(SELECT countIf(expired) FROM lease) AS expired_leases, "
+        "countIf(l.holder != '') AS retained_holders, "
+        "countIf(l.holder != '' AND p.state = 'drained' "
+        "AND p.transition_id = {transition:UUID}) AS matching_drained_holders "
+        "FROM retained AS p ANY LEFT JOIN lease AS l "
+        "ON toString(p.participant_id) = arrayElement(splitByChar('/', l.holder), 1) "
+        "SETTINGS max_execution_time = 3, max_rows_to_read = 10000, "
+        "max_bytes_to_read = 10485760, read_overflow_mode = 'throw', "
+        "max_result_rows = 1, max_result_bytes = 4096, result_overflow_mode = 'throw', "
+        "max_memory_usage = 134217728, max_threads = 1, select_sequential_consistency = 1"
+    )
+    row = await asyncio.wait_for(
+        client.query_one(
+            sql,
+            {
+                "name": "provider_configuration",
+                "transition": str(UUID(transition)),
+                "scope": scope,
+            },
+        ),
+        timeout=5,
+    )
+    keys = {
+        "retained",
+        "running",
+        "matching_drained",
+        "other_drained",
+        "retained_retired",
+        "expired",
+        "same_scope",
+        "lease_rows",
+        "expired_leases",
+        "retained_holders",
+        "matching_drained_holders",
+    }
+    if (
+        row is None
+        or row.keys() != keys
+        or any(type(value) is not int or not 0 <= value <= 10000 for value in row.values())
+    ):
+        raise ValueError("Invalid provider diagnostic aggregate")
+    print("Provider reset diagnostic: " + json.dumps(row, sort_keys=True))
+
+
 async def main() -> None:
     client = get_client()
     await client.connect()
     try:
-        if sys.argv[1] == "seed":
+        if sys.argv[1] == "diagnostic":
+            await diagnostic(client, sys.argv[2])
+        elif sys.argv[1] == "seed":
             await seed()
         elif sys.argv[1] == "workers":
             print(json.dumps(await workers(client)))

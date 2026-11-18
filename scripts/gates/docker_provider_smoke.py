@@ -61,6 +61,16 @@ def control(compose: list[str], failed_model: str) -> None:
 
 def data_check(compose: list[str], *args: str) -> list[dict] | None:
     source = (ROOT / "scripts/gates/docker_provider_data.py").read_text()
+    if args[0] == "diagnostic":
+        subprocess.run(
+            [*compose, "exec", "-T", "loom", "python", "-", *args],
+            input=source,
+            text=True,
+            check=True,
+            timeout=10,
+            stderr=subprocess.DEVNULL,
+        )
+        return None
     if args[0] == "workers":
         result = subprocess.run(
             [*compose, "exec", "-T", "loom", "python", "-", *args],
@@ -203,9 +213,16 @@ def smoke_providers(base: str, compose: list[str]) -> None:
     data_check(compose, "docker-smoke-16", "16")
     reset = dashboard_action(base, "reset")
     assert reset["state"] == "queued", reset
-    status = wait_status(
-        base, lambda row: row["pending"] is None and row["source"] == "environment"
-    )
+    try:
+        status = wait_status(
+            base, lambda row: row["pending"] is None and row["source"] == "environment"
+        )
+    except BaseException:
+        try:
+            data_check(compose, "diagnostic", reset["config_id"])
+        except BaseException:  # noqa: BLE001 — diagnostic failure must preserve activation failure
+            print("Provider reset diagnostic unavailable")
+        raise
     assert status["embedding_model"] == environment["embedding_model"], status
     assert status["llm_model"] == environment["llm_model"], status
     wait_admission(base)
