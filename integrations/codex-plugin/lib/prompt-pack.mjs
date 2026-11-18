@@ -62,6 +62,7 @@ export function codeLookup(prompt, token) {
       if (!match) continue;
       const name = match[1];
       if (name.length > 256 || redactSecrets(name, token) !== name) return null;
+      if (/^(?:a|an|the|this|that|these|those|it|my|our|your)$/i.test(name)) continue;
       return { op, name };
     }
   }

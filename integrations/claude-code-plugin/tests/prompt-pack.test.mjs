@@ -67,6 +67,8 @@ test("typed selection stays conservative and refuses secret-bearing identifiers"
     "Can you explain where the parser is defined and why?",
     "Which callers use a parser when a record is incomplete?",
     "Who calls Parser.parse-record in this checkout?",
+    "Who calls the parser in this module?",
+    "Which callers of this function can you establish?",
     "Explain exact string matching in the parser and its callers.",
   ])
     assert.equal(codeLookup(prompt).op, "code.search", prompt);
