@@ -134,9 +134,9 @@ export function codeScopeLine(hit) {
   if (!hit || !hit.org || !hit.namespace) return "";
   const where = hit.repo ? ` (${hit.repo}${hit.branch ? ` @ ${hit.branch}` : ""})` : "";
   return (
-    `Code index scope${where}: pass org: "${hit.org}", namespace: "${hit.namespace}" on EVERY ` +
-    `loom_code_* call from this checkout — without them the server answers from its default ` +
-    `repository, not this one.`
+    `Code index scope${where}: pass namespace: "${hit.namespace}" on EVERY loom_code_* call ` +
+    `from this checkout. MCP infers org "${hit.org}" from the token; HTTP/SDK callers also pass org. ` +
+    `Without the namespace the server answers from its default repository, not this one.`
   );
 }
 
@@ -175,9 +175,12 @@ const CODE_ARBITRATION =
   "# Loom code index: this repository is indexed (per-merge fresh).\n" +
   "- Use Loom first when indexed evidence is needed: loom_code_symbol for definitions, " +
   "loom_code_callers for callers, loom_code_search for concepts, loom_code_impact for a change's effects.\n" +
+  "- If the needed tool is deferred, discover it with the client's tool search (ToolSearch in Claude Code). " +
+  "A definition does not supply its callers; retrieve the missing evidence for the question.\n" +
   "- If a hook already supplied the answer, use it; do not repeat the lookup. Read only a returned span " +
   "to verify it. Skip retrieval for self-contained tasks.\n" +
-  "- Exact strings, uncommitted changes and unindexed files: use local grep/Read. If Loom is " +
+  "- Explicit literal-search requests, uncommitted changes and unindexed files: use local grep/Read. " +
+  "A code question quoting an identifier or error is still a code investigation. If Loom is " +
   "unavailable or abstains, use a targeted local lookup and name the limitation.\n" +
   "- The index is master; this checkout may be behind it. For unchanged files, report the index's path:line.\n";
 
