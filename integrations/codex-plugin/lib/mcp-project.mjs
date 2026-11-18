@@ -94,6 +94,7 @@ export async function sessionProject({ pid = process.ppid, identity = processIde
     pid = current.parent;
     if (waitMs > 0 && Date.now() >= deadline) break;
   }
+  if (ancestors.length === 0) return "";
   do {
     for (const ancestor of ancestors) {
       const context = readJsonFile(contextPath(ancestor, tmp), null);

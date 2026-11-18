@@ -235,6 +235,19 @@ test("concurrent clients retain exact quote/dollar paths and separate sessions",
   }
 });
 
+test("missing client ancestors return without scheduling a context poll", async (t) => {
+  t.mock.method(globalThis, "setTimeout", () => {
+    assert.fail("a context write cannot resolve a missing client identity");
+  });
+  for (const identity of [
+    () => null,
+    (pid) => ({ pid, parent: 1, born: "shell", name: "sh" }),
+    (pid) => ({ pid, parent: pid - 1, born: String(pid), name: "sh" }),
+  ]) {
+    assert.equal(await sessionProject({ pid: 30, identity, waitMs: 1500 }), "");
+  }
+});
+
 test("a later context write can complete while the helper waits", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "loom-project-test-"));
   const identity = (pid) => ({ pid, parent: 1, born: "live" });
