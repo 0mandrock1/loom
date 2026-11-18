@@ -1938,6 +1938,8 @@ async def test_a_summary_left_a_source_is_downgraded_with_its_vectors_and_search
     tags = ["consolidated", "src:k1", "src:k2"]
     made = await call("memory.set", _set(ns, "summary", "a summary of k1 and k2", tags=tags))
     assert made.status_code == 200, made.text
+    # The downgrade copies vectors from the summary's initial publication.
+    await _published(pg_conn, org)
     gone = await call("memory.delete", {"namespace": ns, "agent": "a", "memory_key": "k1"})
     assert gone.status_code == 200, gone.text
     assert gone.json().get("dependents_downgraded") == 1, gone.text
@@ -3748,7 +3750,10 @@ async def test_a_write_made_unembedded_over_an_embedded_key_retires_its_vectors(
         body = {"namespace": ns, "agent": "a", "entries": [body]}
     elif op == "memory.update":
         body = {"namespace": ns, "memory_key": "k", "value": value}
-    assert (await call(op, body)).status_code == 200
+    response = await call(op, body)
+    assert response.status_code == 200
+    if op == "memory.update":
+        assert response.json()["updated"] is True
     # The retirement rides the write's publication, after its commit answered.
     await _published(pg_conn, org)
     live = ch_client.query(

@@ -28,6 +28,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from server.core.diagnostics import codes_only
+
 _MAX_SKIPPED = 16
 
 
@@ -62,6 +64,10 @@ class RequestWork:
     # resolved (a code op naming none runs in the code namespace): the ledger
     # row's tenant where the request named none.
     admitted: tuple[str, str] | None = None
+    # Mutable with the bag: a child leg marks its parent request even when it admits
+    # nothing. Diagnostic suppression must not hide this authorization state.
+    mirror_marked: bool = False
+    mirror_unread: bool = False
 
     def mark(self, name: str) -> float:
         now = time.perf_counter()
@@ -93,13 +99,28 @@ def begin() -> RequestWork:
 
 
 def current() -> RequestWork | None:
-    return _current.get()
+    return None if codes_only() else _current.get()
+
+
+def mark_mirrored(*, unread: bool = False) -> bool:
+    """Mark a leg; False means no outer request bag exists and it must serve no mirror."""
+    bag = _current.get()
+    if bag is None:
+        return False
+    bag.mirror_marked = True
+    bag.mirror_unread |= unread
+    return True
+
+
+def mirror_marked() -> bool:
+    bag = _current.get()
+    return bag is not None and bag.mirror_marked
 
 
 def mark_stage(name: str) -> None:
     """Charge the wall since the previous mark (or the bag's start) to
     `name`. No bag bound: nothing happens."""
-    bag = _current.get()
+    bag = current()
     if bag is None:
         return
     try:
@@ -115,6 +136,8 @@ def note_ch_summary(summary: Any) -> dict[str, Any]:
     `query_id`) for the caller's span, or {} when the summary is empty or
     unreadable — a Cloud response without the header is a null reading, not
     an error. Never raises."""
+    if codes_only():
+        return {}
     try:
         if not isinstance(summary, dict) or not summary:
             return {}
@@ -131,7 +154,7 @@ def note_ch_summary(summary: Any) -> dict[str, Any]:
         }
         if qid:
             parsed["query_id"] = qid
-        bag = _current.get()
+        bag = current()
         if bag is not None:
             bag.ch_statements += 1
             bag.ch_read_rows += parsed["read_rows"]
@@ -145,7 +168,7 @@ def note_ch_summary(summary: Any) -> dict[str, Any]:
 def next_query_seq() -> tuple[int, str] | None:
     """The request's next statement number and its nonce, or None when no bag is
     bound (a worker pass keeps the driver's own query ids)."""
-    bag = _current.get()
+    bag = current()
     if bag is None:
         return None
     bag.ch_seq += 1
@@ -153,7 +176,7 @@ def next_query_seq() -> tuple[int, str] | None:
 
 
 def note_injected(*, facts: int = 0, chunks: int = 0) -> None:
-    bag = _current.get()
+    bag = current()
     if bag is None:
         return
     bag.injected_facts += max(0, int(facts))
@@ -161,7 +184,7 @@ def note_injected(*, facts: int = 0, chunks: int = 0) -> None:
 
 
 def note_schema_skipped(table: str) -> None:
-    bag = _current.get()
+    bag = current()
     if bag is None or not table:
         return
     name = str(table)

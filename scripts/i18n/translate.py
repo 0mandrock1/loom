@@ -146,7 +146,13 @@ LINK_TEXT = re.compile(r"(?<!!)\[([^\[\]\n]+)\]\([^)\s]+")
 # An HTML link's inner text; `<code>` inside it is dropped with its content, other tags
 # (`<b>`) without theirs, before checking.
 HTML_LINK_TEXT = re.compile(r"<a\s[^>]*>(.*?)</a>", re.DOTALL)
-HTML_TAG = re.compile(r"<[^>]+>")
+# A literal comparison is prose; quoted delimiters and comments belong to their tag.
+HTML_TAG = re.compile(
+    r"<!--.*?-->|<\?.*?\?>|<!\[CDATA\[.*?\]\]>"
+    r"|<(?:/?[A-Za-z][^\s/<>\"']*(?=[\s/>])|![A-Za-z])"
+    r"(?:[^<>\"']|\"[^\"]*\"|'[^']*')*>",
+    re.DOTALL,
+)
 HTML_CODE = re.compile(r"<code>.*?</code>", re.DOTALL)
 IMAGE_ALT = re.compile(r"!\[([^\]\n]+)\]\(")
 HTML_ALT = re.compile(r'\balt="([^"]+)"')

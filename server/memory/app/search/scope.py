@@ -14,8 +14,9 @@ from typing import Any
 from server.auth.fanout import Fanout, resolve_fanout
 from server.core.background import create_deferred_task
 from server.core.ch import get_client
+from server.core.errors import VectorInputTooLargeError
 from server.core.llm_free import reads_llm_free
-from server.memory.api.models_search import MemorySearchInput
+from server.memory.api.models_search import SEARCH_ENTITY_FILTER_MAX, MemorySearchInput
 from server.memory.app.search.query_plan import _enrichment_parser_gate_active
 from server.memory.domain.graph_quality import names_only
 
@@ -63,6 +64,9 @@ class _SearchRun:
     triples_matched: int = 0
     # The side legs the orchestrator launched after the scope reads.
     side_tasks: list[asyncio.Task[Any] | None] = field(default_factory=list)
+    # The term leg (`term_leg.launch`), launched once the search is admitted and joined
+    # after the verdict.
+    term_task: asyncio.Task[Any] | None = None
     # Sequential reads, entered once the Postgres barrier waited (`pg_validation.admit`)
     # and left by `close`.
     sequential_scope: ExitStack = field(default_factory=ExitStack)
@@ -76,6 +80,7 @@ class _SearchRun:
             self.calibration_task,
             self.fanout_task,
             self.canonical_task,
+            self.term_task,
             *self.side_tasks,
         ):
             if task is not None and not task.done():
@@ -137,7 +142,14 @@ def _entity_filter(input: MemorySearchInput, llm_query_entities: list[str]) -> l
     """The entity filter before canonicalisation: the caller's own wins over the
     entities the intent parser found. A name too long to be one is left out, so a failed
     canonical lookup never binds it."""
-    return names_only(input.entity_filter or []) or names_only(llm_query_entities)
+    if len(input.entity_filter) > SEARCH_ENTITY_FILTER_MAX:
+        raise VectorInputTooLargeError("entity_filter accepts at most 64 raw names")
+    entities = names_only(input.entity_filter or [])
+    if entities:
+        return entities
+    if len(llm_query_entities) > SEARCH_ENTITY_FILTER_MAX:
+        raise VectorInputTooLargeError("entity_filter accepts at most 64 raw names")
+    return names_only(llm_query_entities)
 
 
 async def _prelaunch_canonical_lookup(
@@ -211,6 +223,8 @@ async def _resolve_entity_scope(
                     namespaces=run.namespaces,
                     entity_texts=effective_entity_filter,
                 )
+            except VectorInputTooLargeError:
+                raise
             except Exception as e:  # noqa: BLE001 — canonical entity lookup is optional; raw filter kept
                 log.warning("entity canonical lookup failed (non-fatal): %s", e)
     elif _canonical_task is not None:
@@ -218,6 +232,8 @@ async def _resolve_entity_scope(
         # overlapped its RTT. Await it now; same fail-open as the serial path.
         try:
             effective_entity_filter = await _canonical_task
+        except VectorInputTooLargeError:
+            raise
         except Exception as e:  # noqa: BLE001 — canonical entity lookup is optional; raw filter kept
             log.warning("entity canonical lookup failed (non-fatal): %s", e)
     run.effective_entity_filter = effective_entity_filter

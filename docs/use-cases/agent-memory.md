@@ -84,3 +84,12 @@ AI Agent to Loom conversation history, durable memories and knowledge search.
 
 Use the [Dify tools plugin](../features/integrations/frameworks.md#dify) to save facts,
 recall a user's memories and search app documents from a workflow.
+
+Use [Google ADK memory](../features/integrations/frameworks.md#google-adk) to recall
+per-user facts and shared knowledge through ADK memory tools.
+
+Use a [Haystack document store and retriever](../features/integrations/frameworks.md#haystack)
+to search documents from a pipeline while keeping them in your Loom deployment.
+
+Use [Agno user memories](../features/integrations/frameworks.md#agno) through its
+native memory manager with a Loom database bound to each end user.

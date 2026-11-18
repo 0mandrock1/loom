@@ -4,9 +4,12 @@ server/memory/api/models_loom_search.py; the legs and assembly in memory/app/loo
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from typing import Any
 
 from server.code.app.repo_scope import repo_namespace_in_scope
+from server.core.diagnostics import private_work
+from server.core.request_work import mirror_marked
 from server.memory.api.models_loom_search import SearchInput, SearchOutput
 from server.memory.app.loom_search.fanout import search_sections
 
@@ -49,8 +52,9 @@ async def handle_search(input: SearchInput) -> SearchOutput:
         explain=input.explain,
         repo_namespace=repo_namespace,
     )
-    _record_gap_miss(input, payload, repo_namespace or "")
-    return SearchOutput.model_validate(payload)
+    with private_work() if mirror_marked() else nullcontext():
+        _record_gap_miss(input, payload, repo_namespace or "")
+        return SearchOutput.model_validate(payload)
 
 
 # The `withheld` reasons that mean an answer led and the rest was set aside.
@@ -79,6 +83,8 @@ def _record_gap_miss(input: SearchInput, payload: dict[str, Any], repo_namespace
     if any(s.get("error") for s in (memory, *others)) or any(s.get("results") for s in others):
         return
     hits = memory.get("results") or []
+    if memory.get("term_leg") not in ("complete", "empty") or any(h.get("governed") for h in hits):
+        return  # a governed definition answers, or a term leg not complete or empty may hold one
     if repo_namespace and repo_namespace != input.namespace:
         if any(h.get("namespace") == repo_namespace for h in hits):
             return  # a decision merged from the scoped repository answers

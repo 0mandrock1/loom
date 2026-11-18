@@ -335,7 +335,10 @@ def _attach_log_handler(resource: Any, log_exporter: Any) -> None:
         set_logger_provider(logger_provider)
 
         # Attach LoggingHandler to the root logger so everything is captured.
+        from server.core.diagnostics import public_log
+
         handler = LoggingHandler(level=stdlogging.INFO, logger_provider=logger_provider)
+        handler.addFilter(public_log)
         stdlogging.getLogger().addHandler(handler)
         _logger_provider = logger_provider
         _log_handler = handler
@@ -477,6 +480,10 @@ def traced(name: str, **attrs: Any) -> Any:
     """
     import contextlib
 
+    from server.core.diagnostics import codes_only
+
+    if codes_only():
+        return contextlib.nullcontext()
     try:
         from opentelemetry import trace
 
