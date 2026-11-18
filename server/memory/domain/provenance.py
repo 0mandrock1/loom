@@ -111,12 +111,14 @@ def cli_actor(command: str) -> str:
 PIPELINE_ACTORS: Final = frozenset(
     {
         EXTRACTION_WORKER_ACTOR,
+        "process:budget_warning",
         "process:code_coverage_notify",
         "process:consolidation",
         "process:loom",
         "process:period_digest",
         "process:proposal_policy",
         "process:session_brief",
+        "process:source-push",
         "process:task_lease_sweep",
     }
 )

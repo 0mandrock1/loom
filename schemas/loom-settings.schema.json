@@ -2349,6 +2349,13 @@
           "type": "string",
           "description": "Comma-separated origin list. \"*\" allows all (acceptable when auth_required=True). Empty disables CORS entirely."
         },
+        "cost_budget_alert_share": {
+          "default": 0.8,
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "type": "number",
+          "description": "Fraction of a cap that warns its namespace's configured inbox on the next check."
+        },
         "dashboard_redirect_url": {
           "default": "",
           "type": "string",
@@ -2358,6 +2365,12 @@
           "default": 1.0,
           "type": "number",
           "description": "Daily LLM spend cap per namespace, USD: extraction workers skip a namespace whose rolling 24 h cost reached it. Overridden per namespace by loom.namespaces.daily_cost_cap_usd; 0.0 disables on both tiers."
+        },
+        "default_daily_user_cost_cap_usd": {
+          "default": 0.0,
+          "minimum": 0,
+          "type": "number",
+          "description": "Separate rolling-24h cap per named user_id within a namespace, USD; 0 disables it. A namespace's daily_user_cost_cap_usd overrides this default when positive."
         },
         "default_namespace": {
           "default": "local",
@@ -3119,6 +3132,11 @@
           "type": "integer",
           "description": "Seconds one pass, which runs one job, may take before it is cancelled: the extractor's timeout plus embedding the largest source. A job cut off runs again from its start and counts toward its attempts."
         },
+        "knowledge_mirrored_sources_enabled": {
+          "default": false,
+          "type": "boolean",
+          "description": "Require protected automatic session capture and persist deployment privacy state. Off does not lift protection while the deployment latch remains set."
+        },
         "knowledge_noise_filter": {
           "default": true,
           "type": "boolean",
@@ -3129,6 +3147,72 @@
           "minimum": 60,
           "type": "integer",
           "description": "Seconds a no-row source's chunks must have aged before a delete retires them (a first write's are younger); never less than an ingest pass plus 5 minutes of clock skew."
+        },
+        "knowledge_query_history_enabled": {
+          "default": false,
+          "type": "boolean",
+          "description": "Permit opt-in ClickHouse query-history sources to queue definition drafts."
+        },
+        "knowledge_query_history_interval_seconds": {
+          "default": 3600,
+          "minimum": 300,
+          "type": "integer",
+          "description": "Seconds between query-history passes."
+        },
+        "knowledge_query_history_max_breakers": {
+          "default": 1000,
+          "maximum": 100000,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Query-history circuit states kept per process, at most; older sources are evicted first."
+        },
+        "knowledge_query_history_max_drafts": {
+          "default": 20,
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Drafts one source may queue in a worker turn, at most."
+        },
+        "knowledge_query_history_max_groups": {
+          "default": 200,
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Most-used query groups inspected per source turn before skipping existing drafts."
+        },
+        "knowledge_query_history_max_pass_seconds": {
+          "default": 120.0,
+          "maximum": 600.0,
+          "minimum": 30.0,
+          "type": "number",
+          "description": "Deadline of one query-history pass; it starts no new group after half this budget."
+        },
+        "knowledge_query_history_max_sources": {
+          "default": 100,
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Sources one pass reads, at most; each turn is separately time bounded."
+        },
+        "knowledge_query_history_min_users": {
+          "default": 3,
+          "minimum": 3,
+          "type": "integer",
+          "description": "Distinct initial ClickHouse accounts required before drafting a query group."
+        },
+        "knowledge_query_history_read_timeout_s": {
+          "default": 30,
+          "exclusiveMinimum": 0,
+          "maximum": 120,
+          "type": "number",
+          "description": "Seconds allowed for one query-history source read."
+        },
+        "knowledge_query_history_window_days": {
+          "default": 7,
+          "maximum": 30,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Days of finished SELECT query history a turn groups."
         },
         "knowledge_repo_docs_list_ttl_s": {
           "default": 60.0,
@@ -3178,6 +3262,12 @@
           "type": "integer",
           "description": "How many fused hits a rerank reads (the legs fetch at least this many)."
         },
+        "knowledge_source_acl_stale_seconds": {
+          "default": 3600,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Mirrored reads require a complete listing and group observation within this many seconds; missing or older evidence admits nobody."
+        },
         "knowledge_source_max_documents": {
           "default": 50000,
           "maximum": 200000,
@@ -3197,6 +3287,41 @@
           "maximum": 25.0,
           "type": "number",
           "description": "Seconds a document source's probe (add, update, check, rotate) or tracker short-id lookup may take in all; past it add, update and rotate answer SOURCE_UNREACHABLE and check answers reachable: false."
+        },
+        "knowledge_source_push_cleanup_timeout_s": {
+          "default": 5.0,
+          "exclusiveMinimum": 0,
+          "type": "number",
+          "description": "Seconds allowed for the whole Drive channel cleanup; at least the per-channel wait."
+        },
+        "knowledge_source_push_enabled": {
+          "default": false,
+          "type": "boolean",
+          "description": "Enable optional source push setup, callbacks and Drive renewal; false keeps polling only."
+        },
+        "knowledge_source_push_interval_seconds": {
+          "default": 300,
+          "minimum": 60,
+          "type": "integer",
+          "description": "Seconds between bounded channel-renewal pages; channels renew a day before expiry."
+        },
+        "knowledge_source_push_max_pass_seconds": {
+          "default": 120.0,
+          "exclusiveMinimum": 0,
+          "type": "number",
+          "description": "Seconds a renewal pass may run; reserve one provider attempt and two cleanup windows."
+        },
+        "knowledge_source_push_provider_timeout_s": {
+          "default": 40.0,
+          "exclusiveMinimum": 0,
+          "type": "number",
+          "description": "Seconds one push setup or Drive renewal may spend on provider work, before cleanup."
+        },
+        "knowledge_source_push_stop_timeout_s": {
+          "default": 2.0,
+          "exclusiveMinimum": 0,
+          "type": "number",
+          "description": "Seconds allowed to stop one superseded or unpublished Drive channel."
         },
         "knowledge_source_retire_documents_per_pass": {
           "default": 40,
