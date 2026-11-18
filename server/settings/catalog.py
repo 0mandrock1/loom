@@ -2346,6 +2346,14 @@ class KnowledgeSettings(BaseModel):
     knowledge_source_push_enabled: bool = False
     # Seconds between bounded channel-renewal pages; channels renew a day before expiry.
     knowledge_source_push_interval_seconds: int = Field(default=300, ge=60)
+    # Seconds one push setup or Drive renewal may spend on provider work, before cleanup.
+    knowledge_source_push_provider_timeout_s: float = Field(default=40.0, gt=0)
+    # Seconds allowed to stop one superseded or unpublished Drive channel.
+    knowledge_source_push_stop_timeout_s: float = Field(default=2.0, gt=0)
+    # Seconds allowed for the whole Drive channel cleanup; at least the per-channel wait.
+    knowledge_source_push_cleanup_timeout_s: float = Field(default=5.0, gt=0)
+    # Seconds a renewal pass may run; reserve one provider attempt and two cleanup windows.
+    knowledge_source_push_max_pass_seconds: float = Field(default=120.0, gt=0)
     # Seconds between sync passes while there are sources.
     knowledge_source_sync_interval_seconds: int = Field(default=900, ge=60)
     # Seconds between passes that found no source to sync; one idle sleep plus one
@@ -2395,6 +2403,30 @@ class KnowledgeSettings(BaseModel):
             return {}
         items = json_map_items(raw, "document_extractor_tokens_json", strings_only=True)
         return {url.rstrip("/"): token for url, token in items}
+
+    @model_validator(mode="after")
+    def _check_source_push_budgets(self) -> KnowledgeSettings:
+        provider = self.knowledge_source_push_provider_timeout_s
+        cleanup = self.knowledge_source_push_cleanup_timeout_s
+        if self.knowledge_source_push_stop_timeout_s > cleanup:
+            raise ValueError(
+                "LOOM_KNOWLEDGE_SOURCE_PUSH_STOP_TIMEOUT_S must not exceed "
+                "LOOM_KNOWLEDGE_SOURCE_PUSH_CLEANUP_TIMEOUT_S"
+            )
+        # renew_drive holds its source-specific renewal lease for 120 seconds.
+        if provider + cleanup >= 120:
+            raise ValueError(
+                "LOOM_KNOWLEDGE_SOURCE_PUSH_PROVIDER_TIMEOUT_S plus "
+                "LOOM_KNOWLEDGE_SOURCE_PUSH_CLEANUP_TIMEOUT_S must stay below the "
+                "120-second renewal lease"
+            )
+        if provider + 2 * cleanup >= self.knowledge_source_push_max_pass_seconds:
+            raise ValueError(
+                "LOOM_KNOWLEDGE_SOURCE_PUSH_MAX_PASS_SECONDS must exceed "
+                "LOOM_KNOWLEDGE_SOURCE_PUSH_PROVIDER_TIMEOUT_S plus twice "
+                "LOOM_KNOWLEDGE_SOURCE_PUSH_CLEANUP_TIMEOUT_S"
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_document_extractors(self) -> KnowledgeSettings:

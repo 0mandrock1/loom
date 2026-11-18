@@ -159,7 +159,7 @@ def fake(monkeypatch: pytest.MonkeyPatch) -> _Store:
     monkeypatch.setattr(leases, "holding", _holding)
     monkeypatch.setattr(leases, "has_live_holder", _has_live_holder)
 
-    async def _open(org: str) -> list[dict[str, Any]]:
+    async def _open(org: str, *, ch=None) -> list[dict[str, Any]]:
         return list(fake.erasures)
 
     from server.erasure.app import ledger_reads

@@ -39,7 +39,6 @@ from server.settings import settings
 
 log = logging.getLogger(__name__)
 PUSH_MIGRATION = 108
-PROVIDER_TIMEOUT_S = 40  # not a setting: bounded admin/renewal provider work
 
 
 def _require_enabled() -> None:
@@ -47,8 +46,8 @@ def _require_enabled() -> None:
         raise BadConfigError("an operator must enable source push on this deployment")
 
 
-async def require_ready() -> None:
-    if not await machines.fleet_at(get_client(), PUSH_MIGRATION):
+async def require_ready(*, ch: Any = None) -> None:
+    if not await machines.fleet_at(ch or get_client(), PUSH_MIGRATION):
         raise BadConfigError("push setup requires every live build to support its erasure")
 
 
@@ -122,12 +121,12 @@ async def _fresh(reg: PushRegistration) -> KnowledgeSource:
     return fresh
 
 
-async def _put(reg: PushRegistration, *, retiring: bool = False) -> None:
-    async with fenced(domain.writer_lease_name(reg.org, reg.namespace)) as uncertain:
+async def _put(reg: PushRegistration, *, retiring: bool = False, ch: Any = None) -> None:
+    async with fenced(domain.writer_lease_name(reg.org, reg.namespace), ch=ch) as uncertain:
         if not retiring:
-            await require_ready()
+            await require_ready(ch=ch)
         uncertain(True)
-        await store.put(dataclasses.replace(reg, actor=writer_actor("process:source-push")))
+        await store.put(dataclasses.replace(reg, actor=writer_actor("process:source-push")), ch=ch)
         uncertain(False)
 
 
@@ -138,27 +137,28 @@ async def retire(src: KnowledgeSource) -> None:
         await _put(dataclasses.replace(current, status="retired", secret_enc=""), retiring=True)
 
 
-async def reseal_registry(*, dry_run: bool) -> tuple[int, list[str]]:
+async def reseal_registry(*, dry_run: bool, ch: Any = None) -> tuple[int, list[str]]:
     """Re-read under the lifecycle lease; a scanned row cannot recreate an erased one."""
     after = ("", "")
     count = 0
     lost: list[str] = []
-    while page := await store.sealed_page(after):
+    while page := await store.sealed_page(after, ch=ch):
         for observed in page:
-            async with sources.sources_lease(observed.org, observed.namespace):
+            async with sources.sources_lease(observed.org, observed.namespace, ch=ch):
                 with sequential_reads():
-                    await sources._require_no_erasure(observed.org, observed.namespace)
-                    current = await store.get(observed.org, observed.source_id)
+                    await sources._require_no_erasure(observed.org, observed.namespace, ch=ch)
+                    current = await store.get(observed.org, observed.source_id, ch=ch)
                     if current is None or not current.secret_enc:
                         continue
                     fresh = await source_store.get_source(
-                        current.org, current.namespace, current.name
+                        current.org, current.namespace, current.name, ch=ch
                     )
                     if fresh is None or fresh.source_id != current.source_id:
                         if not dry_run:
                             await _put(
                                 dataclasses.replace(current, status="retired", secret_enc=""),
                                 retiring=True,
+                                ch=ch,
                             )
                         continue
                     new = resealed(domain.SECRET_PURPOSE, current.secret_enc)
@@ -168,7 +168,7 @@ async def reseal_registry(*, dry_run: bool) -> tuple[int, list[str]]:
                         continue
                     count += 1
                     if not dry_run:
-                        await _put(dataclasses.replace(current, secret_enc=new))
+                        await _put(dataclasses.replace(current, secret_enc=new), ch=ch)
         after = (page[-1].org, page[-1].source_id)
     return count, lost
 
@@ -204,7 +204,7 @@ async def handle_configure(input: PushConfigureInput) -> PushStatusOutput:
     )
     callback_url(reg)
     credential = sources.credential_of(src)
-    async with asyncio.timeout(PROVIDER_TIMEOUT_S):
+    async with asyncio.timeout(settings.knowledge_source_push_provider_timeout_s):
         if src.kind == "notion":
             reg = dataclasses.replace(reg, provider_id=await notion.workspace_id(credential))
         elif src.kind == "linear":
@@ -373,7 +373,7 @@ async def receive(
 async def _stop_channels(token: str, channels: list[dict[str, Any]]) -> None:
     for channel in channels:
         try:
-            async with asyncio.timeout(2):
+            async with asyncio.timeout(settings.knowledge_source_push_stop_timeout_s):
                 await gdrive_push.stop(token, channel)
         except Exception:  # noqa: BLE001 — expiry and polling recover failed channel cleanup
             log.warning("source push channel cleanup failed")
@@ -393,7 +393,7 @@ async def _renew_drive(reg: PushRegistration, *, initial: bool) -> None:
     created: list[dict[str, Any]] = []
     publication_attempted = False
     token = ""
-    async with asyncio.timeout(PROVIDER_TIMEOUT_S):
+    async with asyncio.timeout(settings.knowledge_source_push_provider_timeout_s):
         async with sources.sources_lease(reg.org, reg.namespace):
             with sequential_reads():
                 src = await _fresh(reg)
@@ -448,11 +448,11 @@ async def _renew_drive(reg: PushRegistration, *, initial: bool) -> None:
             # known channel without publishing a response to a retired generation.
             if token and created and not publication_attempted:
                 with contextlib.suppress(TimeoutError):
-                    async with asyncio.timeout(5):
+                    async with asyncio.timeout(settings.knowledge_source_push_cleanup_timeout_s):
                         await _stop_channels(token, created)
             raise
     with contextlib.suppress(TimeoutError):
-        async with asyncio.timeout(5):
+        async with asyncio.timeout(settings.knowledge_source_push_cleanup_timeout_s):
             await _stop_channels(token, old)
 
 

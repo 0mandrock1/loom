@@ -962,6 +962,18 @@
               "body",
               "options"
             ],
+            "source_push_configure": [
+              "body",
+              "options"
+            ],
+            "source_push_confirm": [
+              "body",
+              "options"
+            ],
+            "source_push_status": [
+              "body",
+              "options"
+            ],
             "source_remove": [
               "body",
               "options"

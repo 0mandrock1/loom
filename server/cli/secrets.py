@@ -151,7 +151,7 @@ async def reseal_all(
             # under the source lease prevent a scanned row from reviving it.
             from server.knowledge.app.source_push import reseal_registry
 
-            n, missing = await reseal_registry(dry_run=dry_run)
+            n, missing = await reseal_registry(dry_run=dry_run, ch=ch)
             counts[f"{table}.{column}"] = n
             if missing:
                 lost[f"{table}.{column}"] = missing

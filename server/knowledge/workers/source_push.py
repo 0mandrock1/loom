@@ -9,11 +9,11 @@ import time
 from server.core.ch import set_query_tag
 from server.knowledge.app.source_push import renew_drive, require_ready
 from server.knowledge.store.source_push import drive_page
+from server.settings import settings
 from server.workers import pass_context
 from server.workers.status import record_pass
 
 log = logging.getLogger(__name__)
-MAX_PASS_SECONDS = 120
 
 
 async def run_pass() -> dict[str, int]:
@@ -27,8 +27,13 @@ async def run_pass() -> dict[str, int]:
         after = ["", ""]
     rows = await drive_page((after[0], after[1]))
     result = {"items_planned": len(rows), "items_done": 0, "failed": 0}
-    # Leave 40 seconds for one provider attempt and five for cleanup/status.
-    deadline = time.monotonic() + 70
+    # Leave one provider attempt and cleanup/status time before the supervisor cancels.
+    deadline = (
+        time.monotonic()
+        + settings.knowledge_source_push_max_pass_seconds
+        - settings.knowledge_source_push_provider_timeout_s
+        - 2 * settings.knowledge_source_push_cleanup_timeout_s
+    )
     with record_pass("knowledge_source_push") as rec:
         for reg in rows:
             pass_context.check_stop()

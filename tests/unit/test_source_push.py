@@ -55,12 +55,12 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     async def get_source(*args: object, **kwargs: object):
         return state.src
 
-    async def get_reg(org: str, source_id: str):
+    async def get_reg(org: str, source_id: str, *, ch=None):
         if state.reg and state.reg.org == org and state.reg.source_id == source_id:
             return state.reg
         return None
 
-    async def put(reg: PushRegistration):
+    async def put(reg: PushRegistration, *, ch=None):
         state.reg = reg
         state.writes.append(reg)
 
@@ -442,3 +442,81 @@ async def test_paused_setup_can_be_inspected_and_disabled_without_public_origin(
         PushConfigureInput(org="org", namespace="docs", name="source", enabled=False)
     )
     assert disabled.status == "disabled" and env.reg.secret_enc == ""
+
+
+@pytest.mark.asyncio
+async def test_provider_and_channel_cleanup_read_configured_timeouts(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    waits = []
+
+    @asynccontextmanager
+    async def timeout(seconds: float):
+        waits.append(seconds)
+        yield
+
+    monkeypatch.setattr(app.asyncio, "timeout", timeout)
+    monkeypatch.setattr(app.settings, "knowledge_source_push_provider_timeout_s", 17.0)
+    monkeypatch.setattr(app.settings, "knowledge_source_push_stop_timeout_s", 1.25)
+    monkeypatch.setattr(app.settings, "knowledge_source_push_cleanup_timeout_s", 3.0)
+    await setup_notion(env)
+    assert waits == [17.0]
+    env.src = dataclasses.replace(env.src, kind="gdrive")
+    env.reg = dataclasses.replace(env.reg, provider="gdrive")
+    monkeypatch.setattr(app.gdrive, "parse_service_account", lambda key: object())
+    monkeypatch.setattr(app.gdrive, "access_token", AsyncMock(return_value="token"))
+    monkeypatch.setattr(app.gdrive_push, "member_drives", AsyncMock(return_value=set()))
+    monkeypatch.setattr(
+        app.gdrive_push,
+        "watch",
+        AsyncMock(
+            return_value={
+                "id": "created",
+                "token": "channel-token",
+                "resource_id": "resource",
+                "expiration": time.time() + 3600,
+                "drive_id": "",
+            }
+        ),
+    )
+    stopped = AsyncMock()
+    monkeypatch.setattr(app.gdrive_push, "stop", stopped)
+    await app._renew_drive(env.reg, initial=True)
+    assert waits == [17.0, 17.0, 3.0]
+    await app._stop_channels("token", [{"id": "superseded"}])
+    assert waits == [17.0, 17.0, 3.0, 1.25]
+    stopped.assert_awaited_once_with("token", {"id": "superseded"})
+
+
+@pytest.mark.parametrize(
+    "overrides,error",
+    [
+        ({"knowledge_source_push_stop_timeout_s": 6.0}, "STOP_TIMEOUT_S"),
+        ({"knowledge_source_push_provider_timeout_s": 115.0}, "renewal lease"),
+        ({"knowledge_source_push_max_pass_seconds": 50.0}, "MAX_PASS_SECONDS"),
+    ],
+)
+def test_push_budgets_refuse_cleanup_or_attempt_outside_deadline(
+    overrides: dict[str, float], error: str
+) -> None:
+    from pydantic import ValidationError
+
+    from server.settings.catalog import KnowledgeSettings
+
+    with pytest.raises(ValidationError, match=error):
+        KnowledgeSettings(**overrides)
+
+
+def test_push_budgets_accept_configured_deadlines() -> None:
+    from server.settings.catalog import KnowledgeSettings
+
+    configured = KnowledgeSettings(
+        knowledge_source_push_provider_timeout_s=60.0,
+        knowledge_source_push_stop_timeout_s=3.0,
+        knowledge_source_push_cleanup_timeout_s=8.0,
+        knowledge_source_push_max_pass_seconds=180.0,
+    )
+    assert configured.knowledge_source_push_provider_timeout_s == 60.0
+    assert configured.knowledge_source_push_stop_timeout_s == 3.0
+    assert configured.knowledge_source_push_cleanup_timeout_s == 8.0
+    assert configured.knowledge_source_push_max_pass_seconds == 180.0

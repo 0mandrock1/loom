@@ -2856,6 +2856,21 @@ settings:
   # [restart]
   # knowledge_source_push_interval_seconds: 300
 
+  # Seconds one push setup or Drive renewal may spend on provider work, before cleanup.
+  # [restart]
+  # knowledge_source_push_provider_timeout_s: 40.0
+
+  # Seconds allowed to stop one superseded or unpublished Drive channel. [restart]
+  # knowledge_source_push_stop_timeout_s: 2.0
+
+  # Seconds allowed for the whole Drive channel cleanup; at least the per-channel wait.
+  # [restart]
+  # knowledge_source_push_cleanup_timeout_s: 5.0
+
+  # Seconds a renewal pass may run; reserve one provider attempt and two cleanup
+  # windows. [restart]
+  # knowledge_source_push_max_pass_seconds: 120.0
+
   # Seconds between sync passes while there are sources. [restart]
   # knowledge_source_sync_interval_seconds: 900
 
