@@ -203,9 +203,17 @@ async def test_a_coalesced_set_the_blacklist_could_not_check_is_sent_alone(agent
 
 async def _sets_of_one_key(agent: Agent, values: list[str]) -> list[Any]:
     """Two point writes, then `values` as sets of key `k` in one batch."""
-    sets = [agent.memory.set("a", "a"), agent.memory.set("b", "b")]
-    sets += [agent.memory.set("k", v) for v in values]
-    return list(await asyncio.gather(*sets, return_exceptions=True))
+    from tests.unit.clock_fake import ManualClock
+
+    loop = asyncio.get_running_loop()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(loop, "time", ManualClock(t=loop.time()))
+        sets = [agent.memory.set("a", "a"), agent.memory.set("b", "b")]
+        sets += [agent.memory.set("k", v) for v in values]
+        pending = asyncio.gather(*sets, return_exceptions=True)
+        await asyncio.sleep(0)
+        await agent.memory.flush_sets()
+        return list(await pending)
 
 
 def _alone_values(t: Any) -> list[str]:
