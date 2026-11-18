@@ -206,16 +206,23 @@ def _synthetic_tool_descriptors_core() -> list[dict[str, Any]]:
                             "plane gate, …) and the server's provenance note."
                         ),
                     },
+                    "live": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Search the asker's connected sources without storing results; "
+                            "disabled by default."
+                        ),
+                    },
                     "bodies": {
                         "type": "string",
                         "enum": ["full", "excerpt", "none", "unit"],
                         "default": "excerpt",
                         "description": (
-                            "How much of each memory body to return: excerpt (the default: "
-                            "200 chars, a decision or constraint as stored), full (the "
-                            "1,200-char stored clip), unit (whole stored values by rank until "
-                            "body_budget_tokens), or none (keys and scores only). Fetch the "
-                            "rest of an excerpt with memory.get."
+                            "Memory: excerpt (default, 200 chars), full (stored "
+                            "1,200-char clip), unit (whole values ranked within "
+                            "body_budget_tokens), or none (keys and scores). More via "
+                            "memory.get."
                         ),
                     },
                 },
@@ -230,6 +237,7 @@ def _synthetic_tool_descriptors_core() -> list[dict[str, Any]]:
                     "knowledge": {"type": "object"},
                     "profile": {"type": "object"},
                     "conversations": {"type": "object"},
+                    "live": {"type": "object"},
                 },
             },
             "annotations": {
@@ -805,8 +813,31 @@ def search_answer(
             thread = h.get("thread_id") or "-"
             ts = h.get("ts") or h.get("created_at") or ""
             lines.append(f"  - [thread={thread} {ts}] {excerpt[:200]}")
+    live_hits = (payload.get("live") or {}).get("results") or []
+    if live_hits:
+        lines.append("\nLive source hits:")
+        for hit in live_hits[:top_k]:
+            title = " ".join(hit["title"].split())
+            excerpt = (
+                " ".join((hit.get("content") or "").split())[:200]
+                if arguments.get("bodies") != "none"
+                else ""
+            )
+            lines.append(f"  - [{hit['provider']}: {title}] {hit['url']} {excerpt}".rstrip())
+    structured = lean_search_result(payload, arguments, namespace, why_note)
+    if live_hits and arguments.get("bodies") == "none":
+        structured = {
+            **structured,
+            "live": {
+                **structured["live"],
+                "results": [
+                    {key: value for key, value in hit.items() if key != "content"}
+                    for hit in structured["live"]["results"]
+                ],
+            },
+        }
     return {
         "content": [{"type": "text", "text": "\n".join(lines)}],
         "isError": False,
-        "structuredContent": lean_search_result(payload, arguments, namespace, why_note),
+        "structuredContent": structured,
     }

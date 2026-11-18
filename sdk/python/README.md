@@ -152,6 +152,21 @@ async with agent.session("thread-42", user_id="u1") as s:
 
 `agent.tools(user_id=..., session_id=...)` gives a model six loom verbs — `loom_remember`, `loom_recall`, `loom_ask`, `loom_offload`, `loom_fetch`, `loom_note` — as `definitions("openai" | "anthropic" | "generic")` and one `await execute(name, arguments)` that returns the string the model reads. The schemas are the same as the TypeScript SDK's.
 
+An explicit code namespace offers a read-only code lookup before the memory tools.
+The model chooses `symbol`, `search`, `callers` or `impact`; tenant scope and request
+budgets stay in the application. Use `only` for a code-only tool loop:
+
+```python
+tools = agent.tools(code_namespace="code-repo", only=["loom_code_lookup"], max_result_chars=12_000)
+definitions = tools.definitions("anthropic")
+result = await tools.execute("loom_code_lookup", {"kind": "symbol", "target": "pkg.Reader.read"})
+```
+
+Code results preserve valid JSON within the character cap and disclose whole-body or
+row omissions. Honor abstention, ambiguity, source citations and graph lower bounds.
+See the [code tools guide](https://clickhouse.github.io/loom/guides/code-tools/) and
+[`examples/code_lookup.py`](https://github.com/ClickHouse/loom/blob/main/sdk/python/examples/code_lookup.py).
+
 `loom_remember` returns the server's receipt: `stored` confirms a persisted row, while
 `noop` and `merged_into_key` distinguish reuse of an existing fact. Conflicts retain their
 peers and next action. `loom_recall` preserves abstention, code freshness, row status,

@@ -800,9 +800,24 @@ It writes:
   `code.coverage_claim` can tell "executed by many tests" from "executed by none".
 
 Rows the newest run no longer has are tombstoned, and only after every slice was read.
-`code.coverage_claim` ranks a measured row as `executed`, above every other tier, when its
-ranges meet the subject's span; a subject whose file the run covered but whose lines no
-test executed is `uncovered`, with the measurement in `measured`.
+`code.coverage_claim` ranks a verified measured row as `executed`, above every other tier,
+when its ranges meet the subject's span. Verified measurements for every source file at
+the current repository watermark can establish that no test executed the subject, with
+the evidence in `measured`.
+
+Test names can be repository-relative file paths or pytest node IDs such as
+`tests/test_example.py::TestExample::test_value[param]|run`. The import removes the
+function, class, parameter and setup/run/teardown context suffixes and leading `./`, then
+requires the test file to exist in the namespace's live index. Paths relative to the
+integration or query test directory also resolve through those layouts. Contexts that
+map to one source/test-file pair contribute their union of executed lines; overlapping
+lines count once, and the pair keeps its strongest measured specificity score.
+
+The source must expose the per-test line records in `checks_coverage_lines` and each
+run's commit in `checks`; a coverage database or JSON report needs conversion to those
+tables. Re-run `loom code coverage-import --namespace <namespace> --dry-run` to check
+`unmapped_tests`, then import without `--dry-run` to rebuild stored pairs from the run.
+Updating the server alone does not rebuild imported coverage.
 
 ```bash
 LOOM_CODE_COVERAGE_SOURCE_URL=https://<coverage server>
@@ -812,6 +827,39 @@ loom code coverage-import --namespace <namespace> --dry-run   # counts only, wri
 loom code coverage-import --namespace <namespace>
 LOOM_CODE_COVERAGE_IMPORT_ENABLED=true                         # then daily, in the workers
 ```
+
+### Coverage freshness
+
+Line ranges describe the source measured by their run. A coverage row supports current
+execution claims only when its commit matches the source file's `indexed_commit` and the
+namespace has a `git_head` watermark. A symbol's selected spans must carry the same
+indexing commit; missing or inverted line extents and lagging compiler metadata remain
+unverified.
+A missing symbol extent never expands to whole-file execution. The measured
+test must also remain live at the matching indexing commit before its pair counts as
+`executed`. An unchanged file keeps its indexing commit when the repository advances,
+so advancing the head alone does not invalidate positive evidence.
+
+Other coverage rows remain file associations with method `coverage_history`, tier
+`file_reference`, and evidence marked `unverified`. Their old line numbers are never
+intersected with current symbol spans. These rows alone produce verdict `unknown`.
+Independent strong evidence can still establish `covered_by`.
+
+`measured.freshness` is `verified`, `partial`, or `unverified`. Its `files` dictionary
+reports each measurement commit, indexing commit, selected `symbol_commits`, and
+freshness. `commits` lists all measurement commits; `commit` is empty when they differ.
+`paths` and `hits` include only
+verified measurements. `unverified_paths` names measurements without matching identity;
+`unmeasured_paths` names source files absent from the import. A partial or unverified
+measurement cannot establish that the current subject was not executed. A negative also
+requires `run_current: true`: all measurement commits match `index_commit`, the current
+repository watermark. Tests added after an older run could execute an unchanged source.
+
+Different commits do not prove different file contents. The serving read compares commit
+identities without reading historical repository objects, so an unchanged file measured
+at another commit can remain unverified. Missing identity metadata also remains
+unverified. Matching measurement, source, symbol-span, and test indexing commits verify
+line evidence. The import retains historical evidence until a complete run replaces it.
 
 ## Another branch
 

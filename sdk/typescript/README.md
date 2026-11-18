@@ -420,6 +420,28 @@ for shared file rules. Do not infer a repository from the enabled lookup tools. 
 asynchronously, and provenance does not attest that code is unchanged. See
 [memories linked to code](https://github.com/ClickHouse/loom/blob/main/docs/concepts/memory.md#memories-linked-to-code).
 
+An explicit code namespace offers a read-only lookup before the memory tools. Use
+`only` for a code-only loop; memory tools keep the Agent's memory namespace:
+
+```ts
+const tools = bot.tools(
+  { userId: "u1", sessionId: "thread-42" },
+  { codeNamespace: "code-repo", only: ["loom_code_lookup"], maxResultChars: 12000 },
+);
+const definitions = tools.definitions("openai");
+const result = await tools.execute("loom_code_lookup", {
+  kind: "callers",
+  target: "pkg.Reader.read",
+  depth: 2,
+});
+```
+
+The model selects `symbol`, `search`, `callers` or `impact`; the application fixes scope
+and request budgets. Code results fit the configured cap as valid JSON with explicit
+whole-body or row omissions. Honor abstention, ambiguity, citations and graph lower
+bounds. See the [code tools guide](https://clickhouse.github.io/loom/guides/code-tools/)
+and [`examples/code-lookup`](https://github.com/ClickHouse/loom/tree/main/sdk/typescript/examples/code-lookup/).
+
 ## Probe before you rely
 
 ```ts
