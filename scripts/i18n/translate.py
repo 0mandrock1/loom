@@ -6,8 +6,10 @@
 
 The main-only workflow books a durable cumulative allowance before calling Bedrock.
 The generator shares one approximate actual-usage cap across every page and language.
-Only verified pages are written. Relative links use available translated targets and
-otherwise point to English. Obsolete generated output waits for surviving inbound links.
+Requests retain complete Markdown units within a 16 KiB source-byte bound. The assembled
+page keeps the source's invariants and table layout before it is staged. Relative links
+use available translated targets and otherwise point to English. Obsolete generated
+output waits for surviving inbound links.
 """
 
 from __future__ import annotations
@@ -26,7 +28,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
-from scripts.i18n import lifecycle, refresh
+from scripts.i18n import chunks, context, lifecycle, refresh
+from scripts.i18n.chunks import ANCHOR, CODE_SPAN, HTML_TAG, outside_fences
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = "i18n"
@@ -130,7 +133,6 @@ MAX_TOKENS = 32000
 
 LANGUAGE_LINE = re.compile(r"<!-- languages -->.*?<!-- /languages -->", re.DOTALL)
 STAMP = re.compile(r"\A<!-- i18n: source=(.*?) blob=([0-9a-f]{40}) model=(\S+) -->\n")
-FENCE = re.compile(r"^(`{3,}|~{3,})")
 # A Markdown link or image target, an HTML href or src, or a reference definition.
 LINK = re.compile(r"(\]\(|(?:href|src)=\"|^\[(?!\^)[^\]\n]+\]:[ \t]+)([^)\"\s]+)", re.MULTILINE)
 # A Markdown link's text (not an image's).
@@ -138,13 +140,6 @@ LINK_TEXT = re.compile(r"(?<!!)\[([^\[\]\n]+)\]\([^)\s]+")
 # An HTML link's inner text; `<code>` inside it is dropped with its content, other tags
 # (`<b>`) without theirs, before checking.
 HTML_LINK_TEXT = re.compile(r"<a\s[^>]*>(.*?)</a>", re.DOTALL)
-# A literal comparison is prose; quoted delimiters and comments belong to their tag.
-HTML_TAG = re.compile(
-    r"<!--.*?-->|<\?.*?\?>|<!\[CDATA\[.*?\]\]>"
-    r"|<(?:/?[A-Za-z][^\s/<>\"']*(?=[\s/>])|![A-Za-z])"
-    r"(?:[^<>\"']|\"[^\"]*\"|'[^']*')*>",
-    re.DOTALL,
-)
 HTML_CODE = re.compile(r"<code>.*?</code>", re.DOTALL)
 IMAGE_ALT = re.compile(r"!\[([^\]\n]+)\]\(")
 HTML_ALT = re.compile(r'\balt="([^"]+)"')
@@ -157,10 +152,7 @@ KEPT_WORDS = frozenset(
     cline pypi npm apache ci url id token namespace go rust java javascript c""".split()
 )
 URL = re.compile(r"https?://[^\s<>()\"'`*\]]+")
-# A code span may wrap across lines; Markdown renders the break as a space.
-CODE_SPAN = re.compile(r"(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.DOTALL)
 HEADING = re.compile(r"^(#{1,6}) +(.+?) *$")
-ANCHOR = re.compile(r'^<a id="([^"]+)"></a>$')
 NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 
 SYSTEM = """You translate a Markdown page of Loom's documentation, or one section of it, into
@@ -181,23 +173,6 @@ Reply with the translated text only, with no preamble and no code fence around i
 
 
 # ---- page structure -------------------------------------------------------------------
-
-
-def outside_fences(text: str) -> list[tuple[str, bool]]:
-    """The page's lines, each with whether it is inside a fenced code block."""
-    lines, fence = [], None
-    for line in text.split("\n"):
-        mark = FENCE.match(line.lstrip())
-        if fence is None and mark:
-            fence = mark.group(1)
-            lines.append((line, True))
-        elif fence is not None:
-            lines.append((line, True))
-            if line.strip().startswith(fence) and line.strip().strip(fence[0]) == "":
-                fence = None
-        else:
-            lines.append((line, False))
-    return lines
 
 
 def slug(heading: str, seen: Counter[str]) -> str:
@@ -221,17 +196,6 @@ def anchor_headings(text: str, seen: Counter[str]) -> str:
             out += [f'<a id="{slug(heading.group(2), seen)}"></a>', ""]
         out.append(line)
     return "\n".join(out)
-
-
-def sections(text: str) -> list[str]:
-    """The page cut before every `## ` heading outside code; the pieces join back to it
-    with newlines."""
-    pieces: list[list[str]] = [[]]
-    for line, in_code in outside_fences(text):
-        if not in_code and line.startswith("## ") and pieces[-1]:
-            pieces.append([])
-        pieces[-1].append(line)
-    return ["\n".join(p) for p in pieces]
 
 
 # ---- links ----------------------------------------------------------------------------
@@ -364,40 +328,138 @@ def _words(label: str) -> list[str]:
     return [w for w in words if w.lower() not in KEPT_WORDS]
 
 
-def labels(text: str) -> Counter[str]:
-    """The labels of `text` that hold a word to translate: headings, link texts (Markdown and
-    HTML), image alt texts, and table cells with at least two such words."""
-    # Code spans go first: a link or an alt attribute shown as code is not a label.
-    prose = CODE_SPAN.sub(
-        " ", "\n".join(line for line, in_code in outside_fences(text) if not in_code)
+def _label_links(text: str) -> tuple[tuple[str, str], ...]:
+    return tuple((m[1], m[0].partition("](")[2]) for m in LINK_TEXT.finditer(text))
+
+
+def _label_nodes(text: str) -> dict[tuple, context.Label]:
+    # Retain character offsets so a request can be checked inside its source containers.
+    def blank(value: str) -> str:
+        return "".join("\n" if c == "\n" else " " for c in value)
+
+    prose = "\n".join(blank(line) if code else line for line, code in outside_fences(text))
+    prose = CODE_SPAN.sub(lambda m: blank(m[0]), prose)
+    nodes = {}
+    offset = 0
+    heading_index = 0
+    for line in prose.splitlines(keepends=True):
+        if heading := HEADING.match(line.rstrip("\n")):
+            nodes[("heading", heading_index)] = context.Label(
+                HTML_TAG.sub(" ", heading[2]), start=offset, end=offset + len(line.rstrip("\n"))
+            )
+            heading_index += 1
+        offset += len(line)
+    seen: Counter[tuple] = Counter()
+    for kind, regex in (
+        ("link", LINK_TEXT),
+        ("html", HTML_LINK_TEXT),
+        ("alt", IMAGE_ALT),
+        ("html_alt", HTML_ALT),
+    ):
+        for match in regex.finditer(prose):
+            inner = match[1]
+            links = _label_links(match[0]) if kind == "link" else ()
+            if kind == "html":
+                target = LINK.search(match[0].split(">", 1)[0])
+                inner = HTML_TAG.sub(" ", HTML_CODE.sub(" ", inner)).strip()
+                links = ((inner, target[2]),) if target else ()
+            identity = (kind, links[0][1] if links else "")
+            key = (*identity, seen[identity])
+            seen[identity] += 1
+            nodes[key] = context.Label(inner, links=links, start=match.start(), end=match.end())
+    nodes.update(chunks.table_labels(text))
+    return nodes
+
+
+def _residual_label(node: context.Label, atoms: tuple[str, ...]) -> str:
+    residual, _spelling = context.project(node, atoms)
+    # A name plus one ordinary qualifier still has a translation obligation.
+    minimum = 1 if atoms else node.minimum
+    return " ".join(residual.split()) if len(_words(residual)) >= minimum else ""
+
+
+def _source_protections(
+    nodes: dict[tuple, context.Label], source_path: str
+) -> dict[tuple, tuple[str, ...]]:
+    # Only tracked repository targets attest filenames; a remote basename proves nothing.
+    files = frozenset()
+    if any(node.links for node in nodes.values()) and (ROOT / ".git").exists():
+        paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode()
+        files = frozenset(paths.rstrip("\0").split("\0"))
+    return {
+        key: context.protected(node, source_path, files=files, repo_url=REPO_URL)
+        for key, node in nodes.items()
+    }
+
+
+def labels(text: str, *, source_path: str = "") -> Counter[str]:
+    """Translatable labels after protecting only source-attested spelling spans."""
+    nodes = _label_nodes(text)
+    protections = _source_protections(nodes, source_path)
+    return Counter(
+        label for key, node in nodes.items() if (label := _residual_label(node, protections[key]))
     )
-    prose_lines = prose.split("\n")
-    found = [m.group(2) for m in map(HEADING.match, prose_lines) if m]
-    found += LINK_TEXT.findall(prose)
-    found += [
-        HTML_TAG.sub(" ", HTML_CODE.sub(" ", inner)).strip()
-        for inner in HTML_LINK_TEXT.findall(prose)
-    ]
-    found += IMAGE_ALT.findall(prose) + HTML_ALT.findall(prose)
-    out: Counter[str] = Counter(label for label in found if _words(label))
-    for line in prose_lines:
-        if line.startswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            out.update(c for c in cells if len(_words(c)) >= 2)
-    return out
 
 
-def differences(source: str, translation: str) -> list[str]:
+def _label_differences(
+    source: str,
+    translation: str,
+    source_path: str,
+    scope: context.SourceContext | None = None,
+) -> list[str]:
+    english = scope.english if scope else source
+    if scope and english[scope.start : scope.end] != source:
+        raise ValueError("translation request does not match its source context")
+    candidate = scope.candidate(translation) if scope else translation
+    start, end = (scope.start, scope.end) if scope else (0, len(source))
+    target_end = start + len(translation)
+    wanted, actual = _label_nodes(english), _label_nodes(candidate)
+    source_labels: Counter[str] = Counter()
+    target_labels: Counter[str] = Counter()
+    protections = _source_protections(wanted, source_path)
+    problems = []
+    for key, node in wanted.items():
+        atoms = protections[key]
+        if not (start <= node.start and node.end <= end):
+            continue
+        if label := _residual_label(node, atoms):
+            source_labels[label] += 1
+        if atoms:
+            translated = actual.get(key, context.Label(""))
+            expected = context.project(node, atoms)[1]
+            got = context.project(translated, atoms)[1]
+            if (
+                expected != got
+                or node.field != translated.field
+                or node.default_for != translated.default_for
+                or node.family_for != translated.family_for
+            ):
+                problems.append(f"protected source strings {key}: expected {expected}, got {got}")
+    for key, node in actual.items():
+        if start <= node.start and node.end <= target_end:
+            if label := _residual_label(node, protections.get(key, ())):
+                target_labels[label] += 1
+    if untranslated := source_labels & target_labels:
+        problems.insert(
+            0,
+            "left in English (headings, link texts, alt texts, table cells): "
+            + f"{sorted(untranslated)[:8]}",
+        )
+    return problems
+
+
+def differences(
+    source: str,
+    translation: str,
+    *,
+    source_path: str = "",
+    source_context: context.SourceContext | None = None,
+) -> list[str]:
     """How `translation` breaks the invariants of `source`; empty when it keeps them.
     A translation may add a number (a spelled-out one written as digits), never drop one,
     and may not hand back a heading, link text, alt text or table cell in English."""
-    found = []
-    untranslated = labels(source) & labels(translation)
-    if untranslated:
-        found.append(
-            f"left in English (headings, link texts, alt texts, table cells): "
-            f"{sorted(untranslated)[:8]}"
-        )
+    source_path = source_context.path if source_context else source_path
+    found = _label_differences(source, translation, source_path, source_context)
     if code_blocks(source) != code_blocks(translation):
         found.append("code blocks: copy every fenced code block unchanged, in the same order")
     want, got = invariants(source), invariants(translation)
@@ -475,10 +537,16 @@ def untranslated_pages() -> list[str]:
             if not path.is_file():
                 continue
             english = "\n".join(english_requests(prepare(source, lang)[0]))
-            kept = labels(english) & labels(path.read_text())
-            if kept:
-                rel = path.relative_to(ROOT).as_posix()
-                problems.append(f"{rel} keeps in English: {sorted(kept)[:4]}")
+            text = path.read_text()
+            # Generated banner links must not shift the source body's node identities.
+            if (stamp := STAMP.match(text)) and stamp[1] == source:
+                prefix = header(source, lang, stamp[3], stamp[2])
+                if text.startswith(prefix):
+                    text = text[len(prefix) :]
+            rel = path.relative_to(ROOT).as_posix()
+            problems.extend(
+                f"{rel}: {problem}" for problem in _label_differences(english, text, source)
+            )
     return problems
 
 
@@ -603,7 +671,14 @@ def reply_text(data: dict[str, Any]) -> str:
     return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
 
 
-def translate_text(text: str, lang: Language, client: Any, spend: Spend) -> str:
+def translate_text(
+    text: str,
+    lang: Language,
+    client: Any,
+    spend: Spend,
+    *,
+    source_context: context.SourceContext | None = None,
+) -> str:
     if not text.strip():
         return text
     system = SYSTEM.format(language=lang.english, style=lang.style)
@@ -613,7 +688,7 @@ def translate_text(text: str, lang: Language, client: Any, spend: Spend) -> str:
         data = call(client, spend.model, system, messages)
         spend.add(data.get("usage", {}))
         reply = reply_text(data)
-        problems = differences(text, reply)
+        problems = differences(text, reply, source_context=source_context)
         if not problems:
             return _same_edges(text, reply)
         messages += [
@@ -657,29 +732,38 @@ def render(source: str, lang: Language, body: str, line: str, model: str) -> str
     return header(source, lang, model, blob(source)) + body
 
 
-# A page up to this size goes in one call, so its terms stay the same from section to
-# section; a longer one goes a section at a time, within what one reply holds.
+# Keep short pages together for consistent terms; larger requests also have a byte bound.
 WHOLE_PAGE_CHARS = 8000
 
 
 def english_requests(text: str) -> list[str]:
-    """The page's requests as sent, each heading with its page-wide anchor: the whole page
-    when it is short, else one `## ` section each."""
-    seen: Counter[str] = Counter()
-    parts = [anchor_headings(s, seen) for s in sections(text)]
-    whole = "\n".join(parts)
-    return [whole] if len(whole) <= WHOLE_PAGE_CHARS else parts
+    """The bounded requests used by both translation and its cost/reservation planners."""
+    whole = anchor_headings(text, Counter())
+    try:
+        groups = [whole] if len(whole) <= WHOLE_PAGE_CHARS else chunks.heading_sections(whole)
+        return [piece for section in groups for piece in chunks.split(section)]
+    except ValueError as error:
+        raise TranslationDiffers(str(error)) from error
 
 
 def translate_page(source: str, lang: Language, client: Any, spend: Spend) -> None:
     text, line = prepare(source, lang)
     requests = english_requests(text)
-    body = "\n".join(translate_text(s, lang, client, spend) for s in requests)
+    english = "\n".join(requests)
+    replies = []
+    offset = 0
+    for request in requests:
+        scope = context.SourceContext(source, english, offset, offset + len(request))
+        replies.append(translate_text(request, lang, client, spend, source_context=scope))
+        offset += len(request) + 1
+    body = "\n".join(replies)
     # A section can borrow an English label from another part of the page; `check` reads the
     # whole page, so the page is held to the same rule before it is written.
-    kept = labels("\n".join(requests)) & labels(body)
-    if kept:
-        raise TranslationDiffers(f"keeps in English: {sorted(kept)[:4]}")
+    problems = differences(english, body, source_path=source)
+    if chunks.table_shape(english) != chunks.table_shape(body):
+        problems.append("table row/cell layout differs after request assembly")
+    if problems:
+        raise TranslationDiffers(f"assembled page differs: {problems}")
     path = target_path(lang.code, source)
     lifecycle.stage(path, render(source, lang, body, line, spend.model))
     print(f"verified {path}  (${spend.usd:.2f} so far)", flush=True)

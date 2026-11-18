@@ -760,3 +760,83 @@ def test_pending_readme_bootstrap_is_reused_before_its_english_bar_merges(
     assert calls.count(("README.md", "ja")) == 1
     assert calls.count(("README.md", "es")) == int(every)
     assert calls[-1] == ("README.md", "ko")
+
+
+@pytest.mark.parametrize("change", ["exact", "spelling", "qualifier"])
+def test_composed_lifecycle_keeps_source_attested_name_obligations(
+    repo: pathlib.Path, change: str
+) -> None:
+    source = "docs/benchmarks/results.md"
+    english = "# MemBench\n\n## Details\n"
+    if change == "qualifier":
+        english = english.replace("# MemBench", "# MemBench samples")
+    put(repo, source, english)
+    git(repo, "add", source)
+    body = "\n".join(t.english_requests(english)).replace("## Details", "## 詳細")
+    if change == "spelling":
+        body = body.replace("# MemBench", "# MemBenxh")
+    candidate = t.render(source, JA, body, "", t.DEFAULT_MODEL)
+    problems = lc.candidate_problems(t.target_path("ja", source), candidate)
+    assert bool(problems) == (change != "exact")
+
+
+@pytest.mark.parametrize("action", ["candidate", "stage", "import"])
+@pytest.mark.parametrize("change", ["row", "column"])
+def test_composed_stored_table_layout_is_checked_before_reuse(
+    repo: pathlib.Path, action: str, change: str
+) -> None:
+    source = "docs/a.md"
+    english = "# Alpha\n\n| Name | Value |\n| --- | --- |\n| First label | First value |\n"
+    english += "| Second label | Second value |\n"
+    put(repo, source, english)
+    body = "\n".join(t.english_requests(english))
+    for old, new in (
+        ("# Alpha", "# 日本語"),
+        ("Name", "名称"),
+        ("Value", "値"),
+        ("First label", "最初の名前"),
+        ("First value", "最初の値"),
+        ("Second label", "次の名前"),
+        ("Second value", "次の値"),
+    ):
+        body = body.replace(old, new)
+    if change == "row":
+        body = body.replace("| 次の名前 | 次の値 |\n", "")
+    else:
+        body = body.replace("| 名称 | 値 |", "| 名称 | 値 | 追加 |")
+        body = body.replace("| --- | --- |", "| --- | --- | --- |")
+    path = t.target_path("ja", source)
+    candidate = t.render(source, JA, body, "", t.DEFAULT_MODEL)
+    if action == "candidate":
+        assert any(
+            "table row/cell layout" in problem for problem in lc.candidate_problems(path, candidate)
+        )
+    elif action == "stage":
+        with pytest.raises(t.TranslationDiffers, match="table row/cell layout"):
+            lc.stage(path, candidate)
+        assert not (repo / lc.checkpoint_path(path)).exists()
+    else:
+        sha = pending_branch(repo, path, candidate)
+        assert t.import_pending(sha) == 0
+        assert not (repo / path).exists()
+
+
+def test_composed_lifecycle_stages_native_table_rows_without_changing_body(
+    repo: pathlib.Path,
+) -> None:
+    source = "docs/a.md"
+    put(repo, source, "# Alpha\n\n| Name | Value |\n| --- | --- |\n| First label | First value |\n")
+    body = "\n".join(t.english_requests((repo / source).read_text()))
+    for old, new in (
+        ("# Alpha", "# 日本語"),
+        ("Name", "名称"),
+        ("Value", "値"),
+        ("First label", "名前"),
+        ("First value", "値"),
+    ):
+        body = body.replace(old, new)
+    path = t.target_path("ja", source)
+    candidate = t.render(source, JA, body, "", t.DEFAULT_MODEL)
+    assert lc.candidate_problems(path, candidate) == []
+    lc.stage(path, candidate)
+    assert (repo / lc.checkpoint_path(path)).read_text() == candidate
