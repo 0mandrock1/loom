@@ -100,7 +100,9 @@ outcome (refusal, 4xx `rejected`, or `error`) and to attach value-shape advisori
 8. **Non-embedded rows stop here.** A type in `NON_SEARCHABLE_TYPES` (`episodic`,
    `profile`) or a `high`-sensitivity row gets one insert and no embedding row
    (`server/memory/domain/memory_types.py`, `is_embedded`). No embedding row means no search leg sees
-   it.
+   it. A confirmed ClickHouse insert attempts the same hash-only audit receipt as an
+   embedded write; audit failures do not fail the write. Under Postgres, the commit
+   already includes the audit row.
 9. **Embed** (`_set_embed`) the value and, when the key carries words, the key, in one
    batched call where the embedder supports it.
 10. **Conflict verdict** (`_set_conflict_verdict`, `memory/app/conflicts.py`
