@@ -38,7 +38,7 @@ from server.auth.scim_routes import (
     user_name_and_email,
 )
 from server.core import ch
-from server.core.errors import GrantBusyError
+from server.core.errors import BackendUnavailableError, GrantBusyError
 from server.identity.app import me_service_accounts, scim_groups
 from server.observability import audit
 from server.settings import settings
@@ -412,7 +412,7 @@ class _World:
         self.claim_limit: int | None = None  # names held at once before a claim runs out
         self.claims: dict[tuple[str, str], asyncio.Lock] = {}  # one holder a name, as a lease
         self.leases: list[str] = []
-        self.holding = 0  # SCIM leases held now
+        self._holding: dict[asyncio.Task[Any] | None, int] = {}  # per-caller SCIM leases
         self.waits: list[float] = []  # what the real `wait_out` sleeps
 
         async def stale_snapshot(subject: str) -> bool:
@@ -469,6 +469,18 @@ class _World:
         monkeypatch.setattr(revocation, "revoked_outright", stale_snapshot)
         monkeypatch.setattr(revocation, "refresh", no_refresh)
         monkeypatch.setattr(audit, "emit", emit)
+
+    @property
+    def holding(self) -> int:
+        return self._holding.get(asyncio.current_task(), 0)
+
+    @holding.setter
+    def holding(self, value: int) -> None:
+        task = asyncio.current_task()
+        if value:
+            self._holding[task] = value
+        else:
+            self._holding.pop(task, None)
 
     def person(self, email: str, *subjects: str) -> None:
         """Seed verified namespace contacts, separately from grants in other orgs."""
@@ -934,6 +946,35 @@ async def test_a_token_the_person_revoked_still_takes_its_children(world) -> Non
     assert world.table.live_tokens() == []
 
 
+async def test_delete_retry_without_durable_identity_proof_stays_inactive_and_pending(
+    world, monkeypatch
+) -> None:
+    world.person("lee@example.com", "lee")
+    uid = await _create("lee@example.com")
+    query = world.table.query_all
+    failed = False
+
+    async def read(sql: str, params):
+        nonlocal failed
+        if "SELECT DISTINCT owner_email, org" in sql and not failed:
+            failed = True
+            raise RuntimeError("identity backend unavailable before capture")
+        return await query(sql, params)
+
+    monkeypatch.setattr(world.table, "query_all", read)
+    with pytest.raises(RuntimeError, match="identity backend unavailable"):
+        await scim.delete(uid)
+    row = world.table.newest(uid)
+    assert row is not None and row["deleted"] and not row["active"]
+    assert row["crawl_erasure_required"] and not row["crawl_erasure_done"]
+    assert not row["crawl_erasure_enc"] and not world.person_cleanup.finalized
+    with pytest.raises(BackendUnavailableError):
+        await scim.delete(uid)
+    assert world.table.newest(uid) == row
+    assert await world.keeps_out("lee")
+    assert not world.person_cleanup.finalized
+
+
 async def test_many_tokens_are_revoked_in_one_request_a_few_names_held_at_once(world) -> None:
     world.person("lee@example.com", "lee")
     world.table.tokens += [_saved_token(f"bot-{i:04}", "lee") for i in range(2000)]
@@ -1104,8 +1145,12 @@ async def test_a_reactivation_waits_once_its_leases_are_let_go(world, monkeypatc
     @asynccontextmanager
     async def held(name: str) -> AsyncIterator[None]:
         events.append(f"held {name.split(':')[0]}")
-        yield
-        events.append(f"let go {name.split(':')[0]}")
+        world.holding += 1
+        try:
+            yield
+        finally:
+            world.holding -= 1
+            events.append(f"let go {name.split(':')[0]}")
 
     async def wait(cutoff: datetime) -> None:
         events.append("waited")
@@ -2969,6 +3014,7 @@ class _Run:
         self.together = False  # requests at once: no faults, which they would share
         self.race: random.Random | None = None  # whether a sign-in waits on a row write
         self.refused_late = 0  # sign-ins refused at the second check
+        self.pending_identity = False  # a failed capture needs verified historical repair
         self.operator: set[str] = set()  # subjects an operator revoked outright
         self.sessions: list[tuple[str, str, int]] = []  # (person, subject, iat) signed in
         for s in sorted({s for subjects in _REACHES.values() for s in subjects}):
@@ -3066,7 +3112,25 @@ class _Run:
         started = self.now()
         try:
             settled = await self._send(*op)
+        except BackendUnavailableError:
+            # A failure before durable canonical/provider capture cannot be repaired
+            # by looking up a possibly reused email on a later DELETE.
+            row = self.world.table.newest(scim.user_id(_PEOPLE[op[1]]))
+            assert row is not None and row["deleted"] and not row["active"]
+            assert row["crawl_erasure_required"] and not row["crawl_erasure_done"]
+            encoded = row["crawl_erasure_enc"]
+            assert not encoded or not person_erasure.load(row["id"], encoded).prepared
+            self.pending_identity = True
+            self.dirty[op[1]] = self.now()
+            return True
         except (RuntimeError, scim.Busy, login.SignInUnavailable):
+            if op[1] in _PEOPLE:
+                row = self.world.table.newest(scim.user_id(_PEOPLE[op[1]]))
+                if row and row["deleted"] and not row["crawl_erasure_done"]:
+                    encoded = row["crawl_erasure_enc"]
+                    self.pending_identity |= (
+                        not encoded or not person_erasure.load(row["id"], encoded).prepared
+                    )
             if "row-landed" in self.fired[:-1]:  # and the read-back failed after it
                 self.unaudited[op[1]] += 1
             if op[0] != "signin":  # a sign-in is no SCIM request
@@ -3198,13 +3262,14 @@ def _fresh_world() -> Iterator[_World]:
 
 async def _run(
     units: list[_Unit], fired: list[tuple[bool, bool]] | None = None
-) -> tuple[list[Any], list[tuple[bool, bool]]]:
-    """The state after each unit, and whether it failed and made a JIT account.
+) -> tuple[list[Any], list[tuple[bool, bool]], int | None]:
+    """States, request failures/JIT, and the first state requiring verified identity repair.
     With `fired` (a run before), a unit that failed and was retried is sent
     once, clean."""
     with _fresh_world() as world:
         run = _Run(world)
         states, fires = [], []
+        pending_from = None
         for i, (op, faults, retried) in enumerate(units):
             if fired is not None and fired[i][0] and retried:
                 if fired[i][1]:
@@ -3217,7 +3282,9 @@ async def _run(
                     await run.step(op, ())
             await run.check()
             states.append(run.state())
-        return states, fires
+            if run.pending_identity and pending_from is None:
+                pending_from = i
+        return states, fires, pending_from
 
 
 async def test_every_sequence_keeps_the_invariants_and_a_retry_converges() -> None:
@@ -3231,11 +3298,18 @@ async def test_every_sequence_keeps_the_invariants_and_a_retry_converges() -> No
             faults = tuple(rng.sample(_FAULTS, rng.choice((1, 1, 2)))) if rng.random() < 0.5 else ()
             units.append((rng.choice(_OPS), faults, bool(faults) and rng.random() < 0.7))
         try:
-            states, fired = await _run(units)
-            if any(failed for failed, _ in fired):  # (d) a retry ends where a clean request does
-                clean, _ = await _run(units, fired)
-                assert states == clean
-                runs += 1
+            states, fired, pending_from = await _run(units)
+            if any(failed for failed, _ in fired):  # (d) proven retries match a clean request
+                clean, _, clean_pending_from = await _run(units, fired)
+                uncertain = [n for n in (pending_from, clean_pending_from) if n is not None]
+                if uncertain:
+                    # All schedules and invariants still run. Only the prefix before
+                    # unavailable historical proof can promise clean retry equality.
+                    end = min(uncertain)
+                    assert states[:end] == clean[:end]
+                else:
+                    assert states == clean
+                    runs += 1
         except AssertionError as e:
             raise AssertionError(f"{units}: {e}") from e
     assert runs > 1500  # failures fired and were compared, not just drawn
@@ -3256,9 +3330,11 @@ async def _run_together(groups: list[list[tuple[str, str, bool]]], rng: random.R
                     await lock.acquire()
             except TimeoutError:
                 raise scim.Busy from None
+            world.holding += 1
             try:
                 yield
             finally:
+                world.holding -= 1
                 lock.release()
 
         async def turns() -> None:

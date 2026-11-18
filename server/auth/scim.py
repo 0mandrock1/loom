@@ -325,7 +325,9 @@ def _subject_lease(subject: str) -> str:
 @asynccontextmanager
 async def _held(name: str) -> AsyncIterator[None]:
     try:
-        async with leases.holding(name, ttl_s=_LEASE_TTL_S, wait_s=_LEASE_WAIT_S) as held:
+        async with leases.holding(
+            name, ttl_s=_LEASE_TTL_S, wait_s=_LEASE_WAIT_S, settle_writes=True
+        ) as held:
             if not held:
                 raise Busy
             yield

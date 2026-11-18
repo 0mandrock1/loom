@@ -37,8 +37,8 @@ class _Rows(_World):
         monkeypatch.setattr(leases, "holding", self.holding)
 
     @asynccontextmanager
-    async def holding(self, key: str, *, ttl_s: float, wait_s: float, ch: Any):
-        assert ch is self and (ttl_s, wait_s) == (60.0, 5.0)
+    async def holding(self, key: str, *, ttl_s: float, wait_s: float, ch: Any, settle_writes: bool):
+        assert ch is self and (ttl_s, wait_s) == (60.0, 5.0) and settle_writes
         prefix, org, namespace = key.split(":")
         assert prefix == "knowledge-source" and self.held is None
         self.held = org, namespace

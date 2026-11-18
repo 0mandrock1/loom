@@ -53,6 +53,7 @@ class _World(_CrawlWorld, _PublicationWorld):
         self.states: list[dict[str, Any]] = []
         self.lose_during_embedding = False
         self.lose_during_proof = False
+        self.unhandled_reads: list[tuple[str, tuple[str, ...]]] = []
         monkeypatch.setattr(crawl_sources, "get_client", lambda: self)
         monkeypatch.setattr(crawl_exclusions, "get_client", lambda: self)
         monkeypatch.setattr(instances, "read_live", self.read_live)
@@ -154,7 +155,13 @@ class _World(_CrawlWorld, _PublicationWorld):
                 for row in self.document_writes
                 if (row["namespace"], row["source_uri"]) in params["pairs"]
             ]
-        return await super().query_all(query, params, **kwargs)
+        try:
+            return await super().query_all(query, params, **kwargs)
+        except AssertionError:
+            # Preserve fail-closed behavior; surface only the unexpected fake-I/O
+            # projection and parameter names, never substitute admission evidence.
+            self.unhandled_reads.append((" ".join(query.split()), tuple(sorted(params))))
+            raise
 
     async def insert(self, table: str, rows: list[dict[str, Any]]) -> None:
         if table == source_store.TABLE:
@@ -270,7 +277,13 @@ async def test_registration_native_publication_and_indexed_reader_share_exact_ge
     before = len(world.provider_calls), len(world.native_requests)
     with acting_as(verify_token(_token())):
         plan = await reads.prepare("team", ["shared-space"])
-        [admitted] = await plan.check([candidate], chunks=True)
+        assert plan.sources == {(_MIRROR, world.source.source_id): "shared-space"}, (
+            world.unhandled_reads,
+            world.listings,
+        )
+        checked = await plan.check([candidate], chunks=True)
+        assert checked, world.unhandled_reads
+        [admitted] = checked
         assert admitted.document == document and plan.current(admitted)
     assert (len(world.provider_calls), len(world.native_requests)) == before
 
@@ -310,7 +323,13 @@ async def test_indexed_evidence_is_removed_after_person_or_registration_fence_ch
     candidate["doc_version"] = document["version"]
     with acting_as(verify_token(_token())):
         plan = await reads.prepare("team", ["shared-space"])
-        [admitted] = await plan.check([candidate], chunks=True)
+        assert plan.sources == {(_MIRROR, world.source.source_id): "shared-space"}, (
+            world.unhandled_reads,
+            world.listings,
+        )
+        checked = await plan.check([candidate], chunks=True)
+        assert checked, world.unhandled_reads
+        [admitted] = checked
         if change == "pending":
             world.person_erasure_pending = True
         elif change == "epoch":

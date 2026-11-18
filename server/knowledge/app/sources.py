@@ -608,7 +608,11 @@ async def sources_lease(
     # The TTL outlives the few reads and inserts of one write with room to spare (a
     # holder that dies is taken over after it).
     async with leases.holding(
-        _sources_lease_name(org, namespace), ttl_s=60.0, wait_s=wait_s, ch=ch
+        _sources_lease_name(org, namespace),
+        ttl_s=60.0,
+        wait_s=wait_s,
+        ch=ch,
+        settle_writes=True,
     ) as held:
         if not held:
             raise OverloadedError(
