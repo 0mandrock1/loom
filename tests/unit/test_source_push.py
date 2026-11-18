@@ -507,7 +507,7 @@ async def test_provider_and_channel_cleanup_read_configured_timeouts(
     "overrides,error",
     [
         ({"knowledge_source_push_stop_timeout_s": 6.0}, "STOP_TIMEOUT_S"),
-        ({"knowledge_source_push_provider_timeout_s": 115.0}, "renewal lease"),
+        ({"knowledge_source_push_provider_timeout_s": 60.0}, "renewal work window"),
         ({"knowledge_source_push_max_pass_seconds": 50.0}, "MAX_PASS_SECONDS"),
     ],
 )
@@ -526,15 +526,39 @@ def test_push_budgets_accept_configured_deadlines() -> None:
     from server.settings.catalog import KnowledgeSettings
 
     configured = KnowledgeSettings(
-        knowledge_source_push_provider_timeout_s=60.0,
+        knowledge_source_push_provider_timeout_s=36.0,
         knowledge_source_push_stop_timeout_s=3.0,
-        knowledge_source_push_cleanup_timeout_s=8.0,
+        knowledge_source_push_cleanup_timeout_s=6.0,
         knowledge_source_push_max_pass_seconds=180.0,
     )
-    assert configured.knowledge_source_push_provider_timeout_s == 60.0
+    assert configured.knowledge_source_push_provider_timeout_s == 36.0
     assert configured.knowledge_source_push_stop_timeout_s == 3.0
-    assert configured.knowledge_source_push_cleanup_timeout_s == 8.0
+    assert configured.knowledge_source_push_cleanup_timeout_s == 6.0
     assert configured.knowledge_source_push_max_pass_seconds == 180.0
+
+
+def test_push_budget_boundary_matches_the_actual_renewal_lease_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic import ValidationError
+
+    from server.settings.catalog import KnowledgeSettings
+
+    monkeypatch.setattr(app.leases, "time", SimpleNamespace(monotonic=lambda: 100.0))
+    lease = app.leases.Lease("push-budget", ttl_s=120, ch=object(), holder="budget-test")
+    lease._renewed = 100.0
+    work_window = app.leases.work_left(lease, 120)
+    assert work_window == 48.0
+    with pytest.raises(ValidationError, match="renewal work window"):
+        KnowledgeSettings(
+            knowledge_source_push_provider_timeout_s=40.0,
+            knowledge_source_push_cleanup_timeout_s=work_window - 40.0,
+        )
+    configured = KnowledgeSettings(
+        knowledge_source_push_provider_timeout_s=40.0,
+        knowledge_source_push_cleanup_timeout_s=work_window - 41.0,
+    )
+    assert configured.knowledge_source_push_cleanup_timeout_s == 7.0
 
 
 @pytest.mark.asyncio
