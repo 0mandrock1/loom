@@ -13,6 +13,13 @@ test("Claude can load the code guidance without a manual slash command", () => {
   assert.doesNotMatch(frontmatter, /^disable-model-invocation:\s*true\s*$/m);
 });
 
+test("automatic code guidance defers to LOCAL-FIRST sessions", () => {
+  const frontmatter = skill.split("---")[1];
+  assert.match(frontmatter, /NOT for LOCAL-FIRST sessions/);
+  assert.match(skill, /primer says LOCAL-FIRST, use local grep\/Read/);
+  assert.match(skill, /Use Loom only when asked about upstream/);
+});
+
 test("the loom-code skill stays short and names the MCP tools; the tables live in reference.md", () => {
   // Codex loads a skill by reading SKILL.md whole (`sed -n 1,240p`): a
   // definition question can pay ~2,400 tokens for the file before the one

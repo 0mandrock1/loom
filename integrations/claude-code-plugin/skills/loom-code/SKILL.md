@@ -9,10 +9,13 @@ description: >
   sentence is the trigger — code.grep covers exact literals too. NOT for
   repos loom hasn't indexed (a code.search that abstains on everything is
   the tell), and NOT for your own uncommitted files (grep those; pass your
-  diff to code.impact for blast radius).
+  diff to code.impact for blast radius). NOT for LOCAL-FIRST sessions.
 ---
 
 # loom-code — the indexed answer before the grep reflex
+
+If the startup primer says LOCAL-FIRST, use local grep/Read; the code guard
+stands down. Use Loom only when asked about upstream, naming the indexed commit.
 
 Loom holds a compiler-grade index of this codebase (symbols, call graph,
 tests, PR history), served as MCP tools. One call replaces a grep plus
