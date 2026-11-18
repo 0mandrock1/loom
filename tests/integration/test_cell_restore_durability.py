@@ -171,6 +171,36 @@ async def _initialize(drill: Drill) -> None:
         )
 
 
+async def _cleanup_drill(state: Drill | None, observer: Any) -> None:
+    errors: list[BaseException] = []
+    if state is not None:
+        try:
+            if state.paused:
+                await state.resume()
+        except BaseException as exc:  # noqa: BLE001 — remaining owned cleanup must run
+            errors.append(exc)
+        for task in state.tasks:
+            if not task.done():
+                task.cancel()
+        deadline = asyncio.get_running_loop().time() + 10
+        for close in (
+            lambda: asyncio.gather(*state.tasks, return_exceptions=True),
+            directory.close,
+            pg.close_pool,
+        ):
+            try:
+                async with asyncio.timeout_at(deadline):
+                    await close()
+            except BaseException as exc:  # noqa: BLE001 — attempt each close within the shared bound
+                errors.append(exc)
+    try:
+        observer.terminate()
+    except BaseException as exc:  # noqa: BLE001 — preserve the first cleanup failure
+        errors.append(exc)
+    if errors:
+        raise errors[0]
+
+
 @pytest.fixture
 async def drill(monkeypatch):
     if not os.environ.get("LOOM_CELL_RESTORE_DRILL"):
@@ -200,17 +230,12 @@ async def drill(monkeypatch):
         async with asyncio.timeout(60):
             await _initialize(state)
         yield state
-    finally:
-        if state is not None:
-            if state.paused:
-                await state.resume()
-            for task in state.tasks:
-                if not task.done():
-                    task.cancel()
-            async with asyncio.timeout(10):
-                await asyncio.gather(*state.tasks, return_exceptions=True)
-                await directory.close()
-        observer.terminate()
+    except BaseException:  # Owned cleanup must preserve setup or test failure.
+        with contextlib.suppress(BaseException):
+            await _cleanup_drill(state, observer)
+        raise
+    else:
+        await _cleanup_drill(state, observer)
 
 
 async def _directory_page() -> dict[str, Any]:

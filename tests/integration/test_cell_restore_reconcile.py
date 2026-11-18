@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import uuid
@@ -68,9 +69,12 @@ async def ch(stores, monkeypatch):
         f"loom.{name}": f"loom.restore_reconcile_{tag}_{name}"
         for name in ("storage_authority", "erasure_requests", "audit_log")
     }
+    stack = contextlib.AsyncExitStack()
+    stack.push_async_callback(real.disconnect)
     try:
         for source, target in aliases.items():
             await real.execute(f"CREATE TABLE {target} AS {source}")
+            stack.push_async_callback(real.execute, f"DROP TABLE IF EXISTS {target}")
         await real.insert(
             aliases["loom.storage_authority"],
             [{"authority": "postgres", "epoch": 1, "deployment_id": "dep-first"}],
@@ -80,12 +84,14 @@ async def ch(stores, monkeypatch):
         monkeypatch.setattr(settings, "cell", "first")
         monkeypatch.setattr(settings, "pg_dsn", stores["first"])
         monkeypatch.setattr(settings, "document_s3_bucket", "")
+        stack.push_async_callback(pg.close_pool)
         yield paired
-    finally:
-        await pg.close_pool()
-        for target in reversed(list(aliases.values())):
-            await real.execute(f"DROP TABLE IF EXISTS {target}")
-        await real.disconnect()
+    except BaseException:  # Cleanup must preserve the erasure or repair failure.
+        with contextlib.suppress(BaseException):
+            await stack.aclose()
+        raise
+    else:
+        await stack.aclose()
 
 
 async def snapshot(org, tag):

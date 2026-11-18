@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
 from server.cli import cell_attach_pg as apg
@@ -182,8 +184,11 @@ async def test_real_clickhouse_and_postgres_direct_nonce_round_trip(cell_db, mon
         async def execute(self, sql, params=None):
             return await ch.execute(sql, params)
 
+    stack = contextlib.AsyncExitStack()
+    stack.push_async_callback(ch.disconnect)
     try:
         await ch.execute(f"CREATE TABLE {table} AS loom.storage_authority")
+        stack.push_async_callback(ch.execute, f"DROP TABLE IF EXISTS {table}")
         paired = AuthorityTable()
         with pytest.raises(ValueError, match="records no Postgres authority"):
             await identity(paired, cell_db)
@@ -212,9 +217,12 @@ async def test_real_clickhouse_and_postgres_direct_nonce_round_trip(cell_db, mon
             )
             is None
         )
-    finally:
-        await ch.execute(f"DROP TABLE IF EXISTS {table}")
-        await ch.disconnect()
+    except BaseException:  # Owned cleanup preserves the nonce or identity failure.
+        with contextlib.suppress(BaseException):
+            await stack.aclose()
+        raise
+    else:
+        await stack.aclose()
 
 
 async def test_restore_budget_closes_real_backend_stalled_in_transaction_rollback(
