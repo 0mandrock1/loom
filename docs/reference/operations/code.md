@@ -298,7 +298,7 @@ What does this symbol call — forward call edges (depth<=3), tier-marked like c
 | `resolved_by` | `str` | How an over-qualified name bound when the exact form missed — `anonymous_namespace` (`(anonymous namespace)::` segments stripped) or `tail` (a namespace the definition does not carry dropped; one definition fit), or `registration` when a… |
 | `ambiguous` | `bool` | A bare short name that resolves to many unrelated definitions (setColumns on 60 classes) is not walked: `ambiguous` is set, `candidates` lists the qualified names to pick from, and edges is empty. |
 | `candidates` | `list[str]` | With `ambiguous`: up to 20 qualified names to pick from. |
-| `dispatch_seeds` | `list[dict[str, str]]` | Virtual dispatch: when the seed is an override, calls in the code go to the BASE declaration, so its callers are included and listed here as {"symbol", "via": "overrides" \| "inherits" \| "virtual_by_name"}. |
+| `dispatch_seeds` | `list[dict[str, str]]` | Virtual dispatch: when the seed is an override, calls in the code go to the BASE declaration, so its callers are included and listed here as {"symbol", "via": "overrides" \| "inherits"}. |
 | `note` | `str` | Plain-text notes on how the walk ran: dispatch or member folding, the ambiguity refusal, declined call sites, stale compiler-tier files; "" when none apply. |
 | `truncated` | `bool` | True when the walk stopped short: `max_nodes` held or a hop's edge read hit its cap. |
 | `counts_floor` | `bool` | Epistemic contract: edge counts are FLOORS, never totals. |
@@ -352,7 +352,7 @@ Who calls this symbol — exact reverse call edges (depth<=3), compiler-resolved
 | `resolved_by` | `str` | How an over-qualified name bound when the exact form missed — `anonymous_namespace` (`(anonymous namespace)::` segments stripped) or `tail` (a namespace the definition does not carry dropped; one definition fit), or `registration` when a… |
 | `ambiguous` | `bool` | A bare short name that resolves to many unrelated definitions (setColumns on 60 classes) is not walked: `ambiguous` is set, `candidates` lists the qualified names to pick from, and edges is empty. |
 | `candidates` | `list[str]` | With `ambiguous`: up to 20 qualified names to pick from. |
-| `dispatch_seeds` | `list[dict[str, str]]` | Virtual dispatch: when the seed is an override, calls in the code go to the BASE declaration, so its callers are included and listed here as {"symbol", "via": "overrides" \| "inherits" \| "virtual_by_name"}. |
+| `dispatch_seeds` | `list[dict[str, str]]` | Virtual dispatch: when the seed is an override, calls in the code go to the BASE declaration, so its callers are included and listed here as {"symbol", "via": "overrides" \| "inherits"}. |
 | `note` | `str` | Plain-text notes on how the walk ran: dispatch or member folding, the ambiguity refusal, declined call sites, stale compiler-tier files; "" when none apply. |
 | `truncated` | `bool` | True when the walk stopped short: `max_nodes` held or a hop's edge read hit its cap. |
 | `counts_floor` | `bool` | Epistemic contract: edge counts are FLOORS, never totals. |
