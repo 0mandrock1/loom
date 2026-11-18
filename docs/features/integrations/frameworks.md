@@ -657,6 +657,15 @@ makes a session id unique per user only. A search reads all of the user's memori
 namespace, from every session. Remaining result slots hold up to 100 knowledge documents shared by
 the app namespace; documents carry no fact-deletion id.
 
+The Python service retains the application-owned `SessionProtection` families present
+at construction and method entry. Use one service per logical session family; native
+app, user and session ids do not select protection. Inside `family.automatic()`, a
+protected contributor suppresses further content requests, including later extraction
+batches and the optional knowledge search. If that second search is suppressed after
+a marked memory result, the callback raises `AutomaticCaptureSuppressed` and returns
+no memory response. Calls outside automatic context remain explicit and observe
+responses through the retained families. Exact deletion remains a reference operation.
+
 | ADK                     | Loom                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `add_session_to_memory` | the text of the session's events, without the ones a rewind took back, sent to `memory.set_from_messages` (400 messages a call, the op's cap); Loom extracts the facts and resolves duplicates and conflicts. A session added again is extracted again, so a callback that runs every turn, as `after_agent_callback` does, saves that turn's events, as in the example                                                                                                                                                               |

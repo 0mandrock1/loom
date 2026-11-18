@@ -385,7 +385,7 @@
     "integrations/generic/ingest.sh": "23b2410ce557114d83598ebd603431bd387f6af0ee9f1a7f4decb347d89b3e12",
     "sdk/python/loom/integrations/agno.py": "55bb96f5f63f8a5352af2cc08d3d7e8a63cd94be57303ee0a3363a993de0630d",
     "sdk/python/loom/integrations/claude_memory.py": "970aff889f2aa9d948457de51d58d8d32a6c0d7f91acbf390c25ac1230419f36",
-    "sdk/python/loom/integrations/google_adk.py": "237251456c2c18423f64419826a7296758d087aa3e05b11c6d1b37f06709f53a",
+    "sdk/python/loom/integrations/google_adk.py": "7f55974e7d6ff0990094289915e2ed7bb46e6eb66ec43e0aeb16b01d0a7f7c58",
     "sdk/python/loom/integrations/haystack.py": "d81b7e445fa139a889e64127d13f3f9982dea9786ffc1de8bfd3970bfcaa46af",
     "sdk/python/loom/integrations/langgraph.py": "5d68e6ab1645d868477a13b14aa6d734c72f72057464cac9a21aa707add17e7b",
     "sdk/python/loom/integrations/llamaindex.py": "46f226f75befdb7870fae48a3ae860517bbda651767d8861651ebed00ab89bc2",
