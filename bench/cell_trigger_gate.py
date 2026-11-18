@@ -34,6 +34,7 @@ import asyncpg
 import clickhouse_connect
 import httpx
 
+from scripts.gates.testsupport.cell_trigger.fixture import FILES, native_failure_metadata
 from server.core import cell_triggers
 from server.core.hashing import hash_text, sha256_value
 
@@ -1603,16 +1604,28 @@ def main() -> int:
     except BaseException as error:  # noqa: BLE001 — every failed run must emit INVALID
         # Never serialize exception text: clients may include credentials or values.
         reason = str(error) if isinstance(error, Invalid) else "operation refused"
+        failure = None
+        try:
+            failure = native_failure_metadata(
+                error, files=(*FILES, "cell_trigger_gate.py", "pg.py", "pg_memory.py")
+            )
+        except BaseException:  # noqa: BLE001 — diagnostic failure must preserve INVALID
+            pass
         verdict = {
             "verdict": "INVALID",
             "phase": phase,
             "reason": reason,
             "error_type": type(error).__name__,
+            **({"failure": failure} if failure is not None else {}),
         }
         if artifact is not None:
             try:
                 artifact.emit(
-                    "invalid", phase=phase, reason=reason, error_type=type(error).__name__
+                    "invalid",
+                    phase=phase,
+                    reason=reason,
+                    error_type=type(error).__name__,
+                    **({"failure": failure} if failure is not None else {}),
                 )
             except BaseException:  # noqa: BLE001 — secondary output cannot replace INVALID.
                 pass

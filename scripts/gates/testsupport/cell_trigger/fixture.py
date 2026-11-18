@@ -569,16 +569,18 @@ def load_owned(path: Path):
     return OwnedChildren()
 
 
-def error_metadata(error: BaseException) -> dict:
+def error_metadata(
+    error: BaseException, *, files: tuple[str, ...] = FILES, fallback: bool = True
+) -> dict:
     site = {"file": "unknown", "line": 0, "function": "unknown"}
-    frame = sys._getframe(1)
-    line = frame.f_lineno
+    frame = sys._getframe(1) if fallback else None
+    line = frame.f_lineno if frame is not None else 0
     trace = error.__traceback__
     for _ in range(64):
         if trace is None:
             break
         candidate = trace.tb_frame
-        if Path(candidate.f_code.co_filename).name in FILES and candidate.f_code.co_name not in {
+        if Path(candidate.f_code.co_filename).name in files and candidate.f_code.co_name not in {
             "need",
             "closed",
             "equal",
@@ -593,7 +595,7 @@ def error_metadata(error: BaseException) -> dict:
         frame = frame.f_back
         if frame is not None:
             line = frame.f_lineno
-    if frame is not None and Path(frame.f_code.co_filename).name in FILES:
+    if frame is not None and Path(frame.f_code.co_filename).name in files:
         site = {
             "file": Path(frame.f_code.co_filename).name,
             "line": line,
@@ -608,6 +610,48 @@ def error_metadata(error: BaseException) -> dict:
         if isinstance(error, Exception)
         else "cancelled",
     }
+
+
+def native_failure_metadata(error: BaseException, *, files: tuple[str, ...] = FILES) -> dict:
+    metadata = error_metadata(error, files=files)
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,63}", metadata["error_type"]):
+        metadata["error_type"] = "unknown"
+    code = getattr(error, "code", None)
+    code = code if type(code) is int and 0 <= code < 2**31 else None
+    causes = []
+    seen = {id(error)}
+    cause = error.__cause__ if error.__cause__ is not None else error.__context__
+    for _ in range(4):
+        if cause is None or id(cause) in seen:
+            break
+        seen.add(id(cause))
+        name = type(cause).__name__
+        number = getattr(cause, "errno", None)
+        causes.append(
+            {
+                "error_type": name
+                if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,63}", name)
+                else "unknown",
+                "errno": number if type(number) is int and -(2**31) <= number < 2**31 else None,
+            }
+        )
+        cause_site = error_metadata(cause, files=files, fallback=False)["site"]
+        if cause_site["file"] != "unknown":
+            causes[-1]["site"] = cause_site
+        sqlstate = getattr(cause, "sqlstate", None)
+        if type(sqlstate) is str and re.fullmatch(r"[0-9A-Z]{5}", sqlstate):
+            causes[-1]["sqlstate"] = sqlstate
+        cause = cause.__cause__ if cause.__cause__ is not None else cause.__context__
+    driver = {"code": code, "causes": causes}
+    sqlstate = getattr(error, "sqlstate", None)
+    if type(sqlstate) is str and re.fullmatch(r"[0-9A-Z]{5}", sqlstate):
+        driver["sqlstate"] = sqlstate
+    extra = getattr(error, "extra", None)
+    if type(extra) is dict and type(extra.get("outcome_unknown")) is bool:
+        driver["outcome_unknown"] = extra["outcome_unknown"]
+    if code is not None or causes or len(driver) > 2:
+        metadata["driver"] = driver
+    return metadata
 
 
 class Owner:

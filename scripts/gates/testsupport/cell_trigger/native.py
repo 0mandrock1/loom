@@ -39,7 +39,7 @@ from fixture import (
     child_env,
     database,
     digest,
-    error_metadata,
+    native_failure_metadata,
     need,
     pg_dsn,
     read,
@@ -92,33 +92,6 @@ PG_FIELDS = (
     )
     + ("revision", "audit", "targets", "attempts", "last_error")
 )
-
-
-def native_failure_metadata(error: BaseException) -> dict:
-    metadata = error_metadata(error)
-    code = getattr(error, "code", None)
-    code = code if type(code) is int and 0 <= code < 2**31 else None
-    causes = []
-    seen = {id(error)}
-    cause = error.__cause__ if error.__cause__ is not None else error.__context__
-    for _ in range(4):
-        if cause is None or id(cause) in seen:
-            break
-        seen.add(id(cause))
-        name = type(cause).__name__
-        number = getattr(cause, "errno", None)
-        causes.append(
-            {
-                "error_type": name
-                if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,63}", name)
-                else "unknown",
-                "errno": number if type(number) is int and -(2**31) <= number < 2**31 else None,
-            }
-        )
-        cause = cause.__cause__ if cause.__cause__ is not None else cause.__context__
-    if code is not None or causes:
-        metadata["driver"] = {"code": code, "causes": causes}
-    return metadata
 
 
 def pg_census_sql():
@@ -1529,7 +1502,24 @@ class Fixture:
                     )
                     if "driver" in failure:
                         driver = failure["driver"]
-                        closed(driver, "code causes")
+                        closed(
+                            driver,
+                            "code causes"
+                            + (" sqlstate" if "sqlstate" in driver else "")
+                            + (" outcome_unknown" if "outcome_unknown" in driver else ""),
+                        )
+                        need(
+                            (
+                                "sqlstate" not in driver
+                                or type(driver["sqlstate"]) is str
+                                and re.fullmatch(r"[0-9A-Z]{5}", driver["sqlstate"])
+                            )
+                            and (
+                                "outcome_unknown" not in driver
+                                or type(driver["outcome_unknown"]) is bool
+                            ),
+                            "native Postgres failure metadata",
+                        )
                         need(
                             (
                                 driver["code"] is None
@@ -1541,7 +1531,31 @@ class Fixture:
                             "native driver failure metadata",
                         )
                         for cause in driver["causes"]:
-                            closed(cause, "error_type errno")
+                            closed(
+                                cause,
+                                "error_type errno"
+                                + (" sqlstate" if "sqlstate" in cause else "")
+                                + (" site" if "site" in cause else ""),
+                            )
+                            need(
+                                "sqlstate" not in cause
+                                or type(cause["sqlstate"]) is str
+                                and re.fullmatch(r"[0-9A-Z]{5}", cause["sqlstate"]),
+                                "native Postgres failure cause",
+                            )
+                            if "site" in cause:
+                                cause_site = cause["site"]
+                                closed(cause_site, "file line function")
+                                need(
+                                    cause_site["file"] in (*FILES, "unknown")
+                                    and type(cause_site["line"]) is int
+                                    and 0 <= cause_site["line"] < 2**31
+                                    and isinstance(cause_site["function"], str)
+                                    and re.fullmatch(
+                                        r"[A-Za-z_][A-Za-z_0-9]{0,63}", cause_site["function"]
+                                    ),
+                                    "native failure cause site",
+                                )
                             need(
                                 isinstance(cause["error_type"], str)
                                 and re.fullmatch(
