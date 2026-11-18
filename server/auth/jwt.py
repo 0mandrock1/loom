@@ -131,8 +131,8 @@ class SigningAuthority:
 
 
 @dataclass(frozen=True)
-class AuthInfo:
-    """The authenticated principal. Passed through to handlers."""
+class AuthorizationClaims:
+    """Verified claim metadata, without making it an incoming request principal."""
 
     subject: str  # effective subject (post-impersonation if any)
     org: str
@@ -270,6 +270,11 @@ class AuthInfo:
         if self.org != "*" and self.org != org:
             return False
         return namespace in self.write_namespaces or "*" in self.write_namespaces
+
+
+@dataclass(frozen=True)
+class AuthInfo(AuthorizationClaims):
+    """An authenticated request principal, passed through to handlers."""
 
 
 # The `read_scope` claim's values, widest first.
