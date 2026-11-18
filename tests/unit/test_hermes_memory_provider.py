@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import importlib.util
 import io
 import json
@@ -60,6 +61,15 @@ class _Response:
 
     def geturl(self):
         return self.url
+
+
+class _BrokenBody(io.BytesIO):
+    def __init__(self, failure):
+        super().__init__(b"private diagnostic")
+        self.failure = failure
+
+    def read(self, size=-1):
+        raise self.failure
 
 
 class HermesMemoryProviderTest(unittest.TestCase):
@@ -254,6 +264,54 @@ class HermesMemoryProviderTest(unittest.TestCase):
         self.assertIn("write_outcome", result)
         self.assertNotIn("persisted", result)
         self.open.assert_called_once()
+
+    def test_truncated_success_reply_returns_unknown_write_outcome(self):
+        response = self.reply({}, "memory.set")
+        response.read = Mock(side_effect=http.client.IncompleteRead(b"partial", 12))
+        result = self.call("loom_remember", {"memory_key": "k", "content": "fact"})
+        self.assertEqual(result["error"], "CONNECTION_FAILED")
+        self.assertIn("write_outcome", result)
+        self.assertNotIn("persisted", result)
+        self.assertTrue(response.closed)
+        self.open.assert_called_once()
+
+    def test_truncated_read_reply_has_no_write_outcome(self):
+        response = self.reply({})
+        response.read = Mock(side_effect=http.client.IncompleteRead(b"partial", 12))
+        self.assertEqual(
+            self.call("loom_recall", {"query": "fact"}),
+            {"error": "CONNECTION_FAILED", "retryable": False},
+        )
+        self.assertTrue(response.closed)
+        self.open.assert_called_once()
+
+    def test_error_body_failures_keep_status_and_write_uncertainty(self):
+        for status in (409, 503):
+            for failure in (
+                TimeoutError("private diagnostic"),
+                http.client.IncompleteRead(b"private", 12),
+            ):
+                for tool, args in (
+                    ("loom_recall", {"query": "fact"}),
+                    ("loom_remember", {"memory_key": "k", "content": "fact"}),
+                ):
+                    with self.subTest(status=status, failure=type(failure).__name__, tool=tool):
+                        self.open.reset_mock()
+                        body = _BrokenBody(failure)
+                        self.open.side_effect = urllib.error.HTTPError(
+                            "https://loom.example.com", status, "refused", {}, body
+                        )
+                        result = self.call(tool, args)
+                        self.assertEqual(result["http_status"], status)
+                        self.assertEqual(result["error"], f"HTTP_{status}")
+                        self.assertFalse(result["retryable"])
+                        self.assertEqual(
+                            "write_outcome" in result, tool == "loom_remember" and status >= 500
+                        )
+                        self.assertNotIn("persisted", result)
+                        self.assertNotIn("private", json.dumps(result))
+                        self.assertTrue(body.closed)
+                        self.open.assert_called_once()
 
     def test_oversized_malformed_and_redirected_responses_refuse(self):
         for body, url, code in [

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import re
@@ -146,10 +147,13 @@ class Client:
                     raise LoomError("REDIRECT_REFUSED", uncertain=writing)
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as exc:
-            with exc:
-                raw = exc.read(MAX_RESPONSE_BYTES + 1)
+            try:
+                with exc:
+                    raw = exc.read(MAX_RESPONSE_BYTES + 1)
+            except (OSError, urllib.error.URLError, http.client.HTTPException):
+                raw = b""  # Keep the known status when its optional diagnostic body cannot be read.
             raise self._http_error(exc.code, raw, writing=writing) from None
-        except (OSError, urllib.error.URLError):
+        except (OSError, urllib.error.URLError, http.client.HTTPException):
             raise LoomError("CONNECTION_FAILED", uncertain=writing) from None
         if len(raw) > MAX_RESPONSE_BYTES:
             raise LoomError("RESPONSE_TOO_LARGE", uncertain=writing)
