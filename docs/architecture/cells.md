@@ -540,24 +540,29 @@ refuses a placement call whose fields match neither value of the directory's row
 `loom doctor` names a mismatch, a cell whose OIDC client another cell shares, and a cell
 with SCIM off beside cells with it on.
 
-`loom cell prepare` writes `current` into `loom.cell_self` with the `first` and mode
-rows. Until the directory row holds a fingerprint (before attach), it writes, when the
-own row is missing, the fingerprint every live process reports in its heartbeat,
-refusing while any live process runs a build before N, which reports none, or while the
-fingerprints they report differ; a present own row stands, and a live process running
-neither its `current` nor its `next` refuses; every run, before it registers, refuses a
-live process whose deployment id, bucket name or prefix differs from prepare's own
-configuration (a field it does not report read at its default). Once the directory row
-holds a fingerprint, a rerun writes `current` and `next` from it, as `loom cell restore`
-does, refusing only while a live process's fingerprint matches neither. Either way the
-cell stays ready through the `LOOM_CELL` rollout. A later configuration change, while
-the cell is `attaching` or `serving`, goes through `loom cell update`; before attach has
-written the cell's fingerprint to the directory row it writes `next` only to
-`loom.cell_self`, reserving nothing (and `--finish` and `--revert` then touch only
-`loom.cell_self`), and a resumed attach runs its overlap refusals on, and writes to the
-directory, both values of `loom.cell_self`. A prepared cell's issuers and org patterns
-are reserved nowhere: the router routes no issuer to it and takes no placement from it
-until attach has run its overlap refusals and written its directory row.
+`loom cell prepare` validates every live process's deployment, bucket and prefix
+against its native configuration. Missing heartbeats or differing configurations
+refuse a new own row; a present own row requires every process to match its current
+or next value. The local first and mode rows retain their normal preparation rules.
+
+For the first cell, the pair stays local until first attach reserves it in the
+directory. For a later cell, prepare selects that same process/local pair before
+probing and publishes it in the normal registration transaction. Each non-null value
+must be readable, name the registered stores and public host, fit the placement envelope,
+and avoid every other cell's current and next issuer, OIDC, pattern and configured-org
+reservations. The bounded read admits at most 4096 registered cells including the
+new cell, 4 MiB of selected reservation JSON and 64 KiB per fingerprint. A bound or
+unreadable stored reservation refuses registration rather than omitting a cell.
+
+Later prepare requires the exact published pair in the registration response and
+the full row returned by its fresh control claim before local acknowledgment. Its
+second live-process census and local acceptance CAS remain required. A rerun cannot
+fill a blank directory pair or change a reservation; it refuses and retains state.
+Before first attach publishes its pair, first-cell updates remain local. A later
+cell's configuration changes use the existing directory-fenced `loom cell update` rules; a configured-org
+reservation is not a placement, and prepare creates neither placements nor tenancy.
+A prepared later cell remains attaching/enforced: its reserved issuers are not
+routed and its reservations do not admit fleet business actions.
 
 A change to what a cell accepts goes through `loom cell update --config <file>`
 ([operator procedure](../operations/cell-update.md)). The nonsecret settings file
@@ -722,16 +727,22 @@ heartbeat lacks `LOOM_CELL` or names another cell. Prepare does three things, in
    any other form. Prepare takes the hash as an argument, 64 lowercase hex characters,
    so no CLI needs the secret; any other value, the credential or its 128-character
    secret included, is refused, naming `loom cell credential new`, and stored nowhere.
-   No other cell's row may hold the hash, as its current or next one.
+   No other cell's row may hold the hash, as its current or next one. A later
+   registration also stores the verified current/next fingerprint pair in that same
+   transaction, after comparing both values against all other reservations. First
+   registration leaves the pair NULL. The later request names both fields explicitly;
+   the first request names neither. All routers must support the later fields before
+   prepare runs: an older strict parser refuses them, with no reduced-request retry.
 3. **It writes the cell's rows**: the mode (`recording` on the first cell, `enforced` on
    a later one), the `first` row and `current`.
 
 Prepare is resumable. A rerun for the directory row of the same name, deployment id and
 host writes whichever of the `first` row and the mode row is missing, from the
-directory's state, and `loom.cell_self` as above (before attach from the heartbeats when
-it is missing; once the directory holds the fingerprint, `current` and `next` from it,
-overwriting a present value that differs); before attach, a present own row stands, and
-a live process running neither its `current` nor its `next` refuses. The directory's
+directory's state, and `loom.cell_self` as above. First-cell preparation may derive
+an absent own row from the heartbeats before attach. Later preparation requires its
+submitted process/local pair to equal the already published directory pair; blank or
+changed pairs refuse without repair. Every process must match the acknowledged current
+or next value before local acceptance is written. The directory's
 state is the `first` value the unique index names and the highest mode it records for
 the cell: `recording` for the first cell or `enforced` for a later one at registration,
 in the same transaction as the row, then each mode attach raises, recorded in the

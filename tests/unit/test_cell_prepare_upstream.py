@@ -55,6 +55,15 @@ def test_rerun_keeps_the_registered_addresses(first, stored, requested, probe, r
         probe_url=PROBE,
         upstream_url=stored,
     )
+    if not first:
+        body = _body(
+            host=row["host"],
+            deployment_id=row["deployment_id"],
+            bucket=row["bucket"],
+            bucket_prefix=row["bucket_prefix"],
+            probe_url=PROBE,
+        )
+        row.update(current_fp=body["current_fp"], next_fp=body["next_fp"])
     reg = directory.Registration(
         cell=row["cell"],
         host=row["host"],
@@ -69,6 +78,8 @@ def test_rerun_keeps_the_registered_addresses(first, stored, requested, probe, r
         prefix_objects=0,
         processes_without_cell=0,
         upstream_url=requested,
+        current_fp=row["current_fp"],
+        next_fp=row["next_fp"],
     )
     before = copy.deepcopy(row)
     why = directory._rerun_refusal(row, reg)

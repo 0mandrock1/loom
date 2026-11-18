@@ -697,7 +697,7 @@ class Router:
                 "state": row.state,
                 "mode": row.mode,
                 "registered": written,
-                # The fingerprints attach accepted, which a rerun writes into the cell.
+                # Later prepare publishes the pair; first attach publishes its pair.
                 "current_fp": row.current_fp,
                 "next_fp": row.next_fp,
                 **(
@@ -1279,13 +1279,15 @@ def _registration(
     if not isinstance(body, dict) or set(body) - known - {
         "probe_url",
         "upstream_url",
+        "current_fp",
+        "next_fp",
         "nonces",
         "held",
     }:
         return _refused(
             400,
             "a registration is a JSON object of " + ", ".join(sorted(known)) + ", held and "
-            "nonces, with a later cell's probe_url and upstream_url",
+            "nonces, with a later cell's probe_url, upstream_url, current_fp and next_fp",
         )
     host_text = _text(body, "host", needed=True)
     deployment_id = _text(body, "deployment_id", needed=True)
@@ -1343,6 +1345,8 @@ def _registration(
     is_first = host == shared_host
     upstream = ""
     if is_first:
+        if "current_fp" in body or "next_fp" in body:
+            return _refused(400, "the first cell registers no fingerprint pair")
         if "upstream_url" in body:
             return _refused(400, "the first cell uses the router's upstream: no upstream_url")
         if probe:
@@ -1361,6 +1365,8 @@ def _registration(
         # without it), and a rerun probes and answers without it.
         upstream = routing.cell_address(settings.router_upstream_url) or ""
     else:
+        if not {"current_fp", "next_fp"} <= body.keys():
+            return _refused(400, "a later cell names current_fp and next_fp explicitly")
         if not probe_address:
             return _refused(400, "a later cell names its probe_url")
         proposed = _text(body, "upstream_url", needed=True)
@@ -1381,11 +1387,15 @@ def _registration(
         probe_url=address,
         is_first=is_first,
         upstream_url=upstream,
+        current_fp=body.get("current_fp"),
+        next_fp=body.get("next_fp"),
         tenancy_rows=held["tenancy_rows"],
         state_rows=held["state_rows"],
         prefix_objects=held["prefix_objects"],
         processes_without_cell=held["processes_without_cell"],
     )
+    if reason := directory.registration_pair_refusal(vars(reg)):
+        return _refused(400, reason)
     return reg, dict(nonces)
 
 
