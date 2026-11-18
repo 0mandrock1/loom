@@ -919,89 +919,122 @@ def test_composed_lifecycle_stages_native_table_rows_without_changing_body(
     assert (repo / lc.checkpoint_path(path)).read_text() == candidate
 
 
-def test_english_fallbacks_reuse_body_and_refresh_between_checks(repo, monkeypatch):
-    put(repo, "docs/a.md", "# Alpha\n\n## Second\n")
-    publish(repo, "docs/b.md")
-    page = "i18n/ja/docs/b.md"
-    path = repo / page
-    url = t.REPO_URL + "/blob/main/docs/a.md"
-    anchors = ("alpha", "%73econd", "missing", "alpha")
-    path.write_text(path.read_text() + "\n".join(f"[guide]({url}#{a})" for a in anchors))
-    original = t.english_requests
-    calls = []
-
-    def requests(text):
-        calls.append(text)
-        return original(text)
-
-    monkeypatch.setattr(t, "english_requests", requests)
-
-    def message(anchor):
-        return (
-            page,
-            "docs/a.md",
-            f"{page} links to {url}#{anchor}, whose English destination or anchor is missing",
-        )
-
-    assert lc.link_failures() == [message("missing")]
-    assert calls == ["# Alpha\n\n## Second\n"]
-    put(repo, "docs/a.md", "# New\n\n## Second\n")
-    assert lc.link_failures() == [message("alpha"), message("missing"), message("alpha")]
-    assert calls == ["# Alpha\n\n## Second\n", "# New\n\n## Second\n"]
-
-
-def test_fragmentless_fallback_checks_existence_without_reading_english(repo, monkeypatch):
-    publish(repo, "docs/a.md")
-    page = "i18n/ja/docs/a.md"
-    path = repo / page
-    names = ("a", "b", "link", "directory", "unlisted")
-    urls = [t.REPO_URL + f"/blob/main/docs/{name}.md" for name in names]
-    path.write_text(path.read_text() + "\n".join(f"[guide]({url})" for url in urls))
-    (repo / "docs/b.md").unlink()
-    (repo / "docs/link.md").symlink_to("a.md")
-    (repo / "docs/directory.md").mkdir()
-    put(repo, "docs/unlisted.md", "# Alpha\n")
-    monkeypatch.setattr(t, "sources", lambda: tuple(f"docs/{name}.md" for name in names[:-1]))
-    original = pathlib.Path.read_text
-
-    def read_text(path, *args, **kwargs):
-        assert path.parent != repo / "docs", "English destination body was read"
-        return original(path, *args, **kwargs)
-
-    def requests(text):
-        pytest.fail("a fragmentless destination needs no request layout")
-
-    monkeypatch.setattr(pathlib.Path, "read_text", read_text)
-    monkeypatch.setattr(t, "english_requests", requests)
-    assert lc.link_failures() == [
-        (
-            page,
-            f"docs/{name}.md",
-            f"{page} links to {url}, whose English destination or anchor is missing",
-        )
-        for name, url in zip(names[1:], urls[1:], strict=True)
-    ]
-
-
-def test_fallback_repair_reuses_body_and_keeps_other_bytes(repo, monkeypatch):
-    publish(repo, "docs/a.md")
-    publish(repo, "docs/b.md")
-    put(repo, "docs/a.md", "# New\n")
-    path = repo / "i18n/ja/docs/b.md"
-    url = t.REPO_URL + "/blob/main/docs/a.md"
-    before = path.read_text() + (
-        f"\n[guide]({url}#alpha) [guide]({url}#new) [guide]({url}#alpha)\n"
-        "[guide](https://example.test/blob/main/docs/a.md#alpha)\n"
+@pytest.mark.parametrize("repair", [False, True])
+def test_fallback_pass_reuses_english_parse_for_different_anchors_only_within_call(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repair: bool
+) -> None:
+    put(repo, "docs/a.md", "# Alpha\n\n## Beta\n")
+    links = "\n".join(
+        f"[guide]({t.REPO_URL}/blob/main/docs/a.md{fragment})"
+        for fragment in ("#alpha", "#b%65ta", "", "#alpha")
     )
-    path.write_text(before)
+    put(
+        repo,
+        "i18n/ja/docs/b.md",
+        t.header("docs/b.md", JA, t.DEFAULT_MODEL, t.blob("docs/b.md")) + links,
+    )
     original = t.english_requests
-    calls = []
+    parsed = []
 
-    def requests(text):
-        calls.append(text)
+    def requests(text: str) -> list[str]:
+        parsed.append(text)
         return original(text)
 
     monkeypatch.setattr(t, "english_requests", requests)
-    lc.repair_english_fallbacks(["ja"])
-    assert path.read_text() == before.replace(url + "#alpha", "a.md#alpha")
-    assert calls == ["# New\n"]
+    for _ in range(2):
+        if repair:
+            lc.repair_english_fallbacks()
+        else:
+            assert lc.link_failures() == []
+    assert parsed == ["# Alpha\n\n## Beta\n"] * 2
+
+
+def test_fallback_pass_reparses_changed_source_and_rejects_removed_anchor(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = t.english_requests
+    parsed = []
+
+    def requests(text: str) -> list[str]:
+        parsed.append(text)
+        put(repo, "docs/a.md", "# Changed\n")
+        return original(text)
+
+    monkeypatch.setattr(t, "english_requests", requests)
+    link = f"[guide]({t.REPO_URL}/blob/main/docs/a.md#alpha)"
+    problems = lc.link_failures({"i18n/ja/docs/b.md": link + "\n" + link})
+    assert len(problems) == 1
+    assert problems[0][1] == "docs/a.md"
+    assert parsed == ["# Alpha\n", "# Changed\n"]
+
+
+def test_fallback_repair_reparses_changed_source_before_retaining_owned_anchor(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    publish(repo, "docs/a.md")
+    link = f"[guide]({t.REPO_URL}/blob/main/docs/a.md#alpha)"
+    path = repo / "i18n/ja/docs/b.md"
+    header = t.header("docs/b.md", JA, t.DEFAULT_MODEL, t.blob("docs/b.md"))
+    put(repo, "i18n/ja/docs/b.md", header + link + "\n" + link)
+    original = t.english_requests
+    parsed = []
+
+    def requests(text: str) -> list[str]:
+        parsed.append(text)
+        put(repo, "docs/a.md", "# Changed\n")
+        return original(text)
+
+    monkeypatch.setattr(t, "english_requests", requests)
+    lc.repair_english_fallbacks()
+    assert path.read_text() == header + link + "\n[guide](a.md#alpha)"
+    assert parsed == ["# Alpha\n", "# Changed\n"]
+
+
+@pytest.mark.parametrize("replacement", ["deleted", "symlink"])
+@pytest.mark.parametrize("repair", [False, True])
+def test_fallback_pass_rechecks_regular_source_after_first_parse(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch, replacement: str, repair: bool
+) -> None:
+    publish(repo, "docs/a.md")
+    link = f"[guide]({t.REPO_URL}/blob/main/docs/a.md#alpha)"
+    header = t.header("docs/b.md", JA, t.DEFAULT_MODEL, t.blob("docs/b.md"))
+    path = repo / "i18n/ja/docs/b.md"
+    put(repo, "i18n/ja/docs/b.md", header + link + "\n" + link)
+    original = t.english_requests
+    parsed = []
+
+    def requests(text: str) -> list[str]:
+        parsed.append(text)
+        (repo / "docs/a.md").unlink()
+        if replacement == "symlink":
+            (repo / "docs/a.md").symlink_to("b.md")
+        return original(text)
+
+    monkeypatch.setattr(t, "english_requests", requests)
+    if repair:
+        lc.repair_english_fallbacks()
+        assert path.read_text() == header + link + "\n[guide](a.md#alpha)"
+    else:
+        problems = lc.link_failures()
+        assert len(problems) == 1
+        assert problems[0][1] == "docs/a.md"
+    assert parsed == ["# Alpha\n"]
+
+
+@pytest.mark.parametrize("fragment", ["", "#alpha"])
+@pytest.mark.parametrize("repair", [False, True])
+def test_fallback_pass_propagates_english_parser_errors_without_fragment_shortcut(
+    repo: pathlib.Path, fragment: str, repair: bool
+) -> None:
+    put(repo, "docs/a.md", "# Alpha\n\n" + "x" * 20_000)
+    link = f"[guide]({t.REPO_URL}/blob/main/docs/a.md{fragment})"
+    put(
+        repo,
+        "i18n/ja/docs/b.md",
+        t.header("docs/b.md", JA, t.DEFAULT_MODEL, t.blob("docs/b.md")) + link,
+    )
+    with pytest.raises(t.TranslationDiffers, match="indivisible Markdown unit"):
+        if repair:
+            lc.repair_english_fallbacks()
+        else:
+            lc.link_failures()
