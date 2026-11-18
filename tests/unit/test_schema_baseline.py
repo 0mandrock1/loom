@@ -165,6 +165,7 @@ def test_the_journal_files() -> None:
         "107_user_cost_budgets.sql",
         "108_knowledge_mirror_latch.sql",
         "109_knowledge_source_push.sql",
+        "110_private_event_storage.sql",
     ]
 
 

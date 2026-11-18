@@ -319,6 +319,14 @@
           "type": "integer",
           "description": "Threads one statement may use (pinned as a MAX, so a statement cannot take the host)."
         },
+        "ch_analysis_observer_urls": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array",
+          "description": "Additional trusted writer HTTP origins for analyst setup policy observations. Uses the configured service credentials; missing or duplicate writers refuse."
+        },
         "ch_analysis_probe_interval_s": {
           "default": 60.0,
           "maximum": 3600,
