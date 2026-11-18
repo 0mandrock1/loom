@@ -21,6 +21,7 @@ class CoverageRepo:
         self.measured = measured
         self.head = head
         self.lines = lines
+        self.span_commit = indexed
 
     async def coverage_files_for(self, org, ns, paths):
         assert (org, ns) == (ORG, NS)
@@ -54,7 +55,14 @@ async def run_claim(monkeypatch, repo, span):
         return True, "probe"
 
     async def resolve(*args):
-        return [{"path": SRC, "start_line": span[0], "end_line": span[1]}], ""
+        return [
+            {
+                "path": SRC,
+                "start_line": span[0],
+                "end_line": span[1],
+                "indexed_commit": repo.span_commit,
+            }
+        ], ""
 
     async def terms(*args):
         return {}
@@ -189,3 +197,66 @@ async def test_independent_strong_evidence_still_establishes_coverage(monkeypatc
     assert out.verdict == cc.COVERED_BY
     assert out.strongest_tier == cc.PR_COOCCURRENCE
     assert out.measured["freshness"] == "unverified"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("span_commit", ["old", ""])
+async def test_stale_or_unknown_symbol_identity_cannot_use_current_line_ranges(
+    monkeypatch, span_commit
+):
+    repo = CoverageRepo(indexed="current", measured="current")
+    repo.span_commit = span_commit
+    out = await run_claim(monkeypatch, repo, (10, 12))
+    assert out.verdict == cc.UNKNOWN
+    assert out.strongest_tier == cc.FILE_REFERENCE
+    assert not out.measured["measured"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("test_commit", [None, "current"])
+async def test_deleted_or_changed_test_cannot_retain_an_exact_execution_claim(
+    monkeypatch, test_commit
+):
+    class ChangedTestRepo(CoverageRepo):
+        async def file_rows_for_paths(self, org, ns, paths):
+            rows = await super().file_rows_for_paths(org, ns, paths)
+            if TEST in rows:
+                if test_commit is None:
+                    rows.pop(TEST)
+                else:
+                    rows[TEST]["indexed_commit"] = test_commit
+            return rows
+
+    out = await run_claim(monkeypatch, ChangedTestRepo(indexed="old"), (10, 12))
+    assert out.verdict == cc.UNKNOWN
+    assert out.strongest_tier == cc.FILE_REFERENCE
+    assert out.tests[0]["methods"] == ["coverage_history"]
+
+
+@pytest.mark.asyncio
+async def test_old_nonexecution_cannot_refute_tests_added_after_the_run(monkeypatch):
+    repo = CoverageRepo(indexed="old", measured="old", head="current")
+    out = await run_claim(monkeypatch, repo, (30, 32))
+    assert out.verdict == cc.UNKNOWN
+    assert out.measured["freshness"] == "verified"
+    assert not out.measured["run_current"]
+
+
+@pytest.mark.asyncio
+async def test_symbol_file_association_without_span_identity_stays_historical():
+    repo = CoverageRepo(indexed="current", measured="current")
+    rows, _ = await app.claim_tests(repo, ORG, NS, "symbol", "sample", [SRC], limit=5, terms={})
+    assert rows[0]["tier"] == cc.FILE_REFERENCE
+    assert rows[0]["methods"] == ["coverage_history"]
+
+
+@pytest.mark.asyncio
+async def test_measured_execution_without_a_specific_test_is_not_uncovered(monkeypatch):
+    class SharedLinesRepo(CoverageRepo):
+        async def coverage_rows_for(self, org, ns, paths):
+            return []
+
+    repo = SharedLinesRepo(indexed="current", measured="current")
+    out = await run_claim(monkeypatch, repo, (10, 12))
+    assert out.measured["executed"] and out.measured["run_current"]
+    assert out.verdict == cc.UNKNOWN

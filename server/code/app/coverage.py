@@ -390,15 +390,17 @@ async def claim_tests(
     limit: int,
     terms: dict[str, str] | None = None,
     spans: dict[str, list[tuple[int, int]]] | None = None,
+    span_commits: dict[str, set[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """The coverage claim's reads and merge, without the verdict: the test
     map rows for the subject's source files and a textual grep over the test trees for each
     literal in `terms` (literal -> tier), merged per test file (map methods + `grep`), each
     row carrying the strongest `tier` of its evidence, strongest first, and the largest grep
     total before its cap. Shared with `code.conventions` so rule 7 asks the same question
-    the op does, minus the trace row. Measured `coverage` rows count when their executed
-    ranges meet the subject's span in `spans` (path -> line spans); a path absent from
-    `spans`, or `spans` None, counts every row of the path."""
+    the op does, minus the trace row. Measured rows need matching source, test and
+    symbol-span identities before their ranges meet the subject's span in `spans`.
+    A symbol without span identities keeps only historical file associations; a path
+    subject counts every verified row of the file."""
     cap = limit * 3
     terms = default_terms(subject_kind, subject) if terms is None else terms
     exact_terms = {t for t, tier in terms.items() if tier == cc.EXACT_SCOPED}
@@ -409,7 +411,13 @@ async def claim_tests(
         _grep_tests_many(repo, org, ns, [(t, cap) for t, _ in ordered_terms]),
         repo.coverage_rows_for(org, ns, src_paths) if src_paths else _empty_list(),
     )
-    current, historical = await partition_coverage_rows(repo, org, ns, cov_rows)
+    current, historical = await partition_coverage_rows(
+        repo,
+        org,
+        ns,
+        cov_rows,
+        span_commits=(span_commits or {}) if subject_kind == "symbol" else None,
+    )
     map_rows = list(map_rows) + executed_rows(current, spans) + historical
     # The content references' evidence is registered vocabulary (the crossref
     # whitelist): a subject whose bare name is in it is itself a SQL-level
@@ -768,6 +776,14 @@ async def handle_code_coverage_claim(input: Any) -> Any:
             )[:20]
         terms = await search_terms(repo, org, ns, subject_kind, subject, rows, resolved_by)
     spans = subject_spans(rows) if subject_kind == "symbol" else None
+    span_commits = (
+        {
+            p: {str(r.get("indexed_commit") or "") for r in rows if r.get("path") == p}
+            for p in src_paths
+        }
+        if subject_kind == "symbol"
+        else None
+    )
     with code_span("coverage_claim.reads", seeds=len(src_paths)):
         (ordered, grep_total), units, measured = await asyncio.gather(
             claim_tests(
@@ -780,11 +796,12 @@ async def handle_code_coverage_claim(input: Any) -> Any:
                 limit=input.limit,
                 terms=terms,
                 spans=spans,
+                span_commits=span_commits,
             ),
             unit_tests_reaching(repo, org, ns, rows, subject, src_paths, subject_kind=subject_kind)
             if subject_kind != "setting"
             else _empty_list(),
-            measured_for(repo, org, ns, src_paths, spans),
+            measured_for(repo, org, ns, src_paths, spans, span_commits=span_commits),
         )
     if units:
         ordered = merge_test_rows(ordered, units)
@@ -801,11 +818,16 @@ async def handle_code_coverage_claim(input: Any) -> Any:
         ordered,
         control_ok=control_ok,
         measured_unexecuted=measured.get("freshness") == "verified"
+        and bool(measured.get("run_current"))
         and bool(measured.get("measured"))
         and not measured.get("executed"),
     )
     if verdict in {cc.UNCOVERED, cc.WEAK_EVIDENCE} and (
-        measured.get("freshness") in {"partial", "unverified"}
+        (
+            bool(measured)
+            and (measured.get("freshness") != "verified" or not measured.get("run_current"))
+        )
+        or (verdict == cc.UNCOVERED and measured.get("executed"))
         or any("coverage_history" in r["methods"] for r in ordered)
     ):
         verdict = cc.UNKNOWN

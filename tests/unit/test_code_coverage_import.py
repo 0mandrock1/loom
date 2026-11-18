@@ -398,7 +398,12 @@ async def test_the_claim_reports_a_span_no_test_executed() -> None:
         {"src/IO/copy.cpp": {"commit_sha": "c0ffee", "lines": "[[470,486],[492,499]]"}}
     )
     out = await app_cov.measured_for(
-        repo, "acme", "code-x", ["src/IO/copy.cpp"], {"src/IO/copy.cpp": [(487, 491)]}
+        repo,
+        "acme",
+        "code-x",
+        ["src/IO/copy.cpp"],
+        {"src/IO/copy.cpp": [(487, 491)]},
+        span_commits={"src/IO/copy.cpp": {"c0ffee"}},
     )
     assert out["measured"] and not out["executed"] and out["commit"] == "c0ffee"
     whole = await app_cov.measured_for(repo, "acme", "code-x", ["src/IO/copy.cpp"], None)

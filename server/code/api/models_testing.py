@@ -146,10 +146,11 @@ class CodeCoverageClaimOutput(BaseModel):
     # `via: unit_tests` when a test unit reaching the subject stood in for it.
     control: dict[str, Any] = Field(default_factory=dict)
     # Imported execution evidence, {} when none exists: measured, executed, paths,
-    # hits, commit (empty for mixed commits), commits, index_commit, files (per-path
-    # commit, indexed_commit, freshness), freshness, unverified_paths, unmeasured_paths.
-    # Only verified source identities contribute hits; partial or unverified evidence
-    # cannot establish nonexecution. Freshness is verified | partial | unverified.
+    # hits, commit (empty for mixed commits), commits, index_commit, run_current,
+    # files (per-path commit, indexed_commit, symbol_commits, freshness), freshness,
+    # unverified_paths, unmeasured_paths. Only verified source and symbol-span identities
+    # contribute hits; nonexecution also requires a run at the current index watermark.
+    # Freshness is verified | partial | unverified.
     measured: dict[str, Any] = Field(default_factory=dict)
     # Id of this call's row in `loom.code_search_trace`.
     trace_run_id: str = ""
