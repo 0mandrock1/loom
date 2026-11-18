@@ -131,14 +131,14 @@ async def test_online_ledger_retry_survives_physical_standby_promotion(
         first = asyncio.create_task(migrate())
         tasks.append(first)
         pid = await _waiting(observer, first)
-        # The index is acknowledged already; its ledger COMMIT alone is unflushed.
+        # The index is acknowledged; the pending ledger transaction is not visible yet.
         async with connect() as conn:
             assert (
                 await conn.fetchval(
-                    "SELECT count(*) FROM loom_router.pg_migrations "
-                    "WHERE filename = '004_placements_by_cell_org.sql'"
+                    "SELECT indisvalid AND indisready FROM pg_index "
+                    "WHERE indexrelid = 'loom_router.placements_by_cell_org'::regclass"
                 )
-                == 1
+                is True
             )
         first.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -152,6 +152,15 @@ async def test_online_ledger_retry_survives_physical_standby_promotion(
                 await asyncio.sleep(0.01)
             else:
                 pytest.fail("cancelled migration retained backend locks")
+        # Cancellation releases the commit wait before other sessions can see the ledger.
+        async with connect() as conn:
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM loom_router.pg_migrations "
+                    "WHERE filename = '004_placements_by_cell_org.sql'"
+                )
+                == 1
+            )
         monkeypatch.setattr(pg_migrate, "_record_online", record)
         retry = asyncio.create_task(migrate())
         tasks.append(retry)
