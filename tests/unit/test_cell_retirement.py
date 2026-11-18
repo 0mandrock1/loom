@@ -69,14 +69,27 @@ async def test_close_is_permanent_through_an_awaited_retirement_write(monkeypatc
     monkeypatch.setattr(barrier, "_server_side_settled", AsyncMock(return_value=True))
     monkeypatch.setattr(barrier, "running_queries", AsyncMock(return_value=0))
     task = asyncio.create_task(barrier.retire_process())
-    await entered.wait()
-    with pytest.raises(retirement.ProcessStopping):
-        async with gate.admit():
-            pytest.fail("Permanent closure must not reopen while insert is awaited")
-    with pytest.raises(retirement.ProcessStopping):
-        await barrier.register_process()
-    finish.set()
-    assert await task
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=0.5)
+        with pytest.raises(retirement.ProcessStopping):
+            async with gate.admit():
+                pytest.fail("Permanent closure must not reopen while insert is awaited")
+        with pytest.raises(retirement.ProcessStopping):
+            await barrier.register_process()
+        finish.set()
+        done, _ = await asyncio.wait({task}, timeout=0.5)
+        if not done:
+            raise TimeoutError("owned test task did not finish")
+        assert await task
+    except TimeoutError:
+        if task.done():
+            task.result()
+        raise
+    finally:
+        finish.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 def _request_app(handler):
@@ -128,23 +141,36 @@ async def test_composed_request_tail_holds_counter_after_dispatch_raises(monkeyp
     monkeypatch.setattr(barrier, "record_retirement", AsyncMock())
     async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
         task = asyncio.create_task(client.post("/oauth/token"))
-        await asyncio.wait_for(entered.wait(), 5)
-        assert gate.active == 1  # actual handler ended, outer tail remains counted
-        assert observed == [1]
-        gate.install("test")
-        gate.enrolled = True
-        gate.stopped()
-        assert not await barrier.retire_process()
-        assert not task.done()
-        barrier.record_retirement.assert_not_awaited()
-        if cancel_tail:
-            task.cancel()
-            await asyncio.wait_for(canceled.wait(), 5)
-            assert gate.active == 1 and not task.done()
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            assert gate.active == 1  # actual handler ended, outer tail remains counted
+            assert observed == [1]
+            gate.install("test")
+            gate.enrolled = True
+            gate.stopped()
             assert not await barrier.retire_process()
-        finish.set()
-        await task
-        assert gate.active == 0
+            assert not task.done()
+            barrier.record_retirement.assert_not_awaited()
+            if cancel_tail:
+                task.cancel()
+                await asyncio.wait_for(canceled.wait(), 5)
+                assert gate.active == 1 and not task.done()
+                assert not await barrier.retire_process()
+            finish.set()
+            done, _ = await asyncio.wait({task}, timeout=0.5)
+            if not done:
+                raise TimeoutError("owned test task did not finish")
+            await task
+            assert gate.active == 0
+        except TimeoutError:
+            if task.done():
+                task.result()
+            raise
+        finally:
+            finish.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -205,14 +231,27 @@ async def test_canceled_control_dispatch_remains_counted_until_actual_completion
             {"type": "http", "path": path, "method": "POST"}, AsyncMock(), AsyncMock()
         )
     )
-    await entered.wait()
-    task.cancel()
-    await canceled.wait()
-    gate.close()
-    assert gate.active == 2 and not task.done()
-    finish.set()
-    await task
-    assert gate.active == 0
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=0.5)
+        task.cancel()
+        await asyncio.wait_for(canceled.wait(), timeout=0.5)
+        gate.close()
+        assert gate.active == 2 and not task.done()
+        finish.set()
+        done, _ = await asyncio.wait({task}, timeout=0.5)
+        if not done:
+            raise TimeoutError("owned test task did not finish")
+        await task
+        assert gate.active == 0
+    except TimeoutError:
+        if task.done():
+            task.result()
+        raise
+    finally:
+        finish.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -237,20 +276,35 @@ async def test_registered_descendant_blocks_after_outer_and_inner_completed(monk
         return {"ok": True}
 
     app = _request_app(handler)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://localhost"
-    ) as client:
-        assert (await client.post("/oauth/token")).status_code == 200
-    await entered.wait()
-    assert gate.active == 0
-    gate.install("test")
-    gate.enrolled = True
-    gate.stopped()
-    monkeypatch.setattr(barrier, "record_retirement", AsyncMock())
-    assert not await barrier.retire_process()
-    barrier.record_retirement.assert_not_awaited()
-    finish.set()
-    await asyncio.gather(*tasks)
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+        ) as client:
+            assert (await client.post("/oauth/token")).status_code == 200
+        await asyncio.wait_for(entered.wait(), timeout=0.5)
+        assert gate.active == 0
+        gate.install("test")
+        gate.enrolled = True
+        gate.stopped()
+        monkeypatch.setattr(barrier, "record_retirement", AsyncMock())
+        assert not await barrier.retire_process()
+        barrier.record_retirement.assert_not_awaited()
+        finish.set()
+        _, pending = await asyncio.wait(tasks, timeout=0.5)
+        if pending:
+            raise TimeoutError("owned descendant did not finish")
+        await asyncio.gather(*tasks)
+    except TimeoutError:
+        for child in tasks:
+            if child.done() and not child.cancelled():
+                child.result()
+        raise
+    finally:
+        finish.set()
+        for child in tasks:
+            if not child.done():
+                child.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -532,14 +586,27 @@ async def test_pod_object_death_never_retires_work_that_can_resume(
             effects.append("mint after object deletion")
 
     task = asyncio.create_task(paused())
-    await admitted.wait()
-    await barrier.sweep_stopped(now=5000)
-    barrier.record_retirement.assert_not_awaited()
-    assert barrier.stale_participants()[0]["participant_id"] == str(participant)
-    assert len(seen) == 1  # the current reaper never asks the API for a death certificate
-    resume.set()
-    await task
-    assert effects == ["mint after object deletion"]
+    try:
+        await asyncio.wait_for(admitted.wait(), timeout=0.5)
+        await barrier.sweep_stopped(now=5000)
+        barrier.record_retirement.assert_not_awaited()
+        assert barrier.stale_participants()[0]["participant_id"] == str(participant)
+        assert len(seen) == 1  # the current reaper never asks the API for a death certificate
+        resume.set()
+        done, _ = await asyncio.wait({task}, timeout=0.5)
+        if not done:
+            raise TimeoutError("owned test task did not finish")
+        await task
+        assert effects == ["mint after object deletion"]
+    except TimeoutError:
+        if task.done():
+            task.result()
+        raise
+    finally:
+        resume.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -566,17 +633,30 @@ async def test_production_child_task_cancellation_stays_counted_until_completion
         transport=httpx.ASGITransport(app=app), base_url="http://localhost"
     ) as client:
         task = asyncio.create_task(client.post("/oauth/token"))
-        await entered.wait()
-        task.cancel()
-        # Let BaseHTTPMiddleware propagate cancellation to its downstream child.
-        for _ in range(5):
-            await asyncio.sleep(0)
-        gate.close()
-        assert gate.active > 0
-        assert not task.done()
-        finish.set()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=0.5)
+            task.cancel()
+            # Let BaseHTTPMiddleware propagate cancellation to its downstream child.
+            for _ in range(5):
+                await asyncio.sleep(0)
+            gate.close()
+            assert gate.active > 0
+            assert not task.done()
+            finish.set()
+            with contextlib.suppress(asyncio.CancelledError):
+                done, _ = await asyncio.wait({task}, timeout=0.5)
+                if not done:
+                    raise TimeoutError("owned test task did not finish")
+                await task
+        except TimeoutError:
+            if task.done():
+                task.result()
+            raise
+        finally:
+            finish.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
     assert gate.active == 0
 
 
@@ -612,13 +692,28 @@ async def test_shutdown_budget_does_not_wait_for_cancellation_deferring_drains(m
     monkeypatch.setattr(boot, "SHUTDOWN_DRAIN_BUDGET_S", 0.01)
     monkeypatch.setattr(barrier, "record_retirement", AsyncMock())
     started = time.monotonic()
-    await asyncio.wait_for(main._shut_down(None, None, None, None), timeout=0.5)
-    assert time.monotonic() - started < 0.5
-    await canceled.wait()
-    assert not owned[0].done()
-    barrier.record_retirement.assert_not_awaited()
-    finish.set()
-    await owned[0]
+    try:
+        await asyncio.wait_for(main._shut_down(None, None, None, None), timeout=0.5)
+        assert time.monotonic() - started < 0.5
+        await asyncio.wait_for(canceled.wait(), timeout=0.5)
+        assert not owned[0].done()
+        barrier.record_retirement.assert_not_awaited()
+        finish.set()
+        done, _ = await asyncio.wait({owned[0]}, timeout=0.5)
+        if not done:
+            raise TimeoutError("owned drain did not finish")
+        await owned[0]
+    except TimeoutError:
+        for child in owned:
+            if child.done() and not child.cancelled():
+                child.result()
+        raise
+    finally:
+        finish.set()
+        for child in owned:
+            if not child.done():
+                child.cancel()
+        await asyncio.gather(*owned, return_exceptions=True)
 
 
 def test_nonmodel_principal_command_enrolls_before_acceptance(monkeypatch):
@@ -692,18 +787,32 @@ async def test_stream_and_response_background_cleanup_remain_counted(monkeypatch
         transport=httpx.ASGITransport(app=app), base_url="http://localhost"
     ) as client:
         task = asyncio.create_task(client.post("/oauth/token"))
-        await body_entered.wait()
-        assert gate.active == 2
-        gate.install("test")
-        gate.enrolled = True
-        gate.stopped()
-        assert not await barrier.retire_process()
-        body_finish.set()
-        await cleanup_entered.wait()
-        assert gate.active == 2 and not task.done()
-        assert not await barrier.retire_process()
-        cleanup_finish.set()
-        assert (await task).content == b"firstlast"
+        try:
+            await asyncio.wait_for(body_entered.wait(), timeout=0.5)
+            assert gate.active == 2
+            gate.install("test")
+            gate.enrolled = True
+            gate.stopped()
+            assert not await barrier.retire_process()
+            body_finish.set()
+            await asyncio.wait_for(cleanup_entered.wait(), timeout=0.5)
+            assert gate.active == 2 and not task.done()
+            assert not await barrier.retire_process()
+            cleanup_finish.set()
+            done, _ = await asyncio.wait({task}, timeout=0.5)
+            if not done:
+                raise TimeoutError("owned test task did not finish")
+            assert (await task).content == b"firstlast"
+        except TimeoutError:
+            if task.done():
+                task.result()
+            raise
+        finally:
+            body_finish.set()
+            cleanup_finish.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
     assert gate.active == 0
 
 
@@ -742,13 +851,26 @@ async def test_websocket_lifetime_and_shutdown_refusal_share_the_same_counter():
     task = asyncio.create_task(
         app(scope, AsyncMock(return_value={"type": "websocket.connect"}), AsyncMock())
     )
-    await entered.wait()
-    assert gate.active == 2
-    gate.close()
-    send = AsyncMock()
-    await app(scope, AsyncMock(), send)
-    send.assert_awaited_once_with({"type": "websocket.close", "code": 1013})
-    assert gate.active == 2
-    finish.set()
-    await task
-    assert gate.active == 0
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=0.5)
+        assert gate.active == 2
+        gate.close()
+        send = AsyncMock()
+        await app(scope, AsyncMock(), send)
+        send.assert_awaited_once_with({"type": "websocket.close", "code": 1013})
+        assert gate.active == 2
+        finish.set()
+        done, _ = await asyncio.wait({task}, timeout=0.5)
+        if not done:
+            raise TimeoutError("owned test task did not finish")
+        await task
+        assert gate.active == 0
+    except TimeoutError:
+        if task.done():
+            task.result()
+        raise
+    finally:
+        finish.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

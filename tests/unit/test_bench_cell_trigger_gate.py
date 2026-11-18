@@ -1003,16 +1003,29 @@ async def test_restore_preserves_primary_failure_and_survives_second_cancellatio
     monkeypatch.setattr(gate, "_close_pg", close)
     artifact = SimpleNamespace(emit=lambda kind, **kw: events.append(kind))
     task = asyncio.create_task(gate._run(args(), fixture, artifact, object()))
-    await restoring.wait()
-    task.cancel()
-    await asyncio.sleep(0)
-    task.cancel()
-    release.set()
-    with pytest.raises(ValueError) as raised:
-        await task
-    assert raised.value is failure and conn.closed
-    assert "triggers_restored" in events
-    assert settings.pg_delivery_batch_rows > 0
+    try:
+        await asyncio.wait_for(restoring.wait(), timeout=0.5)
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        release.set()
+        with pytest.raises(ValueError) as raised:
+            done, _ = await asyncio.wait({task}, timeout=0.5)
+            if not done:
+                raise TimeoutError("owned test task did not finish")
+            await task
+        assert raised.value is failure and conn.closed
+        assert "triggers_restored" in events
+        assert settings.pg_delivery_batch_rows > 0
+    except TimeoutError:
+        if task.done():
+            task.result()
+        raise
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.parametrize("cleanup_failure", [False, True])

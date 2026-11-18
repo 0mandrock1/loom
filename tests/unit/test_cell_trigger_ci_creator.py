@@ -828,3 +828,204 @@ def test_clickhouse_waits_for_published_http_after_temporary_native_ready(tmp_pa
     assert stores.published_attempts == 2
     assert stores.native_attempts == 0
     assert stores.phase == "clickhouse_query"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "rows",
+        "error",
+        "missing",
+        "duplicate",
+        "wrong-arm",
+        "private-field",
+        "too-many",
+        "bad-mask",
+        "changed-reuse",
+    ],
+)
+def test_independent_workload_reader_consumes_one_bounded_api_cost_sample(
+    protocol_reader, monkeypatch, tmp_path, change
+):
+    import uuid
+
+    capture, fixture, _, _ = protocol_reader
+    workload = object.__new__(capture.Workload)
+    workload.w = tmp_path
+    workload.s = {"head": "a" * 40, "tree": "b" * 40, "source_hashes": {"driver": "c" * 64}}
+    workload.ids, workload.keys = set(), set()
+    workload.counts = {"api": 0, "delivery": 0}
+    workload.configuration = {
+        "fingerprints": {},
+        "credential_posture": {},
+        "api_configuration_sha256": "d" * 64,
+        "cli_configuration_sha256": "e" * 64,
+        "shared_configuration_sha256": "f" * 64,
+    }
+    workload.launch = {
+        "server": {"health_instance": "test"},
+        "configuration_artifact": {"sha256": "1" * 64},
+    }
+    launch = tmp_path / "serving-cell" / "launch.json"
+    launch.parent.mkdir()
+    launch.write_text("{}")
+    manifest = {
+        "deployment_id": str(uuid.UUID(int=1)),
+        "epoch": 1,
+        "instance_id": str(uuid.UUID(int=2)),
+        **{key: value for key, value in workload.configuration.items() if key.endswith("_sha256")},
+    }
+    monkeypatch.setattr(
+        capture,
+        "read",
+        lambda path: (
+            manifest
+            if path == tmp_path / "fixture.json"
+            else pytest.fail("unexpected receipt read")
+        ),
+    )
+    config = dict(
+        kind="configuration",
+        manifest=manifest,
+        shared_configuration_excludes=["cell_router_token"],
+        credential_posture={},
+        api_configuration_attested=True,
+        source=dict(head=workload.s["head"], tree=workload.s["tree"], clean=True),
+        launch=dict(
+            health_instance="test",
+            fingerprints={},
+            launch_sha256=capture.sha(launch),
+            configuration_artifact_sha256="1" * 64,
+            birth_sha256=capture.digest(workload.launch["server"]),
+        ),
+        manifest_sha256=capture.digest(manifest),
+        calls=2000,
+        warmup=50,
+        rounds=5,
+        batches=5,
+        batch_rows=500,
+        logical_keys=45500,
+        value_bytes=4096,
+        order=list(capture.ORDER),
+        driver_sha256="c" * 64,
+    )
+    proof = dict(
+        kind="arm_proof",
+        arm=0,
+        on=True,
+        fingerprint_sha256="2" * 64,
+        tables=["memory_current"],
+        invariant_sha256="3" * 64,
+        org_triggers_sha256="4" * 64,
+        **manifest,
+        **{
+            key: config[key]
+            for key in (
+                "source",
+                "launch",
+                "credential_posture",
+                "shared_configuration_excludes",
+                "api_configuration_attested",
+            )
+        },
+    )
+    metric = dict.fromkeys(
+        (
+            "shape",
+            "calls",
+            "elapsed_ms",
+            "max_ms",
+            "read_rows",
+            "read_bytes",
+            "written_rows",
+            "cpu_us",
+        ),
+        1,
+    )
+    metric.update(kind_mask=1, table_mask=8)
+    observation = {"window_seconds": 60, "rows": [metric]}
+    if change == "error":
+        observation = {"window_seconds": 60, "error_type": "DatabaseError", "error_code": 241}
+    sample = dict(kind="api_costs", arm=0, **deepcopy(observation))
+    if change == "wrong-arm":
+        sample["arm"] = 1
+    if change == "private-field":
+        sample["query"] = "secret query text"
+    if change == "too-many":
+        sample["rows"] = [metric] * 21
+    if change == "bad-mask":
+        sample["rows"][0]["table_mask"] = 8192
+    reused = deepcopy(observation)
+    if change == "changed-reuse":
+        reused["rows"][0]["shape"] = 2
+
+    class WorkerBoundary(Exception):
+        pass
+
+    def records(*_args, **_kwargs):
+        yield config, b""
+        yield proof, b""
+        for index in range(2050):
+            key = f"gate-{'a' * 32}-0-{index}"
+            yield (
+                dict(
+                    kind="request",
+                    arm=0,
+                    index=index,
+                    status=200,
+                    key=key,
+                    memory_id=str(uuid.UUID(int=index + 1)),
+                    version=index + 1,
+                    content_sha256=capture.content_hash(key),
+                    elapsed_ms=1.0,
+                    measured=index >= 50,
+                    admission="derived_ready",
+                ),
+                b"",
+            )
+        if change != "missing":
+            yield sample, b""
+        if change == "duplicate":
+            yield sample, b""
+        for index in range(5):
+            yield (
+                dict(
+                    kind="worker",
+                    arm=0,
+                    index=index,
+                    claimed=500,
+                    published=500,
+                    failed=0,
+                    expired_keys=0,
+                    expired_evidence=0,
+                    swept_settled=0,
+                    published_audits=0,
+                ),
+                b"",
+            )
+        yield dict(kind="delivery_block", arm=0, elapsed_seconds=1.0, rows=2500, rps=2500.0), b""
+        yield (
+            dict(
+                kind="settled",
+                arm=0,
+                api_rows=2050,
+                delivery_rows=2500,
+                physical={"clickhouse_query_costs": reused},
+            ),
+            b"",
+        )
+        raise WorkerBoundary
+
+    monkeypatch.setattr(capture, "record_stream", records)
+    seen = []
+    terminal = None
+    reader = workload.inputs()
+    try:
+        seen.extend(reader)
+    except (WorkerBoundary, fixture.Refused) as error:
+        terminal = error
+    finally:
+        reader.close()
+    assert len(seen) == 2050 and workload.counts == {"api": 2050, "delivery": 0}
+    assert isinstance(terminal, WorkerBoundary if change in {"rows", "error"} else fixture.Refused)
+    assert "secret" not in str(terminal)
