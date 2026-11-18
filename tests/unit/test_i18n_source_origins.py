@@ -24,11 +24,11 @@ def _digest(text):
     return sha256(text.encode()).hexdigest()
 
 
-def _case(current, *, historical=RAW):
+def _case(current, *, historical=RAW, whole=False):
     old = t.anchor_headings(historical, t.Counter())
     now = t.anchor_headings(current, t.Counter())
     units, at = [], 0
-    for i, part in enumerate(chunks.heading_sections(old)):
+    for i, part in enumerate((old,) if whole else chunks.heading_sections(old)):
         units.append(OriginalUnit(at, at + len(part), _digest(part), str(i)))
         at += len(part) + 1
     return (
@@ -180,12 +180,72 @@ def test_source_proof_never_turns_an_incomplete_original_into_a_completed_counte
     assert not plan.units
 
 
-def test_source_origin_proof_keeps_changed_completed_whole_page_refusal():
+@pytest.mark.parametrize("fault", [False, True], ids=["source-change", "source-change-with-fault"])
+def test_source_origins_keep_changed_completed_whole_page_as_one_request(fault):
+    current = RAW.replace("Original first.", "Added 界.\nOriginal first.")
+    case = _case(current, whole=True)
+    _, now, units, _ = case
+    plan = _plan(
+        case,
+        faults=(UnitFault("0", "semantic"),) if fault else (),
+        bounded_new_request_bytes=len(now.english.encode()),
+    )
+    assert not plan.conflicts
+    assert len(plan.units) == 1
+    request = plan.units[0]
+    assert request.disposition == "changed"
+    assert request.original == units[0]
+    assert request.fault_ids == (("semantic",) if fault else ())
+    assert request.scope.english[request.scope.start : request.scope.end] == now.english
+    assert request.separator_before == plan.trailing_separator == ""
+    assert not plan.removed
+
+
+@pytest.mark.parametrize(
+    "invalid", ["absent", "forged", "replacement", "ambiguous", "boundary", "language"]
+)
+def test_completed_whole_page_requires_valid_source_origins(invalid):
     current = RAW.replace("Original first.", "Added first.\nOriginal first.")
-    old, now, _, origins = _case(current)
-    unit = OriginalUnit(0, len(old.english), _digest(old.english), "whole")
-    plan = _plan((old, now, (unit,), origins))
-    assert plan.conflicts[0].kind == "whole_page_replacement"
+    if invalid == "replacement":
+        current = RAW.replace("Original first.", "Replacement.")
+    elif invalid == "ambiguous":
+        current = current.replace("Intro.", "# Sample\n\nIntro.")
+    elif invalid == "boundary":
+        current += "Tail.\n"
+    old, now, units, origins = _case(current, whole=True)
+    if invalid == "forged":
+        origins = replace(origins, current_raw=RAW)
+    elif invalid == "language":
+        origins = replace(origins, language="unknown")
+    plan = reconcile_completed_units(
+        old,
+        now,
+        units,
+        unit_manifest_sha256=original_unit_manifest_sha256(units),
+        source_origins=None if invalid == "absent" else origins,
+    )
+    assert plan.conflicts[0].kind == (
+        "whole_page_replacement" if invalid == "absent" else "boundary"
+    )
+    assert not plan.units
+
+
+@pytest.mark.parametrize("fault", [False, True], ids=["reuse", "correction"])
+def test_source_origins_keep_same_input_whole_page_disposition(fault):
+    case = _case(RAW, whole=True)
+    plan = _plan(case, faults=(UnitFault("0", "semantic"),) if fault else ())
+    assert not plan.conflicts
+    assert len(plan.units) == 1
+    assert plan.units[0].disposition == ("correction" if fault else "reuse")
+    assert plan.units[0].original == case[2][0]
+
+
+def test_changed_completed_whole_page_is_not_split_to_fit_request_bound():
+    case = _case(RAW.replace("Original first.", "Added 界.\nOriginal first."), whole=True)
+    plan = _plan(case, bounded_new_request_bytes=len(case[1].english.encode()) - 1)
+    assert plan.conflicts[0].kind == "boundary"
+    assert plan.conflicts[0].reply_refs == ("0",)
+    assert not plan.units
 
 
 @pytest.mark.parametrize("fits", [False, True])
