@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock
@@ -171,3 +172,25 @@ async def test_plain_pg_commit_already_owns_audit_receipt(
     commit.assert_awaited_once_with(w, [w.memory_row], MEMORY_ROW | AUDIT_ROW)
     publish.assert_awaited_once_with("committed", ch=ch, wait=True)
     assert writes == receipts == []
+
+
+@pytest.mark.parametrize("high", [False, True])
+async def test_cancelled_audit_still_announces_the_committed_row(plain, monkeypatch, high):
+    writes, _ = plain
+    entered = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def emit(**kwargs):
+        entered.set()
+        await blocked.wait()
+
+    monkeypatch.setattr(audit, "emit", emit)
+    w = _write(high=high)
+    task = asyncio.create_task(set_commit._set_plain_insert(w, object()))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert writes == [w.memory_row]
+    set_commit._announce_set.assert_awaited_once_with(w)
+    assert set_commit.fence_high.await_count == int(high)

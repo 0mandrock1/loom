@@ -498,15 +498,15 @@ async def _land_plain_row(w: _SetWrite, ch: Any, *, high: bool) -> int:
         with traced("ch.insert.memory", table="loom.memory"):
             await insert_memory_versions([memory_row], ch=ch)
         landed = True
-        await _audit_set_receipt(
-            w.input,
-            memory_id=w.memory_id,
-            content_sha256=w.new_sha,
-            source_class=w.source_class,
-            verdict="",
-            actor=w.writer_actor or "-",
-        )
         try:
+            await _audit_set_receipt(
+                w.input,
+                memory_id=w.memory_id,
+                content_sha256=w.new_sha,
+                source_class=w.source_class,
+                verdict="",
+                actor=w.writer_actor or "-",
+            )
             version = await _lift_after_insert(w, ch)
         finally:
             await _announce_set(w)  # the row is in, whatever failed after it
