@@ -18,6 +18,7 @@ pytestmark = pytest.mark.usefixtures("ch_target_required")
 
 @pytest.fixture
 async def tracker_record(ch_client: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from server.auth import keyring
     from server.auth.context import current_auth, set_current_auth
     from server.boot import _register_tracker_namespaces_once
     from server.core.ch import get_client, set_query_tag
@@ -25,6 +26,7 @@ async def tracker_record(ch_client: Any, monkeypatch: pytest.MonkeyPatch) -> Any
     from server.tracker.domain.contract import REQUIRED
     from server.tracker.store.source import qa_intel
 
+    monkeypatch.setattr(keyring, "_view", keyring._view)
     ch = get_client()
     await ch.connect()
     set_query_tag("test.tracker_search")

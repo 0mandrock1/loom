@@ -4,10 +4,11 @@ Memory (plus the scoped repository's decisions), knowledge (plus the scoped
 repository's documents), profile, conversations and authorized tracker records
 are searched in parallel after their capture consent is resolved; the
 sections are assembled into one payload and trimmed by the answer-first
-rules (answer_first.py). A leg that fails returns
+rules (answer_first.py). An ordinary leg failure returns
 `{"error": ..., "results": []}` under its section and the others still
-answer. The MCP `loom_search` tool renders this payload as its text and
-lean result; the `search` operation returns it as is.
+answer. Typed input refusals propagate instead of producing partial results.
+The MCP `loom_search` tool renders this payload as its text and lean result;
+the `search` operation returns it as is.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from server.core import request_tail
 from server.core.ch import set_query_tag
 from server.core.diagnostics import private_work
-from server.core.errors import LoomServerError, caller_text
+from server.core.errors import LoomServerError, VectorInputTooLargeError, caller_text
 from server.identity.app.request_scope import request_scope
 from server.identity.domain.read_scope import ReadFilters
 from server.knowledge.app import repo_docs, source_publication
@@ -405,7 +406,8 @@ async def search_sections(
             (
                 result
                 for result in (mem_result, know_result, profile_rows, conv_result, t_section)
-                if isinstance(result, BaseException) and not isinstance(result, Exception)
+                if isinstance(result, VectorInputTooLargeError)
+                or (isinstance(result, BaseException) and not isinstance(result, Exception))
             ),
             None,
         )
