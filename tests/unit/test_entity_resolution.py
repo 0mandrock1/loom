@@ -411,3 +411,76 @@ async def test_normalized_map_preserves_duplicate_rows_and_attestation(
     assert fuzzy.confidence >= 0.95
     ambiguous = owner.choose_canonical_candidate("acme", ["acme labs", "acme corp"])
     assert ambiguous.canonical_text == "acme" and ambiguous.strategy == "self"
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("Northwind AI", "northwindai"),
+        ("white water rafting", "whitewater rafting"),
+        ("naomi alderman", "naomi alderdman"),
+        ("qin dynasty", "qing dynasty"),
+        ("Aster's cloud", "aster cloud"),
+        ("Aster’s cloud", "aster-cloud"),
+        ("ＴＯＫＹＯ cloud", "tokyo cloud"),
+        ("İstanbul service", "istanbul-service"),
+        ("cafe\u0301 cluster", "cafécluster"),
+        ("user", "I"),
+        ("", "northwind"),
+        ("...", "---"),
+    ],
+)
+def test_similarity_preserves_frozen_raw_scorer(left: str, right: str) -> None:
+    from difflib import SequenceMatcher
+
+    from server.memory.app import entity_resolution as owner
+
+    # The prefilter oracle imports the live scorer, so retain an independent one.
+    a_canon = owner.canonical_entity_text(left)
+    b_canon = owner.canonical_entity_text(right)
+    if not a_canon or not b_canon:
+        expected = 0.0
+    elif a_canon == b_canon:
+        expected = 1.0
+    else:
+        compact_a = owner.compact_entity_text(a_canon)
+        compact_b = owner.compact_entity_text(b_canon)
+        expected = float(
+            max(
+                [
+                    SequenceMatcher(None, a_canon, b_canon).ratio(),
+                    SequenceMatcher(None, compact_a, compact_b).ratio()
+                    if compact_a and compact_b
+                    else 0.0,
+                ]
+            )
+        )
+    assert owner.entity_similarity(left, right) == expected
+    assert owner.compact_entity_text(left) == "".join(c for c in a_canon if c.isalnum())
+    assert owner.compact_entity_text(right) == "".join(c for c in b_canon if c.isalnum())
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        ("Northwind AI", "northwindai", 1.0),
+        ("naomi alderman", "naomi alderdman", 28 / 29),
+        ("ＴＯＫＹＯ cloud", "tokyo cloud", 1.0),
+        ("", "northwind", 0.0),
+    ],
+    ids=["compact-pair", "typo-pair", "equal-control", "empty-control"],
+)
+def test_similarity_normalizes_only_raw_inputs(monkeypatch, left, right, expected) -> None:
+    from server.memory.app import entity_resolution as owner
+
+    original = owner.canonical_entity_text
+    calls = []
+
+    def counted(raw):
+        calls.append(raw)
+        return original(raw)
+
+    monkeypatch.setattr(owner, "canonical_entity_text", counted)
+    assert owner.entity_similarity(left, right) == expected
+    # The compact filter receives values already normalized above.
+    assert calls == [left, right]

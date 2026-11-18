@@ -51,8 +51,8 @@ def entity_similarity(a: str, b: str) -> float:
         return 0.0
     if a_canon == b_canon:
         return 1.0
-    compact_a = compact_entity_text(a_canon)
-    compact_b = compact_entity_text(b_canon)
+    compact_a = "".join(char for char in a_canon if char.isalnum())
+    compact_b = "".join(char for char in b_canon if char.isalnum())
     ratios = [
         SequenceMatcher(None, a_canon, b_canon).ratio(),
         SequenceMatcher(None, compact_a, compact_b).ratio() if compact_a and compact_b else 0.0,

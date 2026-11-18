@@ -1029,3 +1029,286 @@ def test_independent_workload_reader_consumes_one_bounded_api_cost_sample(
     assert len(seen) == 2050 and workload.counts == {"api": 2050, "delivery": 0}
     assert isinstance(terminal, WorkerBoundary if change in {"rows", "error"} else fixture.Refused)
     assert "secret" not in str(terminal)
+
+
+@pytest.fixture
+def request_cost_api_case(keeper_config_case, tmp_path, monkeypatch):
+    import asyncio
+    import contextvars
+    import hashlib
+    import itertools
+    import json
+    import sys
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    import uvicorn
+
+    from bench import cell_trigger_gate
+    from server import settings as settings_module
+    from server.core import ch, deployment_config, instances, provider_process
+    from server.observability import otel
+
+    native, _, _, _, _ = keeper_config_case
+    samples = (8192, 10240, 12288, 14336, 16384, 18432)
+    marker = object()
+    error = RuntimeError("private-delegate-error")
+    cancelled = asyncio.CancelledError()
+    state = {"calls": 0, "sends": 0, "children": 0, "enters": 0, "exits": 0}
+    posture = {"router_operator_token": "", "cell_router_token": "lcr_" + "a" * 128}
+    monkeypatch.setattr(
+        settings_module, "settings", SimpleNamespace(model_dump=lambda **_: posture)
+    )
+    monkeypatch.setattr(cell_trigger_gate, "_workload", lambda _: {})
+    monkeypatch.setattr(deployment_config, "fingerprints", lambda _: {})
+    monkeypatch.setattr(instances, "instance_id", lambda: "fixture-instance")
+    monkeypatch.setattr(provider_process, "_start_ticks", lambda _: "123")
+    wall, cpu = itertools.count(), itertools.count()
+    monkeypatch.setattr(native.time, "perf_counter_ns", lambda: next(wall))
+    monkeypatch.setattr(native.time, "process_time_ns", lambda: next(cpu))
+
+    @contextmanager
+    def delegate(name, **attrs):
+        state["enters"] += 1
+        try:
+            assert name == "entity.resolve" and attrs["private"] == "private-stage-value"
+            yield marker
+            if attrs.get("fail_exit"):
+                raise error
+        finally:
+            state["exits"] += 1
+
+    monkeypatch.setattr(otel, "traced", delegate)
+
+    def invoke(mode):
+        state["mode"] = mode
+        pending = []
+        receive_message = {"type": "http.request", "body": b"private-request-value"}
+
+        async def receive():
+            return receive_message
+
+        async def send(message):
+            assert message is state["outgoing"]
+            if mode == "send-error" and state["calls"] == samples[0]:
+                raise error
+            state["sends"] += 1
+
+        async def application(scope, actual_receive, actual_send):
+            assert scope is state["scope"] and actual_receive is receive
+            assert await actual_receive() is receive_message
+            if scope["type"] != "http":
+                state["lifespan"] = 1
+                return
+            if scope["method"] != "POST" or scope["path"] != "/v1/memory.set":
+                state["passthrough"] = state.get("passthrough", 0) + 1
+                assert actual_send is send
+                return
+            state["calls"] += 1
+            index = state["calls"]
+            ch.set_query_tag(f"memory.set request-{index}")
+            selected = index in samples
+            count = 225 if mode == "cap" and index == samples[0] else 1
+            for _ in range(count):
+                with otel.traced(
+                    "entity.resolve",
+                    private="private-stage-value",
+                    fail_exit=mode == "exit-error" and selected,
+                ) as value:
+                    assert value is marker
+                    if selected and mode in {"body-error", "cancel"}:
+                        raise cancelled if mode == "cancel" else error
+            if selected:
+
+                async def child():
+                    await state["release"].wait()
+                    with otel.traced("entity.resolve", private="private-stage-value") as value:
+                        assert value is marker
+                        state["children"] += 1
+
+                pending.append(asyncio.create_task(child()))
+                pending.append(asyncio.create_task(child(), context=contextvars.Context()))
+            for message in (
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [(b"x-request-id", f"request-{index}".encode())],
+                },
+                {"type": "http.response.body", "body": b"private-response-value"},
+            ):
+                state["outgoing"] = message
+                await actual_send(message)
+
+        monkeypatch.setitem(sys.modules, "server.main", SimpleNamespace(app=application))
+
+        async def exercise(factory):
+            app = factory()
+            state["release"] = asyncio.Event()
+            try:
+                for scope in (
+                    {"type": "lifespan"},
+                    {"type": "http", "method": "GET", "path": "/v1/memory.set"},
+                    {"type": "http", "method": "POST", "path": "/v1/health"},
+                ):
+                    state["scope"] = scope
+                    await app(scope, receive, send)
+                for _ in range(samples[-1]):
+                    state["scope"] = {"type": "http", "method": "POST", "path": "/v1/memory.set"}
+                    await app(state["scope"], receive, send)
+            finally:
+                state["release"].set()
+                await asyncio.gather(*pending)
+
+        def run(application_factory, **options):
+            assert options == {
+                "factory": True,
+                "app_dir": str(tmp_path),
+                "host": "127.0.0.1",
+                "port": 12345,
+                "loop": "asyncio",
+                "workers": 1,
+                "reload": False,
+            }
+            asyncio.run(exercise(application_factory))
+
+        monkeypatch.setattr(uvicorn, "run", run)
+        folder = tmp_path / "serving-cell"
+        folder.mkdir()
+        if mode == "writer-error":
+            original_open = Path.open
+
+            class BrokenStream:
+                def write(self, _):
+                    raise OSError("private-disk-error")
+
+                def close(self):
+                    state["stream_closed"] = 1
+
+            def open_path(path, *args, **kwargs):
+                if path == folder / "request-costs.jsonl":
+                    return BrokenStream()
+                return original_open(path, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "open", open_path)
+        context = {
+            "head": "a" * 40,
+            "tree": "b" * 40,
+            "root": str(tmp_path),
+            "ports": {"api": 12345},
+        }
+        state["error"] = None
+        try:
+            native.api(context, folder / "launch.json")
+        except BaseException as caught:  # noqa: BLE001 — compare the exact fake delegate's failure, including cancellation
+            state["error"] = caught
+        assert otel.traced is delegate
+        path = folder / "request-costs.jsonl"
+        state["raw"] = path.read_text() if path.exists() else ""
+        state["rows"] = [json.loads(line) for line in state["raw"].splitlines()]
+        state["tags"] = {
+            index: int.from_bytes(hashlib.sha256(f"memory.set request-{index}".encode()).digest())
+            for index in samples
+        }
+        state["expected_error"] = cancelled if mode == "cancel" else error
+        return state
+
+    return invoke
+
+
+@pytest.mark.parametrize("mode", ["normal", "cap", "writer-error"])
+def test_native_request_cost_samples_delegate_and_bound(request_cost_api_case, mode):
+    state = request_cost_api_case(mode)
+    assert state["error"] is None
+    assert state["calls"] == 18432 and state["sends"] == 2 * 18432
+    assert state["lifespan"] == 1 and state["passthrough"] == 2
+    assert state["children"] == 12 and state["enters"] == state["exits"]
+    if mode == "writer-error":
+        assert state["stream_closed"] == 1 and state["rows"] == []
+        return
+    rows = state["rows"]
+    assert rows[0] == [0, 1, 8192, 10240, 12288, 14336, 16384, 18432]
+    assert len(rows) <= 194 and len(state["raw"].encode()) <= 65536
+    assert all(type(number) is int and number >= 0 for row in rows for number in row)
+    assert "private" not in state["raw"] and "request-" not in state["raw"]
+    if mode == "cap":
+        assert len(rows) == 194 and rows[-1][2] == 192 and rows[-1][3] > 0
+        return
+    assert rows[-1] == [3, 18432, 18, 0, 0]
+    roots, spans = [r for r in rows if r[0] == 2], [r for r in rows if r[0] == 1]
+    assert [r[1] for r in roots] == list(state["tags"])
+    assert len(spans) == 12 and sum(r[9] for r in spans) == 6
+    for row in roots + spans:
+        assert len(row) == 11 and row[4] > 0 and row[5] > 0
+        assert row[6] == state["tags"][row[1]] and row[8] == 0
+        assert row[2] == (0 if row[0] == 2 else 1)
+        assert (row[7], row[10]) == ((200, 1) if row[0] == 2 else (0, 0))
+
+
+@pytest.mark.parametrize("mode", ["body-error", "exit-error", "send-error", "cancel"])
+def test_native_request_costs_preserve_original_failure(request_cost_api_case, mode):
+    state = request_cost_api_case(mode)
+    assert state["error"] is state["expected_error"]
+    assert state["calls"] == 8192 and state["enters"] == state["exits"]
+    rows = state["rows"]
+    root = next(row for row in rows if row[0] == 2)
+    span = next(row for row in rows if row[0] == 1)
+    assert root[1] == span[1] == 8192
+    assert root[6:9] == [0, 0, 1] and root[10] == 0
+    assert span[6] == state["tags"][8192]
+    assert span[8] == (0 if mode == "send-error" else 1)
+    assert rows[-1][0:2] == [3, 8192]
+    assert "private" not in state["raw"]
+
+
+@pytest.mark.parametrize(
+    "mode", ["valid", "secret", "negative", "cap", "read-error", "write-error"]
+)
+def test_request_cost_publication_is_numeric_bounded_and_fail_open(tmp_path, monkeypatch, mode):
+    import json
+
+    from scripts.gates import cell_trigger_acceptance as creator
+
+    folder = tmp_path / "private"
+    source = folder / "fixture/serving-cell/request-costs.jsonl"
+    source.parent.mkdir(parents=True)
+    rows = [[0, 1, 8192, 10240, 12288, 14336, 16384, 18432], [3, 18432, 0, 0, 0]]
+    if mode == "secret":
+        rows.append([1, "private-key-value"])
+    elif mode == "negative":
+        rows.append([3, 18432, 0, -1, 0])
+    contents = "\n".join(json.dumps(row) for row in rows) + "\n"
+    source.write_text(" " * 65537 if mode == "cap" else contents)
+    (folder / "fixture/private.log").write_text("private-log-value")
+    destination = tmp_path / "published"
+    if mode == "read-error":
+        original_read = Path.read_text
+
+        def read(path, *args, **kwargs):
+            if path == source:
+                raise OSError("private-read-error")
+            return original_read(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", read)
+    if mode == "write-error":
+        original_write = creator.write
+
+        def write(path, *args, **kwargs):
+            if path.name == "request-costs.json":
+                raise OSError("private-write-error")
+            return original_write(path, *args, **kwargs)
+
+        monkeypatch.setattr(creator, "write", write)
+    original = ValueError("private-original-error")
+    creator.publish(folder, destination, original, phase="native", diagnostic_error_type=None)
+    result = json.loads((destination / "result.json").read_text())
+    assert result["accepted"] is False and result["error_type"] == "ValueError"
+    assert {p.name for p in destination.iterdir()} == (
+        {"result.json"} if mode == "write-error" else {"result.json", "request-costs.json"}
+    )
+    public = "".join(p.read_text() for p in destination.iterdir())
+    assert "private-" not in public
+    if mode != "write-error":
+        diagnostic = json.loads((destination / "request-costs.json").read_text())
+        assert diagnostic == (
+            {"schema": 1, "rows": rows} if mode == "valid" else {"schema": 1, "invalid": 1}
+        )
