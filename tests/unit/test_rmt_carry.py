@@ -477,6 +477,10 @@ def _fenced_client(monkeypatch: pytest.MonkeyPatch, before_send: Any) -> tuple[A
     monkeypatch.setattr(type(ch_mod.CHClient()), "client", property(lambda self: driver))
 
     async def _stray(self: Any, sql: str, params: Any = None) -> Any:
+        if "toUnixTimestamp64Milli(now64(3))" in sql:
+            now = rmt_carry.server_now()
+            assert now is not None
+            return {"ms": int(now * 1000)}
         assert "system.columns" in sql
         return {"n": driver.stray}
 

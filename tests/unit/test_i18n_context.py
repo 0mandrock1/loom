@@ -45,6 +45,83 @@ def test_filename_identity_comes_from_the_source_link_target(name):
     assert protected(Label(name, links=((name, "other.md"),)), "docs/other.md", files=files) == ()
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "overview.md",
+        "tracker/overview.md",
+        "features/tracker/overview.md",
+        "docs/features/tracker/overview.md",
+    ],
+)
+def test_filename_path_suffix_is_attested_by_its_tracked_target(name):
+    target = "docs/features/tracker/overview.md"
+    node = Label(name, links=((name, t.REPO_URL + "/blob/main/" + target),))
+    atoms = protected(
+        node, "docs/features/code-index/overview.md", files=frozenset({target}), repo_url=t.REPO_URL
+    )
+    assert atoms == (name,)
+    assert project(node, atoms)[0].strip() == ""
+    source = f"[{name}]({t.REPO_URL}/blob/main/{target})\n"
+    assert t.differences(source, source, source_path="docs/features/code-index/overview.md") == []
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "tracker/summary.md",
+        "other/overview.md",
+        "tracker overview.md",
+        "overview.md",
+        "overview",
+        "跟踪器概览",
+    ],
+)
+def test_filename_path_suffix_cannot_drop_or_translate_a_source_component(changed):
+    source = f"[tracker/overview.md]({t.REPO_URL}/blob/main/docs/features/tracker/overview.md)\n"
+    output = source.replace("[tracker/overview.md]", f"[{changed}]")
+    assert any(
+        "protected source strings" in p
+        for p in t.differences(source, output, source_path="docs/features/code-index/overview.md")
+    )
+
+
+def test_filename_path_suffix_leaves_ordinary_descriptors_translatable():
+    source = (
+        f"[tracker/overview.md guide]({t.REPO_URL}/blob/main/docs/features/tracker/overview.md)\n"
+    )
+    assert any(
+        "left in English" in p
+        for p in t.differences(source, source, source_path="docs/features/code-index/overview.md")
+    )
+    assert (
+        t.differences(
+            source,
+            source.replace(".md guide]", ".md 指南]"),
+            source_path="docs/features/code-index/overview.md",
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize("tracked", [False, True])
+def test_filename_path_suffix_requires_the_actual_repository_target(tracked):
+    target = "docs/features/tracker/overview.md"
+    url = ("https://example.test" if tracked else t.REPO_URL) + "/blob/main/" + target
+    node = Label("tracker/overview.md", links=(("tracker/overview.md", url),))
+    files = frozenset({target}) if tracked else frozenset()
+    assert (
+        protected(node, "docs/features/code-index/overview.md", files=files, repo_url=t.REPO_URL)
+        == ()
+    )
+
+
+def test_path_protection_does_not_allow_a_standalone_tracker_heading():
+    assert t.differences(
+        "# Tracker\n", "# Tracker\n", source_path="docs/features/code-index/overview.md"
+    )
+
+
 def test_quoted_prose_is_not_a_returned_string_declaration():
     quoted = '"Install the package" / "Getting started"'
     assert protected(Label(quoted), "docs/other.md") == ()

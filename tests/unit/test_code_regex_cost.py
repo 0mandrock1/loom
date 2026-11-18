@@ -471,7 +471,7 @@ def test_a_registered_lane_costs_linear_time(lang: str) -> None:
     new = {shape: t for shape, t in slow.items() if shape not in known}
     assert not new and not reparsed, (
         f"{lang}, from the step's smaller size (N or 4N) to 4 times it: (step, s, s) {new}; "
-        f"(step, bytes, bytes) {reparsed}"
+        f"(step, bytes, bytes) {reparsed}; child diagnostics:\n{done.stderr[-4000:]}"
     )
     fixed = sorted(set(known) & linear)  # clearly linear now, not a timer's doubt
     assert not fixed, f"{lang}: {fixed} run in linear time; drop them from KNOWN_SLOW"
