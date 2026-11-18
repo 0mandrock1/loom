@@ -220,7 +220,7 @@ def test_subject_spans_from_symbol_rows() -> None:
         {"path": "src/a.h", "start_line": 7, "end_line": 0},
         {"path": "", "start_line": 1, "end_line": 2},
     ]
-    assert app_cov.subject_spans(rows) == {"src/a.cpp": [(480, 495)], "src/a.h": [(7, 7)]}
+    assert app_cov.subject_spans(rows) == {"src/a.cpp": [(480, 495)]}
 
 
 # ---------------------------------------------------------------- the import
@@ -479,7 +479,12 @@ async def test_the_claim_reports_a_span_no_test_executed() -> None:
         {"src/IO/copy.cpp": {"commit_sha": "c0ffee", "lines": "[[470,486],[492,499]]"}}
     )
     out = await app_cov.measured_for(
-        repo, "acme", "code-x", ["src/IO/copy.cpp"], {"src/IO/copy.cpp": [(487, 491)]}
+        repo,
+        "acme",
+        "code-x",
+        ["src/IO/copy.cpp"],
+        {"src/IO/copy.cpp": [(487, 491)]},
+        span_commits={"src/IO/copy.cpp": {"c0ffee"}},
     )
     assert out["measured"] and not out["executed"] and out["commit"] == "c0ffee"
     whole = await app_cov.measured_for(repo, "acme", "code-x", ["src/IO/copy.cpp"], None)
