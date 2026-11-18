@@ -300,8 +300,13 @@ asyncio.run(main())
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await asyncio.wait_for(process.communicate(), 10)
-    assert process.returncode == 0, (stdout.decode(), stderr.decode())
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), 10)
+        assert process.returncode == 0, (stdout.decode(), stderr.decode())
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
 
 
 @pytest.mark.parametrize("kind", ["ordinary", "cancel", "exit", "keyboard"])

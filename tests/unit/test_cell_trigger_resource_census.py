@@ -240,3 +240,37 @@ def test_restarted_forest_refuses_store_uid_drift(census, monkeypatch):
     assert isinstance(owner.first, fixture.Refused)
     assert owner.sampled == 7.0
     assert owned.round == 1
+
+
+def test_store_identity_refusals_keep_distinct_failure_sites(census, monkeypatch):
+    owner, owned, _ = census
+    original_identity, original_stat = owned.identify, fixture.os.stat
+    sites = []
+    for fault in ("missing", "start", "boot", "uid"):
+        owner.failures.clear()
+        owner.sampled = 7.0
+        owner.spec["stores"]["pg"]["boot_id"] = "changed" if fault == "boot" else "boot"
+        owned.identify = lambda pid, fault=fault: (
+            None
+            if pid == 200 and fault == "missing"
+            else (1, "changed", "S")
+            if pid == 200 and fault == "start"
+            else original_identity(pid)
+        )
+
+        def stat(path, *args, fault=fault, **kwargs):
+            if str(path) == "/proc/200" and fault == "uid":
+                return SimpleNamespace(st_uid=fixture.os.geteuid() + 1)
+            return original_stat(path, *args, **kwargs)
+
+        monkeypatch.setattr(fixture.os, "stat", stat)
+        owner.sample()
+        assert isinstance(owner.first, fixture.Refused)
+        assert str(owner.first) == "resource store birth changed"
+        assert owner.sampled == 7.0
+        record = owner.failure_summary()["records"][0]
+        assert record["primary"] is True and record["phase"] == "resource"
+        assert record["site"]["file"] == "fixture.py"
+        assert record["site"]["function"] == "sample"
+        sites.append(record["site"]["line"])
+    assert len(set(sites)) == 4

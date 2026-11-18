@@ -782,11 +782,11 @@ class Owner:
             boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
             for store in self.spec["stores"].values():
                 identity = self.owned.identity(store["host_pid"])
+                need(identity is not None, "resource store birth changed")
+                need(identity[1] == store["start_ticks"], "resource store birth changed")
+                need(boot == store["boot_id"], "resource store birth changed")
                 need(
-                    identity is not None
-                    and identity[1] == store["start_ticks"]
-                    and boot == store["boot_id"]
-                    and os.stat(f"/proc/{store['host_pid']}").st_uid == store["uid"],
+                    os.stat(f"/proc/{store['host_pid']}").st_uid == store["uid"],
                     "resource store birth changed",
                 )
             roots = [self.owned.pid] + [s["host_pid"] for s in self.spec["stores"].values()]
