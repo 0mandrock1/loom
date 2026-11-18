@@ -27,10 +27,24 @@ neither installs the file nor changes the running processes' configuration. It
 prints fingerprint digests and changed field names.
 
 The deployment id, registered public and OAuth host, and bucket and prefix cannot
-change. The root-secret fingerprint must match the directory's locked value. A
-candidate with SCIM enabled refuses; per-cell SCIM support is required before such
-a rollout. Reverting a pending SCIM-on candidate to a recorded SCIM-off current
-value remains possible.
+change. The root-secret fingerprint must match the directory's locked value.
+
+A SCIM-on target requires this cell's valid SCIM token, OIDC login and required
+authentication. The CLI freshly checks active accounts, live refresh sessions and
+personal service-account creators against the target provisioning policy before
+claiming the directory generation, after durable local acceptance, and after
+participant turnover before releasing the reservation. It uses the same bounded
+[provisioning census as attach](cell-attach.md); a cached admission decision does
+not establish this precondition. Run the CLI with the target's SCIM credentials
+and authentication settings configured.
+
+Provision every required identity before updating. Alternatively, add
+`--revoke-unprovisioned` to `--config`, `--finish` or `--revert` to end tokens
+issued before the update for subjects that cannot meet its SCIM policy. Accepted
+SCIM cutoffs are reported immediately and remain if a later check fails; the
+command does not roll them back. Correct the reported cause and rerun the same
+action. This flag does not apply to address refresh. Reverting to SCIM-off current
+does not require provisioning.
 
 After attach has begun, the directory reserves both current and next values and
 places newly configured orgs before the cell's Postgres accepts next. Overlap checks

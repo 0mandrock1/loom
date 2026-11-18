@@ -66,7 +66,17 @@ def target_fingerprint(
     if reason := fingerprints.registration_refusal(value, registered):
         raise ValueError(reason)
     if value["fields"]["scim"]:
-        raise ValueError("configuration update requires per-cell SCIM before enabling SCIM")
+        from server.auth.scim_routes import scim_settings_problem
+
+        problem = scim_settings_problem(
+            target.scim_token,
+            target.oauth_login_provider,
+            target.auth_actually_required(),
+            cell_name=registered["cell"],
+            first=(registered["is_first"], registered["cell"]),
+        )
+        if problem:
+            raise ValueError(problem)
     if reason := fingerprints.placement_refusal(registered["cell"], "candidate", value):
         raise ValueError(reason)
     return value

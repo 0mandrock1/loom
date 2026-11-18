@@ -46,6 +46,21 @@ def test_update_refuses_ambiguous_actions_before_connect(monkeypatch, actions):
     assert "one" in command._args_problem(values)
 
 
+@pytest.mark.parametrize("action", [None, "config", "finish", "revert"])
+def test_scim_cutoffs_require_a_configuration_action(monkeypatch, action):
+    command = importlib.import_module("server.cli.cell_update")
+    monkeypatch.setattr(settings, "cell", "first")
+    monkeypatch.setattr(settings, "storage_authority", "postgres")
+    monkeypatch.setattr(settings, "pg_dsn", "postgresql://configured")
+    values = args(revoke_unprovisioned=True)
+    if action is not None:
+        setattr(values, action, "target.yaml" if action == "config" else True)
+    result = command._args_problem(values)
+    assert result == (
+        "--revoke-unprovisioned needs --config, --finish or --revert" if action is None else ""
+    )
+
+
 @pytest.mark.parametrize("refused", [False, True])
 def test_control_coordinator_verifies_and_gates_without_becoming_a_participant(
     monkeypatch, refused
