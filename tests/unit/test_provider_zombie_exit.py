@@ -67,7 +67,7 @@ def test_an_exact_single_thread_zombie_is_proven_stopped_before_wait() -> None:
         while time.monotonic() < end:
             state, parent, observed_start, threads = _stat(pid)
             assert parent == os.getpid() and observed_start == start
-            if state == "Z":
+            if state == "Z" and threads == 1:
                 break
             time.sleep(0.005)
         assert state == "Z" and threads == 1, (
