@@ -341,8 +341,34 @@ def test_list_and_inspect_return_config_and_sync_never_the_credential(
     body = KnowledgeSourceInspectInput(org=ORG, namespace=NS, name="design-decks")
     seen = asyncio.run(app.handle_knowledge_source_inspect(body))
     assert seen.documents[0].source_uri == "https://x/1"
-    for text in (listed.model_dump_json(), seen.model_dump_json()):
-        assert "credential" not in text and SECRET not in text and "x/mined" not in text
+    sealed = fake.rows[(ORG, NS, "design-decks")].credential_enc
+    assert sealed and sealed != SECRET
+    for entry in (listed.sources[0], seen):
+        assert (entry.credential_mode, entry.access, entry.owner_subject) == (
+            "shared",
+            "namespace",
+            "",
+        )
+    for answer in (listed, seen):
+        values: list[Any] = [answer.model_dump(mode="json")]
+        while values:
+            value = values.pop()
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    assert "credential" not in key.lower() or key == "credential_mode"
+                    assert key.lower() not in {
+                        "access_token",
+                        "refresh_token",
+                        "client_secret",
+                        "private_key",
+                        "authorization",
+                    }
+                    values.append(item)
+            elif isinstance(value, list):
+                values.extend(value)
+            elif isinstance(value, str):
+                assert all(secret not in value for secret in (SECRET, sealed, "x/mined"))
+        assert all(secret not in answer.model_dump_json() for secret in (SECRET, sealed, "x/mined"))
 
 
 def test_unknown_sources_are_not_found(fake: _Store) -> None:
@@ -2642,7 +2668,7 @@ def test_connected_source_quota_uses_its_own_namespace_and_owner_bounds(
     fake.rows[(ORG, NS, connected.name)] = connected
     with pytest.raises(ValidationError) as caught:
         asyncio.run(app._require_free(ORG, NS, "another", owner_subject="person"))
-    assert caught.value.code == "SOURCE_QUOTA"
+    assert caught.value.to_detail()["code"] == "SOURCE_QUOTA"
     assert ("person" in str(caught.value)) == (axis == "person")
 
 

@@ -634,7 +634,7 @@ async def _require_free(org: str, namespace: str, name: str, *, owner_subject: s
     # A new row under the name would orphan a removed mirrored source's documents and
     # any delete request for them, which only the build that serves mirrored sources
     # (their ops and their delete requests) acts on.
-    if earlier is not None and not domain.served(earlier) and not domain.mirror_synced(earlier):
+    if earlier is not None and not domain.served(earlier):
         raise ValidationError(
             f"the name {name!r} belongs to a removed source this server does not serve "
             "yet; register the new source under another name, or retry once the "
