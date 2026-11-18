@@ -282,14 +282,16 @@ async def own_grant_lines(
     return [str(line) for (line,) in rows]
 
 
-async def write_entities(statements: list[str], *, ch: _CHClient | None = None) -> None:
+async def write_entities(
+    statements: list[str], *, names: boundary.SettingNames, ch: _CHClient | None = None
+) -> None:
     """Send the entity statements in order; the first refusal stops them.
     They hold the analyst's password and the scope key, so their text stays
     out of system.query_log, and they stay out of the statement capture file."""
     ch = ch or _default_client()
     with uncaptured():
         for sql in statements:
-            await ch.execute(sql, settings=boundary.LOG_TEXT_CUT)
+            await ch.execute(sql, settings=boundary.provisioning_settings(names))
 
 
 def target_database() -> str:

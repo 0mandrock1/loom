@@ -374,6 +374,8 @@ same code for any cause. The exceptions are these:
      `response_tokens`, the stored duration), its `model` and the outcome fields a model
      call can change (`success`, `error_code`, `status_class`) go to a platform admin
      only, and the error-rate and model metrics leave marked requests out.
+     The stored argument map keeps only numeric statement/read/injection work fields.
+     Result identifiers, document tags, argument digests and error prose are omitted.
 3. A connected source's per-item and per-file codes and `too_many_documents`, to its
    owner, and its listing age, to its owner as a code (fresh or stale).
 4. A platform admin's view of a mirror's sources (every mirrored source's status, the

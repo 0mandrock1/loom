@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any
 
 from server.core.ch import get_client
-from server.core.ch_writes import async_insert_settings, batched_insert_settings
+from server.core.ch_writes import batched_insert_settings
 from server.observability.instance import stamp_row
 
 log = logging.getLogger(__name__)
@@ -344,14 +344,17 @@ async def write_private_event(event: AgentEvent) -> None:
 async def write_marked_request_event(event: AgentEvent) -> None:
     """Commit a captured marked request with the server clock, outside the queue."""
     from server.core.diagnostics import codes_only
+    from server.observability.event_args import marked_request_args
 
     if not codes_only() or event.kind != "request" or event.mirror_marked is not True:
         raise ValueError("marked request events require a private scope and server classification")
     row = for_this_cell(event).to_row()
     row.pop("ts", None)
+    row["args"] = marked_request_args(row["args"])
+    row["memory_key"] = ""
     await get_client().insert(
         "loom.agent_events",
         [row],
-        settings=async_insert_settings(),
+        settings=batched_insert_settings(),
         required_columns=frozenset({"mirror_marked"}),
     )

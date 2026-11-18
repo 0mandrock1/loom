@@ -252,10 +252,16 @@ def test_entity_statements_are_sent_with_their_text_cut_from_the_log() -> None:
         async def execute(self, sql: str, settings: dict[str, object], **_: object) -> None:
             sent.append((sql, settings))
 
-    asyncio.run(store.write_entities(SQL, ch=_Client()))  # type: ignore[arg-type]
+    names = boundary.SettingNames("SQL_")
+    asyncio.run(store.write_entities(SQL, names=names, ch=_Client()))  # type: ignore[arg-type]
     assert [sql for sql, _ in sent] == SQL
     cut = {"log_queries_cut_to_length": 1, "log_formatted_queries": 0}
-    assert all(settings == cut for _, settings in sent)
+    empty_scope = {names.org: "", names.ns: "", names.exp: "0", names.sig: ""}
+    assert all(settings == {**cut, **empty_scope} for _, settings in sent)
+    # The defaults affect DDL analysis, never the stored view's request-time scope.
+    view = next(sql for sql in SQL if sql.startswith("CREATE OR REPLACE VIEW"))
+    assert "getSetting('SQL_loom_org')" in view
+    assert " SETTINGS " not in view
 
 
 def test_profile_pins_what_a_statement_could_widen() -> None:

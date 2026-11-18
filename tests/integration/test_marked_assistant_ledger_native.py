@@ -162,7 +162,7 @@ async def test_citations_use_persisted_unknown_or_ordinary_positive_evidence(
         await events.insert("loom.memory_exposures", [exposure], async_insert_settings())
     monkeypatch.setattr(ledger, "_default_client", lambda: events)
     monkeypatch.setattr(settings, "memory_exposure_ledger_enabled", True)
-    text = f"```sql\n{sql}\n```" if kind == "sql" else f"[memory:{key}]"
+    text = f"```sql\n{sql}\n```" if kind == "sql" else f"[memory:{key}@v1]"
     checked = await citations.verify(
         text, org=org, namespace="notes", token="", run_id="answer", subject="reader"
     )

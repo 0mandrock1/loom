@@ -103,6 +103,18 @@ class SettingNames:
 # which the cut misses, is not written. Cloud pins log_queries but not these.
 LOG_TEXT_CUT = {"log_queries_cut_to_length": 1, "log_formatted_queries": 0}
 
+
+def provisioning_settings(names: SettingNames) -> dict[str, str | int]:
+    """Analyze signed views under an expired empty scope, only for their DDL query."""
+    return {
+        **LOG_TEXT_CUT,
+        names.org: "",
+        names.ns: "",
+        names.exp: "0",
+        names.sig: "",
+    }
+
+
 _BLOCK = 64  # SHA-256 block size, for HMAC's inner and outer pads
 
 

@@ -190,3 +190,86 @@ def test_ordinary_event_still_uses_the_existing_queue(world):
     assert len(world.queued) == len(world.held) == 1
     assert world.queued[0].mirror_marked is False
     assert world.rows == []
+
+
+@pytest.mark.parametrize("marked", [False, True])
+@pytest.mark.parametrize("found", [False, True])
+async def test_stored_marked_row_keeps_work_but_no_document_projection(world, marked, found):
+    from server.knowledge.api.models_knowledge import KnowledgeGetOutput
+
+    if marked:
+        assert request_work.mark_mirrored()
+    bag = request_work.current()
+    bag.ch_statements, bag.ch_read_rows, bag.ch_read_bytes = 3, 17, 91
+    bag.ch_elapsed_ms, bag.injected_facts, bag.injected_chunks = 4.5, 2, 5
+    bag.schema_skipped = ["private-schema-canary"]
+    bag.stage_ms["private-stage-canary"] = 3.0
+    ledger.emit_agent_event(
+        op_name="knowledge.get",
+        identity={
+            "org": "org-a",
+            "namespace": "team",
+            "agent": "reader",
+            "user_id": "user-a",
+            "session_id": "session-a",
+        },
+        request_id="request-a",
+        latency_ms=23,
+        success=True,
+        error_code="",
+        raw_args={"source_uri": "private-address-canary", "query": "private-query-canary"},
+        result=KnowledgeGetOutput(
+            found=found,
+            source_uri="private-address-canary",
+            title="private-title-canary",
+            content="private-body-canary",
+            tags=["private-tag-canary"],
+        ),
+    )
+    if marked:
+        await request_tail.drain_required()
+        row = world.rows[0]
+        assert row["args"] == {
+            "out_ch_statements": "3",
+            "out_ch_read_rows": "17",
+            "out_ch_read_bytes": "91",
+            "out_ch_elapsed_ms": "4.5",
+            "out_injected_facts": "2",
+            "out_injected_chunks": "5",
+        }
+        assert not any("private-" in str(value) for value in row.values())
+        assert row["input_tokens"] == 17 and row["upstream_cost_usd"] == 0.125
+    else:
+        row = world.queued[0].to_row()
+        assert row["args"]["out_found"] == str(found).lower()
+        assert "private-tag-canary" in row["args"]["out_tags"]
+        assert "private-address-canary" in str(row["args"])
+
+
+@pytest.mark.parametrize("marked", [False, True])
+async def test_stored_marked_failure_keeps_constant_outcome_without_error_text(world, marked):
+    if marked:
+        assert request_work.mark_mirrored()
+    ledger.emit_agent_event(
+        op_name="knowledge.get",
+        identity={
+            "org": "org-a",
+            "namespace": "team",
+            "agent": "reader",
+            "user_id": "user-a",
+            "session_id": "session-a",
+        },
+        request_id="request-a",
+        latency_ms=23,
+        success=False,
+        error_code="UNAVAILABLE",
+        error=RuntimeError("unquoted-private-backend-canary"),
+    )
+    if marked:
+        await request_tail.drain_required()
+        row = world.rows[0]
+        assert row["args"] == {}
+        assert "unquoted-private-backend-canary" not in str(row)
+        assert row["success"] is False and row["error_code"] == "UNAVAILABLE"
+    else:
+        assert "unquoted-private-backend-canary" in world.queued[0].to_row()["args"]["error"]

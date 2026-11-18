@@ -92,6 +92,8 @@ async def test_waited_writer_preserves_row_and_omits_process_clock(monkeypatch, 
     event = captured_event()
     expected = event.to_row()
     del expected["ts"]
+    expected["args"] = {}
+    expected["memory_key"] = ""
     original = copy.deepcopy(event)
     before = writer.emitter.stats()
     with private_work():
@@ -101,12 +103,40 @@ async def test_waited_writer_preserves_row_and_omits_process_clock(monkeypatch, 
     table, rows, settings = writer.rows[0]
     assert table == "loom.agent_events" and rows == [expected]
     assert "ts" not in rows[0] and rows[0]["mirror_marked"] == 1
-    assert settings["async_insert"] == settings["wait_for_async_insert"] == 1
-    assert settings["async_insert_use_adaptive_busy_timeout"] == 1
-    assert settings["async_insert_busy_timeout_min_ms"] == 3
-    assert settings["async_insert_busy_timeout_max_ms"] == 11
+    assert settings["wait_for_async_insert"] == 1
+    assert settings["async_insert"] == int(batching)
+    if batching:
+        assert settings["async_insert_use_adaptive_busy_timeout"] == 1
+        assert settings["async_insert_busy_timeout_min_ms"] == 3
+        assert settings["async_insert_busy_timeout_max_ms"] == 11
+    else:
+        assert settings == {"async_insert": 0, "wait_for_async_insert": 1}
     assert writer.emitter.stats() == before
     assert writer.emitter.queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_writer_drops_untrusted_projections_even_without_the_transport(writer):
+    event = captured_event(
+        memory_key="private-key-canary",
+        args={
+            "out_ch_statements": "3",
+            "out_ch_read_rows": "private-row-canary",
+            "out_ch_read_bytes": "-1",
+            "out_injected_facts": "1.5",
+            "out_injected_chunks": "２",
+            "out_ch_elapsed_ms": "inf",
+            "out_tags": "private-tag-canary",
+            "error": "private-error-canary",
+        },
+    )
+    with private_work():
+        await events.write_marked_request_event(event)
+    row = writer.rows[0][1][0]
+    assert row["args"] == {"out_ch_statements": "3"}
+    assert row["memory_key"] == ""
+    assert "private-" not in str(row)
+    assert event.memory_key == "private-key-canary"
 
 
 @pytest.mark.asyncio
