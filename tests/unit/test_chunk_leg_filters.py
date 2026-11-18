@@ -19,7 +19,7 @@ from tests.unit.test_memory_search_service import StubCH, _q
 _PARENT_IN = "c.parent_memory_key IN (SELECT memory_key FROM loom.memory_embeddings FINAL"
 _PARENT_NOT_IN = (
     "(c.agent, c.user_id, c.session_id, c.parent_memory_key) NOT IN "
-    "(SELECT agent, user_id, session_id, memory_key FROM loom.memory_embeddings FINAL"
+    "(SELECT agent, user_id, session_id, memory_key FROM loom.memory FINAL"
 )
 
 
@@ -166,9 +166,14 @@ def test_the_neighbour_fallback_binds_every_parameter_its_predicate_names(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("flag,status", [("include_duplicates", "duplicate"),
-                                         ("include_superseded", "superseded"),
-                                         ("include_proposed", "proposed")])
+@pytest.mark.parametrize(
+    "flag,status",
+    [
+        ("include_duplicates", "duplicate"),
+        ("include_superseded", "superseded"),
+        ("include_proposed", "proposed"),
+    ],
+)
 async def test_default_parent_status_gate_respects_explicit_include_flags(flag, status) -> None:
     for enabled in (False, True):
         (sql1, _), (sql2, _) = await _both_stages(_q(**{flag: enabled}))
@@ -188,8 +193,7 @@ async def test_hard_tag_lookup_cannot_replace_the_known_parents_status_gate() ->
 def test_knowledge_time_replays_retirement_and_deletion_of_the_known_parent() -> None:
     from server.memory.app.retrieval.chunks import _chunk_parent_pred
 
-    pred = _chunk_parent_pred(_q(as_of=datetime(2020, 1, 1),
-                               as_of_basis="knowledge_time"), {})
+    pred = _chunk_parent_pred(_q(as_of=datetime(2020, 1, 1), as_of_basis="knowledge_time"), {})
     assert _PARENT_NOT_IN in pred
     assert "invalid_at > {as_of:DateTime}" in pred
     assert "tombstoned_at > {as_of:DateTime}" in pred
