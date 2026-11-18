@@ -292,6 +292,7 @@ One code namespace indexes one repository. No repository is configured by defaul
 | --- | --- | --- | --- | --- |
 | `LOOM_CODE_REPOS_JSON` | `str` | *(unset)* |  | Multi-repo: JSON array of repo configs (code/domain/index/repos.py); empty = the scalar single-repo settings. Missing per-entry fields fall back to the scalars. |
 | `LOOM_CODE_SELF_SERVICE_ENABLED` | `bool` | `True` |  | Repositories added from the Repositories page (loom.code_repos) merge with the configured entries (`code_repos_json` and the scalar entry); a configured entry for a namespace a member added from the page is skipped. Off = the operator's JSON is the only source. |
+| `LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY` | `bool` | `False` |  | True leaves code.repo.remote_branches, code.repo.add and code.repo.add_branch to platform admins: a token scoped to namespaces, or a trusted caller acting for another subject, is refused too. False: each op's own role decides. |
 | `LOOM_CODE_REPOS_ROOT` | `str` | `'var/code_repos/self'` |  | Where the code ingest worker clones a self-service entry's bare mirror (one per GitHub repository, shared by its branches). |
 | `LOOM_CODE_REPOS_SHARED_GID` | `int \| None` | `None` |  | Numeric gid of the prepared var/code_repos: mirror and checkout directories in it 2770, locks 0660, server and `loom code` umask 007. Unset: 0700, 0600, the caller's umask. |
 | `LOOM_CODE_SELF_SERVICE_MAX_REPOS` | `int` | `20` |  | Active self-service entries per org (branches count); past it the add refuses with a message. |
@@ -323,6 +324,7 @@ Resource limits (rlimits) for each process of a sandboxed repository job (clone,
 | `LOOM_CODE_SANDBOX_MEMORY_MB` | `int` | `16384` |  | Data memory (heap and private mappings, RLIMIT_DATA) one process of a sandboxed repository job may use, in MiB. Not address space: node reserves far more of that than it uses. |
 | `LOOM_CODE_SANDBOX_MAX_PIDS` | `int` | `2048` |  | Processes and threads one job may run at once (RLIMIT_NPROC, set inside the job's user namespace, so other jobs and the server do not count; Linux 5.14+, older kernels count the uid's tasks host-wide). |
 | `LOOM_CODE_SANDBOX_REQUIRED` | `bool` | `False` |  | Set by deployments that ship the sandbox profiles: a repository job refuses to run rather than run unsandboxed, and /v1/health reports the missing sandbox as an error. False: without the sandbox, jobs fall back to plain processes as "Without the sandbox" in code-index-operations.md says. |
+| `LOOM_CODE_SELF_SERVICE_GIT_UNSANDBOXED` | `bool` | `False` |  | True lets a host without the sandbox add and fetch a self-service entry with a network remote: its git jobs (ls-remote, clone, fetch) run as plain processes and it gets no compiler tier. Refused at load without code_self_service_platform_admin_only, where a request can carry no principal (auth off, or mcp_auth_mode open), and with code_sandbox_required. False: such an entry needs the sandbox. |
 | `LOOM_CODE_SANDBOX_MAX_FILE_MB` | `int` | `32768` |  | Largest file one process of a sandboxed repository job may write, in MiB (a pack or index.scip). |
 
 ### Mirror fetch
