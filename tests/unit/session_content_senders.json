@@ -337,15 +337,19 @@
       "category": "reference",
       "reason": "Reads or removes stored records by their identity, prefix or exact version; automatic content writes remain classified."
     },
-    "sdk/typescript/src/session.ts:context.fetch:a6492a425ee430fbbb56:1": {
+    "sdk/typescript/src/session.ts:<dynamic>:f81d27efc95e87cdbb46:1": {
+      "category": "delivery",
+      "reason": "Forwards the operation and body from separately scanned session capture producers without selecting additional content; this module pins transcript, carry-over, query and thread builders."
+    },
+    "sdk/typescript/src/session.ts:context.fetch:ccacc88667bf0eca248c:1": {
       "category": "explicit",
       "reason": "Forwards the content, blob key or pattern supplied to the explicit session offload or fetch method."
     },
-    "sdk/typescript/src/session.ts:context.offload:fed367fa2d6b139d98d8:1": {
+    "sdk/typescript/src/session.ts:context.offload:6852f9b32930b2d7354e:1": {
       "category": "explicit",
       "reason": "Forwards the content, blob key or pattern supplied to the explicit session offload or fetch method."
     },
-    "sdk/typescript/src/session.ts:conversation.get:0e0b97851ba6397b9e61:1": {
+    "sdk/typescript/src/session.ts:conversation.get:972c9a651a04c958355b:1": {
       "category": "reference",
       "reason": "Reads history using the thread identity and fixed limits, without sending transcript text."
     }
@@ -394,6 +398,6 @@
     "sdk/typescript/src/integrations/langchain.ts": "2e6b93cbd2eb3ed57d910404845f8de9b06b9d3e9e2c59194100ad95f8819ce8",
     "sdk/typescript/src/integrations/mastra-memory.ts": "83c20da9e1d9c1d8cf3adf05759275d139959b811711ba0647653f6c0acc0e9b",
     "sdk/typescript/src/integrations/openai-agents.ts": "cc284291bc50fad8948272868f00750d0a9cb92097b9ec209f6d11a05eea75be",
-    "sdk/typescript/src/session.ts": "d1f658c713cd20055043d299418406f9bd4430c6ebc9a48641761b434e772a9b"
+    "sdk/typescript/src/session.ts": "49c162dd55f578d508a9c537891a991d7e46866ee3dbaf5f9b9e4d67242b5e05"
   }
 }
