@@ -63,11 +63,13 @@ The script performs this sequence:
 
 Output contains operation names, available request IDs and categorical outcomes. It
 prints no source bodies, review claims, credentials or server error bodies. It disables
-automatic run recording, optional startup briefs, write coalescing and SDK retries;
-failed or ambiguous operations are not silently retried. Actual request IDs and
+automatic run recording, optional startup briefs, write coalescing, retries and
+rate-limit pacing; failed or ambiguous operations are not silently retried. Actual request IDs and
 outcomes come from the deployment; no captured live output is supplied here.
 A lost create response can leave a task or run whose ID the client did not receive;
 its operator must reconcile that history rather than repeat the call automatically.
+Cleanup reads and cancellation are separate operations. Do not let other workers
+claim or defer this example's task while it runs; the read does not reserve the task.
 
 The repository tag allows the configured code-link worker to consider the saved note,
 but this short run does not wait for that worker or verify native link states. Its

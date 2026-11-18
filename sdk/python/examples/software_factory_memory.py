@@ -106,6 +106,7 @@ async def handoff(
     )
     task = created["task"]
     task_ref["task_id"] = task["task_id"]
+    task_ref["fence"] = task["fence"]
     require(task.get("from_subject") == IMPLEMENTER, "Unexpected posting principal")
     require(task.get("status") == "todo", "The review task requires admission")
     claimed = (await request(reviewer, "task.claim", task_id=task_ref["task_id"]))["task"]
@@ -159,17 +160,23 @@ async def cancel_unfinished(implementer: Agent, reviewer: Agent, task_ref: dict[
     require(task.get("from_subject") == IMPLEMENTER, "Cleanup found another poster")
     if task["status"] in TERMINAL:
         return
+    require(
+        task.get("fence") == task_ref.get("fence"),
+        "The task lease changed; leave it for its operator",
+    )
     if task.get("owner") == REVIEWER:
-        require(
-            task.get("fence") == task_ref.get("fence"),
-            "The task lease changed; leave it for its operator",
-        )
         await request(
             reviewer, "task.cancel", task_id=task_id, fence=task["fence"], reason="Example stopped"
         )
     else:
         require(not task.get("owner"), "Another agent owns the task; leave it for its operator")
-        await request(implementer, "task.cancel", task_id=task_id, reason="Example stopped")
+        await request(
+            implementer,
+            "task.cancel",
+            task_id=task_id,
+            fence=task["fence"],
+            reason="Example stopped",
+        )
 
 
 async def workflow(implementer: Agent, reviewer: Agent, args: argparse.Namespace) -> None:
@@ -283,6 +290,7 @@ async def main(args: argparse.Namespace) -> None:
         "mentor_brief": False,
         "coalesce_sets": False,
         "retry": {"max_attempts": 1},
+        "pacing": False,
     }
     async with (
         Agent(

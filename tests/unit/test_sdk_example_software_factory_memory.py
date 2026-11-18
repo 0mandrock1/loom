@@ -12,6 +12,8 @@ from typing import Any
 
 import httpx
 import pytest
+from loom.errors import LoomError, RateLimited
+from loom.transport import Transport
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "sdk/python/examples/software_factory_memory.py"
 COMMIT = "a" * 40
@@ -57,6 +59,10 @@ class FactoryServer:
         self.calls.append((op, token, body))
         assert body["namespace"] == ("code-example" if op.startswith("code.") else "shared")
         assert body["org"] == "example-org"
+        if self.case == "rate-limited":
+            return httpx.Response(
+                429, json={"detail": {"code": "RATE_LIMITED"}}, headers={"Retry-After": "1"}
+            )
         result = self.respond(op, body, review)
         return httpx.Response(200, json=result, headers={"X-Request-Id": "example-receipt"})
 
@@ -128,6 +134,8 @@ class FactoryServer:
             assert self.task is not None and body["task_id"] == "example-task"
             if op == "task.claim":
                 assert review
+                if self.case in {"claim-race", "claim-failed"}:
+                    raise RuntimeError("Simulated failed claim")
                 self.task.update(
                     owner="factory-reviewer",
                     fence=17,
@@ -136,14 +144,24 @@ class FactoryServer:
                 )
             elif op == "task.heartbeat":
                 assert review and body["fence"] == 17
-                if self.case == "lease-changed":
+                if self.case in {"lease-changed", "unowned-replacement"}:
                     self.task["fence"] = 18
+                    if self.case == "unowned-replacement":
+                        self.task.update(owner="", status="todo")
                     raise RuntimeError("Simulated lost lease before any task completion")
             elif op == "task.complete":
                 assert review and body["fence"] == 17
                 self.task.update(status="done", outcome=body["outcome"])
             elif op == "task.cancel":
-                assert review and body["fence"] == 17
+                if self.case == "claim-race":
+                    assert body["fence"] == 0
+                    self.task.update(owner="replacement", fence=1, status="in_progress")
+                    if body.get("fence") != self.task["fence"]:
+                        raise LoomError("TASK_FENCE_STALE")
+                if self.case == "claim-failed":
+                    assert not review and body["fence"] == 0
+                elif self.case not in {"unowned-replacement", "claim-race"}:
+                    assert review and body["fence"] == 17
                 self.task["status"] = "cancelled"
             else:
                 assert op == "task.get"
@@ -226,3 +244,49 @@ async def test_lagging_compiler_stops_before_writing(monkeypatch: pytest.MonkeyP
     with pytest.raises(RuntimeError, match="compiler tier"):
         await load_example().main(arguments())
     assert [op for op, _, _ in server.calls] == ["code.index_status"]
+
+
+async def test_rate_limit_is_not_paced_or_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = FactoryServer("rate-limited")
+    configure(monkeypatch, server)
+    original = Transport._rate_limit_wait
+
+    def no_wait(self: Transport, *args: Any, **kwargs: Any) -> float:
+        wait = original(self, *args, **kwargs)
+        assert wait == 0, "Rate-limit pacing would resend the request"
+        return wait
+
+    monkeypatch.setattr(Transport, "_rate_limit_wait", no_wait)
+    with pytest.raises(RateLimited):
+        await load_example().main(arguments())
+    assert [op for op, _, _ in server.calls] == ["code.index_status"]
+
+
+async def test_cleanup_preserves_unowned_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = FactoryServer("unowned-replacement")
+    configure(monkeypatch, server)
+    with pytest.raises(RuntimeError, match="lease changed"):
+        await load_example().main(arguments())
+    assert server.task is not None and server.task["status"] == "todo"
+    assert server.task["fence"] == 18 and not server.task["owner"]
+    assert not any(op == "task.cancel" for op, _, _ in server.calls)
+    assert server.memory is None
+
+
+async def test_cleanup_supplies_initial_fence_before_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = FactoryServer("claim-failed")
+    configure(monkeypatch, server)
+    with pytest.raises(RuntimeError, match="failed claim"):
+        await load_example().main(arguments())
+    assert server.task is not None and server.task["status"] == "cancelled"
+    assert server.memory is None
+
+
+async def test_cleanup_fence_refuses_a_claim_after_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    server = FactoryServer("claim-race")
+    configure(monkeypatch, server)
+    with pytest.raises(LoomError, match="TASK_FENCE_STALE"):
+        await load_example().main(arguments())
+    assert server.task is not None and server.task["status"] == "in_progress"
+    assert server.task["owner"] == "replacement" and server.task["fence"] == 1
+    assert server.memory is None
