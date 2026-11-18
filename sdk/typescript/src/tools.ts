@@ -10,6 +10,7 @@
  *     // … model returns a tool call { name, arguments } …
  *     const result = await tools.execute(call.name, call.arguments);
  *
+ * An explicit `codeNamespace` also offers one read-only code lookup tool.
  * The parameter schemas are hand-written subsets of the generated op inputs:
  * what a model should decide (key, value, query), not what the SDK stamps
  * (identity) or the operator tunes (budgets, modes). `execute()` checks the
@@ -17,6 +18,8 @@
  */
 
 import type { Agent, Scope } from "./agent.js";
+import type { OpInput } from "./client.js";
+import { CODE_TOOL_SPEC, type CodeOp, codeRequest, fitCodeResult } from "./code-tools.js";
 import { LoomError } from "./errors.js";
 
 export type ToolFormat = "anthropic" | "openai" | "generic";
@@ -134,7 +137,7 @@ const SPECS = [
   },
 ] as const satisfies readonly ToolSpec[];
 
-export type ToolName = (typeof SPECS)[number]["name"];
+export type ToolName = (typeof SPECS)[number]["name"] | typeof CODE_TOOL_SPEC.name;
 
 export const LOOM_TOOL_SPECS: readonly ToolSpec<ToolName>[] = Object.freeze(SPECS);
 
@@ -161,7 +164,8 @@ export function toolDefinitions<F extends ToolFormat = "generic">(
   format?: F,
   only?: readonly ToolName[],
 ): ToolDefinition<F>[] {
-  const specs = LOOM_TOOL_SPECS.filter((s) => !only || only.includes(s.name));
+  const available = only ? [CODE_TOOL_SPEC, ...LOOM_TOOL_SPECS] : LOOM_TOOL_SPECS;
+  const specs = available.filter((s) => !only || only.includes(s.name));
   return specs.map((s) => definition(format ?? "generic", s)) as ToolDefinition<F>[];
 }
 
@@ -181,6 +185,8 @@ function definition(format: ToolFormat, s: ToolSpec<ToolName>): ToolDefinition {
 
 export interface AgentToolsOptions {
   only?: readonly ToolName[];
+  /** Opt in to read-only code lookup under this application-bound namespace. */
+  codeNamespace?: string;
   /** Cap on the string returned to the model. Default 8,000 characters. */
   maxResultChars?: number;
 }
@@ -189,14 +195,25 @@ export interface AgentToolsOptions {
 export class AgentTools {
   private readonly names: ReadonlySet<ToolName>;
   private readonly maxResultChars: number;
+  private readonly codeNamespace: string | undefined;
 
   constructor(
     readonly agent: Agent,
     readonly scope: Scope = {},
     opts: AgentToolsOptions = {},
   ) {
-    this.names = new Set(LOOM_TOOL_SPECS.map((s) => s.name).filter((n) => !opts.only || opts.only.includes(n)));
     this.maxResultChars = opts.maxResultChars ?? 8_000;
+    if (opts.only?.includes("loom_code_lookup") && opts.codeNamespace === undefined)
+      throw new LoomError("loom_code_lookup requires codeNamespace");
+    if (opts.codeNamespace !== undefined) {
+      if (typeof opts.codeNamespace !== "string" || !opts.codeNamespace.trim())
+        throw new LoomError("codeNamespace must be a non-empty string");
+      if (!Number.isInteger(this.maxResultChars) || this.maxResultChars < 256)
+        throw new LoomError("code tools require maxResultChars of at least 256");
+    }
+    this.codeNamespace = opts.codeNamespace?.trim();
+    const available = this.codeNamespace ? [CODE_TOOL_SPEC, ...LOOM_TOOL_SPECS] : LOOM_TOOL_SPECS;
+    this.names = new Set(available.map((s) => s.name).filter((n) => !opts.only || opts.only.includes(n)));
   }
 
   definitions<F extends ToolFormat = "generic">(format?: F): ToolDefinition<F>[] {
@@ -213,9 +230,26 @@ export class AgentTools {
    * schema) throws a `LoomError` whose message the model can act on.
    */
   async execute(name: string, args: unknown): Promise<string> {
-    const spec = LOOM_TOOL_SPECS.find((s) => s.name === name);
+    const spec = [CODE_TOOL_SPEC, ...LOOM_TOOL_SPECS].find((s) => s.name === name);
     if (!spec || !this.has(spec.name))
       throw new LoomError(`unknown tool ${name}; this agent offers ${Array.from(this.names).join(", ")}`);
+    if (spec.name === "loom_code_lookup") {
+      const raw = parseArgs(args);
+      const extra = Object.keys(raw).filter((key) => !Object.hasOwn(CODE_TOOL_SPEC.parameters.properties, key));
+      if (extra.length) throw new LoomError(`unexpected code tool arguments: ${extra.sort().join(", ")}`);
+      const { op, body } = codeRequest(checkArgs(CODE_TOOL_SPEC, raw));
+      const input = { ...this.agent.identity(this.scope), ...body, namespace: this.codeNamespace } as OpInput<CodeOp>;
+      const response = await this.agent.client.callWithResponse(op, input);
+      return fitCodeResult(
+        {
+          op,
+          request_id: response.requestId,
+          scope: { org: this.agent.org, namespace: this.codeNamespace },
+          data: response.data,
+        },
+        this.maxResultChars,
+      );
+    }
     const out = await this.run(spec.name, checkArgs(spec, args));
     let text = typeof out === "string" ? out : JSON.stringify(out);
     const recalled = out as { memories?: unknown[]; omitted?: number };
@@ -240,7 +274,7 @@ export class AgentTools {
     return JSON.stringify(out);
   }
 
-  private async run(name: ToolName, a: Args): Promise<unknown> {
+  private async run(name: Exclude<ToolName, "loom_code_lookup">, a: Args): Promise<unknown> {
     switch (name) {
       case "loom_remember": {
         const memoryType = optText(a, "memory_type");

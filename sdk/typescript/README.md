@@ -400,6 +400,28 @@ for (const call of completion.choices[0].message.tool_calls ?? []) {
 
 `execute()` returns the string the model reads (compact JSON, or a line it can act on: "no parked text under blob_key=…"), validates required arguments with messages a model can correct, and truncates past `maxResultChars` (`loom_recall` leaves out its lowest-ranked memories whole to fit, counted in `omitted`). [`examples/session-resume`](https://github.com/ClickHouse/loom/tree/main/sdk/typescript/examples/session-resume/) is the two-process run with a real `gpt-4o-mini` tool-use turn.
 
+An explicit code namespace offers a read-only lookup before the memory tools. Use
+`only` for a code-only loop; memory tools keep the Agent's memory namespace:
+
+```ts
+const tools = bot.tools(
+  { userId: "u1", sessionId: "thread-42" },
+  { codeNamespace: "code-repo", only: ["loom_code_lookup"], maxResultChars: 12000 },
+);
+const definitions = tools.definitions("openai");
+const result = await tools.execute("loom_code_lookup", {
+  kind: "callers",
+  target: "pkg.Reader.read",
+  depth: 2,
+});
+```
+
+The model selects `symbol`, `search`, `callers` or `impact`; the application fixes scope
+and request budgets. Code results fit the configured cap as valid JSON with explicit
+whole-body or row omissions. Honor abstention, ambiguity, citations and graph lower
+bounds. See the [code tools guide](https://clickhouse.github.io/loom/guides/code-tools/)
+and [`examples/code-lookup`](https://github.com/ClickHouse/loom/tree/main/sdk/typescript/examples/code-lookup/).
+
 ## Probe before you rely
 
 ```ts

@@ -152,6 +152,23 @@ async with agent.session("thread-42", user_id="u1") as s:
 
 `agent.tools(user_id=..., session_id=...)` gives a model six loom verbs — `loom_remember`, `loom_recall`, `loom_ask`, `loom_offload`, `loom_fetch`, `loom_note` — as `definitions("openai" | "anthropic" | "generic")` and one `await execute(name, arguments)` that returns the string the model reads. The schemas are the same as the TypeScript SDK's.
 
+An explicit code namespace offers a read-only code lookup before the memory tools.
+The model chooses `symbol`, `search`, `callers` or `impact`; tenant scope and request
+budgets stay in the application. Use `only` for a code-only tool loop:
+
+```python
+tools = agent.tools(
+    code_namespace="code-repo", only=["loom_code_lookup"], max_result_chars=12_000
+)
+definitions = tools.definitions("anthropic")
+result = await tools.execute("loom_code_lookup", {"kind": "symbol", "target": "pkg.Reader.read"})
+```
+
+Code results preserve valid JSON within the character cap and disclose whole-body or
+row omissions. Honor abstention, ambiguity, source citations and graph lower bounds.
+See the [code tools guide](https://clickhouse.github.io/loom/guides/code-tools/) and
+[`examples/code_lookup.py`](https://github.com/ClickHouse/loom/blob/main/sdk/python/examples/code_lookup.py).
+
 ## Retries and logging
 
 The retry policy is one frozen dataclass, set on the Agent and overridable per call with a `RetryPolicy` or a dict of its fields; every field is validated and named when wrong. Defaults: 3 attempts; 0.1 s backoff doubling to 5 s with ±25 % jitter; 408 and 5xx retried for registry-idempotent ops (any other op only on a 408 or a 503 `AUTH_UNAVAILABLE`, which the server answers before running it), except an answer the server classes `configuration`; connection errors retried; a read timeout, a cut-off response or a write that broke off retried only for an op the registry marks idempotent and not read-only (the server dedups its `Idempotency-Key`); a `Retry-After` on a retried status honoured up to 60 s. A 429 is paced, not retried.
