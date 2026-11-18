@@ -160,6 +160,42 @@ def without_people(raw: str, addresses: frozenset[str]) -> str:
     return raw if kept == parsed.emails else to_json(replace(parsed, emails=kept))
 
 
+def without_selectors(raw: str, addresses: frozenset[str]) -> str:
+    """A retired registration may have no directory subject or remaining selector."""
+    try:
+        value = json.loads(raw)
+        if not isinstance(value, dict) or set(value) != {"directory_subject", "subjects"}:
+            raise ValueError("crawl selector history refused")
+        directory = value["directory_subject"]
+        if directory:
+            directory = email(directory)
+        elif directory != "":
+            raise ValueError("crawl selector history refused")
+        subjects = value["subjects"]
+        if not isinstance(subjects, list) or len(subjects) > MAX_PEOPLE:
+            raise ValueError("crawl selector history refused")
+        checked = []
+        for subject in subjects:
+            if (
+                not isinstance(subject, dict)
+                or set(subject) != {"type", "email"}
+                or subject["type"] not in ("person", "group")
+            ):
+                raise ValueError("crawl selector history refused")
+            checked.append({"type": subject["type"], "email": email(subject["email"])})
+        kept = [s for s in checked if s["type"] != "person" or s["email"] not in addresses]
+        remaining = "" if directory in addresses else directory
+        if len(kept) == len(subjects) and remaining == directory:
+            return raw
+        return json.dumps(
+            {"directory_subject": remaining, "subjects": kept},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, KeyError, RecursionError):
+        raise ValueError("crawl selector history refused") from None
+
+
 @dataclass(frozen=True, repr=False)
 class File:
     id: str

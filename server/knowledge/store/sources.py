@@ -30,7 +30,7 @@ from server.core.ch import own_write_reads
 from server.core.datetimes import naive_utc_now_seconds
 from server.core.repo_base import _CHClient, _default_client
 from server.knowledge.domain.live_chunks import has_live_chunks_sql
-from server.knowledge.domain.source_crawl import Options
+from server.knowledge.domain.source_crawl import Options, without_selectors
 from server.knowledge.domain.sources import (
     NAMESPACE_ACCESS,
     SYNC_WORKER_ACTOR,
@@ -89,16 +89,23 @@ def _items(raw: str) -> list[dict[str, Any]]:
     return [i for i in data if isinstance(i, dict)] if isinstance(data, list) else []
 
 
+def _crawl_options(row: dict[str, Any]) -> dict[str, Any]:
+    if row.get("credential_mode") != "crawl":
+        return {}
+    raw = str(row.get("options_json") or "{}")
+    if row.get("active"):
+        return json_object(Options.parse(json.loads(raw)).stored())
+    # Preserve a retired source's remaining selectors during full-row reseals.
+    # Erasure may have removed its directory subject or its final person selector.
+    without_selectors(raw, frozenset())
+    return json_object(raw)
+
+
 def _source(row: dict[str, Any]) -> KnowledgeSource:
     created = row.get("created_at")
     updated = row.get("updated_at")
     kind = str(row.get("source_kind") or row.get("kind") or "")
     config = json_object(str(row.get("config_json") or ""))
-    crawl = (
-        Options.parse(json.loads(str(row.get("options_json") or "{}")))
-        if row.get("credential_mode") == "crawl"
-        else None
-    )
     return KnowledgeSource(
         org=str(row.get("org") or ""),
         namespace=str(row.get("namespace") or ""),
@@ -114,7 +121,7 @@ def _source(row: dict[str, Any]) -> KnowledgeSource:
         credential_mode=str(row.get("credential_mode") or "shared"),
         owner_subject=str(row.get("owner_subject") or ""),
         connection_id=str(row.get("connection_id") or ""),
-        crawl_options=json.loads(crawl.stored()) if crawl is not None else {},
+        crawl_options=_crawl_options(row),
         registrant_subject=str(row.get("registrant_subject") or ""),
         approval_enc=str(row.get("approval_enc") or ""),
         crawl_generation=str(row.get("crawl_generation") or ""),
