@@ -93,7 +93,7 @@ def response(*requests: dict, reason: str = "tool_use") -> dict:
     }
 
 
-def execute_fake(monkeypatch: pytest.MonkeyPatch, responses: list) -> None:
+def execute_fake(monkeypatch: pytest.MonkeyPatch, responses: list, close_error=None) -> None:
     class Client:
         def converse(self, **kwargs):
             value = responses.pop(0)
@@ -102,7 +102,8 @@ def execute_fake(monkeypatch: pytest.MonkeyPatch, responses: list) -> None:
             return value
 
         def close(self):
-            pass
+            if close_error is not None:
+                raise close_error
 
     monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *a, **k: Client()))
 
@@ -222,6 +223,110 @@ def test_loom_lookup_is_actual_optional_binding_and_errors_are_recorded(config, 
     unused = bench.run_trial(config)
     assert unused["model_selected_loom_calls"] == 0
     assert unused["status"] == "completed_empty_patch" and unused["resolved"] is None
+
+
+@pytest.mark.parametrize(
+    "http_status,code,expected_status,cleanup_fails",
+    [
+        (401, "AUTH_INVALID", "guard_refused", False),
+        (403, "AUTH_INSUFFICIENT", "guard_refused", False),
+        (409, "SESSION_PROTECTION_REQUIRED", "guard_refused", False),
+        (403, "AUTH_INSUFFICIENT", "guard_refused", True),
+        (400, "VALIDATION_FAILED", "provider_error", False),
+        (503, "BACKEND_UNAVAILABLE", "provider_error", False),
+    ],
+)
+def test_typed_sdk_preflight_failures_stop_before_agent_inference(
+    config, monkeypatch, http_status, code, expected_status, cleanup_fails
+):
+    import loom
+    from loom.errors import from_response
+
+    failure = from_response(
+        {"detail": {"code": code, "message": "private transport details"}},
+        http_status,
+        request_id="preflight-refusal",
+    )
+    calls = []
+
+    class SDK:
+        def __init__(self, **kwargs):
+            assert kwargs["retry"] == {"max_attempts": 1}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            calls.append("close")
+            if cleanup_fails:
+                raise RuntimeError("cleanup failed")
+
+        async def call_with_meta(self, op, body):
+            calls.append(op)
+            raise failure
+
+    def provider_must_not_start(*args, **kwargs):
+        pytest.fail("Preflight failure must precede agent provider construction")
+
+    config.arm = "loom"
+    monkeypatch.setenv("BENCH_TOKEN", "fixture-credential")
+    monkeypatch.setattr(loom, "Agent", SDK)
+    execute_fake(monkeypatch, [])
+    monkeypatch.setattr(sys.modules["boto3"], "client", provider_must_not_start)
+    result = bench.run_trial(config)
+    assert result["status"] == expected_status
+    assert result["stage"] == "loom_preflight"
+    assert result["preflight_status"] == "failed" and result["preflight_failed"] is True
+    assert result["agent_inference_started"] is False
+    assert result["usage"] == {} and result["tool_calls"] == 0
+    assert result["error"]["http_status"] == http_status
+    assert result["error"]["request_id"] == "preflight-refusal"
+    assert calls == ["code.index_status", "close"]
+    events = (config.out / "events.jsonl").read_text()
+    assert "private transport details" not in events and "fixture-credential" not in events
+    assert not any(e["type"] == "model_response" for e in bench.events_in(config.out))
+
+
+def test_provider_failure_after_successful_preflight_retains_its_stage(config, monkeypatch):
+    import loom
+
+    class SDK:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def call_with_meta(self, op, body):
+            return SimpleNamespace(
+                request_id="preflight-ok", data={"git_head": config.expected_base}
+            )
+
+    config.arm = "loom"
+    monkeypatch.setenv("BENCH_TOKEN", "fixture-credential")
+    monkeypatch.setattr(loom, "Agent", SDK)
+    execute_fake(monkeypatch, [RuntimeError("provider failed")])
+    result = bench.run_trial(config)
+    assert result["status"] == "provider_error"
+    assert result["stage"] == "agent_inference"
+    assert result["preflight_status"] == "passed" and result["preflight_failed"] is False
+    assert result["agent_inference_started"] is True and result["usage_complete"] is False
+
+
+def test_provider_cleanup_does_not_hide_a_guard_refusal(config, monkeypatch):
+    execute_fake(
+        monkeypatch,
+        [response({"name": "read_file", "input": {"path": "../outside"}})],
+        close_error=RuntimeError("close failed"),
+    )
+    result = bench.run_trial(config)
+    assert result["status"] == "guard_refused" and result["stage"] == "agent_inference"
+    assert result["error"]["type"] == "PermissionError"
+    assert result["usage"]["inputTokens"] == 10
+    assert any(e["type"] == "provider_cleanup_error" for e in bench.events_in(config.out))
 
 
 def test_path_boundary_includes_symlinks_and_git_metadata(config, tmp_path):

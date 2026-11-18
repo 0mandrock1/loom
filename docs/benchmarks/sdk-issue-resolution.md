@@ -119,6 +119,18 @@ returned evidence. `agent.diff` preserves tracked and new-file changes even afte
 provider error, permission refusal, turn limit or supervised timeout. `RESULT.json`
 separates execution status from patch presence and external resolution. A completed
 empty patch is labelled `completed_empty_patch`; `resolved` remains null there.
+`stage`, `preflight_status` and `preflight_failed` identify a binding preflight failure.
+`agent_inference_started: false` records a failure before the agent inference loop;
+true marks a loop attempt, and null means progress is unknown. Missing response usage
+does not establish zero billing for an attempted provider call.
+
+SDK HTTP 401, 403 and 409 refusals and local permission errors have `guard_refused`
+status, including refusals from the index preflight. Cleanup errors retain an earlier
+guard refusal. A controller must stop before grading or starting another trial; it
+must also check the serialized `error.http_status` when reading results from another
+worker version. A failed preflight cannot establish a paired performance result.
+The refusal does not authorize switching credentials, scopes or retrying the action.
+
 Setup refusal leaves an empty patch and preserves the checkout. When a lookup has no
 result, `sdk_lookup_wall_s` is null and `sdk_lookup_timing_complete` is false.
 `sdk_completed_lookup_wall_s` retains the measured completed-call sum;

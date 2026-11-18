@@ -19,7 +19,15 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from bench.agent_traj.claude_code_driver import run_process_group
-from bench.sdk_issue_agent import POLICY, agent_loop, append_event, error_detail, local_path, tools
+from bench.sdk_issue_agent import (
+    POLICY,
+    agent_loop,
+    append_event,
+    error_detail,
+    guard_refused,
+    local_path,
+    tools,
+)
 
 TASK_FIELDS = {
     "instance_id",
@@ -240,6 +248,8 @@ def finalize(
     sdk_unfinished = sum(e["name"] == "loom_code_lookup" for e in attempts) - len(sdk_calls)
     sdk_completed_wall_s = sum(e.get("duration_s", 0) for e in sdk_calls)
     model_responses = [e for e in events if e.get("type") == "model_response"]
+    progress = next((e for e in reversed(events) if e.get("type") == "worker_stage"), {})
+    preflight_status = outcome.get("preflight_status", progress.get("preflight_status"))
     result = {
         "schema_version": 1,
         "arm": manifest.get("arm"),
@@ -248,6 +258,18 @@ def finalize(
         "status": status,
         "answer": outcome.get("answer", ""),
         "error": outcome.get("error"),
+        "stage": outcome.get(
+            "stage", progress.get("stage", "setup" if not setup_validated else None)
+        ),
+        "preflight_status": preflight_status,
+        "preflight_failed": preflight_status == "failed" if preflight_status is not None else None,
+        "agent_inference_started": outcome.get(
+            "agent_inference_started",
+            progress.get(
+                "agent_inference_started",
+                True if model_responses else None if setup_validated else False,
+            ),
+        ),
         "duration_s": round(time.monotonic() - started, 3),
         "usage": dict(usage),
         "usage_complete": status
@@ -324,11 +346,67 @@ def run_trial(args: argparse.Namespace) -> dict:
     return result
 
 
+def _sdk_from_manifest(manifest: dict) -> Any:
+    from loom import Agent
+
+    connection, scope = manifest["connection"], manifest["scope"]
+    token = os.environ.get(connection["token_env"], "")
+    if not token:
+        raise PermissionError("Explicit Loom token environment variable is required")
+    consumer = "sdk-issue-" + manifest["run_id"]
+    return Agent(
+        **scope,
+        agent=consumer,
+        base_url=connection["base_url"],
+        api_key=token,
+        consumer=consumer,
+        mentor_brief=False,
+        auto_run=False,
+        pacing=False,
+        ratelimit_max_wait_s=0,
+        retry={"max_attempts": 1},
+    )
+
+
+async def _sdk_preflight(sdk: Any, manifest: dict, record: Any) -> None:
+    started = time.monotonic()
+    preflight = await sdk.call_with_meta("code.index_status", manifest["scope"])
+    record(
+        {
+            "type": "loom_preflight",
+            "request_id": preflight.request_id,
+            "data": preflight.data,
+            "duration_s": time.monotonic() - started,
+        }
+    )
+    if preflight.data.get("git_head") != manifest["protocol"]["expected_base"]:
+        raise PermissionError("Index does not match the task base")
+
+
+def _cleanup_error(record: Any, outcome: dict, progress: dict, kind: str, error: Exception) -> None:
+    record(
+        {
+            "type": kind if outcome.get("status") == "guard_refused" else "terminal",
+            "status": "cleanup_error",
+            "error": error_detail(error),
+            **progress,
+        }
+    )
+
+
 async def worker(out: Path) -> None:
     manifest = json.loads((out / "MANIFEST.json").read_text())
     record = partial(append_event, out / "events.jsonl")
     sdk = None
+    client = None
+    outcome: dict = {}
+    progress = {
+        "stage": "source_validation",
+        "preflight_status": "not_started" if manifest["arm"] == "loom" else "not_requested",
+        "agent_inference_started": False,
+    }
     try:
+        record({"type": "worker_stage", **progress})
         hashes = {
             "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "agent_sha256": hashlib.sha256(
@@ -337,70 +415,48 @@ async def worker(out: Path) -> None:
         }
         if any(manifest["protocol"][key] != value for key, value in hashes.items()):
             raise PermissionError("Worker source differs from the frozen manifest")
+        progress["stage"] = "provider_setup"
         import boto3
         from botocore.config import Config
 
         if manifest["arm"] == "loom":
-            from loom import Agent
-
-            connection, scope = manifest["connection"], manifest["scope"]
-            token = os.environ.get(connection["token_env"], "")
-            if not token:
-                raise PermissionError("Explicit Loom token environment variable is required")
-            consumer = "sdk-issue-" + manifest["run_id"]
-            sdk = Agent(
-                **scope,
-                agent=consumer,
-                base_url=connection["base_url"],
-                api_key=token,
-                consumer=consumer,
-                mentor_brief=False,
-                auto_run=False,
-                pacing=False,
-                ratelimit_max_wait_s=0,
-                retry={"max_attempts": 1},
-            )
+            progress["stage"] = "sdk_setup"
+            sdk = _sdk_from_manifest(manifest)
             await sdk.__aenter__()
-            started = time.monotonic()
-            preflight = await sdk.call_with_meta("code.index_status", scope)
-            record(
-                {
-                    "type": "loom_preflight",
-                    "request_id": preflight.request_id,
-                    "data": preflight.data,
-                    "duration_s": time.monotonic() - started,
-                }
-            )
-            if preflight.data.get("git_head") != manifest["protocol"]["expected_base"]:
-                raise PermissionError("Index does not match the task base")
+            progress.update(stage="loom_preflight", preflight_status="started")
+            record({"type": "worker_stage", **progress})
+            await _sdk_preflight(sdk, manifest, record)
+            progress["preflight_status"] = "passed"
+        progress["stage"] = "provider_setup"
         client = boto3.client(
             "bedrock-runtime",
             region_name=manifest["protocol"]["region"],
             config=Config(connect_timeout=5, read_timeout=45, retries={"total_max_attempts": 1}),
         )
-        try:
-            outcome = await agent_loop(Path(manifest["checkout"]), manifest, client, sdk, record)
-        finally:
-            client.close()
-        record({"type": "terminal", **outcome})
+        progress.update(stage="agent_inference", agent_inference_started=True)
+        record({"type": "worker_stage", **progress})
+        outcome = await agent_loop(Path(manifest["checkout"]), manifest, client, sdk, record)
+        record({"type": "terminal", **outcome, **progress})
     except Exception as error:  # noqa: BLE001 — retain protocol/provider/guard failures for grading
-        record(
-            {
-                "type": "terminal",
-                "status": "guard_refused"
-                if isinstance(error, PermissionError)
-                else "provider_error",
-                "error": error_detail(error),
-            }
-        )
+        if progress["preflight_status"] == "started":
+            progress["preflight_status"] = "failed"
+        outcome = {
+            "status": "guard_refused" if guard_refused(error) else "provider_error",
+            "error": error_detail(error),
+            **progress,
+        }
+        record({"type": "terminal", **outcome})
     finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception as error:  # noqa: BLE001 — cleanup must retain an earlier guard refusal
+                _cleanup_error(record, outcome, progress, "provider_cleanup_error", error)
         if sdk is not None:
             try:
                 await sdk.__aexit__(None, None, None)
             except Exception as error:  # noqa: BLE001 — cleanup failure cannot look completed
-                record(
-                    {"type": "terminal", "status": "cleanup_error", "error": error_detail(error)}
-                )
+                _cleanup_error(record, outcome, progress, "sdk_cleanup_error", error)
 
 
 def grade_outcome(report: Any, selected: list[str], code: int | None, timed_out: bool) -> dict:

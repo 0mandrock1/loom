@@ -203,6 +203,10 @@ def error_detail(error: BaseException) -> dict:
     }
 
 
+def guard_refused(error: BaseException) -> bool:
+    return isinstance(error, PermissionError) or getattr(error, "status", 0) in (401, 403, 409)
+
+
 async def dispatch(root: Path, request: dict, sdk: Any, manifest: dict, record: Any) -> dict:
     name, values = request["name"], request["input"]
     if name != "loom_code_lookup":
@@ -251,11 +255,7 @@ async def perform(root: Path, request: dict, sdk: Any, manifest: dict, record: A
                 "duration_s": time.monotonic() - started,
             }
         )
-        refused = isinstance(error, PermissionError) or getattr(error, "status", 0) in (
-            401,
-            403,
-            409,
-        )
+        refused = guard_refused(error)
     else:
         record(
             {
