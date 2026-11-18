@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from server.core.event_source import ALL_EVENTS
 from server.insights.api.models_cost import BudgetStatusInput
 from server.insights.app import cost
 from server.observability import budget
@@ -26,7 +27,11 @@ class BudgetCH:
                 "daily_user_cost_cap_usd": self.user_cap,
                 "budget_alert_inbox": self.inbox,
             }
-        assert "mirror_marked" not in sql, "budget verdicts count marked spend too"
+        assert f"FROM {ALL_EVENTS}" in sql
+        assert "WHERE" not in ALL_EVENTS.upper(), "the source must include every event"
+        assert "mirror_marked" not in sql.replace(ALL_EVENTS, "event_rows"), (
+            "budget predicates and aggregates count marked spend too"
+        )
         return {
             "spent": 10.0,
             "own": 0.0,

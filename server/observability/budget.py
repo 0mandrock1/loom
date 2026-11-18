@@ -18,6 +18,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from server.core.event_source import ALL_EVENTS
+
 log = logging.getLogger(__name__)
 
 
@@ -48,20 +50,20 @@ async def namespaces_over_cap(
 
         client = ch or get_client()
         rows = await client.query_all(
-            """
+            f"""
             WITH
                 spend AS (
                     SELECT org, namespace, sum(upstream_cost_usd) AS spent,
-                           sumIf(upstream_cost_usd, operation = {op:String}) AS own
-                    FROM loom.agent_events
-                    WHERE (org, namespace) IN {pairs:Array(Tuple(String, String))}
+                           sumIf(upstream_cost_usd, operation = {{op:String}}) AS own
+                    FROM {ALL_EVENTS}
+                    WHERE (org, namespace) IN {{pairs:Array(Tuple(String, String))}}
                       AND ts > now() - INTERVAL 1 DAY
                     GROUP BY org, namespace
                 ),
                 caps AS (
                     SELECT org, namespace, daily_cost_cap_usd AS cap
                     FROM loom.namespaces FINAL
-                    WHERE (org, namespace) IN {pairs:Array(Tuple(String, String))}
+                    WHERE (org, namespace) IN {{pairs:Array(Tuple(String, String))}}
                 )
             SELECT s.org AS org, s.namespace AS namespace, s.spent AS spent, s.own AS own,
                    c.cap AS cap
@@ -184,7 +186,7 @@ async def budget_snapshot(
                 "sumIf(upstream_cost_usd, user_id = {uid:String}) AS user_spent, "
                 "sumIf(upstream_cost_usd, user_id = {uid:String} "
                 "AND operation = {op:String}) AS user_own "
-                "FROM loom.agent_events WHERE org = {org:String} AND namespace = {ns:String} "
+                f"FROM {ALL_EVENTS} WHERE org = {{org:String}} AND namespace = {{ns:String}} "
                 "AND ts > now() - INTERVAL 1 DAY",
                 params={"org": org, "ns": namespace, "op": operation, "uid": uid},
             )

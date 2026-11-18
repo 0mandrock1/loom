@@ -164,9 +164,10 @@ def test_a_signed_non_boolean_promise_is_refused(claim: Any) -> None:
 
 
 @pytest.mark.parametrize("caller_protected", [False, True])
+@pytest.mark.parametrize("mirrored", [False, True])
 @pytest.mark.asyncio
 async def test_the_bridge_fixes_the_callers_declaration_in_the_answer(
-    monkeypatch: pytest.MonkeyPatch, caller_protected: bool
+    monkeypatch: pytest.MonkeyPatch, caller_protected: bool, mirrored: bool
 ) -> None:
     parent = _auth()
 
@@ -189,13 +190,15 @@ async def test_the_bridge_fixes_the_callers_declaration_in_the_answer(
 
     monkeypatch.setattr(bridge, "delegate", delegate)
     with request_declaration({"headers": [_HEADER] if caller_protected else []}):
-        token = await bridge.answer_token(parent, "example", "notes")
+        token = await bridge.answer_token(parent, "example", "notes", mirrored=mirrored)
     answer = verify_token(token)
     assert answer.session_protection is caller_protected
+    assert answer.answer_mirrors is (caller_protected and mirrored)
     with request_declaration({"headers": [] if caller_protected else [_HEADER]}):
         assert protected_for(answer) is caller_protected
         child = verify_token((await delegate(answer)).mint("sa:child"))
         assert not child.session_protection
+        assert not child.answer_mirrors
         assert not protected_for(child)
         # A forged local field is not inherited by ordinary delegation either.
         assert not verify_token(

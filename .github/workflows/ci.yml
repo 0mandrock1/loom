@@ -1084,10 +1084,12 @@ jobs:
             server-auth.log
 
   mixed-version:
-    needs: validate-ref
+    needs: [validate-ref, clickhouse]
     name: builds N-1 and N on one ClickHouse
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      LOOM_CLICKHOUSE_IMAGE: ${{ needs.clickhouse.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1117,6 +1119,8 @@ jobs:
       # target branch's tip can carry a newer migration by the time the run starts.
       - name: Mixed-version gate
         run: python scripts/gates/mixed_version.py --require --base HEAD~1
+      - name: Published build ordinary-event compatibility
+        run: python scripts/gates/mixed_version.py --require --base 1cbaf0411114512957b96ec5ea7bbb8058828543
 
   sdk-typescript:
     needs: validate-ref

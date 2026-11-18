@@ -61,6 +61,10 @@ settings:
   # [restart]
   # ch_secure: null
 
+  # Additional trusted writer HTTP origins for analyst setup policy observations. Uses
+  # the configured service credentials; missing or duplicate writers refuse. [restart]
+  # ch_analysis_observer_urls: []
+
   # Append `sql:<shape12> <first 200 chars>` of each statement to its `log_comment`
   # ("<op> <request_id>"), so query_log rows group by shape. A statement that carries a
   # secret, or one run as the analyst, gets its shape alone. Off by default: readers
@@ -2851,6 +2855,29 @@ settings:
   # Mirrored reads require a complete listing and group observation within this many
   # seconds; missing or older evidence admits nobody. [restart]
   # knowledge_source_acl_stale_seconds: 3600
+
+  # Enable optional source push setup, callbacks and Drive renewal; false keeps polling
+  # only. [restart]
+  # knowledge_source_push_enabled: false
+
+  # Seconds between bounded channel-renewal pages; channels renew a day before expiry.
+  # [restart]
+  # knowledge_source_push_interval_seconds: 300
+
+  # Seconds one push setup or Drive renewal may spend on provider work, before cleanup.
+  # [restart]
+  # knowledge_source_push_provider_timeout_s: 40.0
+
+  # Seconds allowed to stop one superseded or unpublished Drive channel. [restart]
+  # knowledge_source_push_stop_timeout_s: 2.0
+
+  # Seconds allowed for the whole Drive channel cleanup; at least the per-channel wait.
+  # [restart]
+  # knowledge_source_push_cleanup_timeout_s: 5.0
+
+  # Seconds a renewal pass may run; reserve one provider attempt and two cleanup
+  # windows. [restart]
+  # knowledge_source_push_max_pass_seconds: 120.0
 
   # Seconds between sync passes while there are sources. [restart]
   # knowledge_source_sync_interval_seconds: 900
