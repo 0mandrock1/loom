@@ -335,7 +335,7 @@ python scripts/codegen/docs_reference.py
 | `loom cell which` | Print the lookup's cell and host for an org (the first cell if not placed). | `--org`, `--router` |
 | `loom cell remove` | Remove the directory row of a cell attaching with no placement. | `--cell`, `--router` |
 | `loom cell prepare` | Register this cell in the router's directory and write its rows. | `--cell`, `--host`, `--credential-sha256`, `--probe-url`, `--wait`, `--router` |
-| `loom cell attach` | Attach the prepared first cell: place its orgs, serve. | `--cell`, `--wait`, `--scan-budget`, `--dry-run`, `--ch-allow-user`, `--ch-allow-user-directory`, `--ch-allow-object`, `--ch-allow-replica`, `--pg-allow-role`, `--router` |
+| `loom cell attach` | Attach the prepared first cell: place its orgs, serve. | `--cell`, `--wait`, `--scan-budget`, `--dry-run`, `--ch-allow-user`, `--ch-allow-user-directory`, `--ch-allow-object`, `--ch-allow-replica`, `--pg-allow-role`, `--revoke-unprovisioned`, `--router` |
 | `loom tracker-probe` | Read-only first contact with the tracker source: counts and newest timestamps per upstream table per credential, breaker states, the configured tracker namespaces. |  |
 | `loom tracker-contract-check` | Read-only: does each tracker source's schema meet the record contract (docs/features/tracker/record-contract.md)? | `--source`, `--namespace`, `--json` |
 | `loom tracker-dupcheck-fit` | Refit tracker.duplicate_check's calibrated confidence for one tracker namespace now: replays the duplicate gold at filing time, fits, stores the fit. | `--namespace`, `--org`, `--negatives`, `--dry-run`, `--out` |

@@ -1084,10 +1084,28 @@ refuses on any failure, naming it:
   revocation prefix, so a person the identity provider provisions later is admitted,
   since it will never deprovision a person it does not count as assigned.
 
+The provisioning census reads active accounts, current unexpired refresh families and
+unrevoked, unexpired personal service accounts in bounded pages of 128 rows and 65,536
+bytes of projected string metadata. It uses each table's actual row key to continue, refuses an oversized
+page, and shares one finite scan budget. The same bounded person and ancestry reader
+checks every root freshly, including while the cell is recording; an authentication
+memo or a deactivation-only check cannot establish this precondition. A current refresh
+family supplies only its own stored verified email. Registered machine identities keep
+their existing closed exemption; a subject prefix or an absent creator grants nothing.
+
+With `--revoke-unprovisioned`, each accepted cutoff uses SCIM's own subject lease and
+revocation prefix. An outright revocation or a newer cutoff is retained. The command
+never creates a provisioned user, changes the operator's revocation row, or revokes a
+registered machine identity. An accepted cutoff is reported before confirmation and
+audit; a later failure leaves it in force and the census incomplete. Rerun with the same
+flag to finish. A dry run and a serving rerun never revoke.
+
 The first attach (`loom cell attach`, its procedure on
 [attaching the first cell](../operations/cell-attach.md)) turns the existing deployment
 into the first cell. It aliases nothing (an `oauth_issuer_host` on another host refuses at
-`attach/begin`), and refuses with SCIM on until per-cell SCIM ships. A run holds an
+`attach/begin`). With SCIM on, it freshly checks the complete provisioning precondition
+while still recording, before each mode-commit try, after enforcement and before serving.
+A serving rerun repeats that check without changing revocations. A run holds an
 advisory lock, `cell.ATTACH_LOCK_KEY`, on a session of its own for its life (prepare
 takes the same lock), after checking that the session is one direct
 backend that keeps the tenancy marker: a lock left on a pooler's server connection would

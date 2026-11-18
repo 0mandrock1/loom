@@ -984,6 +984,7 @@ jobs:
           tests/integration/test_cell_attach.py
           tests/integration/test_cell_attach_two_replicas.py
           tests/integration/test_cell_attach_cleanup.py
+          tests/integration/test_cell_scim_census_live_ch.py
           tests/integration/test_cell_control_cleanup.py
           tests/integration/test_cell_control_fence.py
           tests/integration/test_directory_control_cleanup.py

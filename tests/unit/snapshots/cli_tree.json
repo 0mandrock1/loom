@@ -13123,6 +13123,7 @@
             "ch_allow_object",
             "ch_allow_replica",
             "pg_allow_role",
+            "revoke_unprovisioned",
             "router"
            ]
           }
@@ -13278,6 +13279,21 @@
            "type": null,
            "required": false,
            "help": "A Postgres role that may make an org held (the servers' role)",
+           "metavar": null
+          },
+          {
+           "option_strings": [
+            "--revoke-unprovisioned"
+           ],
+           "dest": "revoke_unprovisioned",
+           "action": "_StoreTrueAction",
+           "default": false,
+           "const": true,
+           "choices": null,
+           "nargs": 0,
+           "type": null,
+           "required": false,
+           "help": "Cut off pre-attach tokens of unprovisioned subjects; dry-run writes nothing",
            "metavar": null
           },
           {

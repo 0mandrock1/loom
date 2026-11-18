@@ -145,9 +145,8 @@ def test_the_final_refusals() -> None:
     verdict = beats.judge(
         [_beat("a", value=scim)], "first", (cell.as_value({**FIELDS, "scim": True}),), "refuse"
     )
-    assert [r.reason for r in beats.final_refusals(verdict)] == [
-        "SCIM is on: attach with SCIM on needs the per-cell SCIM release"
-    ]
+    # Provisioning is checked by the real Run owner after the heartbeat verdict.
+    assert beats.final_refusals(verdict) == []
     two = _judge([_beat("a"), _beat("b", keys_fp="other")])
     assert "root-secret fingerprints" in beats.final_refusals(two)[0].reason
     assert "no live process" in beats.final_refusals(_judge([]))[0].reason
