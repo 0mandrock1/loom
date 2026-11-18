@@ -54,6 +54,19 @@ original units needs proven counterpart cuts; the planner does not guess a parti
 Replacement of a completed whole-page unit is unsupported. Exact whole-page reuse remains
 possible, but the API does not resolve every changed-page mapping.
 
+Both `chunks.split` and `reconcile_completed_units` accept `bounded_new_request_bytes`,
+an integer from 1 to 16384, excluding booleans. The default preserves the 16 KiB cuts.
+The bound applies to every prospective request, including changed-input and same-input
+corrections. Reused completed units remain whole even above that bound. A changed or faulty
+completed unit that cannot fit returns a conflict rather than being split.
+
+A lower bound can refine unfinished work after a truncated reply. The caller authenticates
+the settled request, source range, reply and usage, all completion and refusal statuses,
+and subsequent ledger entries. Its execution packet binds the selected bound and exact
+current plan, including counterpart ranges and retained completed references. A bound
+alone does not establish this evidence, clear a hold or admit a call. A truncated response
+prefix is not a completed unit, and smaller input does not guarantee a complete reply.
+
 `translate_text` accepts trusted `initial_feedback` with a current source context for
 changed-input constraints. `request_system` includes that exact feedback in the canonical
 SYSTEM sent to the provider, so the actual request payload binds the constraints. Feedback

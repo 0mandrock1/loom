@@ -239,24 +239,36 @@ def _context_boundaries(text: str, scope: SourceContext) -> list[int]:
     ]
 
 
-def split(text: str, *, source_context: SourceContext | None = None) -> list[str]:
+def validate_request_bound(bound: int) -> None:
+    if type(bound) is not int or not 1 <= bound <= MAX_BYTES:
+        raise ValueError(f"translation request byte bound must be an integer from 1 to {MAX_BYTES}")
+
+
+def split(
+    text: str,
+    *,
+    source_context: SourceContext | None = None,
+    bounded_new_request_bytes: int = MAX_BYTES,
+) -> list[str]:
     """Keep complete Markdown units within one bounded request.
 
     A headerless slice uses its complete source context's table and container boundaries.
     """
+    validate_request_bound(bounded_new_request_bytes)
     boundaries = _context_boundaries(text, source_context) if source_context else None
-    if len(text.encode()) <= MAX_BYTES:
+    if len(text.encode()) <= bounded_new_request_bytes:
         return [text]
     if boundaries is None:
         boundaries = _boundaries(text)
     for a, b in pairwise(boundaries):
-        if len(text[a:b].encode()) > MAX_BYTES:
+        if len(text[a:b].encode()) > bounded_new_request_bytes:
             raise ValueError(
-                f"indivisible Markdown unit exceeds the {MAX_BYTES}-byte translation request bound"
+                "indivisible Markdown unit exceeds the "
+                f"{bounded_new_request_bytes}-byte translation request bound"
             )
     cuts, previous = [0], 0
     for end in boundaries[1:]:
-        if len(text[cuts[-1] : end].encode()) > MAX_BYTES:
+        if len(text[cuts[-1] : end].encode()) > bounded_new_request_bytes:
             cuts.append(previous)
         previous = end
     cuts.append(len(text))

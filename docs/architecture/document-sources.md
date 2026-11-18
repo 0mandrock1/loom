@@ -563,20 +563,29 @@ the public fallback. No reranking provider receives the provisional pools.
   (`/v1/admin/`, outside the gate) leave a mirror's ledger rows out whole: until the
   fold below carries a marked request's spend, a mirror's spend is in no fleet or
   consumer total.
-- **Every `agent_events` read is folded and masked.** The analytics export and
-  `sql_v1_usage_daily` fold a marked request's spend into a row per namespace and day
-  with agent and operation `-`, and every read of `agent_events` rows for anyone below a
-  platform admin, and every worker that derives rows a viewer reads from them, goes
-  through the fold and the mask: `sql_v1_agent_events` masks every field of a marked row
-  whose value can depend on an admitted item (`model`, the tokens, cost and work fields,
-  `llm_calls`, and the outcome fields a model call can change: `success`, `error_code`,
-  `status_class`). The `insights.query` catalog exposes `analysis_agent_events`, a
-  masked view with signed org, namespace, expiry and statement-id checks. Its analyst
-  has no raw `agent_events` grant. SQL naming the raw relation is refused; statements
-  use the catalog's view name. Deploy the canary-first probe version check across the
-  fleet before retiring that grant, so an older replica leaves newer access entities
-  to their owning build. The [assistant boundary](assistant.md) describes the view and
-  key-hiding requirements. Exception 2 accepts this fold beside `cost.summary`'s.
+- **Private events have separate physical storage.** Ordinary events stay in
+  `agent_events`; marked requests and mirror workers write `agent_events_private`.
+  The ordinary table's CHECK excludes marked rows and mirror namespaces. An analyst
+  keeps ordinary signed, namespace-scoped reads and cannot read the private table or
+  its physical metadata. Provisioning verifies the CHECK on every writer, drains
+  the finite set of prepared INSERTs and refuses any existing private contamination
+  before granting access. Checked per-writer HTTP sessions read the native access
+  catalog and prove that policies cannot hide the process or event populations.
+  Unknown visibility, writer routes or metadata refuse. It preserves existing rows
+  for operator resolution. Administrative application uses
+  `loom ch-setup --apply-analyst-sql`; unchecked analyst SQL files refuse.
+- **Private event reads are folded and masked.** The analytics export and
+  `sql_v1_usage_daily` union both stores and fold marked spend into a namespace/day row
+  with agent and operation `-`. `sql_v1_agent_events` and the signed
+  `analysis_agent_events` view mask every field that can depend on an admitted item
+  before predicates run: model, tokens, cost, work, `llm_calls`, success, error code
+  and status class. Trusted budget and history-policy reads cover both streams too.
+  User erasure scrubs both stores under `agent_events.scrub`; the private store has
+  the ordinary ledger's retention and tiering policy. The
+  [storage cutover](rolling-upgrades.md#analyst-event-storage-cutover) preserves
+  ordinary analysis across builds. The [assistant boundary](assistant.md) describes
+  the view and key-hiding requirements. Exception 2 accepts this fold beside
+  `cost.summary`'s.
 
 History predicates cannot use a marked call's outcome or projected arguments. A
 potentially matching marked event in a rule's identity, operation and time scope makes

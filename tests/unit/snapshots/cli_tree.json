@@ -5550,11 +5550,21 @@
        "dests": [
         "help",
         "print_sql",
-        "print_analyst_sql"
+        "print_analyst_sql",
+        "apply_analyst_sql"
        ]
       }
      ],
-     "mutually_exclusive": [],
+     "mutually_exclusive": [
+      {
+       "required": false,
+       "dests": [
+        "print_sql",
+        "print_analyst_sql",
+        "apply_analyst_sql"
+       ]
+      }
+     ],
      "arguments": [
       {
        "option_strings": [
@@ -5599,7 +5609,22 @@
        "nargs": 0,
        "type": null,
        "required": false,
-       "help": "Print the SQL that writes insights.query's analyst user, for an admin where LOOM_CH_USER lacks access management. It holds the user's password and the scope key stored sealed in loom.analysis_secrets (drawn when there is none; where LOOM_CH_USER cannot list users, a missing row is drawn again, which moves the key): run it in full with `clickhouse-client --multiquery --queries-file <file>`, do not store it.",
+       "help": "Refuse unchecked analyst SQL files and name the guarded apply command.",
+       "metavar": null
+      },
+      {
+       "option_strings": [
+        "--apply-analyst-sql"
+       ],
+       "dest": "apply_analyst_sql",
+       "action": "_StoreTrueAction",
+       "default": false,
+       "const": true,
+       "choices": null,
+       "nargs": 0,
+       "type": null,
+       "required": false,
+       "help": "Apply only the analyst user with configured access-management credentials, after live policy, writer and private-event checks. Does not prepare the reader.",
        "metavar": null
       }
      ]

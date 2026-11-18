@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from typing import Any
 
+from server.core.event_source import ALL_EVENTS
 from server.core.repo_base import _CHClient, _default_client
 
 # The roll-up's grain and state columns, and the same
@@ -141,7 +142,7 @@ async def summary_rows(
         )
         sql = f"""
             SELECT {select_dims_scan + (", " if select_dims_scan else "")}{base_select}
-            FROM loom.agent_events
+            FROM {ALL_EVENTS}
             WHERE org = {{org:String}}
               AND toDate(ts) BETWEEN {{from_d:Date}} AND {{to_d:Date}}
               {"" if include_marked else "AND mirror_marked = 0"}
@@ -175,7 +176,7 @@ async def summary_rows(
                   {where}
                 UNION ALL
                 SELECT org, namespace, agent, toDate(ts) AS day, operation, {TAIL_STATES}
-                FROM loom.agent_events
+                FROM {ALL_EVENTS}
                 WHERE org = {{org:String}}
                   AND ts > (SELECT max(ts_hwm) FROM loom.agent_cost_rollup_daily)
                   AND toDate(ts) BETWEEN {{from_d:Date}} AND {{to_d:Date}}
@@ -200,7 +201,7 @@ async def ask_cache_totals(
     rows = await ch.query_all(
         f"""
             SELECT {CACHE_SELECT}
-            FROM loom.agent_events
+            FROM {ALL_EVENTS}
             WHERE org = {{org:String}}
               AND toDate(ts) BETWEEN {{from_d:Date}} AND {{to_d:Date}}
               AND operation = 'memory.ask'
@@ -222,7 +223,7 @@ async def org_spend_24h(
         f"""
         SELECT sum(upstream_cost_usd) AS spent,
                countDistinct(namespace) AS ns_count
-        FROM loom.agent_events
+        FROM {ALL_EVENTS}
         WHERE org = {{org:String}}
           AND upstream_cost_usd > 0
           AND ts > now() - INTERVAL 1 DAY
