@@ -124,9 +124,7 @@ def candidate_problems(path: str, text: str, *, current: bool = True) -> list[st
     body = strip_language_line(text[len(expected_header) :])
     english = canonical_links(english, source)
     body = canonical_links(body, path)
-    problems = t.differences(english, body, source_path=source)
-    if t.chunks.table_shape(english) != t.chunks.table_shape(body):
-        problems.append("table row/cell layout differs after request assembly")
+    problems = t.page_differences(english, body, source_path=source)
     return [f"{path}: {problem}" for problem in problems]
 
 
