@@ -152,7 +152,9 @@ def test_assembled_table_layout_is_verified_before_writing(monkeypatch, tmp_path
     monkeypatch.setattr(t, "ROOT", tmp_path)
     monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
     monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
-    monkeypatch.setattr(t, "translate_text", lambda part, *args: part + "| Loom | Loom | Loom |\n")
+    monkeypatch.setattr(
+        t, "translate_text", lambda part, *args, **_kwargs: part + "| Loom | Loom | Loom |\n"
+    )
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()
@@ -163,7 +165,7 @@ def test_assembled_table_without_outer_pipes_rejects_row_loss(monkeypatch, tmp_p
     monkeypatch.setattr(t, "ROOT", tmp_path)
     monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
     monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
-    monkeypatch.setattr(t, "translate_text", lambda *args: "Loom | Loom\n--- | ---\n")
+    monkeypatch.setattr(t, "translate_text", lambda *args, **_kwargs: "Loom | Loom\n--- | ---\n")
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()
@@ -176,7 +178,7 @@ def test_assembled_table_preserves_delimiter_and_membership(monkeypatch, tmp_pat
     monkeypatch.setattr(t, "ROOT", tmp_path)
     monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
     monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
-    monkeypatch.setattr(t, "translate_text", lambda *args: reply)
+    monkeypatch.setattr(t, "translate_text", lambda *args, **_kwargs: reply)
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()
@@ -193,7 +195,7 @@ def test_assembled_table_cannot_become_another_block(monkeypatch, tmp_path, cont
     monkeypatch.setattr(t, "ROOT", tmp_path)
     monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
     monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
-    monkeypatch.setattr(t, "translate_text", lambda *args: reply)
+    monkeypatch.setattr(t, "translate_text", lambda *args, **_kwargs: reply)
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()
@@ -210,7 +212,7 @@ def test_assembled_tables_preserve_nested_and_raw_html_context(monkeypatch, tmp_
     monkeypatch.setattr(t, "ROOT", tmp_path)
     monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
     monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
-    monkeypatch.setattr(t, "translate_text", lambda *args: reply)
+    monkeypatch.setattr(t, "translate_text", lambda *args, **_kwargs: reply)
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()
@@ -225,7 +227,7 @@ def test_assembled_tables_inside_site_containers_reject_row_loss(monkeypatch, tm
     monkeypatch.setattr(t, "ROOT", tmp_path)
     monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
     monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
-    monkeypatch.setattr(t, "translate_text", lambda *args: reply)
+    monkeypatch.setattr(t, "translate_text", lambda *args, **_kwargs: reply)
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()
@@ -247,7 +249,7 @@ def test_assembled_tables_reject_emptying_a_cell(monkeypatch, tmp_path, cell, ma
     monkeypatch.setattr(t, "ROOT", tmp_path)
     monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
     monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
-    monkeypatch.setattr(t, "translate_text", lambda *args: "".join(lines))
+    monkeypatch.setattr(t, "translate_text", lambda *args, **_kwargs: "".join(lines))
     with pytest.raises(t.TranslationDiffers, match="table"):
         t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert not (tmp_path / "i18n").exists()
@@ -276,7 +278,7 @@ def test_valid_table_reflow_is_written_in_each_supported_container(
     monkeypatch.setattr(
         t,
         "translate_text",
-        lambda part, *args: part.replace(
+        lambda part, *args, **_kwargs: part.replace(
             f"| {value} | {value} |", f"{translated} | {translated}"
         ).replace("| --- | --- |", "--- | ---"),
     )

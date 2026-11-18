@@ -47,7 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from scripts.i18n import chunks
+from scripts.i18n import chunks, context
 from scripts.i18n.chunks import ANCHOR, CODE_SPAN, HTML_TAG, outside_fences
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -326,40 +326,119 @@ def _words(label: str) -> list[str]:
     return [w for w in words if w.lower() not in KEPT_WORDS]
 
 
-def labels(text: str) -> Counter[str]:
-    """The labels of `text` that hold a word to translate: headings, link texts (Markdown and
-    HTML), image alt texts, and table cells with at least two such words."""
-    # Code spans go first: a link or an alt attribute shown as code is not a label.
-    prose = CODE_SPAN.sub(
-        " ", "\n".join(line for line, in_code in outside_fences(text) if not in_code)
+def _label_links(text: str) -> tuple[tuple[str, str], ...]:
+    return tuple((m[1], m[0].partition("](")[2]) for m in LINK_TEXT.finditer(text))
+
+
+def _label_nodes(text: str) -> dict[tuple, context.Label]:
+    # Retain character offsets so a request can be checked inside its source containers.
+    def blank(value: str) -> str:
+        return "".join("\n" if c == "\n" else " " for c in value)
+
+    prose = "\n".join(blank(line) if code else line for line, code in outside_fences(text))
+    prose = CODE_SPAN.sub(lambda m: blank(m[0]), prose)
+    nodes = {}
+    offset = 0
+    heading_index = 0
+    for line in prose.splitlines(keepends=True):
+        if heading := HEADING.match(line.rstrip("\n")):
+            nodes[("heading", heading_index)] = context.Label(
+                HTML_TAG.sub(" ", heading[2]), start=offset, end=offset + len(line.rstrip("\n"))
+            )
+            heading_index += 1
+        offset += len(line)
+    seen: Counter[tuple] = Counter()
+    for kind, regex in (
+        ("link", LINK_TEXT),
+        ("html", HTML_LINK_TEXT),
+        ("alt", IMAGE_ALT),
+        ("html_alt", HTML_ALT),
+    ):
+        for match in regex.finditer(prose):
+            inner = match[1]
+            links = _label_links(match[0]) if kind == "link" else ()
+            if kind == "html":
+                target = LINK.search(match[0].split(">", 1)[0])
+                inner = HTML_TAG.sub(" ", HTML_CODE.sub(" ", inner)).strip()
+                links = ((inner, target[2]),) if target else ()
+            identity = (kind, links[0][1] if links else "")
+            key = (*identity, seen[identity])
+            seen[identity] += 1
+            nodes[key] = context.Label(inner, links=links, start=match.start(), end=match.end())
+    nodes.update(chunks.table_labels(text))
+    return nodes
+
+
+def _residual_label(node: context.Label, atoms: tuple[str, ...]) -> str:
+    residual, _spelling = context.project(node, atoms)
+    # A name plus one ordinary qualifier still has a translation obligation.
+    minimum = 1 if atoms else node.minimum
+    return " ".join(residual.split()) if len(_words(residual)) >= minimum else ""
+
+
+def labels(text: str, *, source_path: str = "") -> Counter[str]:
+    """Translatable labels after protecting only source-attested spelling spans."""
+    return Counter(
+        label
+        for node in _label_nodes(text).values()
+        if (label := _residual_label(node, context.protected(node, source_path)))
     )
-    prose_lines = prose.split("\n")
-    found = [m.group(2) for m in map(HEADING.match, prose_lines) if m]
-    found += LINK_TEXT.findall(prose)
-    found += [
-        HTML_TAG.sub(" ", HTML_CODE.sub(" ", inner)).strip()
-        for inner in HTML_LINK_TEXT.findall(prose)
-    ]
-    found += IMAGE_ALT.findall(prose) + HTML_ALT.findall(prose)
-    out: Counter[str] = Counter(label for label in found if _words(label))
-    for line in prose_lines:
-        if line.startswith("|"):
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
-            out.update(c for c in cells if len(_words(c)) >= 2)
-    return out
 
 
-def differences(source: str, translation: str) -> list[str]:
+def _label_differences(
+    source: str,
+    translation: str,
+    source_path: str,
+    scope: context.SourceContext | None = None,
+) -> list[str]:
+    english = scope.english if scope else source
+    if scope and english[scope.start : scope.end] != source:
+        raise ValueError("translation request does not match its source context")
+    candidate = scope.candidate(translation) if scope else translation
+    start, end = (scope.start, scope.end) if scope else (0, len(source))
+    target_end = start + len(translation)
+    wanted, actual = _label_nodes(english), _label_nodes(candidate)
+    source_labels: Counter[str] = Counter()
+    target_labels: Counter[str] = Counter()
+    protections = {}
+    problems = []
+    for key, node in wanted.items():
+        atoms = protections[key] = context.protected(node, source_path)
+        if not (start <= node.start and node.end <= end):
+            continue
+        if label := _residual_label(node, atoms):
+            source_labels[label] += 1
+        if atoms:
+            translated = actual.get(key, context.Label(""))
+            expected = context.project(node, atoms)[1]
+            got = context.project(translated, atoms)[1]
+            if expected != got or node.field != translated.field:
+                problems.append(f"protected source strings {key}: expected {expected}, got {got}")
+    for key, node in actual.items():
+        if start <= node.start and node.end <= target_end:
+            if label := _residual_label(node, protections.get(key, ())):
+                target_labels[label] += 1
+    if untranslated := source_labels & target_labels:
+        problems.insert(
+            0,
+            "left in English (headings, link texts, alt texts, table cells): "
+            + f"{sorted(untranslated)[:8]}",
+        )
+    return problems
+
+
+def differences(
+    source: str,
+    translation: str,
+    *,
+    source_path: str = "",
+    source_context: context.SourceContext | None = None,
+) -> list[str]:
     """How `translation` breaks the invariants of `source`; empty when it keeps them.
     A translation may add a number (a spelled-out one written as digits), never drop one,
     and may not hand back a heading, link text, alt text or table cell in English."""
-    found = []
-    untranslated = labels(source) & labels(translation)
-    if untranslated:
-        found.append(
-            f"left in English (headings, link texts, alt texts, table cells): "
-            f"{sorted(untranslated)[:8]}"
-        )
+    source_path = source_context.path if source_context else source_path
+    found = _label_differences(source, translation, source_path, source_context)
     if code_blocks(source) != code_blocks(translation):
         found.append("code blocks: copy every fenced code block unchanged, in the same order")
     want, got = invariants(source), invariants(translation)
@@ -462,10 +541,11 @@ def untranslated_pages() -> list[str]:
             if not path.is_file():
                 continue
             english = "\n".join(english_requests(prepare(source, lang)[0]))
-            kept = labels(english) & labels(path.read_text())
-            if kept:
-                rel = path.relative_to(ROOT).as_posix()
-                problems.append(f"{rel} keeps in English: {sorted(kept)[:4]}")
+            rel = path.relative_to(ROOT).as_posix()
+            problems.extend(
+                f"{rel}: {problem}"
+                for problem in _label_differences(english, path.read_text(), source)
+            )
     return problems
 
 
@@ -593,7 +673,14 @@ def reply_text(data: dict[str, Any]) -> str:
     return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
 
 
-def translate_text(text: str, lang: Language, client: Any, spend: Spend) -> str:
+def translate_text(
+    text: str,
+    lang: Language,
+    client: Any,
+    spend: Spend,
+    *,
+    source_context: context.SourceContext | None = None,
+) -> str:
     if not text.strip():
         return text
     system = SYSTEM.format(language=lang.english, style=lang.style)
@@ -603,7 +690,7 @@ def translate_text(text: str, lang: Language, client: Any, spend: Spend) -> str:
         data = call(client, spend.model, system, messages)
         spend.add(data.get("usage", {}))
         reply = reply_text(data)
-        problems = differences(text, reply)
+        problems = differences(text, reply, source_context=source_context)
         if not problems:
             return _same_edges(text, reply)
         messages += [
@@ -664,11 +751,17 @@ def english_requests(text: str) -> list[str]:
 def translate_page(source: str, lang: Language, client: Any, spend: Spend) -> None:
     text, line = prepare(source, lang)
     requests = english_requests(text)
-    body = "\n".join(translate_text(s, lang, client, spend) for s in requests)
+    english = "\n".join(requests)
+    replies = []
+    offset = 0
+    for request in requests:
+        scope = context.SourceContext(source, english, offset, offset + len(request))
+        replies.append(translate_text(request, lang, client, spend, source_context=scope))
+        offset += len(request) + 1
+    body = "\n".join(replies)
     # A section can borrow an English label from another part of the page; `check` reads the
     # whole page, so the page is held to the same rule before it is written.
-    english = "\n".join(requests)
-    problems = differences(english, body)
+    problems = differences(english, body, source_path=source)
     if chunks.table_shape(english) != chunks.table_shape(body):
         problems.append("table row/cell layout differs after request assembly")
     if problems:

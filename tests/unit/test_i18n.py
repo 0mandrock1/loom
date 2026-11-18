@@ -238,7 +238,7 @@ def test_a_label_borrowed_from_another_section_keeps_the_page_unwritten(
     monkeypatch.setattr(
         t,
         "translate_text",
-        lambda text, lang, client, spend: replies["A" if "## A" in text else "B"],
+        lambda text, lang, client, spend, **_kwargs: replies["A" if "## A" in text else "B"],
     )
     with pytest.raises(t.TranslationDiffers, match="Get a token"):
         t.translate_page("docs/x.md", t.LANGUAGES[1], None, t.Spend("claude-sonnet-5-5", 1.0))

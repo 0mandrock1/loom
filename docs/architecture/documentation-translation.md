@@ -37,6 +37,28 @@ The site parser pin matches the documentation builder. A source-byte limit does 
 guarantee that a translated reply fits the output-token limit. Truncated replies remain
 failures, and structural checks do not establish translation quality or prose completeness.
 
+## Source spelling contracts
+
+Label validation distinguishes source spelling from ordinary descriptions. Source-specific
+name declarations protect exact product and project spans. A filename label must match
+its source link target; the conventional `README` label may omit the `.md` suffix.
+Operation field declarations protect returned string vocabularies and one documented
+field formula. A string-typed field whose whole description is quoted identifier
+alternatives also declares literal values. Quotation, capitalization and filename-like
+spelling alone grant no exemption.
+
+These declarations require source evidence: package or project identities, explicit
+terminology, real file targets, or the operation's wire contract. Changes to those source
+declarations require checking the attestation and its focused regression cases. Ordinary
+qualifiers around a protected span remain subject to label validation.
+
+The existing site and CommonMark parsers supply table cells, including escaped and inline
+code pipes. Each bounded request is checked in its complete English container, without
+sending that surrounding text to the provider. Site-only cells without source maps are
+checked at page assembly. Retries, assembly and stored-page checks share the same rule:
+protected spans must retain their spelling, occurrence order and source label or field.
+This is a finite source contract, not a language classifier or a semantic review.
+
 ## Invariants
 
 - No source slice exceeds the bound; all source bytes and page-wide anchors survive assembly.
@@ -48,5 +70,6 @@ failures, and structural checks do not establish translation quality or prose co
 ## Source entry points
 
 - `scripts/i18n/translate.py`: `english_requests`, `request_chars`, `translate_page`.
-- `scripts/i18n/chunks.py`: protected ranges, source cuts and table structure checks.
+- `scripts/i18n/chunks.py`: protected ranges, source cuts and parsed table cells.
+- `scripts/i18n/context.py`: source spelling declarations and residual label projection.
 - `scripts/i18n/requirements.in`: translation runtime dependencies.
