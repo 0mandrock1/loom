@@ -63,17 +63,24 @@ def _require_platform_admin() -> None:
     """With LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY, only a platform admin starts
     a remote job or adds an index. The role counts on a flat token used by its own
     subject: a scoped token's authority is its namespaces, and a trusted caller's
-    role is not the subject's it acts for. With auth off there is no caller to
-    refuse."""
+    role is not the subject's it acts for. A call without a principal passes only
+    where auth is off: no transport then asks for a token, so there is no caller
+    to refuse. Where auth is on such a call is no platform admin's (an MCP endpoint
+    in `open` mode takes one that sends no bearer) and is refused."""
     if not settings.code_self_service_platform_admin_only:
         return
     from server.auth.context import current_auth
     from server.operations.base import Role
 
     auth = current_auth()
-    if auth is None:
+    if auth is None and not settings.auth_actually_required():
         return
-    if auth.has_ns_roles() or auth.impersonated_by or not auth.has_role(Role.PLATFORM_ADMIN):
+    if (
+        auth is None
+        or auth.has_ns_roles()
+        or auth.impersonated_by
+        or not auth.has_role(Role.PLATFORM_ADMIN)
+    ):
         raise AuthInsufficientError(
             "only platform admins add repositories or branches on this deployment "
             "(LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY), with a token of their own that "

@@ -520,17 +520,16 @@ async def test_platform_admin_only_admits_a_platform_admin_to_the_three_ops(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("auth", "admitted"),
+    "auth",
     [
-        (None, True),  # auth off: there is no caller to refuse
-        (_platform_admin(ns_roles=(("code-widgets", "admin"),)), False),
-        (_platform_admin(subject="alice@x", impersonated_by="gateway@x"), False),
-        (_platform_admin(roles=(Role.ORG_ADMIN,)), False),
+        _platform_admin(ns_roles=(("code-widgets", "admin"),)),
+        _platform_admin(subject="alice@x", impersonated_by="gateway@x"),
+        _platform_admin(roles=(Role.ORG_ADMIN,)),
     ],
-    ids=["auth-off", "scoped-token", "acting-for-a-subject", "org-admin"],
+    ids=["scoped-token", "acting-for-a-subject", "org-admin"],
 )
 async def test_platform_admin_only_counts_the_role_on_a_flat_token_of_its_own_subject(
-    plane, monkeypatch: pytest.MonkeyPatch, auth: AuthInfo | None, admitted: bool
+    plane, monkeypatch: pytest.MonkeyPatch, auth: AuthInfo
 ) -> None:
     """A scoped token's authority is its namespaces, and a trusted caller's role is
     not the subject's it acts for: neither adds a repository as a platform admin."""
@@ -539,12 +538,73 @@ async def test_platform_admin_only_counts_the_role_on_a_flat_token_of_its_own_su
     monkeypatch.setattr(settings, "code_self_service_platform_admin_only", True)
     set_current_auth(auth)
     request = CodeRepoAddInput(org=ORG, repo="acme/widgets", branch="main")
-    if admitted:
-        assert (await admin.handle_code_repo_add(request)).namespace == "code-widgets"
-        return
     with pytest.raises(AuthInsufficientError, match="LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY"):
         await admin.handle_code_repo_add(request)
     assert plane.ch.inserted == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("auth_required", False), ("identity_provider", "single-user")],
+    ids=["auth-not-required", "single-user"],
+)
+async def test_platform_admin_only_passes_a_call_without_a_principal_where_auth_is_off(
+    plane, remote_lists_main, monkeypatch: pytest.MonkeyPatch, field: str, value: Any
+) -> None:
+    """With auth off no transport asks for a token: a call without one carries no
+    principal and there is no caller to refuse, so the three ops run as without the
+    setting."""
+    from server.settings import settings
+
+    monkeypatch.setattr(settings, field, value)
+    monkeypatch.setattr(settings, "code_self_service_platform_admin_only", True)
+    set_current_auth(None)
+    listed, added, branch = await _add_side_calls("code-widgets")
+    assert listed.default_branch == "main"
+    assert (added.namespace, branch.namespace) == ("code-widgets", "code-widgets-release-1-2")
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_only_refuses_an_mcp_call_without_a_principal_where_auth_is_on(
+    plane, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An MCP endpoint in `open` mode runs a call that sent no bearer with no
+    principal, on a deployment whose auth is on. Such a caller is no platform admin:
+    each of the three ops answers the authorization error before the sandbox probe
+    and any remote job, as it does to a member."""
+    import server.transport.mcp_call as mcp_call
+    from server.code.app.index import sandbox
+    from server.settings import settings
+
+    def no_probe() -> bool:
+        raise AssertionError("a refused caller starts no sandbox probe")
+
+    async def no_remote_job(*_a: Any, **_k: Any) -> str:
+        raise AssertionError("a refused caller starts no remote job")
+
+    monkeypatch.setattr(settings, "auth_required", True)
+    monkeypatch.setattr(settings, "identity_provider", "")
+    monkeypatch.setattr(settings, "mcp_auth_mode", "open")
+    monkeypatch.setattr(settings, "code_self_service_platform_admin_only", True)
+    monkeypatch.setattr(sandbox, "sandbox_available", no_probe)
+    monkeypatch.setattr(reg, "remote_has_branch", no_remote_job)
+    monkeypatch.setattr(reg, "remote_branches", no_remote_job)
+    calls = {
+        "loom_code_repo_remote_branches": {"org": ORG, "repo": "acme/widgets"},
+        "loom_code_repo_add": {"org": ORG, "repo": "acme/widgets", "branch": "main"},
+        "loom_code_repo_add_branch": {
+            "org": ORG,
+            "namespace": "code-clickhouse",
+            "branch": "26.8",
+        },
+    }
+    for tool, arguments in calls.items():
+        answer = (await mcp_call._call_tool(1, {"name": tool, "arguments": arguments}))["result"]
+        refusal = answer["structuredContent"]
+        assert answer["isError"] is True and refusal["code"] == "AUTH_INSUFFICIENT", tool
+        assert "LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY" in refusal["message"]
+    assert not [t for t, _ in plane.ch.inserted if t in ("loom.code_repos", "loom.namespaces")]
 
 
 @pytest.mark.asyncio
@@ -578,13 +638,13 @@ async def test_the_git_waiver_admits_the_three_ops_without_the_sandbox(
 
 
 @pytest.mark.asyncio
-async def test_on_the_waiver_path_a_request_without_a_principal_reaches_the_remote(
+async def test_with_auth_off_the_waiver_path_reaches_the_remote_a_request_names(
     plane, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The handler has no caller to refuse when a request carries no principal: with
-    both settings on and no sandbox the add asks the remote the request names and
-    registers the entry. The settings stop it instead: the waiver does not load in a
-    mode that admits such a request (the load test in test_repo_job_sandbox.py)."""
+    """With auth off the handler has no caller to refuse: with both settings on and
+    no sandbox the add asks the remote the request names and registers the entry.
+    The settings stop it instead: the waiver does not load with auth off (the load
+    test in test_repo_job_sandbox.py)."""
     from server.code.app.index import sandbox
     from server.settings import settings
 
@@ -596,6 +656,7 @@ async def test_on_the_waiver_path_a_request_without_a_principal_reaches_the_remo
 
     monkeypatch.setattr(reg, "remote_has_branch", _remote)
     monkeypatch.setattr(sandbox, "_available", False)
+    monkeypatch.setattr(settings, "auth_required", False)
     monkeypatch.setattr(settings, "code_self_service_platform_admin_only", True)
     monkeypatch.setattr(settings, "code_self_service_git_unsandboxed", True)
     set_current_auth(None)

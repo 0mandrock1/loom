@@ -138,9 +138,11 @@ Rules:
   asks for: any other caller is refused with `AUTH_INSUFFICIENT` before a remote is asked.
   The role counts on a token of the caller's own that is not scoped to namespaces: a
   scoped token (`ns_roles`) and a trusted caller acting for another subject
-  (`X-Loom-On-Behalf-Of`) are refused too. With auth off nobody is refused. The other
-  `code.repo.*` ops keep their namespace admin gate, and the platform admin who added a
-  repository is its first maintainer.
+  (`X-Loom-On-Behalf-Of`) are refused too. A call that carries no principal passes only
+  with auth off, when no transport asks for a token. With auth on it is refused like any
+  caller that is not a platform admin: an MCP endpoint with `LOOM_MCP_AUTH_MODE=open`
+  takes such a call. The other `code.repo.*` ops keep their namespace admin gate, and the
+  platform admin who added a repository is its first maintainer.
 - `LOOM_CODE_INTEL_ENABLED=false` refuses every `code.repo.*` op but `code.repo.remove`,
   with `PRECONDITION_FAILED`, as it does every other `code.*` op. A retirement with the
   switch off purges the index and this replica's mirror; the other replicas sweep their

@@ -397,9 +397,9 @@ def test_the_git_waiver_lets_only_the_git_callers_reach_a_self_registered_networ
 def test_the_git_waiver_loads_only_where_platform_admins_alone_name_a_remote() -> None:
     """Without the sandbox nothing vets the host a git job connects to, so the waiver
     is refused at load unless only platform admins name a remote: without the
-    platform-admin rule, and in each mode that admits a request without a principal,
-    which that rule passes. It is refused beside LOOM_CODE_SANDBOX_REQUIRED too, which
-    lets no job run as a plain process."""
+    platform-admin rule, and in each mode that admits a request without a principal.
+    It is refused beside LOOM_CODE_SANDBOX_REQUIRED too, which lets no job run as a
+    plain process."""
     from server.settings import Settings
 
     with pytest.raises(ValueError, match="needs LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY"):

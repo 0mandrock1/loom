@@ -746,11 +746,12 @@ remote runs `ssh` with the server's `HOME` and the keys in it. Whoever names a r
 therefore chooses what the server connects to, so Loom refuses to load the setting unless
 `LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY=true` leaves those three ops to platform
 admins ([self-service repositories](../features/code-index/repositories.md#self-service-repositories)).
-That rule passes a request that carries no principal, so the setting is refused as well
-where one can arrive: with auth off (`LOOM_AUTH_REQUIRED=false` or
-`LOOM_IDENTITY_PROVIDER=single-user`) and with `LOOM_MCP_AUTH_MODE=open`. It is also
-refused together with `LOOM_CODE_SANDBOX_REQUIRED=true`, under which no repository job
-runs as a plain process.
+With auth off that rule passes a call that carries no principal, so the setting is
+refused as well there (`LOOM_AUTH_REQUIRED=false` or
+`LOOM_IDENTITY_PROVIDER=single-user`). It is refused with `LOOM_MCP_AUTH_MODE=open` too,
+where such a call can arrive with auth on: the rule refuses it, and the setting still
+needs every caller authenticated. It is also refused together with
+`LOOM_CODE_SANDBOX_REQUIRED=true`, under which no repository job runs as a plain process.
 
 The setting also resumes the git jobs of entries that members added before
 `LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY` was set. They keep the remotes their adders
