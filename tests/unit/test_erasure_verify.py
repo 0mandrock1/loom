@@ -213,9 +213,10 @@ def test_census_user_scope_skips_namespace_only_tables() -> None:
         "loom.memory_ask_precedents",
         "loom.llm_response_cache",
         "loom.code_answers",
+        "loom.task_events",
     } <= set(out)
     assert "loom.memory_answers" not in out
-    assert len(out) == 54
+    assert len(out) == 55
     assert "loom.blob_uploads" in out  # who uploaded what: the user's go
     # the user's supporter rows, and any bot-rule candidate left with no supporter
     assert {"loom.learnings_queue", "loom.learnings_supporters"} <= set(out)

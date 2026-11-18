@@ -16,13 +16,13 @@
 -- Do NOT hand-edit. Edit schemas/migrations/*.sql and re-dump.
 -- CI verifies this file matches what migrations would produce.
 --
--- Counts: 192 tables + 5 views + 19 materialized views.
+-- Counts: 193 tables + 5 views + 19 materialized views.
 
 CREATE DATABASE IF NOT EXISTS `loom`;
 CREATE DATABASE IF NOT EXISTS `loom_telemetry`;
 
 -- ======================================================================
--- Tables (192)
+-- Tables (193)
 -- ======================================================================
 
 -- loom.acl_versions
@@ -2162,6 +2162,16 @@ ORDER BY (org, namespace, ingestion_id)
 TTL toDateTime(updated_at) + toIntervalDay(30)
 SETTINGS non_replicated_deduplication_window = 1000, index_granularity = 1024;
 
+-- loom.knowledge_mirror_latch
+CREATE TABLE IF NOT EXISTS loom.knowledge_mirror_latch
+(
+    `id` UInt8,
+    `set_at` DateTime64(3),
+    CONSTRAINT one_deployment CHECK id = 0
+)
+ENGINE = KeeperMap('/loom/knowledge_mirror_latch')
+PRIMARY KEY id;
+
 -- loom.knowledge_mirrors
 CREATE TABLE IF NOT EXISTS loom.knowledge_mirrors
 (
@@ -3400,7 +3410,9 @@ CREATE TABLE IF NOT EXISTS loom.namespaces
     `retrieval_defaults` String DEFAULT '',
     `proposal_policy` String DEFAULT '',
     `code_change_policy` LowCardinality(String) DEFAULT '',
-    `released_aliases` Array(String) DEFAULT []
+    `released_aliases` Array(String) DEFAULT [],
+    `daily_user_cost_cap_usd` Float64 DEFAULT 0,
+    `budget_alert_inbox` String DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY org
@@ -4157,6 +4169,9 @@ CREATE TABLE IF NOT EXISTS loom.task_events
     `patch` String DEFAULT '{}',
     `note` String DEFAULT '',
     `ts` DateTime64(3) DEFAULT now64(3),
+    `user_id` String DEFAULT '-',
+    `session_id` String DEFAULT '-',
+    `source_class` LowCardinality(String) DEFAULT '',
     INDEX idx_from_subject from_subject TYPE bloom_filter GRANULARITY 4
 )
 ENGINE = MergeTree

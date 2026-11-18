@@ -137,6 +137,7 @@ USER_TRACE: list[tuple[str, tuple[tuple[str, str], ...]]] = [
     ("personal.retire", (("OTHER", "INSERT"),)),
     ("collections.forget_owner", (("OTHER", "INSERT"), ("OTHER", "INSERT"))),
     ("subject_last_seen.delete", ((D, "loom.subject_last_seen"),)),
+    ("tasks.delete", (("OTHER", "INSERT"), (D, "loom.task_events"), (D, "loom._migration_lock"))),
     (
         "conversations.tombstone",
         (
@@ -263,7 +264,15 @@ NS_TRACE: list[tuple[str, tuple[tuple[str, str], ...]]] = [
         ),
     ),
     ("namespace_guides.delete", ((D, "loom.namespace_guides"),)),
-    ("tasks.delete", ((D, "loom.tasks"), (D, "loom.task_events"))),
+    (
+        "tasks.delete",
+        (
+            ("OTHER", "INSERT"),
+            (D, "loom.tasks"),
+            (D, "loom.task_events"),
+            (D, "loom._migration_lock"),
+        ),
+    ),
     ("agent_runs.delete", ((D, "loom.agent_run_claims"), (D, "loom.agent_runs"))),
     (
         "curation.tombstone",
@@ -380,7 +389,15 @@ NS_PURGE_TRACE: list[tuple[str, tuple[tuple[str, str], ...]]] = [
         ),
     ),
     ("namespace_guides.delete", ((D, "loom.namespace_guides"),)),
-    ("tasks.delete", ((D, "loom.tasks"), (D, "loom.task_events"))),
+    (
+        "tasks.delete",
+        (
+            ("OTHER", "INSERT"),
+            (D, "loom.tasks"),
+            (D, "loom.task_events"),
+            (D, "loom._migration_lock"),
+        ),
+    ),
     ("agent_runs.delete", ((D, "loom.agent_run_claims"), (D, "loom.agent_runs"))),
     (
         "curation.tombstone",
@@ -530,6 +547,7 @@ USER_PURGE_TRACE: list[tuple[str, tuple[tuple[str, str], ...]]] = [
         ),
     ),
     ("subject_last_seen.delete", ((D, "loom.subject_last_seen"),)),
+    ("tasks.delete", (("OTHER", "INSERT"), (D, "loom.task_events"), (D, "loom._migration_lock"))),
     (
         "conversations.tombstone",
         (

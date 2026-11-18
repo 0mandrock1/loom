@@ -382,7 +382,7 @@ _CENSUS: tuple[Substrate, ...] = (
     # Task inbox plane: the brief and the notes quote source
     # and issue text; keyed on the inbox's owner namespace, no user axis.
     Substrate("loom.tasks", "is_deleted = 0", None, "tasks.delete", None),
-    Substrate("loom.task_events", "1", None, "tasks.delete", None, final=False),
+    Substrate("loom.task_events", "1", UID, "tasks.delete", "tasks.delete", final=False),
     Substrate("loom.agent_runs", "1", UID, "agent_runs.delete", "agent_runs.delete"),
     Substrate("loom.operator_edges", LIVE, None, "curation.tombstone", None),
     Substrate("loom.conflict_allowlist", LIVE, None, "curation.tombstone", None),
@@ -558,6 +558,10 @@ STEP_ONLY_TABLES: dict[str, tuple[str, ...]] = {
 # a CREATE TABLE that is in none of the three lists, so a new table is
 # classified the day it lands.
 NO_MEMORY_CONTENT: dict[str, str] = {
+    "loom.knowledge_mirror_latch": (
+        "One deployment-wide enablement timestamp; no identity or content. Tenant erasure "
+        "cannot lift protection; only the deployment mirror eraser clears this row last."
+    ),
     "loom.analysis_canary": (
         "One constant row in a reserved scope (org '', namespace '') that insights.query's "
         "probe reads; no content."

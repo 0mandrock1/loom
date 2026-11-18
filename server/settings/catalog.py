@@ -2339,6 +2339,9 @@ class KnowledgeSettings(BaseModel):
     # credential, spends embedding calls on every changed document and model calls
     # mining it for decisions.
     knowledge_source_sync_enabled: bool = False
+    # Require protected automatic session capture and persist deployment privacy state.
+    # Off does not lift protection while the deployment latch remains set.
+    knowledge_mirrored_sources_enabled: bool = False
     # Mirrored reads require a complete listing and group observation within this
     # many seconds; missing or older evidence admits nobody.
     knowledge_source_acl_stale_seconds: int = Field(default=3600, ge=1)
@@ -5134,6 +5137,11 @@ class RuntimeSettings(BaseModel):
     # namespace whose rolling 24 h cost reached it. Overridden per namespace by
     # loom.namespaces.daily_cost_cap_usd; 0.0 disables on both tiers.
     default_daily_cost_cap_usd: float = 1.0
+    # Separate rolling-24h cap per named user_id within a namespace, USD; 0 disables it.
+    # A namespace's daily_user_cost_cap_usd overrides this default when positive.
+    default_daily_user_cost_cap_usd: Annotated[float, LIVE] = Field(default=0.0, ge=0)
+    # Fraction of a cap that warns its namespace's configured inbox on the next check.
+    cost_budget_alert_share: Annotated[float, LIVE] = Field(default=0.8, gt=0, le=1)
     # True: reads call no LLM (ask synthesis: 409), skip the spelling-fix and set-expansion
     # embeddings, and rerank only as named, since a reranker is a model call.
     reads_llm_free: bool = False

@@ -213,35 +213,6 @@ async def ask_cache_totals(
     return int(rows[0].get("cache_hits") or 0), float(rows[0].get("cache_saved_usd") or 0.0)
 
 
-async def namespace_spend_24h(org: str, namespace: str, *, ch: _CHClient | None = None) -> float:
-    ch = ch or _default_client()
-    row = await ch.query_one(
-        """
-            SELECT sum(upstream_cost_usd) AS spent
-            FROM loom.agent_events
-            WHERE org = {org:String}
-              AND namespace = {ns:String}
-              AND ts > now() - INTERVAL 1 DAY
-            """,
-        params={"org": org, "ns": namespace},
-    )
-    return float((row or {}).get("spent") or 0.0)
-
-
-async def namespace_cap(org: str, namespace: str, *, ch: _CHClient | None = None) -> Any:
-    """The namespace's own `daily_cost_cap_usd`; None without a namespaces row."""
-    ch = ch or _default_client()
-    row = await ch.query_one(
-        """
-            SELECT daily_cost_cap_usd
-            FROM loom.namespaces FINAL
-            WHERE org = {org:String} AND namespace = {ns:String}
-            """,
-        params={"org": org, "ns": namespace},
-    )
-    return (row or {}).get("daily_cost_cap_usd")
-
-
 async def org_spend_24h(
     org: str, scope_where: str, scope_params: dict[str, Any], *, ch: _CHClient | None = None
 ) -> tuple[float, int]:

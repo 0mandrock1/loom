@@ -970,6 +970,7 @@ Knowledge documents and conversations: chunking, search floor, thread titles.
 | `LOOM_KNOWLEDGE_SOURCES_MAX_PER_NAMESPACE` | `int` | `8` | live | Active document sources (knowledge.source.add) one namespace may register; an add past it is refused with SOURCE_QUOTA. |
 | `LOOM_KNOWLEDGE_SOURCE_PROBE_TIMEOUT_S` | `float` | `20.0` | live | Seconds a document source's probe (add, update, check, rotate) or tracker short-id lookup may take in all; past it add, update and rotate answer SOURCE_UNREACHABLE and check answers reachable: false. |
 | `LOOM_KNOWLEDGE_SOURCE_SYNC_ENABLED` | `bool` | `False` |  | The knowledge_source_sync worker: pulls each registered document source's changed files into its namespace's documents. Off by default: it needs each source's credential, spends embedding calls on every changed document and model calls mining it for decisions. |
+| `LOOM_KNOWLEDGE_MIRRORED_SOURCES_ENABLED` | `bool` | `False` |  | Require protected automatic session capture and persist deployment privacy state. Off does not lift protection while the deployment latch remains set. |
 | `LOOM_KNOWLEDGE_SOURCE_ACL_STALE_SECONDS` | `int` | `3600` |  | Mirrored reads require a complete listing and group observation within this many seconds; missing or older evidence admits nobody. |
 | `LOOM_KNOWLEDGE_SOURCE_SYNC_INTERVAL_SECONDS` | `int` | `900` |  | Seconds between sync passes while there are sources. |
 | `LOOM_KNOWLEDGE_SOURCE_SYNC_IDLE_INTERVAL_SECONDS` | `int` | `1800` |  | Seconds between passes that found no source to sync; one idle sleep plus one pass stays under three intervals, so the worker never reads as stalled. |
@@ -1746,6 +1747,8 @@ Process shape, deployment, event stream and cost budgets.
 | `LOOM_EVENTS_STREAM_FLUSH_BATCH` | `int` | `500` |  | Queued telemetry rows that trigger a flush before the interval elapses. |
 | `LOOM_TRAFFIC_CLASS_REGISTRY_TTL_SECONDS` | `int` | `300` |  | How long a namespace's registry class is kept in the process cache. |
 | `LOOM_DEFAULT_DAILY_COST_CAP_USD` | `float` | `1.0` |  | Daily LLM spend cap per namespace, USD: extraction workers skip a namespace whose rolling 24 h cost reached it. Overridden per namespace by loom.namespaces.daily_cost_cap_usd; 0.0 disables on both tiers. |
+| `LOOM_DEFAULT_DAILY_USER_COST_CAP_USD` | `float` | `0.0` | live | Separate rolling-24h cap per named user_id within a namespace, USD; 0 disables it. A namespace's daily_user_cost_cap_usd overrides this default when positive. |
+| `LOOM_COST_BUDGET_ALERT_SHARE` | `float` | `0.8` | live | Fraction of a cap that warns its namespace's configured inbox on the next check. |
 | `LOOM_READS_LLM_FREE` | `bool` | `False` |  | True: reads call no LLM (ask synthesis: 409), skip the spelling-fix and set-expansion embeddings, and rerank only as named, since a reranker is a model call. |
 | `LOOM_REPLICA_COUNT` | `int` | `1` |  | The rate limiter divides every cap by the deployment's replica count so the replicas' sum matches the target (approximate, not cluster-strict). The count is the hosts with a live serving loom.instances row; this is its floor, and the count while those rows cannot be read. |
 | `LOOM_SERVES_TRAFFIC` | `bool` | `True` |  | False for a process no load balancer routes to (a workers-only container): its instance row does not count as a replica. |

@@ -226,6 +226,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         )
     await boot.require_keeper(ch)
     await boot.require_storage_authority(ch)
+    await boot.require_session_protection(ch)
     # The deployment's cell state, before the first heartbeat reports this process
     # serving and before the lease is decided on it.
     from server.insights.app.provider_barrier import register_process, retire_reaped_process
@@ -251,7 +252,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             _leader.leads_deployment,
             label=_instance_mod.instance_label() or "",
             workers_lease=_leader.advertised_lease,
-            on_beat=_leader.read_holder,
+            on_beat=boot.refresh_instance_state,
         )
     )
 

@@ -75,6 +75,7 @@ class Delegated:
         jti: str | None = None,
         consumer: str | None = None,
         reads_as_creator: bool = False,
+        session_protection: bool = False,
     ) -> str:
         return jwt_mod.mint_token(
             subject=subject,
@@ -94,6 +95,7 @@ class Delegated:
             parent_iats=self.parent_iats,
             creator=self.creator,
             reads_as_creator=reads_as_creator,
+            session_protection=session_protection,
             saves_to=self.saves_to or None,
         )
 
