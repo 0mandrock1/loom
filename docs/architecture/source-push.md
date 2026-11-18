@@ -42,8 +42,10 @@ binds an org, namespace, source ID, provider and random setup generation to a
 fingerprint of the source's credential and items. Configuration is an admin
 operation. An explicitly configured HTTPS public base URL is required.
 
-The callback URL names the org, namespace, source ID and setup generation. A callback
-re-reads the registry and current source under the namespace's source lease
+The callback URL puts the namespace, source ID and setup generation in the path
+and the exact organization in the required `org` query parameter. Query encoding
+preserves organization names that contain slashes or reserved URL characters.
+A callback re-reads the registry and current source under the namespace's source lease
 before recording a sync request. A removed or replaced source, changed
 credential, changed item set, inactive namespace or retired generation refuses
 the delivery. Callback payloads and headers are not stored or logged.

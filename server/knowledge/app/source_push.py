@@ -12,7 +12,7 @@ import secrets
 import time
 import uuid
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from server.auth import machines
 from server.clients import gdrive, gdrive_push, linear, notion
@@ -91,8 +91,8 @@ def callback_url(reg: PushRegistration) -> str:
     ):
         raise BadConfigError("push setup requires LOOM_PUBLIC_BASE_URL with an HTTPS origin")
     return (
-        f"{base}/hooks/knowledge/{quote(reg.org, safe='')}/{quote(reg.namespace, safe='')}"
-        f"/{reg.source_id}/{reg.generation}"
+        f"{base}/hooks/knowledge/{quote(reg.namespace, safe='')}/{reg.source_id}"
+        f"/{reg.generation}?{urlencode({'org': reg.org})}"
     )
 
 

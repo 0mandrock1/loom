@@ -16,7 +16,7 @@ for (const width of [1400, 375]) {
       await installApi(page, { codeRepos: repos, knowledgeSources: sources });
       let phase = "disabled";
       const token = "verification-token-".repeat(12);
-      const callback = `https://loom.example/hooks/knowledge/org/${"1".repeat(36)}/${"2".repeat(36)}`;
+      const callback = `https://loom.example/hooks/knowledge/code-clickhouse/${"1".repeat(36)}/${"2".repeat(36)}?org=org`;
       const status = (reveal = false) => ({
         enabled: true,
         status: phase,
