@@ -567,9 +567,9 @@ def _logged_turn_rows(embedded: bool):
 async def _source_push(ch: RecordingCH, c: dict[str, Any]) -> None:
     from server.knowledge.store import source_push
 
-    await source_push.get(ORG, _UUID, ch=ch)
-    await source_push.drive_page(("", ""), ch=ch)
-    await source_push.sealed_page(("", ""), ch=ch)
+    await source_push.get(ORG, NS, _UUID, ch=ch)
+    await source_push.drive_page(("", "", ""), ch=ch)
+    await source_push.sealed_page(("", "", ""), ch=ch)
 
 
 async def _save_logged_turn(ch: RecordingCH, c: dict[str, Any]) -> None:

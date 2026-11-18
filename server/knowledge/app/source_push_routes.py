@@ -17,8 +17,10 @@ router = APIRouter()
 CALLBACK_TIMEOUT_S = 4.0  # not a setting: acknowledge inside the provider's five-second limit
 
 
-@router.post("/hooks/knowledge/{org}/{source_id}/{generation}")
-async def notification(request: Request, org: str, source_id: UUID, generation: UUID) -> Response:
+@router.post("/hooks/knowledge/{org}/{namespace}/{source_id}/{generation}")
+async def notification(
+    request: Request, org: str, namespace: str, source_id: UUID, generation: UUID
+) -> Response:
     set_query_tag("knowledge.source.push")
     try:
         async with asyncio.timeout(CALLBACK_TIMEOUT_S):
@@ -30,7 +32,9 @@ async def notification(request: Request, org: str, source_id: UUID, generation: 
                 if len(raw) + len(chunk) > MAX_BODY_BYTES:
                     return Response(status_code=413)
                 raw.extend(chunk)
-            await receive(org, str(source_id), str(generation), bytes(raw), dict(request.headers))
+            await receive(
+                org, namespace, str(source_id), str(generation), bytes(raw), dict(request.headers)
+            )
     except DeliveryRefused:
         return Response(status_code=403)
     return Response(status_code=200)

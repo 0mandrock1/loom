@@ -27,7 +27,7 @@ const pending: PushStatus = {
   ...disabled,
   status: "pending",
   generation: "generation",
-  callback_url: "https://loom.example/hooks/knowledge/org/id/generation",
+  callback_url: "https://loom.example/hooks/knowledge/org/docs/id/generation",
 };
 
 beforeEach(() => {

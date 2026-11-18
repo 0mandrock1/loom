@@ -90,7 +90,10 @@ def callback_url(reg: PushRegistration) -> str:
         or parsed.path
     ):
         raise BadConfigError("push setup requires LOOM_PUBLIC_BASE_URL with an HTTPS origin")
-    return f"{base}/hooks/knowledge/{quote(reg.org, safe='')}/{reg.source_id}/{reg.generation}"
+    return (
+        f"{base}/hooks/knowledge/{quote(reg.org, safe='')}/{quote(reg.namespace, safe='')}"
+        f"/{reg.source_id}/{reg.generation}"
+    )
 
 
 async def _source(input: PushSourceInput) -> KnowledgeSource:
@@ -103,7 +106,7 @@ async def _source(input: PushSourceInput) -> KnowledgeSource:
 async def _fresh(reg: PushRegistration) -> KnowledgeSource:
     """Called under sources_lease, with current strong reads."""
     fresh = await source_store.get_source(reg.org, reg.namespace, reg.name)
-    current = await store.get(reg.org, reg.source_id)
+    current = await store.get(reg.org, reg.namespace, reg.source_id)
     if (
         fresh is None
         or current is None
@@ -132,14 +135,14 @@ async def _put(reg: PushRegistration, *, retiring: bool = False, ch: Any = None)
 
 async def retire(src: KnowledgeSource) -> None:
     """Caller holds the source lease; clearing setup cannot enable an old build."""
-    current = await store.get(src.org, src.source_id)
+    current = await store.get(src.org, src.namespace, src.source_id)
     if current and current.status != "retired":
         await _put(dataclasses.replace(current, status="retired", secret_enc=""), retiring=True)
 
 
 async def reseal_registry(*, dry_run: bool, ch: Any = None) -> tuple[int, list[str]]:
     """Re-read under the lifecycle lease; a scanned row cannot recreate an erased one."""
-    after = ("", "")
+    after = ("", "", "")
     count = 0
     lost: list[str] = []
     while page := await store.sealed_page(after, ch=ch):
@@ -147,7 +150,9 @@ async def reseal_registry(*, dry_run: bool, ch: Any = None) -> tuple[int, list[s
             async with sources.sources_lease(observed.org, observed.namespace, ch=ch):
                 with sequential_reads():
                     await sources._require_no_erasure(observed.org, observed.namespace, ch=ch)
-                    current = await store.get(observed.org, observed.source_id, ch=ch)
+                    current = await store.get(
+                        observed.org, observed.namespace, observed.source_id, ch=ch
+                    )
                     if current is None or not current.secret_enc:
                         continue
                     fresh = await source_store.get_source(
@@ -164,12 +169,12 @@ async def reseal_registry(*, dry_run: bool, ch: Any = None) -> tuple[int, list[s
                     new = resealed(domain.SECRET_PURPOSE, current.secret_enc)
                     if new is None:
                         if not unseal(domain.SECRET_PURPOSE, current.secret_enc, warn=False):
-                            lost.append(f"{current.org}/{current.source_id}")
+                            lost.append(f"{current.org}/{current.namespace}/{current.source_id}")
                         continue
                     count += 1
                     if not dry_run:
                         await _put(dataclasses.replace(current, secret_enc=new), ch=ch)
-        after = (page[-1].org, page[-1].source_id)
+        after = (page[-1].org, page[-1].namespace, page[-1].source_id)
     return count, lost
 
 
@@ -225,7 +230,7 @@ async def handle_configure(input: PushConfigureInput) -> PushStatusOutput:
 async def handle_status(input: PushStatusInput) -> PushStatusOutput:
     src = await _source(input)
     with sequential_reads():
-        reg = await store.get(src.org, src.source_id)
+        reg = await store.get(src.org, src.namespace, src.source_id)
     if reg is None or reg.status == "retired":
         return PushStatusOutput(
             provider=src.kind, enabled=bool(settings.knowledge_source_push_enabled)
@@ -266,7 +271,7 @@ async def handle_confirm(input: PushConfirmInput) -> PushStatusOutput:
     src = await _source(input)
     async with sources.sources_lease(src.org, src.namespace):
         with sequential_reads():
-            reg = await store.get(src.org, src.source_id)
+            reg = await store.get(src.org, src.namespace, src.source_id)
             if (
                 reg is None
                 or reg.provider not in {"notion", "linear"}
@@ -296,18 +301,18 @@ async def handle_confirm(input: PushConfirmInput) -> PushStatusOutput:
 
 
 async def receive(
-    org: str, source_id: str, generation: str, raw: bytes, headers: dict[str, str]
+    org: str, namespace: str, source_id: str, generation: str, raw: bytes, headers: dict[str, str]
 ) -> None:
     if not settings.knowledge_source_push_enabled:
         raise DeliveryRefused("push is disabled")
     with sequential_reads():
-        reg = await store.get(org, source_id)
+        reg = await store.get(org, namespace, source_id)
     if reg is None or reg.generation != generation or reg.status not in {"pending", "active"}:
         raise DeliveryRefused("unverifiable delivery")
     async with sources.sources_lease(reg.org, reg.namespace):
         with sequential_reads():
             fresh = await _fresh(reg)
-            current = await store.get(org, source_id)
+            current = await store.get(org, namespace, source_id)
             if current is None:
                 raise DeliveryRefused("unverifiable delivery")
             data = _secrets(current)
@@ -397,7 +402,7 @@ async def _renew_drive(reg: PushRegistration, *, initial: bool) -> None:
         async with sources.sources_lease(reg.org, reg.namespace):
             with sequential_reads():
                 src = await _fresh(reg)
-                current = await store.get(reg.org, reg.source_id)
+                current = await store.get(reg.org, reg.namespace, reg.source_id)
                 if current is None:
                     raise DeliveryRefused("setup missing")
                 data = _secrets(current)

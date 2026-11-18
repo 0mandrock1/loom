@@ -206,7 +206,7 @@ async def test_reseal_push_registry_uses_the_supplied_client(
             if "loom.knowledge_source_push" in sql:
                 calls.append("scan")
                 assert params is not None
-                return [dict(row)] if params["after"] == ("", "") else []
+                return [dict(row)] if params["after"] == ("", "", "") else []
             if "loom.erasure_requests" in sql:
                 calls.append("erasure")
             if "loom.instances" in sql:
@@ -217,6 +217,7 @@ async def test_reseal_push_registry_uses_the_supplied_client(
         async def query_one(self, sql: str, params: dict | None = None) -> dict | None:
             if "loom.knowledge_source_push" in sql:
                 calls.append("reread")
+                assert params == {"org": "o", "ns": "docs", "source": "source-id"}
                 return dict(row)
             if "loom.knowledge_sources" in sql:
                 calls.append("source")

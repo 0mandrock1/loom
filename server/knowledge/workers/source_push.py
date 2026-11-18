@@ -20,12 +20,12 @@ async def run_pass() -> dict[str, int]:
     set_query_tag("knowledge_source_push")
     await require_ready()
     try:
-        after = json.loads(pass_context.resume_cursor() or '["", ""]')
+        after = json.loads(pass_context.resume_cursor() or '["", "", ""]')
     except ValueError:
-        after = ["", ""]
-    if not isinstance(after, list) or len(after) != 2 or not all(isinstance(s, str) for s in after):
-        after = ["", ""]
-    rows = await drive_page((after[0], after[1]))
+        after = ["", "", ""]
+    if not isinstance(after, list) or len(after) != 3 or not all(isinstance(s, str) for s in after):
+        after = ["", "", ""]
+    rows = await drive_page((after[0], after[1], after[2]))
     result = {"items_planned": len(rows), "items_done": 0, "failed": 0}
     # Leave one provider attempt and cleanup/status time before the supervisor cancels.
     deadline = (
@@ -46,10 +46,10 @@ async def run_pass() -> dict[str, int]:
                 pass_context.note_failure(e, "channel renewal")
                 log.warning("source push renewal failed: %s", type(e).__name__)
                 result["failed"] += 1
-            pass_context.set_cursor(json.dumps([reg.org, reg.source_id]))
+            pass_context.set_cursor(json.dumps([reg.org, reg.namespace, reg.source_id]))
         if result["items_done"] + result["failed"] == len(rows):
             # A nonempty canonical cursor also resets a supervisor's older cursor.
             if len(rows) < 20:
-                pass_context.set_cursor('["", ""]')
+                pass_context.set_cursor('["", "", ""]')
         rec.outcome = result
     return result

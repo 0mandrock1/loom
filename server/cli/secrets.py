@@ -54,7 +54,7 @@ _KEYS = {
     "loom.code_repos": ("org", "namespace"),
     "loom.qa_sources": ("org", "name"),
     "loom.knowledge_sources": ("org", "namespace", "name"),
-    "loom.knowledge_source_push": ("org", "source_id"),
+    "loom.knowledge_source_push": ("org", "namespace", "source_id"),
     "loom.provider_configuration": ("config_id",),
     "loom.oauth_state": ("record_type", "id"),
     "loom.analysis_secrets": ("id",),

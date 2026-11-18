@@ -18,11 +18,14 @@ def _registration(row: dict[str, Any]) -> PushRegistration:
     )
 
 
-async def get(org: str, source_id: str, *, ch: _CHClient | None = None) -> PushRegistration | None:
+async def get(
+    org: str, namespace: str, source_id: str, *, ch: _CHClient | None = None
+) -> PushRegistration | None:
     row = await (ch or _default_client()).query_one(
         f"SELECT {_COLUMNS} FROM {TABLE} FINAL "
-        "WHERE org = {org:String} AND source_id = {source:String} LIMIT 1",
-        params={"org": org, "source": source_id},
+        "WHERE org = {org:String} AND namespace = {ns:String} "
+        "AND source_id = {source:String} LIMIT 1",
+        params={"org": org, "ns": namespace, "source": source_id},
     )
     return _registration(row) if row else None
 
@@ -33,25 +36,26 @@ async def put(registration: PushRegistration, *, ch: _CHClient | None = None) ->
 
 
 async def drive_page(
-    after: tuple[str, str], *, ch: _CHClient | None = None
+    after: tuple[str, str, str], *, ch: _CHClient | None = None
 ) -> list[PushRegistration]:
     rows = await (ch or _default_client()).query_all(
         f"SELECT {_COLUMNS} FROM {TABLE} FINAL "
         "WHERE provider = 'gdrive' AND status = 'active' "
-        "AND (org, source_id) > {after:Tuple(String, String)} "
-        "ORDER BY org, source_id LIMIT 20",
+        "AND (org, namespace, source_id) > {after:Tuple(String, String, String)} "
+        "ORDER BY org, namespace, source_id LIMIT 20",
         params={"after": after},
     )
     return [_registration(row) for row in rows]
 
 
 async def sealed_page(
-    after: tuple[str, str], *, ch: _CHClient | None = None
+    after: tuple[str, str, str], *, ch: _CHClient | None = None
 ) -> list[PushRegistration]:
     rows = await (ch or _default_client()).query_all(
         f"SELECT {_COLUMNS} FROM {TABLE} FINAL "
-        "WHERE secret_enc != '' AND (org, source_id) > {after:Tuple(String, String)} "
-        "ORDER BY org, source_id LIMIT 100",
+        "WHERE secret_enc != '' "
+        "AND (org, namespace, source_id) > {after:Tuple(String, String, String)} "
+        "ORDER BY org, namespace, source_id LIMIT 100",
         params={"after": after},
     )
     return [_registration(row) for row in rows]
