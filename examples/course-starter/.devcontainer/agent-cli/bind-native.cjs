@@ -73,6 +73,7 @@ function bindingPlan(project, tool, host) {
   const manifest = json(path.join(project, "package.json"));
   const lock = json(path.join(project, "package-lock.json"));
   const wrapperDir = fs.realpathSync(path.join(project, "node_modules", info.wrapper));
+  inside(project, wrapperDir);
   const wrapper = json(path.join(wrapperDir, "package.json"));
   const expected = manifest.dependencies?.[info.wrapper];
   if (!expected || wrapper.name !== info.wrapper || wrapper.version !== expected)
@@ -87,12 +88,11 @@ function bindingPlan(project, tool, host) {
   )
     throw new Error(`Native package is absent from the locked graph: ${info.native}`);
   const nativeDir = fs.realpathSync(path.join(project, "node_modules", info.native));
+  inside(project, nativeDir);
   const native = json(path.join(nativeDir, "package.json"));
   if (native.name !== info.native || native.version !== expected)
     throw new Error(`Native package version mismatch: ${info.native}`);
   const source = fs.realpathSync(path.join(nativeDir, info.file));
-  inside(project, wrapperDir);
-  inside(project, nativeDir);
   inside(nativeDir, source);
   if (!fs.statSync(source).isFile() || fs.statSync(source).size === 0)
     throw new Error(`Native binary is missing: ${info.native}`);
