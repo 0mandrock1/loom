@@ -758,6 +758,11 @@ where such a call can arrive with auth on: the rule refuses it, and the setting 
 needs every caller authenticated. It is also refused together with
 `LOOM_CODE_SANDBOX_REQUIRED=true`, under which no repository job runs as a plain process.
 
+Where `LOOM_CODE_GIT_PROXY_URL` is set, those git jobs connect to the operator's proxy
+alone: it decides what they reach, and an `ssh` remote is refused
+([git through a forward proxy](#git-through-a-forward-proxy)). The rules for loading the
+setting stay as they are.
+
 The setting also resumes the git jobs of entries that members added before
 `LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY` was set. They keep the remotes their adders
 named and are cloned and fetched the same way. Before turning it on, list the branches in
