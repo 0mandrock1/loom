@@ -364,6 +364,9 @@ async def _source(
             ):
                 raise _refuse(f"the {kind} census cursor or identity is unreadable")
             cursor, started = key, True
+            # An ownerless namespace is a resource, not a person's account.
+            if kind == "accounts" and subject == "":
+                continue
             if kind == "sessions" and not await _current_session(client, identity, deadline):
                 continue
             status["checked"] += 1

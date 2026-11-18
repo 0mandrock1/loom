@@ -83,14 +83,16 @@ def grant(**changes):
     }
 
 
-async def test_callback_requires_provisioning_before_jit_lookup_or_write(
-    people, session, monkeypatch
-):
+async def test_callback_requires_provisioning_before_jit_writes(people, session, monkeypatch):
+    async def read_identity(email):
+        return None
+
     async def no_jit(*args, **kwargs):
-        pytest.fail("an unprovisioned callback must not find or make an account")
+        pytest.fail("an unprovisioned callback must not finish or create an account")
 
     monkeypatch.setattr(jit, "finish_unfinished_account", no_jit)
-    monkeypatch.setattr(login, "resolve_identity_for_email", no_jit)
+    monkeypatch.setattr(jit, "jit_provision_for_email", no_jit)
+    monkeypatch.setattr(login, "resolve_identity_for_email", read_identity)
     result = await oauth._account_for(
         "missing@example.test", {"kind": "dashboard"}, "unit-upstream"
     )

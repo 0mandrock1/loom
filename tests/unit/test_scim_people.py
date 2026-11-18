@@ -92,7 +92,7 @@ class People:
             return {
                 "lineage_count": len(above),
                 "subject_bytes": size,
-                "inherit_creator_grants": False,
+                "inherit_creator_grants": row.get("inherit_creator_grants", False),
                 "kind": "personal",
                 "revoked_at": row.get("revoked_at"),
                 "expires_at": row.get("expires_at"),

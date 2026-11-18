@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from server.auth import authz, scim, service_accounts
+from server.auth import authz, oauth, scim, service_accounts
 from server.core import cell, ch
 from server.settings import settings
 from tests.integration._resources import unique_org
@@ -329,3 +329,14 @@ async def test_real_person_queries_report_their_physical_work(
     assert len(rows) >= 3
     assert any(int(row["read_rows"]) > 0 for row in rows)
     record_property("scim_person_query_log", json.dumps(rows, default=str))
+
+
+async def test_callback_resolves_verified_work_alias_before_enforcement(
+    people: People, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner, contact = people.email("callback-owner"), people.email("callback-contact")
+    namespace = await people.account(owner, contact)
+    await people.provision(owner, work=(contact,))
+    monkeypatch.setattr(settings, "oidc_jit_provision", False)
+    observed = await oauth._account_for(contact, {"kind": "dashboard"}, "unused-upstream")
+    assert observed == (owner, people.org, [namespace], ["writer"])

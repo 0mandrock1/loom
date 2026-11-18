@@ -41,7 +41,17 @@ async def _page(people: People, kind: str, *, after0="", after1="", bytes_=65536
 async def test_account_census_projects_actual_keys_and_refuses_oversized_transfer(people: People):
     owner = people.email("census-owner")
     namespace = await people.account(owner, owner, password=True)
+    ownerless = "resource-" + uuid.uuid4().hex
+    await people.client.insert(
+        "loom.namespaces",
+        [{"org": people.org, "namespace": ownerless, "owner_email": "", "active": True}],
+    )
     page = await _page(people, "accounts", after0=people.org, after1=namespace[:-1])
+    resources = [
+        tuple(row) for row in page["identities"] if tuple(row[0:2]) == (people.org, ownerless)
+    ]
+    assert len(resources) == 1
+    assert resources[0][:7] == (people.org, ownerless, people.org, "", "", "", 0)
     identities = [
         tuple(row) for row in page["identities"] if tuple(row[0:2]) == (people.org, namespace)
     ]

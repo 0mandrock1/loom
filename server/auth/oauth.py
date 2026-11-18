@@ -798,7 +798,10 @@ async def _account_for(
     from server.auth.login import SignInUnavailable, resolve_identity_for_email
 
     try:
-        if await scim.refuses_subject(email, org="", verified_email=email):  # before JIT writes
+        # Resolve ownership read-only before borrowing a canonical owner's work alias.
+        existing = await resolve_identity_for_email(email)
+        subject, org = (existing[0], existing[1]) if existing is not None else (email, "")
+        if await scim.refuses_subject(subject, org=org, verified_email=email):
             return _Denied(_SIGN_IN_REFUSED)
         await finish_unfinished_account(email)
         resolved = await resolve_identity_for_email(email)
