@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
+from collections import defaultdict, deque
 from dataclasses import replace
 from html.parser import HTMLParser
-from itertools import pairwise
+from itertools import accumulate, pairwise
 from xml.etree.ElementTree import Element
 
 from markdown import Markdown
@@ -129,14 +131,19 @@ def _site_line(line: str) -> tuple[int, str]:
 def _site_lists(text: str, protected: list[tuple[int, int]]) -> list[tuple[int, int]]:
     # The site's two-space list extension has no source maps; protect its continuations
     # in addition to CommonMark's marker-width-dependent ranges.
+    ordered = sorted(protected)
+    starts = [a for a, _ in ordered]
+    ends = list(accumulate((b for _, b in ordered), max))
+    exact_starts = set(starts)
     spans = []
     active, after_blank, offset = None, False, 0
     for line in text.splitlines(keepends=True):
-        inside = any(a <= offset < b for a, b in protected)
+        index = bisect_right(starts, offset)
+        inside = bool(index and offset < ends[index - 1])
         depth, logical = _site_line(line)
         item = None if inside else re.match(r"^( *)(?:[-+*]|\d+[.)])\s", logical)
         indent = len(logical) - len(logical.lstrip(" "))
-        new_block = not inside or any(a == offset for a, _ in protected)
+        new_block = not inside or offset in exact_starts
         if (
             active is not None
             and new_block
@@ -438,17 +445,21 @@ def table_labels(text: str) -> dict[tuple[str, int, int], Label]:
     """Cell text from both existing dialects; source maps survive inline-code pipes."""
     github = _github_rows(text)
     site = _site_tables(text).rows
-    remaining = list(github)
+    by_label: dict[tuple[Label, ...], deque[int]] = defaultdict(deque)
+    for index, row in enumerate(github):
+        by_label[tuple(replace(c, start=0, end=0) for c in row)].append(index)
+    consumed = set()
     rows = []
     for row in site:
-        match = next((r for r in remaining if [replace(c, start=0, end=0) for c in r] == row), None)
-        if match is not None:
-            remaining.remove(match)
-            rows.append(match)
+        matches = by_label.get(tuple(row))
+        if matches:
+            index = matches.popleft()
+            consumed.add(index)
+            rows.append(github[index])
         else:
             # The site parser has no source maps. These obligations remain page-wide.
             rows.append([replace(c, end=len(text)) for c in row])
-    rows.extend(remaining)
+    rows.extend(row for index, row in enumerate(github) if index not in consumed)
     labels = {}
     for index, row in enumerate(rows):
         field = row[0].code[0] if row and not row[0].text and len(row[0].code) == 1 else ""
