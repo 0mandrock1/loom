@@ -183,7 +183,7 @@ async def test_live_search_keeps_only_asker_connected_authorized_sources_and_ori
 
 async def test_live_search_expiry_joins_the_started_native_call(native, monkeypatch):
     native.block = True
-    monkeypatch.setattr(live_search, "TIMEOUT_S", 0)
+    monkeypatch.setattr(live_search.settings, "knowledge_live_search_timeout_s", 0)
     async with _request(native.auth) as bag:
         task = asyncio.create_task(live_search.search("org", ["allowed"], "question", top_k=2))
         assert await task is None
