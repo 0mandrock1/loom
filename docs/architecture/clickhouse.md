@@ -746,7 +746,7 @@ with `purge=true`, runner state, and the supersession rows `knowledge.restore` r
   tail. One Keeper write, no part, no mutation.
 
 **Classification for erasure.** `server/erasure/store/census.py` puts every table in
-`schemas/schema.sql` in exactly one list, and `tests/unit/test_every_table_is_classified.py`
+`schemas/schema.sql` in the lists below, and `tests/unit/test_every_table_is_classified.py`
 fails on a table in none:
 
 | List                     | Holds                                                                                                      |
