@@ -387,7 +387,7 @@
     "sdk/python/loom/integrations/claude_memory.py": "970aff889f2aa9d948457de51d58d8d32a6c0d7f91acbf390c25ac1230419f36",
     "sdk/python/loom/integrations/google_adk.py": "237251456c2c18423f64419826a7296758d087aa3e05b11c6d1b37f06709f53a",
     "sdk/python/loom/integrations/haystack.py": "d81b7e445fa139a889e64127d13f3f9982dea9786ffc1de8bfd3970bfcaa46af",
-    "sdk/python/loom/integrations/langgraph.py": "2cfde5319386f3866667f6ec89ccd4d5c25e63883dd851c852ec24e2e81dc96c",
+    "sdk/python/loom/integrations/langgraph.py": "5d68e6ab1645d868477a13b14aa6d734c72f72057464cac9a21aa707add17e7b",
     "sdk/python/loom/integrations/llamaindex.py": "46f226f75befdb7870fae48a3ae860517bbda651767d8861651ebed00ab89bc2",
     "sdk/python/loom/integrations/openai_agents.py": "e6fe0384a361c2c5e48db26837d8c454e52b5f7fb010fd7f6541f24a22459a7a",
     "sdk/python/loom/memory.py": "3ba359cd1034aacaddc5f0c2605df20fa11b55a304d230863fceb5756cabf0d4",
