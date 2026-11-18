@@ -18,6 +18,7 @@ from tests.unit.test_google_workspace import _http
 from tests.unit.test_google_workspace import account as account
 
 pytestmark = pytest.mark.asyncio
+_NATIVE_SCIM_READ = scim.deactivated
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +33,7 @@ def scim_rows(monkeypatch: pytest.MonkeyPatch) -> set[str]:
             return {"x": 1} if params["id"] in ended else None
 
     rows = Rows()
+    monkeypatch.setattr(scim, "deactivated", _NATIVE_SCIM_READ)
     monkeypatch.setattr(scim, "get_client", lambda: rows)
     return ended
 

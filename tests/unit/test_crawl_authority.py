@@ -34,7 +34,7 @@ from tests.unit.test_crawl_registration import _token
 from tests.unit.test_crawl_signing_authority import key_view as key_view
 from tests.unit.test_google_workspace import account as account
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.claim_cap]
 _BOUNDS = crawl_authority.Bounds(crawl_expansion.Limits(16384, 10, 10), 60, 0)
 _NATIVE_SCIM_READ = scim.deactivated
 

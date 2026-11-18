@@ -18,6 +18,7 @@ pytestmark = pytest.mark.asyncio
 async def test_capture_retains_verified_canonical_subject_not_email_or_memory_user_id(
     world,
 ) -> None:
+    world, _http = world
     encoded = await erasure.capture("scim-person-id", "person@example.com", {"person": {"team"}})
     captured = erasure.load("scim-person-id", encoded)
     assert captured.id == "scim-person-id"
@@ -31,6 +32,7 @@ async def test_capture_retains_verified_canonical_subject_not_email_or_memory_us
 async def test_contact_spelling_without_actual_verified_tie_cannot_capture_another_person(
     world,
 ) -> None:
+    world, _http = world
     with pytest.raises(BackendUnavailableError):
         await erasure.capture("scim-person-id", "unverified@example.com", {"person": {"team"}})
     assert not world.native_requests and not world.writes

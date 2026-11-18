@@ -22,7 +22,7 @@ from tests.unit.test_connected_source_authority import world as world
 from tests.unit.test_crawl_signing_authority import _SECOND
 from tests.unit.test_crawl_signing_authority import key_view as key_view
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.claim_cap]
 _SCOPE = registration.Scope("team", "shared-space", "crawl-source", "crawl-generation", "f" * 64)
 
 
