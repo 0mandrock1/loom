@@ -1061,7 +1061,7 @@ class CheckedPack:
     def publication_proofs(self) -> tuple[SearchProofs, ...]:
         if self._ordinary_mode or self.lost or self._failed:
             return ()
-        proofs = []
+        proofs: list[SearchProofs] = []
         if "knowledge" in self._contributions and self._direct is not None:
             proofs.extend(self._direct.publication_proofs())
         if "memory_stack" in self._contributions and self._stack is not None:
