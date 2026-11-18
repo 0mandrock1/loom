@@ -132,7 +132,7 @@ async def _deliver_claimed(
         "namespace": warning.namespace,
         "user_id": warning.user_id or None,
         "cap_usd": warning.cap,
-        "spent_24h_usd": warning.spent,
+        "spent_24h_usd": None if warning.user_id else warning.spent,
         "share": warning.share,
     }
     row = {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import replace
 from types import SimpleNamespace
@@ -63,6 +64,44 @@ async def test_warning_carries_the_user_axis_and_derived_provenance(
     assert row["source_class"] == "derived"
     assert row["actor"] == "process:budget_warning"
     assert '"user_id": "alice"' in row["patch"]
+
+
+@pytest.mark.parametrize("operator", [False, True])
+@pytest.mark.parametrize("user_id", ["alice", ""])
+async def test_user_warning_redacts_spend_even_when_an_operator_initiates_delivery(
+    warning: BudgetWarning,
+    delivery: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    operator: bool,
+    user_id: str,
+) -> None:
+    from server.auth.jwt import AuthInfo
+    from server.operations.base import Role
+
+    auth = (
+        AuthInfo(
+            subject="operator",
+            org="o",
+            namespaces=("*",),
+            roles=(Role.PLATFORM_ADMIN,),
+            is_service_account=False,
+        )
+        if operator
+        else None
+    )
+    monkeypatch.setattr("server.auth.context.current_auth", lambda: auth)
+    warning = replace(warning, user_id=user_id)
+    assert await alerts.deliver(warning)
+    row = delivery["insert"].call_args.args[0]
+    assert json.loads(row["patch"]) == {
+        "namespace": "n",
+        "user_id": user_id or None,
+        "cap_usd": 2,
+        "spent_24h_usd": None if user_id else 1.8,
+        "share": 0.8,
+    }
+    assert row["note"] == ("User budget warning" if user_id else "Namespace budget warning")
+    assert alerts.event_id(warning) == alerts.event_id(replace(warning, spent=3.87654))
 
 
 @pytest.mark.parametrize("inbox", [None, {"owner_namespace": "other"}])

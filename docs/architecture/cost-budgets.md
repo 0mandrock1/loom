@@ -11,7 +11,12 @@ a token subject is never substituted for an unattributed user. These soft contro
 not reserve spend or establish a billing identity.
 
 `cost.budget_status` shares the policy and spend read with the guards. User mode requires
-a namespace, reports that user's counters and also exposes `namespace_over_cap`.
+a namespace and reports the user's cap and verdict, plus `namespace_over_cap`. Exact
+user spend and its percentage are `null` unless the caller is a verified platform admin
+without namespace-role restrictions. This holds even when every event is ordinary;
+varying the presence of a number would reveal marked activity. Missing auth grants no
+private spend access. Internal accounting, admission and budget pressure include all
+spend, including marked requests. Namespace and org totals remain numeric.
 Transport admission enforces a token's pinned user. Namespace and org modes retain their
 existing read scopes. The [cost guide](../features/observability/cost-and-usage.md#daily-spend-caps)
 describes configuration and warning timing.
@@ -25,6 +30,15 @@ with each other. There is no discovery worker. The event ID includes org, namesp
 and UTC day. A distributed claim and strongly consistent event read serialize the
 check and insert; a deduplication token plus readback handles an uncertain retry.
 Notification failures cannot change a cap verdict.
+
+User warning payloads carry the selected user, cap and warning share, with
+`spent_24h_usd: null`. This applies to the inbox, polling, streams and webhook, even
+when an operator's check triggers delivery: the initiator's authority does not establish
+the recipient's authority. Namespace warnings retain their namespace spend total.
+The user cap verdict and warning threshold crossing reveal bounds on spend; an admin
+who changes caps can infer tighter bounds. This is an accepted policy signal alongside
+the [marked-spend totals exception](document-sources.md), not full noninterference.
+It grants no access to marked work, models or outcomes.
 
 Task updates and watch streams apply the caller's user and session scope to warnings
 before pagination. An incomplete scope receives no warnings; ordinary task events stay

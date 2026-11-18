@@ -9125,7 +9125,7 @@ class CostBudgetStatusBody(TypedDict, total=False):
 class CostBudgetStatusOutput(TypedDict, total=False):
     namespace: Required[str]
     user_id: NotRequired[Optional[str]]
-    spent_24h_usd: Required[float]
+    spent_24h_usd: Required[Optional[float]]
     cap_usd: Required[float]
     cap_source: Required[
         Literal["namespace", "global", "namespace_user", "global_user", "uncapped", "org"]
