@@ -432,9 +432,12 @@ async def test_crash_observation_distinguishes_unproved_predicates(monkeypatch, 
     after = rows if fault == "replacement_mismatch" else [rows[1], replacement]
     monkeypatch.setattr(data, "_workers", lambda *_: after)
     client = AsyncMock()
-    client.query_all.return_value = (
-        [] if fault == "missing_rows" else [{**victim, "state": "retired", "version": 6}]
-    )
+    client.query_all.side_effect = [
+        [rows[0]],
+        [rows[1]],
+        [] if fault == "missing_rows" else [{**victim, "state": "retired", "version": 6}],
+        [victim],
+    ]
     monkeypatch.setattr(
         provider_participants,
         "running_queries",
@@ -452,3 +455,64 @@ async def test_crash_observation_distinguishes_unproved_predicates(monkeypatch, 
         assert victim["host_proof"] not in str(failure.value)
         assert victim["participant_id"] not in str(failure.value)
     assert signals == [victim]
+    reads = client.query_all.await_args_list
+    assert [call.args[1] for call in reads[:2]] == [
+        {"ids": [row["participant_id"]]} for row in rows
+    ]
+    assert all(
+        "SELECT toString(participant_id) AS participant_id" in call.args[0] for call in reads[:2]
+    )
+    if fault == "missing_rows":
+        assert '"reference_count": 1' in str(failure.value)
+        assert '"reference_identity": true' in str(failure.value)
+        assert "SELECT participant_id FROM" in reads[-1].args[0]
+    else:
+        assert all("SELECT participant_id FROM" not in call.args[0] for call in reads)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault", ["missing-first", "missing-second", "wrong-identity", "reference-error"]
+)
+async def test_crash_refuses_unreadable_captured_worker_before_signalling(monkeypatch, fault):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    parent, _processes, rows = _process_fixture(monkeypatch)
+    monkeypatch.setattr(data, "_supervisor", lambda: parent)
+    monkeypatch.setattr(data, "workers", AsyncMock(return_value=rows))
+    signals = []
+    monkeypatch.setattr(data, "_kill_worker", lambda victim, _: signals.append(victim))
+    monkeypatch.setattr(data.provider_process, "proves_stopped", lambda _: True)
+    client = AsyncMock()
+
+    async def query(sql, parameters):
+        selected = next(row for row in rows if [row["participant_id"]] == parameters["ids"])
+        if sql.startswith("SELECT participant_id FROM"):
+            if fault == "reference-error":
+                raise RuntimeError("private diagnostic failure")
+            return [selected]
+        if fault == "missing-second" and selected == rows[0]:
+            return [selected]
+        return [rows[1]] if fault == "wrong-identity" else []
+
+    client.query_all.side_effect = query
+    ticks = iter([0, 0, 241])
+    monkeypatch.setattr(data, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    monkeypatch.setattr(data.asyncio, "sleep", AsyncMock())
+    with pytest.raises(AssertionError, match="Captured worker readback failed") as failure:
+        await data.crash_worker(client)
+    assert signals == []
+    message = str(failure.value)
+    assert '"reader_identity": false' in message
+    assert f'"reader_count": {int(fault == "wrong-identity")}' in message
+    if fault == "reference-error":
+        assert '"reference_read": "query_error"' in message
+        assert "private diagnostic failure" not in message
+    else:
+        assert '"reference_count": 1' in message
+        assert '"reference_identity": true' in message
+    assert all(row["host_proof"] not in message for row in rows)
+    assert [call.args[1] for call in client.query_all.await_args_list] == (
+        [{"ids": [rows[0]["participant_id"]]}] if fault == "missing-second" else []
+    ) + [{"ids": [rows[int(fault == "missing-second")]["participant_id"]]}] * 2

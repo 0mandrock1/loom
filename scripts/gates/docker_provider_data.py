@@ -160,6 +160,30 @@ def _kill_worker(worker: dict, parent: dict) -> None:
         os.close(fd)
 
 
+async def _retirement_rows(client, captured: list[dict]) -> list[dict]:
+    return await client.query_all(
+        "SELECT toString(participant_id) AS participant_id, state, version, host_proof "
+        "FROM loom._provider_participants FINAL WHERE participant_id IN {ids:Array(UUID)}",
+        {"ids": [row["participant_id"] for row in captured]},
+    )
+
+
+async def _native_retirement_observation(client, captured: list[dict]) -> dict:
+    try:
+        rows = await client.query_all(
+            "SELECT participant_id "
+            "FROM loom._provider_participants FINAL WHERE participant_id IN {ids:Array(UUID)}",
+            {"ids": [row["participant_id"] for row in captured]},
+        )
+        return {
+            "reference_count": len(rows),
+            "reference_identity": {str(row["participant_id"]) for row in rows}
+            == {row["participant_id"] for row in captured},
+        }
+    except Exception:  # noqa: BLE001 — diagnostic failure cannot replace the unproved retirement
+        return {"reference_read": "query_error"}
+
+
 async def retired(client, captured: list[dict], *, observation: dict | None = None) -> bool:
     from server.insights.store.provider_participants import running_queries
 
@@ -168,11 +192,7 @@ async def retired(client, captured: list[dict], *, observation: dict | None = No
             observation["retirement"] = reason
         return reason == "proved"
 
-    rows = await client.query_all(
-        "SELECT toString(participant_id) AS participant_id, state, version, host_proof "
-        "FROM loom._provider_participants FINAL WHERE participant_id IN {ids:Array(UUID)}",
-        {"ids": [row["participant_id"] for row in captured]},
-    )
+    rows = await _retirement_rows(client, captured)
     if len(rows) != len(captured):
         return result("row_count")
     expected = {row["participant_id"]: row for row in captured}
@@ -196,6 +216,18 @@ async def crash_worker(client) -> None:
     parent = _supervisor()
     before = await workers(client)
     victim = before[0]
+    for worker in before:
+        rows = await _retirement_rows(client, [worker])
+        identity_matches = len(rows) == 1 and rows[0]["participant_id"] == worker["participant_id"]
+        if not identity_matches:
+            readback = {
+                "reader_count": len(rows),
+                "reader_identity": identity_matches,
+                **await _native_retirement_observation(client, [worker]),
+            }
+            raise AssertionError(
+                "Captured worker readback failed: " + json.dumps(readback, sort_keys=True)
+            )
     _kill_worker(victim, parent)
     deadline = time.monotonic() + 240
     observation: dict = {"death": "not_checked", "retirement": "not_checked"}
@@ -215,6 +247,8 @@ async def crash_worker(client) -> None:
             if len(new) == 2 and len(old & new) == 1 and victim["participant_id"] not in new:
                 return
         await asyncio.sleep(1)
+    if observation["retirement"] == "row_count":
+        observation.update(await _native_retirement_observation(client, [victim]))
     raise AssertionError(
         "Crashed worker retirement or supervised replacement was not proved: "
         + json.dumps(observation, sort_keys=True)
