@@ -253,6 +253,10 @@
       "category": "reference",
       "reason": "Reads or removes stored records by their identity, prefix or exact version; automatic content writes remain classified."
     },
+    "sdk/python/loom/memory.py:<dynamic>:827032f3ae5b4321f9cb:1": {
+      "category": "delivery",
+      "reason": "Forwards only the separately scanned coalescer memory.set and memory.bulk_set payloads; queued value and identity builders are pinned in this module."
+    },
     "sdk/python/loom/run.py:run.get:82577ccc639b723c872d:1": {
       "category": "explicit",
       "reason": "Implements an explicit run read, list or grading request; ambient begin and complete sends are classified separately."
@@ -269,6 +273,10 @@
       "category": "delivery",
       "reason": "Forwards a supplied operation or callable; its producers in this client are scanned separately."
     },
+    "sdk/python/loom/session.py:<dynamic>:a57c3014e84e30d6f6a7:1": {
+      "category": "delivery",
+      "reason": "Forwards the operation and body from separately scanned session capture producers without selecting additional content; this module pins transcript, carry-over, query and thread builders."
+    },
     "sdk/python/loom/session.py:context.fetch:92d5871182fbe6421b70:1": {
       "category": "explicit",
       "reason": "Forwards the content, blob key or pattern supplied to the explicit session offload or fetch method."
@@ -277,7 +285,7 @@
       "category": "explicit",
       "reason": "Forwards the content, blob key or pattern supplied to the explicit session offload or fetch method."
     },
-    "sdk/python/loom/session.py:conversation.get:c3c21b515c3cee0a2d49:1": {
+    "sdk/python/loom/session.py:conversation.get:21fae2d860015a7cceb4:1": {
       "category": "reference",
       "reason": "Reads history using the thread identity and fixed limits, without sending transcript text."
     },
@@ -378,8 +386,9 @@
     "sdk/python/loom/integrations/langgraph.py": "2cfde5319386f3866667f6ec89ccd4d5c25e63883dd851c852ec24e2e81dc96c",
     "sdk/python/loom/integrations/llamaindex.py": "46f226f75befdb7870fae48a3ae860517bbda651767d8861651ebed00ab89bc2",
     "sdk/python/loom/integrations/openai_agents.py": "edf61c0aa6d46778fcfcb7459f7bcc343a0364ec4a76a5e427a5e8f79136e748",
+    "sdk/python/loom/memory.py": "3ba359cd1034aacaddc5f0c2605df20fa11b55a304d230863fceb5756cabf0d4",
     "sdk/python/loom/run.py": "3d408cedd849fe9c16a9cb1a57dbe88367993aa225f6a8b23bac8c644e04723b",
-    "sdk/python/loom/session.py": "cddda21fbf16dfde9385a85788a35a945940b9433d56dd0690f996c6ecb2c4fe",
+    "sdk/python/loom/session.py": "5f0fd61fcfdbf9d60888b111887fca8f32e24eb51ca9ff04a256901657c3202b",
     "sdk/typescript/src/integrations/claude-memory.ts": "c846f0011d7cf1ba4b30e99fbfd8adb6b29abff56856d0dbe14fba620007f6bc",
     "sdk/typescript/src/integrations/google-adk.ts": "26035863d6a81630e1a10c2045128b4483151ad9e4d13e9202d9c90054cf62d6",
     "sdk/typescript/src/integrations/langchain.ts": "2e6b93cbd2eb3ed57d910404845f8de9b06b9d3e9e2c59194100ad95f8819ce8",

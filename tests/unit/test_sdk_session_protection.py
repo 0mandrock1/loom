@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 import pytest
 from loom.agent import Agent
+from loom.errors import BackendUnavailable
 from loom.session_protection import (
     AutomaticCaptureSuppressed,
     SessionProtection,
@@ -398,6 +399,188 @@ async def test_bound_json_route_is_decoded_once(family: SessionProtection) -> No
     try:
         assert await transport.request_json("GET", "/v1/example") == {"found": False}
         assert len(decoded) == 1
+    finally:
+        await transport.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", ["network", "cancel"])
+@pytest.mark.parametrize("status", [200, 503])
+async def test_interrupted_json_protects_before_the_next_automatic_request(
+    family: SessionProtection, interruption: str, status: int
+) -> None:
+    class Interrupted(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'{"mirrored":tr'
+            if interruption == "cancel":
+                raise asyncio.CancelledError
+            raise httpx.ReadError("cut off")
+
+    sends = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sends.append(request)
+        return httpx.Response(
+            status,
+            stream=Interrupted(),
+            headers={"content-type": "application/json" if status == 200 else "text/plain"},
+        )
+
+    transport = Transport("http://inert.invalid", session_protection=family)
+    transport._client._transport = httpx.MockTransport(respond)
+    expected = asyncio.CancelledError if interruption == "cancel" else BackendUnavailable
+    try:
+        with family.automatic():
+            with pytest.raises(expected):
+                await transport.request_json("GET", "/v1/example")
+            assert family.protected
+            with pytest.raises(AutomaticCaptureSuppressed):
+                await transport.request_json("GET", "/v1/example")
+        assert len(sends) == 1
+    finally:
+        await transport.close()
+
+
+async def _opening_binding_call(transport: Transport, route: str) -> None:
+    if route == "post":
+        await transport.post("/v1/knowledge.get", {})
+    elif route == "stream":
+        async with transport.stream("/assistant/chat", json={}) as response:
+            await response.aread()
+    else:
+        await transport.request_json("GET", "/v1/example")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_response_read_retains_every_opening_observer(
+    family: SessionProtection, tmp_path: Path, automatic: bool
+) -> None:
+    ambient = SessionProtection.create(base=tmp_path / "ambient")
+    intermediate = SessionProtection.create(base=tmp_path / "intermediate")
+    replacement = SessionProtection.create(base=tmp_path / "replacement")
+    transport = Transport("http://inert.invalid", session_protection=family)
+
+    class Rebind(httpx.Auth):
+        async def async_auth_flow(self, request):
+            transport.session_protection = intermediate
+            yield request
+
+    class Body(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await asyncio.sleep(0)
+            transport.session_protection = replacement
+            yield b'{"mirrored":true}'
+
+    transport._client.auth = Rebind()
+    transport._client._transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, stream=Body(), headers={"content-type": "application/json"}
+        )
+    )
+    try:
+        if automatic:
+            with ambient.automatic():
+                await _opening_binding_call(transport, "post")
+        else:
+            await _opening_binding_call(transport, "post")
+        assert all(root.protected for root in (family, intermediate, replacement))
+        assert ambient.protected is automatic
+    finally:
+        await transport.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["post", "request_json", "stream", "json_without_content_type"])
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_opening_binding_observes_after_client_rebind(
+    family: SessionProtection, tmp_path: Path, route: str, automatic: bool
+) -> None:
+    ambient = SessionProtection.create(base=tmp_path / "ambient")
+    replacement = SessionProtection.create(base=tmp_path / "replacement")
+    transport = Transport("http://inert.invalid", session_protection=family)
+
+    class Rebind(httpx.Auth):
+        async def async_auth_flow(self, request):
+            await asyncio.sleep(0)
+            transport.session_protection = replacement
+            yield request
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if route == "stream":
+            return httpx.Response(
+                200,
+                content=b'data: {"mirrored":true}\n\n',
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200,
+            content=b'{"mirrored":true}',
+            headers={}
+            if route == "json_without_content_type"
+            else {"content-type": "application/json"},
+        )
+
+    transport._client.auth = Rebind()
+    transport._client._transport = httpx.MockTransport(respond)
+    try:
+        if automatic:
+            with ambient.automatic():
+                await _opening_binding_call(transport, route)
+        else:
+            await _opening_binding_call(transport, route)
+        assert family.protected
+        assert replacement.protected
+        assert ambient.protected is automatic
+    finally:
+        await transport.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route,phase",
+    [("post", "auth"), ("post", "before_post"), ("request_json", "auth"), ("stream", "auth")],
+)
+async def test_opening_binding_stops_dispatch_after_rebind_and_mark(
+    family: SessionProtection, tmp_path: Path, route: str, phase: str
+) -> None:
+    ambient = SessionProtection.create(base=tmp_path / "ambient")
+    replacement = SessionProtection.create(base=tmp_path / "replacement")
+    transport = Transport("http://inert.invalid", session_protection=family)
+    sends = []
+
+    async def rebind():
+        await asyncio.sleep(0)
+        transport.session_protection = replacement
+        family.mark()
+
+    class Rebind(httpx.Auth):
+        async def async_auth_flow(self, request):
+            if phase == "auth":
+                await rebind()
+            yield request
+
+    async def before_post(path, payload):
+        await rebind()
+        return {}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sends.append(request)
+        if route == "stream":
+            return httpx.Response(
+                200, content=b"data: {}\n\n", headers={"content-type": "text/event-stream"}
+            )
+        return httpx.Response(200, json={})
+
+    if phase == "before_post":
+        transport.before_post = before_post
+    transport._client.auth = Rebind()
+    transport._client._transport = httpx.MockTransport(respond)
+    try:
+        with ambient.automatic(), pytest.raises(AutomaticCaptureSuppressed):
+            await _opening_binding_call(transport, route)
+        assert sends == []
+        assert not replacement.protected
     finally:
         await transport.close()
 

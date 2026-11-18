@@ -4,13 +4,14 @@ import {
   AutomaticCaptureSuppressed,
   SessionCapture,
   SessionProtection,
+  type SessionProtectionStore,
   SessionProtectionUnavailable,
 } from "./session-protection.js";
 import { Transport } from "./transport.js";
 
 function family() {
   const state = { value: "clean" as "clean" | "protected", marks: 0 };
-  const root = new SessionProtection({
+  const store: SessionProtectionStore = {
     async read() {
       return state.value;
     },
@@ -18,7 +19,8 @@ function family() {
       state.marks++;
       state.value = "protected";
     },
-  });
+  };
+  const root = new SessionProtection(store);
   return { state, root };
 }
 

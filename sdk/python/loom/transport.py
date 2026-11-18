@@ -46,6 +46,9 @@ from loom.machine import MachineLogin
 from loom.retry import DEFAULT_MAX_RETRY_AFTER_S, DEFAULT_RETRY_POLICY, RetryPolicy, coerce_policy
 from loom.session_protection import (
     SessionProtection,
+    SessionProtectionUnavailable,
+    automatic_for,
+    automatic_roots,
     has_protection,
     observation_scope,
     observe_response,
@@ -379,8 +382,15 @@ class Transport:
             return
         content_type = response.headers.get("content-type", "").lower()
         if response.status_code >= 400 or "json" in content_type:
-            await response.aread()
-            self._observe_json(response)
+            with observation_scope(roots):
+                try:
+                    await response.aread()
+                except BaseException:
+                    # An interrupted envelope cannot establish absence of private metadata.
+                    with contextlib.suppress(SessionProtectionUnavailable):
+                        refuse_response(self.session_protection)
+                    raise
+                self._observe_json(response)
         elif "text/event-stream" in content_type:
             protect_event_stream(response, roots)
 
@@ -541,6 +551,7 @@ class Transport:
         nowhere else."""
         require_automatic_allowed(self.session_protection)
         roots = response_roots(self.session_protection)
+        automatic = automatic_roots(self.session_protection)
         if not path.startswith("/") or path.startswith("//"):
             raise ValueError(f"not a path on {self.base_url}: {path!r}")
         request_id = str(uuid.uuid4())
@@ -550,7 +561,7 @@ class Transport:
         waited_s = 0.0
         while True:
             try:
-                with observation_scope(roots):
+                with automatic_for(automatic), observation_scope(roots):
                     resp = await self._client.request(
                         method, path, json=json, params=params, content=content, headers=headers
                     )
@@ -579,8 +590,11 @@ class Transport:
         content: bytes | None = None,
     ) -> dict[str, Any]:
         """`request`, decoded: the JSON object the route answers."""
-        resp = await self.request(method, path, json=json, params=params, content=content)
-        return self._response_object(path, resp, resp.headers.get("X-Request-Id", ""))
+        roots = response_roots(self.session_protection)
+        automatic = automatic_roots(self.session_protection)
+        with automatic_for(automatic), observation_scope(roots):
+            resp = await self.request(method, path, json=json, params=params, content=content)
+            return self._response_object(path, resp, resp.headers.get("X-Request-Id", ""))
 
     @contextlib.asynccontextmanager
     async def stream(
@@ -601,6 +615,7 @@ class Transport:
         bounds each read (default: the transport's timeout)."""
         require_automatic_allowed(self.session_protection)
         roots = response_roots(self.session_protection)
+        automatic = automatic_roots(self.session_protection)
         if not path.startswith("/") or path.startswith("//"):
             raise ValueError(f"not a path on {self.base_url}: {path!r}")
         request_id = str(uuid.uuid4())
@@ -615,7 +630,7 @@ class Transport:
         timeout = httpx.Timeout(self._timeout_s, read=read_timeout_s or self._timeout_s)
         try:
             async with contextlib.AsyncExitStack() as stack:
-                with observation_scope(roots):
+                with automatic_for(automatic), observation_scope(roots):
                     resp = await stack.enter_async_context(
                         self._client.stream(
                             "POST", path, json=dict(json), headers=sent, timeout=timeout
@@ -626,7 +641,8 @@ class Transport:
                     raise self._error_for(
                         path, resp, resp.headers.get("X-Request-Id") or request_id
                     )
-                protect_event_stream(resp, roots)
+                with observation_scope(roots):
+                    protect_event_stream(resp, response_roots(self.session_protection))
                 yield resp
         except httpx.RequestError as e:
             raise unreachable_error(self.base_url, e, request_id=request_id) from e
@@ -672,6 +688,8 @@ class Transport:
             LoomError: Any other failure, after the policy's retries.
         """
         require_automatic_allowed(self.session_protection)
+        roots = response_roots(self.session_protection)
+        automatic = automatic_roots(self.session_protection)
         headers: dict[str, str] = dict(extra_headers or {})
         if idempotency_key is None and _replayed(op_path):
             idempotency_key = str(uuid.uuid4())
@@ -680,7 +698,8 @@ class Transport:
         headers["X-Request-Id"] = _request_id_to_send(op_path, request_id)
         payload = self.without_empty_namespace(self.with_consumer(payload))
         if self.before_post is not None:
-            extra = await self.before_post(op_path, payload)
+            with automatic_for(automatic), observation_scope(roots):
+                extra = await self.before_post(op_path, payload)
             if extra:
                 headers.update(extra)
         # A RunScope injects its run_id into every body; on a recall read that is
@@ -702,7 +721,8 @@ class Transport:
         while True:
             token = _CALL.set(call)
             try:
-                out = await self._post_once(op_path, payload, headers, timeout_s)
+                with automatic_for(automatic), observation_scope(roots):
+                    out = await self._post_once(op_path, payload, headers, timeout_s)
             except RateLimited as e:
                 wait = self._rate_limit_wait(e, waited_s, op_path, headers["X-Request-Id"])
                 if wait <= 0:
