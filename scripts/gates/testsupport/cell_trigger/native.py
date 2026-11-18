@@ -94,6 +94,33 @@ PG_FIELDS = (
 )
 
 
+def native_failure_metadata(error: BaseException) -> dict:
+    metadata = error_metadata(error)
+    code = getattr(error, "code", None)
+    code = code if type(code) is int and 0 <= code < 2**31 else None
+    causes = []
+    seen = {id(error)}
+    cause = error.__cause__ if error.__cause__ is not None else error.__context__
+    for _ in range(4):
+        if cause is None or id(cause) in seen:
+            break
+        seen.add(id(cause))
+        name = type(cause).__name__
+        number = getattr(cause, "errno", None)
+        causes.append(
+            {
+                "error_type": name
+                if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,63}", name)
+                else "unknown",
+                "errno": number if type(number) is int and -(2**31) <= number < 2**31 else None,
+            }
+        )
+        cause = cause.__cause__ if cause.__cause__ is not None else cause.__context__
+    if code is not None or causes:
+        metadata["driver"] = {"code": code, "causes": causes}
+    return metadata
+
+
 def pg_census_sql():
     # One statement snapshot supplies all ten fixed counts and server observations.
     counts = []
@@ -1494,7 +1521,39 @@ class Fixture:
             if isinstance(error, Refused):
                 try:
                     failure = read(target.with_name(target.name + ".failure.json"), limit=4096)
-                    closed(failure, "error_type site outcome")
+                    closed(
+                        failure,
+                        "error_type site outcome driver"
+                        if "driver" in failure
+                        else "error_type site outcome",
+                    )
+                    if "driver" in failure:
+                        driver = failure["driver"]
+                        closed(driver, "code causes")
+                        need(
+                            (
+                                driver["code"] is None
+                                or type(driver["code"]) is int
+                                and 0 <= driver["code"] < 2**31
+                            )
+                            and type(driver["causes"]) is list
+                            and len(driver["causes"]) <= 4,
+                            "native driver failure metadata",
+                        )
+                        for cause in driver["causes"]:
+                            closed(cause, "error_type errno")
+                            need(
+                                isinstance(cause["error_type"], str)
+                                and re.fullmatch(
+                                    r"[A-Za-z_][A-Za-z_0-9]{0,63}", cause["error_type"]
+                                )
+                                and (
+                                    cause["errno"] is None
+                                    or type(cause["errno"]) is int
+                                    and -(2**31) <= cause["errno"] < 2**31
+                                ),
+                                "native driver failure cause",
+                            )
                     site = failure["site"]
                     closed(site, "file line function")
                     need(
@@ -2424,7 +2483,7 @@ def main() -> int:
         try:
             write(
                 args.output.with_name(args.output.name + ".failure.json"),
-                error_metadata(error),
+                native_failure_metadata(error),
                 limit=4096,
             )
         except BaseException:  # noqa: BLE001 — diagnostic output must not replace the native failure.
