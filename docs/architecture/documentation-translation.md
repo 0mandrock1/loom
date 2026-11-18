@@ -51,8 +51,8 @@ Source edits and faults affecting one original unit share one changed-input disp
 Repeated candidates, overlapping or reordered ranges, unsafe boundaries, unknown faults
 and pair refusals return conflicts. A changed completed unit among several unmatched
 original units needs proven counterpart cuts; the planner does not guess a partition.
-Replacement of a completed whole-page unit is unsupported. Exact whole-page reuse remains
-possible, but the API does not resolve every changed-page mapping.
+Changing a completed whole-page unit requires the raw source-origin proof below.
+Exact whole-page reuse and same-input correction do not require that proof.
 
 `SourceOrigins` optionally supplies the historical and current raw source text and
 language. The caller authenticates those Git bytes and their association with the exact
