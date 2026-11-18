@@ -436,3 +436,116 @@ def test_contextual_split_refuses_foreign_or_unsafe_ranges_before_shortcut(inval
     scope = SourceContext("docs/table.md", english, start, end)
     with pytest.raises(ValueError, match="source context|parser-safe"):
         chunks.split(text, source_context=scope)
+
+
+@pytest.mark.parametrize("insert", [False, True], ids=["unchanged", "insertion"])
+def test_request_bound_preserves_completed_table_payloads_and_default_plan(insert):
+    old, units = _results_original_cut_layout()
+    current = (
+        _source(old.english[:672] + "Inserted paragraph.\n\n" + old.english[672:])
+        if insert
+        else old
+    )
+    default = _reconcile(old, current, units)
+    assert _reconcile(old, current, units, bounded_new_request_bytes=chunks.MAX_BYTES) == default
+    smaller = _reconcile(old, current, units, bounded_new_request_bytes=8192)
+    _assert_assembly(smaller)
+    assert smaller.original_units == units
+    assert smaller.unit_manifest_sha256 == default.unit_manifest_sha256
+    assert [u.original for u in smaller.units if u.disposition == "reuse"] == list(units[:2])
+    assert all(
+        u.scope.path == current.path and u.scope.english == current.english for u in smaller.units
+    )
+    assert any(
+        len(text.encode()) > 8192
+        for u, text in zip(default.units, _texts(default), strict=True)
+        if u.disposition == "new"
+    )
+    assert all(
+        len(text.encode()) <= 8192
+        for u, text in zip(smaller.units, _texts(smaller), strict=True)
+        if u.disposition != "reuse"
+    )
+
+
+def test_request_bound_counts_utf8_and_preserves_default_split():
+    text = ("Paragraph " + "界" * 1800 + "\n\n") * 4
+    assert len(text) < 8192 < len(text.encode())
+    assert chunks.split(text, bounded_new_request_bytes=chunks.MAX_BYTES) == chunks.split(text)
+    parts = chunks.split(text, bounded_new_request_bytes=8192)
+    assert len(parts) > 1
+    assert "\n".join(parts) == text
+    assert all(len(part.encode()) <= 8192 for part in parts)
+
+
+def test_request_bound_keeps_headerless_rows_in_their_current_container():
+    header = "| Item | Value |\n| --- | --- |\n"
+    rows = [f"| Row {i} | " + "a" * 1000 + " |\n" for i in range(12)]
+    english = header + "".join(rows)
+    start, end = len(header + rows[0]), len(english) - 1
+    text = english[start:end]
+    scope = SourceContext("docs/table.md", english, start, end)
+    assert chunks.split(text, source_context=scope) == [text]
+    parts = chunks.split(text, source_context=scope, bounded_new_request_bytes=8192)
+    assert len(parts) > 1
+    assert "\n".join(parts) == text
+    assert all(part.startswith("| Row ") and len(part.encode()) <= 8192 for part in parts)
+
+
+def test_request_bound_refuses_an_indivisible_unit_that_fits_the_default():
+    text = "An indivisible paragraph " + "a" * 9000
+    assert chunks.split(text) == [text]
+    with pytest.raises(ValueError, match="8192-byte"):
+        chunks.split(text, bounded_new_request_bytes=8192)
+
+
+@pytest.mark.parametrize("bound", [1, 8192])
+def test_request_bound_never_reslices_a_large_free_completed_page(bound):
+    old, units = _history("An indivisible paragraph " + "界" * 6000)
+    plan = _reconcile(old, old, units, bounded_new_request_bytes=bound)
+    _assert_assembly(plan)
+    assert len(plan.units) == 1
+    assert plan.units[0].disposition == "reuse" and plan.units[0].original == units[0]
+    assert _texts(plan) == [old.english]
+
+
+@pytest.mark.parametrize("disposition", ["changed", "correction"])
+@pytest.mark.parametrize("bound", [8192, 10240], ids=["conflict", "whole-request"])
+def test_request_bound_keeps_completed_repairs_whole_or_conflicts(disposition, bound):
+    old, units = _history("First.\n", "Old " + "a" * 9000 + "\n", "Last.\n")
+    current = _source(old.english.replace("Old ", "New ")) if disposition == "changed" else old
+    faults = (UnitFault("1", "semantic"), UnitFault("1", "language"))
+    plan = _reconcile(old, current, units, faults=faults, bounded_new_request_bytes=bound)
+    if bound == 8192:
+        assert [c.kind for c in plan.conflicts] == ["boundary"]
+        assert not plan.units
+    else:
+        _assert_assembly(plan)
+        assert [u.disposition for u in plan.units] == ["reuse", disposition, "reuse"]
+        assert plan.units[1].original == units[1]
+        assert plan.units[1].fault_ids == ("language", "semantic")
+        assert _texts(plan)[1] == current.english[units[1].start : units[1].end]
+
+
+@pytest.mark.parametrize("bound", [True, 0, -1, 1.5, "8192", chunks.MAX_BYTES + 1])
+@pytest.mark.parametrize("text", ["", "A short paragraph.\n"], ids=["empty", "short"])
+def test_invalid_request_bound_is_rejected_before_split_shortcuts(bound, text):
+    with pytest.raises(ValueError, match="byte bound"):
+        chunks.split(text, bounded_new_request_bytes=bound)
+
+
+@pytest.mark.parametrize("bound", [True, 0, -1, 1.5, "8192", chunks.MAX_BYTES + 1])
+@pytest.mark.parametrize("empty", [False, True], ids=["all-reuse", "empty"])
+def test_invalid_request_bound_is_rejected_before_reconciliation_shortcuts(bound, empty):
+    old, units = (_source(""), ()) if empty else _history("A completed paragraph.\n")
+    with pytest.raises(ValueError, match="byte bound"):
+        _reconcile(old, old, units, bounded_new_request_bytes=bound)
+
+
+def test_request_bound_allows_a_one_byte_new_request():
+    old, units = _history("x")
+    units = (replace(units[0], reply_ref=None),)
+    plan = _reconcile(old, old, units, bounded_new_request_bytes=1)
+    _assert_assembly(plan)
+    assert _texts(plan) == ["x"]
+    assert [u.disposition for u in plan.units] == ["new"]
