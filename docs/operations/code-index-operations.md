@@ -766,6 +766,20 @@ Rows the newest run no longer has are tombstoned, and only after every slice was
 ranges meet the subject's span; a subject whose file the run covered but whose lines no
 test executed is `uncovered`, with the measurement in `measured`.
 
+Test names can be repository-relative file paths or pytest node IDs such as
+`tests/test_example.py::TestExample::test_value[param]|run`. The import removes the
+function, class, parameter and setup/run/teardown context suffixes and leading `./`, then
+requires the test file to exist in the namespace's live index. Paths relative to the
+integration or query test directory also resolve through those layouts. Contexts that
+map to one source/test-file pair contribute their union of executed lines; overlapping
+lines count once, and the pair keeps its strongest measured specificity score.
+
+The source must expose the per-test line records in `checks_coverage_lines` and each
+run's commit in `checks`; a coverage database or JSON report needs conversion to those
+tables. Re-run `loom code coverage-import --namespace <namespace> --dry-run` to check
+`unmapped_tests`, then import without `--dry-run` to rebuild stored pairs from the run.
+Updating the server alone does not rebuild imported coverage.
+
 ```bash
 LOOM_CODE_COVERAGE_SOURCE_URL=https://<coverage server>
 LOOM_CODE_COVERAGE_SOURCE_USER=<reader>

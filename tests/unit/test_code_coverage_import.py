@@ -76,6 +76,87 @@ def test_a_run_test_name_maps_to_its_live_test_file(name: str, check: str, want:
     assert cr.resolve_test_path(name, check, live) == want
 
 
+@pytest.mark.parametrize(
+    ("name", "path"),
+    [
+        ("tests/test_example.py::test_create", "tests/test_example.py"),
+        ("tests/test_example.py::TestCreate::test_ok[param]|run", "tests/test_example.py"),
+        ("./tests/test_example.py::test_create|setup", "tests/test_example.py"),
+        ("././tests/test_example.py::test_create|teardown", "tests/test_example.py"),
+        ("tests/test_example.py|run", "tests/test_example.py"),
+        ("pkg/tests/test_example.py::test_create", "pkg/tests/test_example.py"),
+        ("test_example.py::test_create", "test_example.py"),
+    ],
+)
+def test_pytest_context_resolves_only_its_live_file(name: str, path: str) -> None:
+    assert cr.resolve_test_path(name, "pytest", {path}) == path
+    assert cr.resolve_test_path(name, "pytest", {"tests/test_other.py"}) == ""
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_contexts_of_one_test_file_union_their_specific_ranges(reverse: bool) -> None:
+    contexts = [
+        ("tests/test_example.py::test_create|run", [[10, 12], [20, 21]], 2),
+        ("tests/test_example.py::TestCreate::test_ok[param]|setup", [[12, 15]], 10),
+        ("tests/test_example.py::test_create|teardown", [[21, 23]], 3),
+    ]
+    if reverse:
+        contexts.reverse()
+    plan = cr.ImportPlan()
+    live = {"pkg/example.py", "tests/test_example.py"}
+    for name, ranges, min_tests in contexts:
+        ci.plan_pairs(
+            plan,
+            [
+                {
+                    "file": "pkg/example.py",
+                    "test_name": name,
+                    "ranges": ranges,
+                    "min_tests": min_tests,
+                }
+            ],
+            live,
+            "abc",
+        )
+    assert not plan.unmapped_tests
+    pair = plan.pairs[("pkg/example.py", "tests/test_example.py")]
+    assert pair["confidence"] == cr.specificity(2)
+    assert json.loads(pair["evidence"]) == {
+        "commit": "abc",
+        "lines": [[10, 15], [20, 23]],
+        "specific_lines": 10,
+    }
+
+
+def test_context_union_precedes_the_evidence_range_cap() -> None:
+    plan = cr.ImportPlan()
+    live = {"pkg/example.py", "tests/test_example.py"}
+    ranges = [[i * 10, i * 10] for i in range(1, cr.MAX_EVIDENCE_RANGES + 2)]
+    ci.plan_pairs(
+        plan,
+        [{"file": "pkg/example.py", "test_name": "tests/test_example.py", "ranges": ranges}],
+        live,
+        "abc",
+    )
+    ci.plan_pairs(
+        plan,
+        [
+            {
+                "file": "pkg/example.py",
+                "test_name": "tests/test_example.py",
+                "ranges": [[2011, 2015]],
+            }
+        ],
+        live,
+        "abc",
+    )
+    pair = plan.pairs[("pkg/example.py", "tests/test_example.py")]
+    evidence = json.loads(pair["evidence"])
+    assert evidence["specific_lines"] == 206
+    assert [2010, 2015] in evidence["lines"]
+    assert len(evidence["lines"]) == cr.MAX_EVIDENCE_RANGES
+
+
 def test_evidence_round_trips_and_caps_its_ranges() -> None:
     many = [(i * 10, i * 10 + (i % 3)) for i in range(1, 400)]
     ev = cr.pair_evidence("abc", many, 999)
@@ -380,6 +461,14 @@ class _FilesRepo:
 
     async def coverage_files_for(self, org: str, ns: str, paths: list[str]) -> dict[str, Any]:
         return {p: f for p, f in self.files.items() if p in paths}
+
+    async def get_state(self, org: str, ns: str, key: str) -> str:
+        return "c0ffee"
+
+    async def file_rows_for_paths(
+        self, org: str, ns: str, paths: list[str]
+    ) -> dict[str, dict[str, str]]:
+        return {p: {"indexed_commit": "c0ffee"} for p in paths}
 
 
 @pytest.mark.asyncio
