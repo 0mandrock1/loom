@@ -27,7 +27,13 @@ from server.memory.app.provenance import writer_actor
 from server.memory.domain.excerpt import build_excerpt
 from server.memory.domain.temporal_sql import SERVED_STATUSES
 from server.memory.store import key_write_lock, pg_memory
-from server.memory.store.rows import identity_key, next_version, version_over, version_time
+from server.memory.store.rows import (
+    build_memory_version_row,
+    identity_key,
+    next_version,
+    version_over,
+    version_time,
+)
 from server.observability.budget_shape import note_budget_shape
 
 if TYPE_CHECKING:
@@ -218,6 +224,7 @@ async def _restore_superseded(input: MemoryRestoreInput, ch: Any) -> MemoryResto
             # A retry of an Undo whose restore landed after its 503: finish that one.
             version, status = int(existing.version), str(existing.status)
             if not pg.enabled():  # under Postgres the commit owes an embedded row's document
+                await blacklist_guard.enforce_rows([build_memory_version_row(existing)])
                 await _mirror_landed(
                     "the Undo",
                     input.memory_key,
@@ -302,6 +309,7 @@ async def _restore_live(
             and existing.sensitivity != "high"
             and existing.redacted_at is None
         ):
+            await blacklist_guard.enforce_rows([build_memory_version_row(existing)])
             await _restore_embedding_mirror(
                 ch, input, existing, row["memory_type"], version=existing.version
             )

@@ -31,6 +31,8 @@ from server.identity.app import namespace_snapshot
 from server.identity.app.directory import IdentityDirectory
 from server.operations.base import Role
 
+pytestmark = pytest.mark.usefixtures("no_blacklisted_values")
+
 ORG, NS = "clickhouse", "ops-deleted"
 BORN = datetime(2025, 1, 2, 3, 4, 5)
 
@@ -515,7 +517,7 @@ async def test_a_restore_records_itself_after_its_memories_commit(wire, monkeypa
     )
     order: list[str] = []
 
-    async def _insert(rows: Any, *, ch: Any) -> bool:
+    async def _insert(rows: Any, *, ch: Any, policy: Any) -> bool:
         order.append(f"memories:{len(rows)}")
         return True  # a batch's publication left to the delivery worker
 
