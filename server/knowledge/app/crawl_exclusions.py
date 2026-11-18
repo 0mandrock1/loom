@@ -10,7 +10,7 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Protocol
 
 from server.auth import claims
 from server.clients._vendor import VendorError
@@ -19,6 +19,11 @@ from server.core.ch import get_client, set_query_tag
 from server.core.secrets_at_rest import seal, unseal
 from server.knowledge.domain.source_crawl import Person, email
 from server.knowledge.store import crawl_exclusions as store
+
+
+class OrgAuthority(Protocol):
+    async def validate(self, org: str) -> None: ...
+
 
 KEY_PURPOSE = "knowledge_crawl.exclusion_key"
 # KeeperMap expiry is UInt32 seconds; this is its fixed representable upper bound.
@@ -48,11 +53,15 @@ async def _move(ch: Any, org: str, old: str | None, new: str) -> None:
         raise VendorError("crawl exclusions changed")
 
 
-async def initialize(org: str, *, ttl_s: float, wait_s: float, ch: Any = None) -> Index:
+async def initialize(
+    org: str, *, authority: OrgAuthority, ttl_s: float, wait_s: float, ch: Any = None
+) -> Index:
     """Registration initializes once under its checked org authority; reads never initialize."""
     set_query_tag("knowledge.crawl.exclusions.initialize")
     ch = ch or get_client()
+    await authority.validate(org)
     async with org_lease(org, ttl_s=ttl_s, wait_s=wait_s, ch=ch):
+        await authority.validate(org)
         row = await store.key(org, ch=ch)
         current = await claims.get(ch, _fence(org))
         if row is None:
@@ -111,7 +120,7 @@ async def _finish(
     org: str,
     row: dict[str, Any],
     *,
-    authorize: Callable[[], Awaitable[None]],
+    authority: OrgAuthority,
     cleanup: Callable[[], Awaitable[None]],
     ch: Any,
 ) -> None:
@@ -139,7 +148,7 @@ async def _finish(
         await _move(ch, org, current, blocked)
     await store.put(org, digests, exclude=bool(row["pending_exclude"]), ch=ch)
     await cleanup()
-    await authorize()
+    await authority.validate(org)
     await _move(ch, org, blocked, active)
     # Until this full row lands, new readers still refuse the unfinished manifest.
     await store.key_put(org, key_id, str(row["key_enc"]), generation=active, ch=ch)
@@ -150,21 +159,21 @@ async def repair(
     *,
     ttl_s: float,
     wait_s: float,
-    authorize: Callable[[], Awaitable[None]],
+    authority: OrgAuthority,
     cleanup: Callable[[], Awaitable[None]],
     ch: Any = None,
 ) -> Index:
     """Finish the persisted mutation after a crash; never guess a readmission."""
     set_query_tag("knowledge.crawl.exclusions.repair")
     ch = ch or get_client()
-    await authorize()
+    await authority.validate(org)
     async with org_lease(org, ttl_s=ttl_s, wait_s=wait_s, ch=ch):
-        await authorize()
+        await authority.validate(org)
         row = await store.key(org, ch=ch)
         if row is None:
             raise VendorError("crawl exclusion repair unavailable")
         _open_key(row)
-        await _finish(org, row, authorize=authorize, cleanup=cleanup, ch=ch)
+        await _finish(org, row, authority=authority, cleanup=cleanup, ch=ch)
     return await Index.open(org, ch=ch)
 
 
@@ -246,16 +255,16 @@ class Index:
         exclude: bool,
         ttl_s: float,
         wait_s: float,
-        authorize: Callable[[], Awaitable[None]],
+        authority: OrgAuthority,
         cleanup: Callable[[], Awaitable[None]],
     ) -> Index:
         """A checked mutation stays fenced until every local rewrite and census succeeds."""
         set_query_tag("knowledge.crawl.exclusions.change")
         if type(exclude) is not bool or not people:
             raise ValueError("explicit provider-person exclusion or readmission required")
-        await authorize()
+        await authority.validate(self.org)
         async with org_lease(self.org, ttl_s=ttl_s, wait_s=wait_s, ch=self._ch):
-            await authorize()
+            await authority.validate(self.org)
             await self.version()
             digests = sorted(
                 {digest for person in people for digest in self.person_digests(person)}
@@ -277,5 +286,5 @@ class Index:
             row = await store.key(self.org, ch=self._ch)
             if row is None or row["pending_id"] != pending:
                 raise VendorError("crawl exclusion repair unavailable")
-            await _finish(self.org, row, authorize=authorize, cleanup=cleanup, ch=self._ch)
+            await _finish(self.org, row, authority=authority, cleanup=cleanup, ch=self._ch)
         return await Index.open(self.org, ch=self._ch)

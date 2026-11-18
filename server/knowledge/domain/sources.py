@@ -137,6 +137,8 @@ class KnowledgeSource:
     registrant_subject: str = ""
     approval_enc: str = ""
     crawl_generation: str = ""
+    crawl_customer_id: str = ""
+    crawl_credential_hash: str = ""
     created_by: str = ""
     active: bool = True
     # On an inactive row: an admin asked for the source's documents to be retired.

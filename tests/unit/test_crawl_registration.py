@@ -23,7 +23,7 @@ from tests.unit.test_crawl_signing_authority import _SECOND
 from tests.unit.test_crawl_signing_authority import key_view as key_view
 
 pytestmark = pytest.mark.asyncio
-_SCOPE = registration.Scope("team", "shared-space", "crawl-source", "crawl-generation")
+_SCOPE = registration.Scope("team", "shared-space", "crawl-source", "crawl-generation", "f" * 64)
 
 
 def _token(**changes: Any) -> str:
@@ -76,7 +76,7 @@ async def test_retained_metadata_is_exact_scoped_and_never_becomes_a_request_pri
         await authz.check_authorized(approval.claims, Role.ADMIN, "team", "shared-space")
 
 
-@pytest.mark.parametrize("field", ["namespace", "source_id", "generation", "org"])
+@pytest.mark.parametrize("field", ["namespace", "source_id", "generation", "org", "resource_hash"])
 async def test_copied_ciphertext_cannot_approve_another_source_or_generation(
     world: Any,
     key_view: list[str],

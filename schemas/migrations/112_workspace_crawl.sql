@@ -3,6 +3,8 @@ ALTER TABLE loom.knowledge_sources ADD COLUMN IF NOT EXISTS options_json String 
 ALTER TABLE loom.knowledge_sources ADD COLUMN IF NOT EXISTS registrant_subject String DEFAULT '';
 ALTER TABLE loom.knowledge_sources ADD COLUMN IF NOT EXISTS approval_enc String DEFAULT '';
 ALTER TABLE loom.knowledge_sources ADD COLUMN IF NOT EXISTS crawl_generation String DEFAULT '';
+ALTER TABLE loom.knowledge_sources ADD COLUMN IF NOT EXISTS crawl_customer_id String DEFAULT '';
+ALTER TABLE loom.knowledge_sources ADD COLUMN IF NOT EXISTS crawl_credential_hash String DEFAULT '';
 
 -- One stable, sealed refusal key per org survives rotation of the deployment root.
 CREATE TABLE IF NOT EXISTS loom.knowledge_crawl_exclusion_keys

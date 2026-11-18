@@ -35,10 +35,46 @@ class Scope:
     namespace: str
     source_id: str
     generation: str
+    resource_hash: str
 
     def check(self) -> None:
         if any(not isinstance(v, str) or not v or "\0" in v for v in dataclasses.astuple(self)):
             raise Refused()
+        if len(self.resource_hash) != 64 or any(
+            c not in "0123456789abcdef" for c in self.resource_hash
+        ):
+            raise Refused()
+
+
+@dataclass(frozen=True, repr=False)
+class AdminPermit:
+    """A current presenter, distinct from the source registrant's retained approval."""
+
+    _auth: AuthInfo
+    _approval: Approval
+
+    async def validate(self, org: str) -> None:
+        if org != self._approval.scope.org or current_auth() is not self._auth:
+            raise Refused()
+        await self._approval.validate()
+        if current_auth() is not self._auth:
+            raise Refused()
+
+
+async def current_permit(scope: Scope) -> AdminPermit:
+    scope.check()
+    auth = current_auth()
+    if (
+        not isinstance(auth, AuthInfo)
+        or not auth.has_role(Role.ORG_ADMIN)
+        or not authz.may_act_in_org(auth, scope.org)
+    ):
+        raise Refused()
+    registrant = await aliases.canonical_subject(scope.org, auth.subject)
+    metadata = _CLAIMS.validate_json(json.dumps(dataclasses.asdict(auth)), strict=True)
+    permit = AdminPermit(auth, Approval(scope, registrant, metadata))
+    await permit.validate(scope.org)
+    return permit
 
 
 async def capture(auth: AuthInfo, scope: Scope) -> tuple[str, str]:

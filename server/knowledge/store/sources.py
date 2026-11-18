@@ -55,6 +55,7 @@ _COLUMNS = (
     "org, namespace, name, source_id, kind, source_kind, config_json, items_json, "
     "credential_enc, secret_enc, access, credential_mode, owner_subject, connection_id, "
     "options_json, registrant_subject, approval_enc, crawl_generation, "
+    "crawl_customer_id, crawl_credential_hash, "
     "created_by, active, pending_delete, created_at, "
     "updated_at"
 )
@@ -98,6 +99,8 @@ def _source(row: dict[str, Any]) -> KnowledgeSource:
         registrant_subject=str(row.get("registrant_subject") or ""),
         approval_enc=str(row.get("approval_enc") or ""),
         crawl_generation=str(row.get("crawl_generation") or ""),
+        crawl_customer_id=str(row.get("crawl_customer_id") or ""),
+        crawl_credential_hash=str(row.get("crawl_credential_hash") or ""),
         created_by=str(row.get("created_by") or ""),
         active=bool(row.get("active")),
         pending_delete=bool(row.get("pending_delete")),
@@ -306,6 +309,8 @@ async def insert_source(src: KnowledgeSource, *, ch: _CHClient | None = None) ->
         "registrant_subject": src.registrant_subject,
         "approval_enc": src.approval_enc,
         "crawl_generation": src.crawl_generation,
+        "crawl_customer_id": src.crawl_customer_id,
+        "crawl_credential_hash": src.crawl_credential_hash,
         "created_by": src.created_by,
         "active": src.active,
         "pending_delete": src.pending_delete,

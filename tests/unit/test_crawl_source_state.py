@@ -61,6 +61,8 @@ async def test_real_source_row_roundtrip_keeps_separate_crawl_authority_and_neve
         registrant_subject="canonical-admin",
         approval_enc="sealed-approval",
         crawl_generation="registration-generation",
+        crawl_customer_id="verified-workspace",
+        crawl_credential_hash="a" * 64,
         secret_enc="sealed-delegated-key",
         created_by="audit-principal",
     )

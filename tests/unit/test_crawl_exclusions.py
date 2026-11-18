@@ -96,7 +96,8 @@ class _World:
                 assert table == store.REFUSALS and set(row) == {"org", "digest", "excluded"}
                 self.rows[row["org"], row["digest"]] = row["excluded"]
 
-    async def authorize(self) -> None:
+    async def validate(self, org: str) -> None:
+        assert org in {"org", "other-org"}
         if not self.authorized:
             raise PermissionError("org authority ended")
 
@@ -108,7 +109,7 @@ class _World:
         self.cleaned += 1
 
     async def start(self, org: str = "org") -> exclusions.Index:
-        return await exclusions.initialize(org, ttl_s=60, wait_s=0, ch=self)
+        return await exclusions.initialize(org, authority=self, ttl_s=60, wait_s=0, ch=self)
 
     async def change(self, index: exclusions.Index, *, exclude: bool = True) -> exclusions.Index:
         return await index.change(
@@ -116,7 +117,7 @@ class _World:
             exclude=exclude,
             ttl_s=60,
             wait_s=0,
-            authorize=self.authorize,
+            authority=self,
             cleanup=self.cleanup,
         )
 
@@ -163,7 +164,7 @@ async def test_cleanup_failure_blocks_old_and_new_readers_and_restart_repairs_re
         "org",
         ttl_s=60,
         wait_s=0,
-        authorize=world.authorize,
+        authority=world,
         cleanup=world.cleanup,
         ch=world,
     )
@@ -271,7 +272,7 @@ async def test_late_old_manifest_cannot_overwrite_a_newer_explicit_readmission(
         exclude=True,
         ttl_s=60,
         wait_s=0,
-        authorize=world.authorize,
+        authority=world,
         cleanup=record_cleanup,
     )
     current = await world.change(current, exclude=False)
@@ -283,7 +284,7 @@ async def test_late_old_manifest_cannot_overwrite_a_newer_explicit_readmission(
             "org",
             ttl_s=60,
             wait_s=0,
-            authorize=world.authorize,
+            authority=world,
             cleanup=world.cleanup,
             ch=world,
         )
