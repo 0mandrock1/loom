@@ -731,8 +731,9 @@ it only while the mode is `recording`, reading the mode row `FOR SHARE`; it runs
 `READ COMMITTED` in its own transaction and commits before the request goes on. Attach's
 write of `enforced` and these inserts never cross: an insert already running when attach
 writes the mode is placed by step 4, one that starts after reads `enforced`, a stream of
-inserts cannot hold the write off, a new-org request waits on attach for a few seconds
-at most, and an attach that stalls holding the write's lock releases it within seconds.
+inserts cannot hold the write off. If attach stalls while holding the mode lock, it
+attempts bounded cleanup. A client abort does not prove that the lock was released;
+stop and verify the exact holder before retrying.
 Attach takes `LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE` (which waits for running
 inserts and queues later ones behind it) in short tries, in one transaction with
 server-side timeouts, then writes the mode and commits on its exact ATTACH backend.
