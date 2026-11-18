@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -487,3 +488,246 @@ def test_a_changed_loaded_service_model_is_not_installed(
     monkeypatch.setattr(probe, "_MODEL_SHA256", "0" * 64)
     with pytest.raises(probe.ProbeError):
         probe.install(sdk_client)
+
+
+def prefix_reader(monkeypatch: pytest.MonkeyPatch, make: Any) -> list[str]:
+    """Project synthetic wire pages through the real strict page validator."""
+    calls: list[str] = []
+
+    async def read(*, start_after: str = "", max_keys: int = 1000) -> object_store.Page:
+        assert max_keys == 1000
+        index = len(calls)
+        calls.append(start_after)
+        response = make(index, start_after)
+        return probe._page(response, "root/", start_after, max_keys)
+
+    monkeypatch.setattr(probe, "list_page", read)
+    return calls
+
+
+def prefix_page(keys: tuple[str, ...], after: str, *, more: bool = False) -> dict[str, Any]:
+    return page(keys=keys, more=more) | {"MaxKeys": 1000, "StartAfter": after}
+
+
+@pytest.mark.asyncio
+async def test_prefix_exhausts_all_pages_and_exports_no_keys(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys = (("root/a", "root/b"), ("root/c",), ("root/z",))
+    calls = prefix_reader(
+        monkeypatch,
+        lambda index, after: prefix_page(keys[index], after, more=index < 2),
+    )
+    assert await probe.check_prefix() is None
+    assert calls == ["", "root/b", "root/c"]
+
+
+@pytest.mark.asyncio
+async def test_prefix_empty_final_page_finishes_without_an_extra_read(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = prefix_reader(monkeypatch, lambda index, after: prefix_page((), after))
+    assert await probe.check_prefix() is None
+    assert calls == [""]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key",
+    [
+        "root/_cell_attach_probe/east",
+        "root/nested/_cell_attach_probe/east",
+        "root/nested/more/_cell_attach_probe/east",
+    ],
+)
+async def test_prefix_foreign_fixed_marker_refuses_at_any_depth_without_export(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+) -> None:
+    calls = prefix_reader(
+        monkeypatch,
+        lambda index, after: prefix_page((key,), after, more=True),
+    )
+    with pytest.raises(probe.ProbeError) as raised:
+        await probe.check_prefix()
+    assert calls == [""] and key not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_prefix_own_marker_and_nonmarker_suffixes_are_not_foreign_markers(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys = tuple(
+        sorted(
+            (
+                "root/_cell_attach_probe/west",
+                "root/deep/_cell_attach_probe/west",
+                "root/deep/_cell_attach_probe/east/child",
+                "root/deep/_cell_attach_probe/east_suffix",
+                "root/deep/_cell_attach_probe/EAST",
+                "root/deep/not_cell_attach_probe/east",
+            )
+        )
+    )
+    calls = prefix_reader(monkeypatch, lambda index, after: prefix_page(keys, after))
+    assert await probe.check_prefix() is None
+    assert calls == [""]
+
+
+@pytest.mark.asyncio
+async def test_prefix_finds_a_foreign_marker_after_an_earlier_clean_page(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys = (("root/a",), ("root/z/_cell_attach_probe/east",))
+    calls = prefix_reader(
+        monkeypatch,
+        lambda index, after: prefix_page(keys[index], after, more=index == 0),
+    )
+    with pytest.raises(probe.ProbeError):
+        await probe.check_prefix()
+    assert calls == ["", "root/a"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("more", [False, True])
+async def test_prefix_exact_object_limit_never_fetches_page101(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+    more: bool,
+) -> None:
+    def make(index: int, after: str) -> dict[str, Any]:
+        assert index < 100
+        keys = tuple(f"root/{number:06d}" for number in range(index * 1000, (index + 1) * 1000))
+        return prefix_page(keys, after, more=index < 99 or more)
+
+    calls = prefix_reader(monkeypatch, make)
+    if more:
+        with pytest.raises(probe.ProbeError):
+            await probe.check_prefix()
+    else:
+        assert await probe.check_prefix() is None
+    assert len(calls) == 100 and calls[-1] == "root/098999"
+
+
+@pytest.mark.asyncio
+async def test_prefix_page_limit_refuses_even_when_object_count_is_lower(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = prefix_reader(
+        monkeypatch,
+        lambda index, after: prefix_page((f"root/{index:06d}",), after, more=True),
+    )
+    with pytest.raises(probe.ProbeError):
+        await probe.check_prefix()
+    assert len(calls) == 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extra", [0, 1])
+async def test_prefix_utf8_bytes_exact_limit_and_limit_plus_one(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+    extra: int,
+) -> None:
+    # 16383 * 1024 + 512 + 512 == 16 MiB; characters are mostly two-byte UTF-8.
+    def make(index: int, after: str) -> dict[str, Any]:
+        keys: list[str] = []
+        for number in range(index * 1000, min((index + 1) * 1000, 16385)):
+            length = 1024 if number < 16383 else 512 + (extra if number == 16384 else 0)
+            head = f"root/{number:06d}/"
+            remaining = length - len(head)
+            keys.append(head + "é" * (remaining // 2) + "x" * (remaining % 2))
+        return prefix_page(tuple(keys), after, more=index < 16)
+
+    calls = prefix_reader(monkeypatch, make)
+    if extra:
+        with pytest.raises(probe.ProbeError):
+            await probe.check_prefix()
+    else:
+        assert await probe.check_prefix() is None
+    assert len(calls) == 17
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second", ["root/a", "root/0"])
+async def test_prefix_duplicate_or_regressing_cross_page_key_refuses(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+    second: str,
+) -> None:
+    calls = prefix_reader(
+        monkeypatch,
+        lambda index, after: prefix_page(
+            ("root/a" if index == 0 else second,), after, more=index == 0
+        ),
+    )
+    with pytest.raises(probe.ProbeError):
+        await probe.check_prefix()
+    assert calls == ["", "root/a"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"IsTruncated": None},
+        {"IsTruncated": 1},
+        {"KeyCount": 2},
+        {"Contents": [], "KeyCount": 0, "IsTruncated": True},
+        {"StartAfter": "root/wrong"},
+        {"ResponseMetadata": {}},
+    ],
+)
+async def test_prefix_partial_page_never_becomes_exhaustion(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: dict[str, Any],
+) -> None:
+    def make(index: int, after: str) -> dict[str, Any]:
+        if index == 0:
+            return prefix_page(("root/a",), after, more=True)
+        return prefix_page(("root/b",), after) | mutation
+
+    calls = prefix_reader(monkeypatch, make)
+    with pytest.raises(probe.ProbeError):
+        await probe.check_prefix()
+    assert calls == ["", "root/a"]
+
+
+@pytest.mark.asyncio
+async def test_prefix_page1001st_object_is_rejected_by_the_existing_page_owner(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys = tuple(f"root/{number:06d}" for number in range(1001))
+    calls = prefix_reader(monkeypatch, lambda index, after: prefix_page(keys, after))
+    with pytest.raises(probe.ProbeError):
+        await probe.check_prefix()
+    assert calls == [""]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("original", [RuntimeError("read failed"), asyncio.CancelledError()])
+async def test_prefix_keeps_the_original_read_failure_or_cancellation(
+    configured: None,
+    monkeypatch: pytest.MonkeyPatch,
+    original: BaseException,
+) -> None:
+    calls: list[str] = []
+
+    async def read(*, start_after: str = "", max_keys: int = 1000) -> object_store.Page:
+        calls.append(start_after)
+        if not start_after:
+            return probe._page(prefix_page(("root/a",), "", more=True), "root/", "", max_keys)
+        raise original
+
+    monkeypatch.setattr(probe, "list_page", read)
+    with pytest.raises(type(original)) as raised:
+        await probe.check_prefix()
+    assert raised.value is original and calls == ["", "root/a"]

@@ -536,3 +536,30 @@ async def list_page(*, start_after: str = "", max_keys: int = 1000) -> object_st
         )
     finally:
         lease.close()
+
+
+async def check_prefix() -> None:
+    """Exhaust the configured root and refuse another cell's fixed marker."""
+    own = _location()
+    name = own.key.rsplit("/", 1)[1]
+    after = ""
+    objects = key_bytes = 0
+    set_query_tag("cell-attach-bucket-probe")
+    for _ in range(100):
+        page = await list_page(start_after=after, max_keys=1000)
+        previous = after
+        for item in page.objects:
+            size = len(item.key.encode("utf-8"))
+            if item.key <= after or objects >= 100000 or key_bytes + size > 16 * 1024 * 1024:
+                raise _refuse()
+            objects += 1
+            key_bytes += size
+            after = item.key
+            _, reserved, holder = item.key.rpartition("/_cell_attach_probe/")
+            if reserved and NAME.fullmatch(holder) and holder != name:
+                raise _refuse()
+        if not page.more:
+            return
+        if after == previous or objects == 100000:
+            raise _refuse()
+    raise _refuse()
