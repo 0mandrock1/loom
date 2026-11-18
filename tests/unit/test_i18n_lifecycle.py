@@ -917,3 +917,91 @@ def test_composed_lifecycle_stages_native_table_rows_without_changing_body(
     assert lc.candidate_problems(path, candidate) == []
     lc.stage(path, candidate)
     assert (repo / lc.checkpoint_path(path)).read_text() == candidate
+
+
+def test_english_fallbacks_reuse_body_and_refresh_between_checks(repo, monkeypatch):
+    put(repo, "docs/a.md", "# Alpha\n\n## Second\n")
+    publish(repo, "docs/b.md")
+    page = "i18n/ja/docs/b.md"
+    path = repo / page
+    url = t.REPO_URL + "/blob/main/docs/a.md"
+    anchors = ("alpha", "%73econd", "missing", "alpha")
+    path.write_text(path.read_text() + "\n".join(f"[guide]({url}#{a})" for a in anchors))
+    original = t.english_requests
+    calls = []
+
+    def requests(text):
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(t, "english_requests", requests)
+
+    def message(anchor):
+        return (
+            page,
+            "docs/a.md",
+            f"{page} links to {url}#{anchor}, whose English destination or anchor is missing",
+        )
+
+    assert lc.link_failures() == [message("missing")]
+    assert calls == ["# Alpha\n\n## Second\n"]
+    put(repo, "docs/a.md", "# New\n\n## Second\n")
+    assert lc.link_failures() == [message("alpha"), message("missing"), message("alpha")]
+    assert calls == ["# Alpha\n\n## Second\n", "# New\n\n## Second\n"]
+
+
+def test_fragmentless_fallback_checks_existence_without_reading_english(repo, monkeypatch):
+    publish(repo, "docs/a.md")
+    page = "i18n/ja/docs/a.md"
+    path = repo / page
+    names = ("a", "b", "link", "directory", "unlisted")
+    urls = [t.REPO_URL + f"/blob/main/docs/{name}.md" for name in names]
+    path.write_text(path.read_text() + "\n".join(f"[guide]({url})" for url in urls))
+    (repo / "docs/b.md").unlink()
+    (repo / "docs/link.md").symlink_to("a.md")
+    (repo / "docs/directory.md").mkdir()
+    put(repo, "docs/unlisted.md", "# Alpha\n")
+    monkeypatch.setattr(t, "sources", lambda: tuple(f"docs/{name}.md" for name in names[:-1]))
+    original = pathlib.Path.read_text
+
+    def read_text(path, *args, **kwargs):
+        assert path.parent != repo / "docs", "English destination body was read"
+        return original(path, *args, **kwargs)
+
+    def requests(text):
+        pytest.fail("a fragmentless destination needs no request layout")
+
+    monkeypatch.setattr(pathlib.Path, "read_text", read_text)
+    monkeypatch.setattr(t, "english_requests", requests)
+    assert lc.link_failures() == [
+        (
+            page,
+            f"docs/{name}.md",
+            f"{page} links to {url}, whose English destination or anchor is missing",
+        )
+        for name, url in zip(names[1:], urls[1:], strict=True)
+    ]
+
+
+def test_fallback_repair_reuses_body_and_keeps_other_bytes(repo, monkeypatch):
+    publish(repo, "docs/a.md")
+    publish(repo, "docs/b.md")
+    put(repo, "docs/a.md", "# New\n")
+    path = repo / "i18n/ja/docs/b.md"
+    url = t.REPO_URL + "/blob/main/docs/a.md"
+    before = path.read_text() + (
+        f"\n[guide]({url}#alpha) [guide]({url}#new) [guide]({url}#alpha)\n"
+        "[guide](https://example.test/blob/main/docs/a.md#alpha)\n"
+    )
+    path.write_text(before)
+    original = t.english_requests
+    calls = []
+
+    def requests(text):
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(t, "english_requests", requests)
+    lc.repair_english_fallbacks(["ja"])
+    assert path.read_text() == before.replace(url + "#alpha", "a.md#alpha")
+    assert calls == ["# New\n"]
