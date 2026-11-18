@@ -259,6 +259,18 @@ the same name reads the same Python history for the same session id and user, an
 handoff between agents of one run keeps it. Python and TypeScript histories are separate
 because the frameworks use different item formats.
 
+Bind the application's existing protection family before constructing either
+native session. The instance retains constructor and callback client families,
+including after rebinding. Python also retains contributors active in the
+callback's context. Use one instance per logical conversation family; restore it
+with the same application-owned protection capsule. The native user and session
+ids select history, without establishing protection authority. History reads and
+additions are automatic work: a marked reply protects every contributor before
+returning and suppresses later automatic calls. An initial complete history reply
+may return; follow-up pages, hydration and batch writes stop. Explicit pop, clear
+and model-selected tools remain available, with reply observation retained for the
+session's manual deletions.
+
 ```python
 from loom.integrations.openai_agents import LoomSession
 
@@ -936,6 +948,15 @@ The [MCP/OpenAPI setup](mcp-clients.md#hosted-builders-and-chat-apps) also works
 the package.
 
 ## LangGraph
+
+A store retains application-owned constructor and callback conversation contributors
+across client rebinding. Bind complete contributor authority before construction and
+use one store per logical conversation family; restore that family's existing capsule.
+An existing automatic SDK context makes only that invocation automatic, with every
+retained family checked before dispatch. Direct calls and model-selected tools remain
+explicit, including after an automatic invocation ends. All calls retain response
+observation, so a marked or malformed reply protects earlier contributors before
+returning or refusing. Namespace, thread and user ids supply no protection authority.
 
 `LoomStore` (`sdk/python/loom/integrations/langgraph.py`) is a LangGraph `BaseStore`, so
 every graph node reaches it through `get_store()`.
