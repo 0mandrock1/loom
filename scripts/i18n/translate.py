@@ -426,7 +426,11 @@ def _label_differences(
             translated = actual.get(key, context.Label(""))
             expected = context.project(node, atoms)[1]
             got = context.project(translated, atoms)[1]
-            if expected != got or node.field != translated.field:
+            if (
+                expected != got
+                or node.field != translated.field
+                or node.default_for != translated.default_for
+            ):
                 problems.append(f"protected source strings {key}: expected {expected}, got {got}")
     for key, node in actual.items():
         if start <= node.start and node.end <= target_end:

@@ -414,5 +414,6 @@ def table_labels(text: str) -> dict[tuple[str, int, int], Label]:
                 cell,
                 field=field if column == len(row) - 1 else "",
                 string_field=bool(field and column == 2 and kind == ("str",)),
+                default_for=field if column == 1 and len(row) == 3 else "",
             )
     return labels

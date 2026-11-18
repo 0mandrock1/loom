@@ -114,6 +114,12 @@ _FIELDS = {
     ),
     ("docs/reference/operations/working_memory.md", "fill_ratio"): ("len(content) / char_limit",),
 }
+_MODEL_DEFAULTS = {
+    (
+        "docs/features/memory/conflicts-and-refusal.md",
+        "LOOM_CONFLICT_RESOLVER_MODEL",
+    ): "gpt-6.1-sol",
+}
 _QUOTED = r'"[A-Za-z_][A-Za-z0-9_.-]*"'
 _ALTERNATIVES = re.compile(rf"{_QUOTED}(?:\s*/\s*{_QUOTED})+")
 
@@ -128,6 +134,7 @@ class Label:
     code: tuple[str, ...] = ()
     start: int = 0
     end: int = 0
+    default_for: str = ""
 
 
 @dataclass(frozen=True)
@@ -175,6 +182,9 @@ def protected(
     declared = _FIELDS.get((source_path, label.field), ())
     if declared and pattern(declared).findall(label.text) == list(declared):
         atoms.extend(declared)
+    default = _MODEL_DEFAULTS.get((source_path, label.default_for))
+    if default and pattern((default,)).search(label.text):
+        atoms.append(default)
     if (
         source_path.startswith("docs/reference/operations/")
         and label.string_field

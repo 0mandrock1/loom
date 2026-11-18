@@ -361,3 +361,79 @@ def test_longer_unicode_or_latin_identifiers_do_not_preserve_a_name(name, change
     assert t.differences(
         f"## {name}\n", f"## {changed}\n", source_path="docs/features/integrations/frameworks.md"
     )
+
+
+_MODEL_PATH = "docs/features/memory/conflicts-and-refusal.md"
+_MODEL_HEADER = "| Setting | Default | Effect |\n| --- | --- | --- |\n"
+_MODEL_ROW = "| `LOOM_CONFLICT_RESOLVER_MODEL` | gpt-6.1-sol | The resolver's judge. |\n"
+
+
+def test_model_default_preserves_its_attested_setting_cell():
+    source = _MODEL_HEADER + _MODEL_ROW
+    output = source.replace("The resolver's judge.", "判定するモデル。")
+    assert t.differences(source, output, source_path=_MODEL_PATH) == []
+    assert t.differences(source, source, source_path=_MODEL_PATH)
+    assert any(
+        "protected source strings" in problem
+        for problem in t.differences(
+            source, output.replace("gpt-6.1-sol", "gpt-6.1-terra"), source_path=_MODEL_PATH
+        )
+    )
+
+
+@pytest.mark.parametrize("case", ["path", "setting", "column", "model", "prose"])
+def test_model_defaults_do_not_exempt_other_source_nodes(case):
+    source = _MODEL_HEADER + _MODEL_ROW
+    path = _MODEL_PATH
+    if case == "path":
+        path = "docs/other.md"
+    elif case == "setting":
+        source = source.replace("LOOM_CONFLICT_RESOLVER_MODEL", "LOOM_OTHER_MODEL")
+    elif case == "column":
+        source = _MODEL_HEADER + "| `LOOM_CONFLICT_RESOLVER_MODEL` | 0 | gpt-6.1-sol |\n"
+    elif case == "model":
+        source = source.replace("gpt-6.1-sol", "gpt-6.1-terra")
+    else:
+        source = "## gpt-6.1-sol\n"
+    output = source.replace("The resolver's judge.", "判定するモデル。")
+    assert t.differences(source, output, source_path=path)
+
+
+def test_a_model_default_does_not_exempt_its_ordinary_qualifier():
+    source = (_MODEL_HEADER + _MODEL_ROW).replace("gpt-6.1-sol", "gpt-6.1-sol recommended")
+    output = source.replace("The resolver's judge.", "判定するモデル。")
+    assert t.differences(source, output, source_path=_MODEL_PATH)
+    assert (
+        t.differences(source, output.replace("recommended", "推奨"), source_path=_MODEL_PATH) == []
+    )
+
+
+def test_a_model_default_cannot_move_to_another_column_or_setting():
+    source = _MODEL_HEADER + _MODEL_ROW + "| `LOOM_OTHER_MODEL` | 0 | Another model. |\n"
+    output = source.replace("The resolver's judge.", "判定するモデル。").replace(
+        "Another model.", "別のモデル。"
+    )
+    moved_column = output.replace(
+        "gpt-6.1-sol | 判定するモデル。", "判定するモデル。 | gpt-6.1-sol"
+    )
+    moved_setting = (
+        output.replace("LOOM_CONFLICT_RESOLVER_MODEL", "SETTING_PLACEHOLDER")
+        .replace("LOOM_OTHER_MODEL", "LOOM_CONFLICT_RESOLVER_MODEL")
+        .replace("SETTING_PLACEHOLDER", "LOOM_OTHER_MODEL")
+    )
+    for changed in (moved_column, moved_setting):
+        assert any(
+            "protected source strings" in problem
+            for problem in t.differences(source, changed, source_path=_MODEL_PATH)
+        )
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["LF", "CRLF"])
+def test_a_headerless_model_default_request_keeps_its_setting_context(newline):
+    english = (_MODEL_HEADER + _MODEL_ROW).replace("\n", newline)
+    row = _MODEL_ROW.rstrip("\n").replace("\n", newline)
+    start = english.index(row)
+    scope = SourceContext(_MODEL_PATH, english, start, start + len(row))
+    output = row.replace("The resolver's judge.", "判定するモデル。")
+    assert t.differences(row, output, source_context=scope) == []
+    assert t.differences(row, output.replace("gpt-6.1-sol", "別のモデル"), source_context=scope)
