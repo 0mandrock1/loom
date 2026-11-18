@@ -21,13 +21,13 @@ from server.memory.app.loom_search.tracker_leg import tracker_text_lines
 from server.operations.base import Operation
 from server.operations.registry import ALL_OPERATIONS
 from server.operations.toolsets import (
-    _MCP_HIDDEN_OPS,
     ASSISTANT_DROPPED_ARGS,
     ASSISTANT_FORCED_ARGS,
     ASSISTANT_NAMED_AGENT_OPS,
     SYNTHETIC_TOOL_OPS,
     assistant_ops,
     curated_roster,
+    hidden_from_mcp,
     is_assistant,
     is_curated,
     resolve_toolset,
@@ -467,13 +467,17 @@ def listed_ops(toolset: str | None) -> list[Operation]:
     # The qa roster's code ops (bisect, pr_check, impact) are
     # its point as much as the code tools are coding's.
     list_code = code_tools or bool(set(toolset_parts(toolset)) & {"coding", "tracker"})
+    # The compiler-tier upload ops leave the hidden set only where the deployment
+    # serves them over MCP; `all` then lists them by the rules below, as code ops.
+    upload_tools = settings.mcp_code_upload_tools
     out: list[Operation] = []
     for op in ALL_OPERATIONS:
-        if op.name in _MCP_HIDDEN_OPS or op.name in SYNTHETIC_TOOL_OPS:
+        hidden = hidden_from_mcp(op.name, code_upload_tools=upload_tools)
+        if hidden or op.name in SYNTHETIC_TOOL_OPS:
             continue  # hidden, or listed by its synthetic descriptor below
         if core_only and op.name not in core_ops:
             continue
-        if not core_only and not listed_under_all(op):
+        if not core_only and not listed_under_all(op, code_upload_tools=upload_tools):
             # `all` lists the stable surface; an experimental op stays
             # callable by name.
             continue

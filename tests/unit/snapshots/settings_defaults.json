@@ -640,6 +640,7 @@
  "mcp_always_load_tools": "code.search,code.symbol",
  "mcp_auth_mode": "required",
  "mcp_code_tools": false,
+ "mcp_code_upload_tools": false,
  "mcp_loom_search_floor_mode": "drop",
  "mcp_loom_search_foreign_margin": 0.08,
  "mcp_loom_search_knowledge_min_similarity": 0.3,
