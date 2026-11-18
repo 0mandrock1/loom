@@ -102,6 +102,7 @@ The existing `test_memories_follow_their_code`
 [integration regression](https://github.com/ClickHouse/loom/blob/main/tests/integration/test_memory_code_links.py)
 checks these states across commits. It also checks a pure move (`moved`), removed code
 (`missing`) and a release branch whose unchanged definition still reads `fresh`.
+
 The packaged [MCP smoke](https://github.com/ClickHouse/loom/blob/main/scripts/gates/docker_code_smoke.py)
 saves a lesson, verifies `fresh`, commits a body edit and waits for the indexing and link
 workers to return `changed` with that exact commit. The
