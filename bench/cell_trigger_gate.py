@@ -1402,6 +1402,29 @@ async def _query_costs(ch: Any, dbs: list[str]) -> dict[str, Any]:
         "read_bytes",
         "written_rows",
         "cpu_us",
+        "kind_mask",
+        "table_mask",
+    )
+    # Only these fixed table categories leave the query log; names and SQL never do.
+    tables = (
+        "memory",
+        "memory_versions",
+        "memory_embeddings",
+        "memory_chunks",
+        "audit_log",
+        "entity_canonical_map",
+        "entity_edges",
+        "entity_edge_rows",
+        "entity_edge_memories",
+        "memory_term_freq",
+        "memory_doc_stats",
+        "agent_events",
+        "entity_degree",
+    )
+    table_mask = " + ".join(
+        f"toUInt64(arrayExists(db -> has(tables, concat(db, '.{table}')), "
+        f"{{dbs:Array(String)}})) * {1 << index}"
+        for index, table in enumerate(tables)
     )
     try:
         async with asyncio.timeout(5):
@@ -1410,9 +1433,12 @@ async def _query_costs(ch: Any, dbs: list[str]) -> dict[str, Any]:
                 "sum(query_duration_ms) AS elapsed_ms, max(query_duration_ms) AS max_ms, "
                 "sum(read_rows) AS read_rows, sum(read_bytes) AS read_bytes, "
                 "sum(written_rows) AS written_rows, sum(ProfileEvents['UserTimeMicroseconds'] "
-                "+ ProfileEvents['SystemTimeMicroseconds']) AS cpu_us FROM system.query_log "
+                "+ ProfileEvents['SystemTimeMicroseconds']) AS cpu_us, "
+                "groupBitOr(multiIf(query_kind='Select', toUInt8(1), "
+                "query_kind='Insert', toUInt8(2), toUInt8(4))) AS kind_mask, "
+                f"groupBitOr({table_mask}) AS table_mask FROM system.query_log "
                 "WHERE type='QueryFinish' AND hasAny(databases, {dbs:Array(String)}) "
-                "AND event_time >= now() - INTERVAL 2 HOUR GROUP BY shape "
+                "AND event_time >= now() - INTERVAL 60 SECOND GROUP BY shape "
                 "ORDER BY elapsed_ms DESC LIMIT 20 SETTINGS max_execution_time=3, "
                 "max_rows_to_read=1000000, max_bytes_to_read=134217728, "
                 "read_overflow_mode='throw', max_result_rows=20, max_result_bytes=16384, "
@@ -1424,12 +1450,28 @@ async def _query_costs(ch: Any, dbs: list[str]) -> dict[str, Any]:
         _require(
             all(type(n) is int and n >= 0 for row in clean for n in row.values()), "query costs"
         )
-        return {"rows": clean}
+        _require(
+            all(
+                1 <= row["kind_mask"] <= 7 and row["table_mask"] < 1 << len(tables) for row in clean
+            ),
+            "query cost categories",
+        )
+        return {"window_seconds": 60, "rows": clean}
     except Exception as error:  # noqa: BLE001 — optional cost diagnostics cannot replace acceptance or cleanup.
-        return {"error_type": type(error).__name__}
+        from server.core.ch_errors import error_code
+
+        try:
+            code = error_code(error)
+        except Exception:  # noqa: BLE001 — unreadable diagnostics cannot replace the first failure.
+            code = None
+        return {
+            "window_seconds": 60,
+            "error_type": type(error).__name__,
+            "error_code": code if type(code) is int and 0 <= code <= 65535 else 0,
+        }
 
 
-async def _physical(conn: Any, ch: Any) -> dict[str, Any]:
+async def _physical(conn: Any, ch: Any, *, query_costs: dict[str, Any]) -> dict[str, Any]:
     from server.core.ch_names import database, telemetry_database
 
     pg = await conn.fetch(
@@ -1451,7 +1493,7 @@ async def _physical(conn: Any, ch: Any) -> dict[str, Any]:
         "postgres_rows": exact,
         "postgres_estimates": [dict(r) for r in pg],
         "clickhouse_parts": parts,
-        "clickhouse_query_costs": await _query_costs(ch, [database(), telemetry_database()]),
+        "clickhouse_query_costs": query_costs,
     }
 
 
@@ -1459,6 +1501,7 @@ async def _run(
     args: argparse.Namespace, fixture: Fixture, artifact: Artifact, ch: Any
 ) -> dict[str, Any]:
     from server.core.ch import set_query_tag
+    from server.core.ch_names import database, telemetry_database
     from server.settings import settings
 
     set_query_tag("bench.cell_trigger_gate")
@@ -1489,6 +1532,8 @@ async def _run(
                     org_triggers_sha256=triggers.org,
                 )
             api = await _memory_set(args, arm=arm, emit=artifact.emit)
+            query_costs = await _query_costs(ch, [database(), telemetry_database()])
+            artifact.emit("api_costs", arm=arm, **query_costs)
             async with asyncio.timeout(SETTLE_S):
                 await _settle_api(conn, ch, args, api)
             block = await _build_block(args, batch)
@@ -1507,7 +1552,7 @@ async def _run(
                     arm=arm,
                     api_rows=len(api),
                     delivery_rows=len(block.rows),
-                    physical=await _physical(conn, ch),
+                    physical=await _physical(conn, ch, query_costs=query_costs),
                 )
             latencies = [r.elapsed_ms for r in api if r.measured]
             samples.append(Samples(on, latencies, rps))
