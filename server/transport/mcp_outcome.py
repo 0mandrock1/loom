@@ -10,7 +10,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from server.core import llm_free
+from server.core import llm_free, request_work
 from server.core.naming import present
 from server.transport._common import ledger_identity
 from server.transport.lean_results import mcp_op_result
@@ -95,8 +95,15 @@ def _search_answer(call: _AdmittedCall, result: Any) -> dict[str, Any]:
     from server.transport.mcp_tools import search_answer
 
     answer = search_answer(result.model_dump(), call.arguments, call.rl_ns, call.mcp_session_id)
-    answer["structuredContent"] = _coerce_bigints(answer["structuredContent"])
-    return answer
+    answer["structuredContent"] = request_work.flag_response(
+        _coerce_bigints(answer["structuredContent"])
+    )
+    if request_work.mirror_marked():
+        answer["content"] = [
+            {"type": "text", "text": json.dumps({"mirrored": True})},
+            *answer["content"],
+        ]
+    return request_work.flag_response(answer)
 
 
 async def _success_response(
@@ -113,6 +120,8 @@ async def _success_response(
     auth, request_id, rl_ns, rl_org = call.auth, call.request_id, call.rl_ns, call.rl_org
     result_dict = result.model_dump(mode="json") if hasattr(result, "model_dump") else result
     result_dict = _coerce_bigints(result_dict)
+    if isinstance(result_dict, dict):
+        result_dict = request_work.flag_response(result_dict)
 
     # Budget violation, audit and idempotency rows in one concurrent round,
     # not three awaited writes in a row.
@@ -137,7 +146,7 @@ async def _success_response(
     )
 
     if op.name == "search.query":
-        return _ok(req_id, _search_answer(call, result))
+        return request_work.flag_response(_ok(req_id, _search_answer(call, result)))
 
     # content[0].text is raw JSON (no prose prefix) — some clients parse it
     # for display and a prefix breaks the parse. structuredContent mirrors it
@@ -151,14 +160,18 @@ async def _success_response(
     if resolved and isinstance(lean_dict, dict):
         lean_dict = {**lean_dict, "namespace_resolved": resolved}
     if isinstance(lean_dict, dict):  # a non-home default says so
-        lean_dict = {**lean_dict, **default_namespace_note()}
-    return _ok(
-        req_id,
-        {
-            "content": [{"type": "text", "text": json.dumps(lean_dict)}],
-            "isError": False,
-            "structuredContent": lean_dict,
-        },
+        lean_dict = request_work.flag_response({**lean_dict, **default_namespace_note()})
+    return request_work.flag_response(
+        _ok(
+            req_id,
+            request_work.flag_response(
+                {
+                    "content": [{"type": "text", "text": json.dumps(lean_dict)}],
+                    "isError": False,
+                    "structuredContent": lean_dict,
+                }
+            ),
+        )
     )
 
 

@@ -189,3 +189,78 @@ def test_mcp_failures_keep_the_mark_after_protocol_unwrapping(
         assert json.loads(body["content"][0]["text"])["mirrored"] is True
     else:
         assert next(iter(result["error"]["data"])) == "mirrored"
+
+
+@pytest.mark.parametrize("name", ["knowledge.get", "knowledge.search"])
+@pytest.mark.parametrize("marked", [False, True])
+def test_http_success_serialization_retains_the_server_owned_mark(name, marked):
+    from server.operations.registry import OPERATIONS_BY_NAME
+    from server.transport import arg_check
+
+    op = OPERATIONS_BY_NAME[name]
+    result = (
+        op.output_model(found=True, source_uri="example", content="private")
+        if name == "knowledge.get"
+        else op.output_model(results=[], embedding_model="fake")
+    )
+    with request_work.bind(request_work.RequestWork()):
+        if marked:
+            request_work.mark_mirrored()
+        body = arg_check.response_body(op, {}, result)
+    if marked:
+        assert next(iter(body)) == "mirrored" and body["mirrored"] is True
+        assert {k: v for k, v in body.items() if k != "mirrored"} == result.model_dump(mode="json")
+    else:
+        assert body == result.model_dump(mode="json")
+
+
+@pytest.mark.parametrize("name", ["knowledge.get", "search.query"])
+@pytest.mark.parametrize("marked", [False, True])
+async def test_mcp_success_unwrapping_keeps_the_mark(monkeypatch, name, marked):
+    import json
+
+    from server.operations.registry import OPERATIONS_BY_NAME
+    from server.transport import mcp_outcome, post_rows
+
+    op = OPERATIONS_BY_NAME[name]
+    result = (
+        op.output_model(found=True, source_uri="example", content="private")
+        if name == "knowledge.get"
+        else op.output_model()
+    )
+    rows = []
+
+    async def record_rows(op, **kwargs):
+        rows.append(kwargs["response_body"])
+
+    monkeypatch.setattr(post_rows, "post_handler_rows", record_rows)
+    call = SimpleNamespace(
+        req_id=1,
+        op=op,
+        input_obj=SimpleNamespace(agent="example"),
+        arguments={},
+        auth=None,
+        request_id="request",
+        rl_ns="notes",
+        rl_org="example",
+        mcp_session_id="session",
+    )
+    with request_work.bind(request_work.RequestWork()):
+        if marked:
+            request_work.mark_mirrored()
+        reply = await mcp_outcome._success_response(call, result, 1, (None, None), None)
+    body = reply["result"]
+    if marked:
+        for envelope in [reply, body, body["structuredContent"], rows[0]]:
+            assert next(iter(envelope)) == "mirrored" and envelope["mirrored"] is True
+        assert json.loads(body["content"][0]["text"])["mirrored"] is True
+    else:
+        assert all(
+            "mirrored" not in envelope
+            for envelope in [reply, body, body["structuredContent"], rows[0]]
+        )
+    if name == "knowledge.get":
+        assert body["structuredContent"]["content"] == "private"
+        assert json.loads(body["content"][0]["text"])["content"] == "private"
+    else:
+        assert "loom_search" in body["content"][-1]["text"]

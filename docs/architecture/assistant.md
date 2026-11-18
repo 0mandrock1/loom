@@ -79,6 +79,13 @@ as its first SSE event, or `mirrored: true` as its whole response's first field.
 decision also routes the answer's cost row to private storage and suppresses public
 diagnostics before subsequent model, budget or tool work.
 
+Marked operation results carry the same server-owned flag after their typed output is
+serialized. HTTP success responses retain it before post-handler rows. MCP success
+responses retain it in the outer envelope, tool result, structured content and canonical
+JSON text. The search tool's prose summary follows a separate first JSON marker block,
+so consuming its text blocks in order observes protection before the summary. Ordinary
+unmarked results keep their existing shapes.
+
 The answer token keeps the caller's `session_protection` promise and a separate
 `answer_mirrors` admission bit. Only an already marked answer for a declared caller
 receives positive admission. Missing or false admission disables its mirror legs,
