@@ -3,7 +3,7 @@
 import json
 import uuid
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -163,8 +163,8 @@ async def test_contract_reader_keeps_publication_privacy_when_repository_metadat
     ch = (
         RecordingCH()
         .on("FROM feed_owner", [{"org": "team", "owner_uuid": owner, "schema_version": 1}])
-        .on("FROM feed_repositories", [current])
         .on("AS now_ms", [{"now_ms": int(now.timestamp()) * 1000, "prior_ms": 0}])
+        .on("FROM feed_repositories", [current])
     )
 
     @asynccontextmanager
@@ -237,3 +237,58 @@ async def test_contract_reader_keeps_publication_privacy_when_repository_metadat
     assert [row for row in rows if row["reach"] == "restricted"] == [
         {"reach": "restricted", **expected}
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["hide", "configure", "cursor"])
+async def test_repository_controls_replace_future_versions_in_the_record(change):
+    clock_row = run([], "SELECT toUnixTimestamp64Milli(now64(3)) AS ms")[0]
+    prior = domain.EPOCH + timedelta(days=1, milliseconds=int(clock_row["ms"]))
+    current = app.identity("team") | dict(
+        repository="widgets/repo",
+        repository_id=7,
+        owner_uuid=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        token_enc="old-sealed",
+        is_private=0,
+        available=1,
+        visible_until=prior,
+        cursors="{}",
+        max_pages=2,
+        revision=uuid.UUID(int=3),
+        version=prior,
+    )
+    setup = [
+        *_record(),
+        _insert_recorded("feed_repositories", current),
+        "INSERT INTO feed_issues (org, repository, number, source_id, body) "
+        "VALUES ('team', 'widgets/repo', 1, 'widgets/repo#1', 'Public item')",
+    ]
+    changes = {
+        "hide": {"available": 0, "visible_until": domain.EPOCH},
+        "configure": {"token_enc": "rotated-sealed", "max_pages": 7},
+        "cursor": {"cursors": json.dumps({"items": "2025-01-02T00:00:00+00:00"})},
+    }[change]
+    ch = RecordingCH().on("AS now_ms", lambda sql, params: run(setup, sql, params))
+    await store.put_repository(ch, current | changes | {"revision": uuid.UUID(int=4)})
+    written = ch.inserted("feed_repositories")[0]
+    assert written["version"] == prior + timedelta(milliseconds=1)
+    rows = run(
+        [*setup, _insert_recorded("feed_repositories", written)],
+        "SELECT available, token_enc, cursors, max_pages, "
+        "toUnixTimestamp64Milli(visible_until) AS visible_ms, "
+        "toUnixTimestamp64Milli(version) AS version_ms, "
+        "(SELECT count() FROM github_issues) AS visible_items "
+        "FROM feed_repositories FINAL WHERE org = 'team' AND repository = 'widgets/repo'",
+    )
+    assert len(rows) == 1
+    for column in ("available", "token_enc", "cursors"):
+        assert rows[0][column] == written[column]
+    assert int(rows[0]["max_pages"]) == written["max_pages"]
+    expected_visible_ms = (
+        int(written["visible_until"].timestamp()) * 1000
+        + written["visible_until"].microsecond // 1000
+    )
+    prior_ms = int(prior.timestamp()) * 1000 + prior.microsecond // 1000
+    assert int(rows[0]["visible_ms"]) == expected_visible_ms
+    assert int(rows[0]["version_ms"]) == prior_ms + 1
+    assert int(rows[0]["visible_items"]) == (0 if change == "hide" else 1)

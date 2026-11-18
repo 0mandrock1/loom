@@ -181,7 +181,21 @@ async def table_engines(ch: _CHClient) -> list[dict[str, Any]]:
 
 
 async def put_repository(ch: _CHClient, row: dict[str, Any]) -> None:
-    await ch.insert("feed_repositories", [{key: row[key] for key in REPOSITORY_COLUMNS}])
+    """Replace control state under the record writer's lease, even after clock rollback."""
+    clock_row = await ch.query_one(
+        """SELECT toUnixTimestamp64Milli(now64(3)) AS now_ms,
+       toUnixTimestamp64Milli(max(version)) AS prior_ms
+FROM feed_repositories WHERE org = {org:String} AND repository = {repo:String}
+LIMIT 1 SETTINGS select_sequential_consistency = 1""",
+        {"org": row["org"], "repo": row["repository"]},
+    )
+    if not clock_row:
+        raise ValueError("repository publication clock is unavailable")
+    published_ms = max(int(clock_row["now_ms"]), int(clock_row["prior_ms"]) + 1)
+    version = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=published_ms)
+    await ch.insert(
+        "feed_repositories", [{key: row[key] for key in REPOSITORY_COLUMNS} | {"version": version}]
+    )
 
 
 async def repository(ch: _CHClient, org: str, repo: str) -> dict[str, Any] | None:

@@ -48,6 +48,10 @@ Publication versions use whole milliseconds to match tracker cursors. Under the 
 writer lease, each content batch receives the later of the record clock and one millisecond
 beyond every persisted content version for its organization, across all repositories.
 This ordering also covers namespaces that read multiple repositories through one cursor.
+Repository control writes likewise advance beyond the persisted version for their exact
+organization and repository, even when the receiving clock moves backward. Visibility
+revocation, credential rotation and cursor checkpoints therefore replace the prior control
+row rather than losing to its timestamp.
 Raw upstream timestamps remain separate and drive API cursors. No model or embedding
 call is required. Repository identities retain the registered allowlist's spelling,
 including when the API returns different capitalization.
@@ -131,7 +135,8 @@ registered trackers are unchanged until an operator initializes and schedules a 
 - [Feed application](../../server/tracker/app/github_feed.py): `initialize`, `configure`,
   `sync` and `_publish` enforce ownership, stamp publication privacy and fence writes.
 - [Record store](../../server/tracker/store/github_feed.py): `statements` defines the
-  contract views; `repository` and `put_items` read publication state consistently.
+  contract views; `repository`, `put_repository` and `put_items` read publication
+  state consistently.
 - [API client](../../server/clients/github_feed.py): `pages` bounds upstream scans;
   [domain rules](../../server/tracker/domain/github_feed.py) validate identities and
   choose replay boundaries through `next_cursor`.

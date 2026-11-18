@@ -1,9 +1,14 @@
 """Feed content publications advance beyond every persisted record version."""
 
+import json
+import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 
+from server.tracker.app import github_feed as app
 from server.tracker.store import github_feed as store
 from tests.unit.ch_fake import RecordingCH
 
@@ -66,3 +71,122 @@ async def test_other_repository_publication_exceeds_the_records_logical_watermar
     ch.on("AS now_ms", publication_clock)
     await store.put_items(ch, "feed_prs", [{"number": 1}], IDENTITY, "widgets/second")
     assert ch.inserted("feed_prs")[0]["version"] == NOW + timedelta(milliseconds=8)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prior_offset_ms", [10_000, 0, -10_000])
+@pytest.mark.parametrize("change", ["hide", "configure", "cursor"])
+async def test_repository_controls_replace_persisted_rows_despite_clock_rollback(
+    monkeypatch, prior_offset_ms, change
+):
+    owner = "00000000-0000-0000-0000-000000000001"
+    target = "00000000-0000-0000-0000-000000000002"
+    prior = NOW + timedelta(milliseconds=prior_offset_ms)
+    previous_cursor = (NOW - timedelta(days=1)).isoformat()
+    original = app.identity("team") | dict(
+        repository="widgets/repo",
+        repository_id=7,
+        owner_uuid=owner,
+        token_enc="sealed-secret",
+        is_private=0,
+        available=1,
+        visible_until=NOW + timedelta(seconds=900),
+        cursors=json.dumps({"items": previous_cursor}),
+        max_pages=2,
+        revision=uuid.uuid4(),
+        version=prior,
+    )
+    ch = RecordingCH()
+    await ch.insert(
+        "feed_repositories",
+        [
+            original,
+            original | {"repository": "widgets/other", "version": NOW + timedelta(hours=1)},
+            original | {"org": "other-team", "version": NOW + timedelta(hours=2)},
+        ],
+    )
+
+    def persisted(params):
+        return [
+            row
+            for row in ch.inserted("feed_repositories")
+            if row["org"] == params["org"] and row["repository"] == params["repo"]
+        ]
+
+    def publication_clock(sql, params):
+        assert "WHERE org = {org:String} AND repository = {repo:String}" in sql
+        assert "LIMIT 1 SETTINGS select_sequential_consistency = 1" in sql
+        latest = max(row.get("version", NOW) for row in persisted(params))
+        prior_ms = int(latest.timestamp()) * 1000 + latest.microsecond // 1000
+        return [{"now_ms": NOW_MS, "prior_ms": prior_ms}]
+
+    def final_repository(sql, params):
+        # Model ReplacingMergeTree's maximum-version winner, including the
+        # server-clock default when the writer omits an explicit version.
+        return [max(persisted(params), key=lambda row: row.get("version", NOW))]
+
+    ch.on("AS now_ms", publication_clock)
+    ch.on("FROM feed_repositories FINAL", final_repository)
+    ch.on("AS ms", [{"ms": NOW_MS}])
+    ch.on("FROM feed_owner", [{"org": "team", "owner_uuid": owner, "schema_version": 1}])
+    ch.on("FROM system.databases", [{"id": target}])
+    keys = []
+
+    @asynccontextmanager
+    async def fence(key, **kwargs):
+        keys.append(key)
+        yield lambda uncertain: None
+
+    monkeypatch.setattr(app, "fenced", fence)
+    monkeypatch.setattr(app, "resealed", lambda *args: None)
+    monkeypatch.setattr(app, "unseal", lambda *args: "read-only-secret")
+    monkeypatch.setattr(app, "seal", lambda *args: "rotated-sealed")
+    metadata = AsyncMock(return_value={"id": 7, "full_name": "widgets/repo", "private": False})
+    monkeypatch.setattr(app.provider, "metadata", metadata)
+    if change == "hide":
+        metadata.side_effect = app.provider.FeedProviderError("http_404")
+        with pytest.raises(app.provider.FeedProviderError):
+            await app.sync(
+                ch,
+                org="team",
+                owner_uuid=owner,
+                repo="widgets/repo",
+                allowed_repos={"widgets/repo"},
+            )
+    elif change == "configure":
+        await app.configure(
+            ch,
+            org="team",
+            owner_uuid=owner,
+            repo="widgets/repo",
+            token="rotated-read-only-secret",
+            allowed_repos={"widgets/repo"},
+            max_pages=7,
+        )
+    else:
+        assert await app._publish(
+            ch, original, owner, target, "items", NOW, {}, app._Observation(7, True, NOW)
+        )
+    written = ch.inserted("feed_repositories")[3:]
+    expected_version = max(NOW, prior + timedelta(milliseconds=1))
+    assert written[0]["version"] == expected_version
+    assert all(row["version"] > prior and row["version"].microsecond % 1000 == 0 for row in written)
+    assert all(
+        before["version"] < after["version"]
+        for before, after in zip(written, written[1:], strict=False)
+    )
+    current = await store.repository(ch, "team", "widgets/repo")
+    assert current == written[-1]
+    assert current["revision"] != original["revision"]
+    assert keys == [f"tracker-feed.writer/{target}"]
+    if change == "hide":
+        assert current["available"] == 0 and current["visible_until"] == app.domain.EPOCH
+        assert current["token_enc"] == original["token_enc"]
+        assert current["cursors"] == original["cursors"]
+    elif change == "configure":
+        assert current["token_enc"] == "rotated-sealed" and current["max_pages"] == 7
+        assert current["cursors"] == original["cursors"]
+    else:
+        assert current["is_private"] == 1 and current["available"] == 1
+        assert json.loads(current["cursors"])["items"] == NOW.isoformat()
+        assert current["token_enc"] == original["token_enc"]
