@@ -28,6 +28,10 @@ def _args_problem(args: argparse.Namespace) -> str:
         return f"--wait is finite, nonnegative and at most {_WAIT_MAX_S} seconds"
     if sum(bool(value) for value in (args.config, args.finish, args.revert, args.probe_url)) > 1:
         return "choose one of --config, --finish, --revert or --probe-url"
+    if getattr(args, "revoke_unprovisioned", False) and not (
+        args.config or args.finish or args.revert
+    ):
+        return "--revoke-unprovisioned needs --config, --finish or --revert"
     return ""
 
 
@@ -100,6 +104,11 @@ def add_update_parser(csub: Any) -> None:
             "Later cell's verified probe listener URL; no flag refreshes the first cell's "
             "router-configured addresses"
         ),
+    )
+    parser.add_argument(
+        "--revoke-unprovisioned",
+        action="store_true",
+        help="Cut off pre-update tokens of subjects that cannot satisfy the target SCIM policy",
     )
     parser.add_argument("--router", help="The router's URL (default: LOOM_CELL_ROUTER_URL)")
     parser.add_argument(

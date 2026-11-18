@@ -144,8 +144,6 @@ def configuration_pair(
     assert current is not None
     if action not in ("config", "finish", "revert"):
         raise ValueError("configuration action must be config, finish or revert")
-    if target["fields"].get("scim", cell.DEFAULTS["scim"]):
-        raise ValueError("configuration update requires per-cell SCIM before enabling SCIM")
 
     def same(a: dict[str, Any], b: dict[str, Any]) -> bool:
         return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
