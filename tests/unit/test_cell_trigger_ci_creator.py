@@ -740,7 +740,15 @@ def test_native_failure_site_reaches_published_evidence_without_private_logs(
     assert "private-" not in json.dumps(published)
 
 
-@pytest.mark.parametrize("contents", ["not-json", '{"error_type":"private-extra"}', "x" * 4097])
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "not-json",
+        '{"error_type":"private-extra"}',
+        "x" * 4097,
+        pytest.param("[" * 1500 + "0" + "]" * 1500, id="deep-nesting"),
+    ],
+)
 def test_invalid_native_failure_sidecar_preserves_command_refusal(keeper_config_case, contents):
     native, instance, owner, _, _ = keeper_config_case
     instance.s["python"] = "unused"
@@ -756,3 +764,29 @@ def test_invalid_native_failure_sidecar_preserves_command_refusal(keeper_config_
     with pytest.raises(native.Refused) as caught:
         instance.action("create", role="pg_cell")
     assert caught.value is original and original.native is None
+
+
+@pytest.mark.parametrize("kind", [KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("site", ["read", "closed"])
+def test_fatal_native_diagnostic_preserves_original_command_refusal(
+    keeper_config_case, monkeypatch, kind, site
+):
+    native, instance, owner, _, _ = keeper_config_case
+    instance.s["python"] = "unused"
+    original = native.Refused("original")
+
+    def refused(*args, **kwargs):
+        raise original
+
+    def diagnostic(*args, **kwargs):
+        raise kind("private-diagnostic-secret")
+
+    owner.command = refused
+    monkeypatch.setattr(native, "read", lambda *args, **kwargs: {})
+    monkeypatch.setattr(native, site, diagnostic)
+    try:
+        instance.action("create", role="pg_cell")
+    except BaseException as error:  # noqa: BLE001 — assert the actual retained failure, including fatal diagnostics.
+        assert error is original and original.native is None
+    else:
+        pytest.fail("command refusal was swallowed")

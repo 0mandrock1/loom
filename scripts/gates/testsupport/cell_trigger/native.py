@@ -1509,8 +1509,8 @@ class Fixture:
                         "native failure metadata",
                     )
                     error.native = failure
-                except (OSError, ValueError, Refused, KeyError, TypeError):
-                    pass  # Missing or invalid diagnostics cannot replace the command failure.
+                except BaseException:  # noqa: BLE001 — diagnostics must not replace the original command failure.
+                    pass
             # A terminal cleanup refusal is recorded, never retried as another mutation.
             if cleanup and self.o.leaders and self.o.leaders[-1]["terminal"] is not None:
                 self.o.select(error)
