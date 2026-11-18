@@ -216,7 +216,7 @@ the `loom` tables each view reads, and, for each materialized view, its target, 
 | `deployment_config` | `ReplacingMergeTree(version)` | `name` |  |  |  |
 | `derived_facts` | `MergeTree` | `(org, namespace, subject, predicate, category)` | `toYYYYMM(created_at)` |  |  |
 | `document_blobs` | `ReplacingMergeTree(created_at)` | `(org, namespace, sha256)` |  |  |  |
-| `documents` | `ReplacingMergeTree(version)` | `(org, namespace, source_uri)` | `toYYYYMM(ingested_at)` |  | 1 skip index (bloom_filter) |
+| `documents` | `ReplacingMergeTree(version)` | `(org, namespace, source_uri)` | `toYYYYMM(ingested_at)` |  | 2 skip index (bloom_filter) |
 | `embedder_calibration` | `ReplacingMergeTree(version)` | `embedder_model` |  |  |  |
 | `embedding_cache` | `ReplacingMergeTree(created_at)` | `(model, key)` |  | `created_at + toIntervalDay(30)` |  |
 | `entity_canonical_map` | `ReplacingMergeTree(version)` | `(org, namespace, mention_text)` | `org` |  | 1 skip index (bloom_filter) |
@@ -241,6 +241,7 @@ the `loom` tables each view reads, and, for each materialized view, its target, 
 | `instances` | `KeeperMap('/loom/instances')` |  |  |  |  |
 | `keyring_readers` | `MergeTree` | `(seen_at, process)` |  | `toDateTime(seen_at) + toIntervalDay(1)` |  |
 | `knowledge_gaps` | `MergeTree` | `(org, namespace, build, gap_id)` |  | `built_at + toIntervalDay(7)` |  |
+| `knowledge_group_members` | `ReplacingMergeTree(version)` | `(org, namespace, source_id, group)` |  |  |  |
 | `knowledge_ingest_cancels` | `MergeTree` | `(org, namespace, ingestion_id)` |  | `toDateTime(requested_at) + toIntervalDay(30)` |  |
 | `knowledge_ingestions` | `ReplacingMergeTree(version)` | `(org, namespace, ingestion_id)` |  | `toDateTime(updated_at) + toIntervalDay(30)` |  |
 | `knowledge_mirrors` | `ReplacingMergeTree(version)` | `(org, namespace, mirror)` |  |  |  |

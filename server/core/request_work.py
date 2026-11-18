@@ -64,6 +64,10 @@ class RequestWork:
     # resolved (a code op naming none runs in the code namespace): the ledger
     # row's tenant where the request named none.
     admitted: tuple[str, str] | None = None
+    # Mutable with the bag: a child leg marks its parent request even when it admits
+    # nothing. Diagnostic suppression must not hide this authorization state.
+    mirror_marked: bool = False
+    mirror_unread: bool = False
 
     def mark(self, name: str) -> float:
         now = time.perf_counter()
@@ -96,6 +100,21 @@ def begin() -> RequestWork:
 
 def current() -> RequestWork | None:
     return None if codes_only() else _current.get()
+
+
+def mark_mirrored(*, unread: bool = False) -> bool:
+    """Mark a leg; False means no outer request bag exists and it must serve no mirror."""
+    bag = _current.get()
+    if bag is None:
+        return False
+    bag.mirror_marked = True
+    bag.mirror_unread |= unread
+    return True
+
+
+def mirror_marked() -> bool:
+    bag = _current.get()
+    return bag is not None and bag.mirror_marked
 
 
 def mark_stage(name: str) -> None:
