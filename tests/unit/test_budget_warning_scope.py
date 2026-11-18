@@ -29,7 +29,7 @@ class EventSQL:
         self.db = sqlite3.connect(":memory:")
         self.db.row_factory = sqlite3.Row
         self.db.execute("ATTACH DATABASE ':memory:' AS loom")
-        columns = repo.EVENT_COLS.split(", ") + ["user_id", "session_id"]
+        columns = repo.EVENT_COLS.split(", ")
         self.db.execute(
             "CREATE TABLE loom.task_events ("
             + ", ".join(

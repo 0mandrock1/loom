@@ -161,17 +161,31 @@ async def test_document_route_honors_the_named_users_cap(
 ) -> None:
     from types import SimpleNamespace
 
+    from server.knowledge.api.models_knowledge import KnowledgeSearchInput
     from server.knowledge.app import knowledge_search, synthesize
+    from server.knowledge.app.knowledge_search import SearchRequest
+    from server.knowledge.app.source_access import ReadPlan
     from server.memory.api.models_ask import MemoryAskInput
     from server.memory.app.ask.handler import _maybe_route_to_synthesize
+    from server.memory.app.ask.source_context import PreparedKnowledge
     from server.memory.domain.corpus_synthesis import CorpusChunk
 
     calls: list[str] = []
 
-    async def search(inp: Any) -> Any:
-        return SimpleNamespace(
-            results=[SimpleNamespace(source_uri="doc://report", tags=[]) for _ in range(2)]
-        )
+    prepared = PreparedKnowledge(
+        SearchRequest(KnowledgeSearchInput(org="o", namespace="n", query=query), ("n",), ()),
+        ReadPlan("o"),
+    )
+
+    async def search(request: SearchRequest, plan: ReadPlan) -> Any:
+        assert request.namespaces == ("n",) and plan is prepared.plan
+
+        async def current() -> Any:
+            return SimpleNamespace(
+                results=[SimpleNamespace(source_uri="doc://report", tags=[]) for _ in range(2)]
+            )
+
+        return SimpleNamespace(current=current)
 
     class LLM:
         model = "fake"
@@ -187,10 +201,10 @@ async def test_document_route_honors_the_named_users_cap(
 
     monkeypatch.setattr(settings, "memory_ask_synth_model", "")
     monkeypatch.setattr("server.llm.client.get_llm_client", LLM)
-    monkeypatch.setattr(knowledge_search, "handle_knowledge_search", search)
+    monkeypatch.setattr(knowledge_search, "run_checked_search", search)
     monkeypatch.setattr(synthesize, "_corpus_chunks", chunks)
     out = await _maybe_route_to_synthesize(
-        MemoryAskInput(org="o", namespace="n", user_id=user_id, query=query)
+        MemoryAskInput(org="o", namespace="n", user_id=user_id, query=query), prepared
     )
     if user_id == "alice":
         assert out is None, "a capped user must fall through to retrieval without synthesis"
