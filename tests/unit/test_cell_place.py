@@ -302,11 +302,20 @@ async def test_local_commit_cancellation_closes_the_session(local):
     conn, state = local
     conn.stall_commit = True
     task = asyncio.create_task(invoke_place())
-    await conn.commit_started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert conn.closed and not conn.terminated and not conn.committed
+    try:
+        try:
+            await asyncio.wait_for(conn.commit_started.wait(), 0.5)
+        except TimeoutError:
+            if task.done():
+                await task
+            raise
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 0.5)
+        assert conn.closed and not conn.terminated and not conn.committed
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def test_stalled_direct_context_entry_is_bounded(local, monkeypatch):

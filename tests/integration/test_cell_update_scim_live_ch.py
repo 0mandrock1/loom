@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import sys
 from argparse import Namespace
 
 import httpx
 import pytest
 
+from server.auth import scim
 from server.cli import cell_control, cell_update_pg
 from server.cli.cell_update_run import Run
 from server.core import cell, pg
@@ -25,6 +27,35 @@ from tests.integration.test_scim_person_live_ch import People
 from tests.unit.cell_control_owner import owner
 
 pytestmark = pytest.mark.usefixtures("ch_target_required")
+
+
+@pytest.fixture(autouse=True)
+async def _clean_people(people: People):
+    try:
+        yield people
+    finally:
+        first_error = sys.exception()
+        for sql, params in (
+            (
+                "ALTER TABLE loom.namespaces DELETE WHERE org = {org:String} "
+                "SETTINGS mutations_sync = 2",
+                {"org": people.org},
+            ),
+            (
+                "ALTER TABLE loom.scim_users DELETE WHERE id IN {ids:Array(String)} "
+                "SETTINGS mutations_sync = 2",
+                {"ids": [scim.user_id(email) for email in people.emails]},
+            ),
+        ):
+            try:
+                await people.client.execute(sql, params=params)
+            except BaseException as error:  # noqa: BLE001 — attempt every owned cleanup.
+                if first_error is None:
+                    first_error = error
+                else:
+                    first_error.add_note(f"identity cleanup also failed: {type(error).__name__}")
+        if first_error is not None:
+            raise first_error
 
 
 @pytest.mark.parametrize("case", ["provisioned", "missing-person", "changed-local-pair"])
