@@ -1316,6 +1316,11 @@ The redirect URI to register with each store is
 - `server/knowledge/app/source_access.py`: the permission check and the mirror legs.
 - `server/auth/connected_accounts.py`: the connect routes and their store.
 - `server/clients/gdrive.py`, `notion.py`, `linear.py`, `recording.py`: the stores.
+- `server/clients/connected_oauth.py` (`OAuthClient`): fixed-provider consent, code
+  exchange, refresh, account metadata and revocation requests. Calls share the caller's
+  deadline, cap response bodies, refuse redirects and never retry. The caller consumes
+  browser-bound state before exchange, authorizes the Loom owner/source and commits
+  refresh generations; this HTTP helper neither supplies nor bypasses those checks.
 
 ## Tests
 
