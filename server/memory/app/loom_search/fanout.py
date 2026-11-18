@@ -1,8 +1,8 @@
 """The loom_search fan-out: one question over every plane that could answer it.
 
 Memory (plus the scoped repository's decisions), knowledge (plus the scoped
-repository's documents), profile and conversations are searched in parallel,
-and — for a defect report under a code scope — the tracker record; the
+repository's documents), profile, conversations and authorized tracker records
+are searched in parallel after their capture consent is resolved; the
 sections are assembled into one payload and trimmed by the answer-first
 rules (answer_first.py). A leg that fails returns
 `{"error": ..., "results": []}` under its section and the others still
@@ -30,7 +30,7 @@ from server.memory.app.agent_rules import request_rule_agent, served_hits
 from server.memory.app.ask.reader_render import render_reader_block
 from server.memory.app.loom_search.answer_first import answer_first
 from server.memory.app.loom_search.repo_decisions import memory_with_repo_decisions
-from server.memory.app.loom_search.tracker_leg import tracker_leg
+from server.memory.app.loom_search.tracker_leg import TrackerSearchPlan, tracker_leg
 from server.memory.app.profile_search import search_profile
 from server.memory.domain import code_change
 
@@ -316,6 +316,7 @@ async def search_sections(
     page: str,
     explain: bool,
     repo_namespace: str,
+    tracker_plan: TrackerSearchPlan | None,
 ) -> dict[str, Any]:
     """The assembled loom_search payload for `query` addressed to
     (`org`, `namespace`); every leg reads the namespaces `namespaces_to_search`
@@ -380,7 +381,7 @@ async def search_sections(
                 org, namespaces, query, top_k=top_k, lexical=profile_hit_matches, scope=scope
             ),
             _conversation_leg(conv_input, scope),
-            tracker_leg(query, top_k=top_k),  # A defect-shaped query under a code scope
+            tracker_leg(query, plan=tracker_plan, top_k=top_k),
             return_exceptions=True,
         )
 
