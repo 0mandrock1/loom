@@ -51,7 +51,7 @@ from server.core.errors import (
     error_kind,
 )
 from server.identity.domain.read_scope import request_read_narrowed
-from server.knowledge.store import source_access
+from server.knowledge.app import source_access
 from server.llm.customer import ModelCallsDisabled, switched_off
 from server.observability import cost_accumulator
 from server.observability.budget import operation_over_share
@@ -347,7 +347,7 @@ async def _mirror_admission(org: str, namespace: str) -> bool:
         return False  # mirror reads require authenticated serving
     set_query_tag("assistant.mirror.admission")
     try:
-        sources = await source_access.active_sources(org, [namespace])
+        sources = await source_access.has_active_mirrored_sources(org, namespace)
     except Exception:  # noqa: BLE001 — unknown admission must never become an ordinary answer
         request_work.mark_mirrored(unread=True)
         with private_work():

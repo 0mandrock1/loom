@@ -151,7 +151,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
     monkeypatch.setattr(bridge, "_place", lambda org, ns: "namespace")
     monkeypatch.setattr(bridge, "switched_off", switched_off)
     monkeypatch.setattr(bridge, "operation_over_share", over_cap)
-    monkeypatch.setattr(bridge.source_access, "active_sources", active_sources)
+    monkeypatch.setattr(bridge.source_access.store, "active_sources", active_sources)
     # The answer's tool calls found nothing (a test may say otherwise).
     monkeypatch.setattr(bridge.support.ledger, "run_rows", _found_nothing)
     monkeypatch.setattr(bridge.support, "_wait", _no_wait)
@@ -1818,7 +1818,7 @@ def _mirrored_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
         return [{"namespace": NS, "source_id": "source"}]
 
     monkeypatch.setattr(settings, "auth_required", True)
-    monkeypatch.setattr(bridge.source_access, "active_sources", active)
+    monkeypatch.setattr(bridge.source_access.store, "active_sources", active)
 
 
 @pytest.mark.parametrize("streamed", [False, True])

@@ -247,6 +247,11 @@ def _head_serves(head: store.ReadHead, candidate: dict[str, Any], chunks: bool) 
     )
 
 
+async def has_active_mirrored_sources(org: str, namespace: str) -> bool:
+    """Read public registration presence after the caller authorizes the namespace."""
+    return bool(await store.active_sources(org, [namespace]))
+
+
 async def prepare(org: str, namespaces: list[str]) -> ReadPlan:
     """Read public registrations first, then bind one marked, fail-closed mirror plan."""
     plan = ReadPlan(org)
