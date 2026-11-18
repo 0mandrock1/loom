@@ -661,9 +661,21 @@ version and fields, and beside them keys that no fingerprint compares: they are 
 needs no column for them (`server.core.instances.cell_row`). Their presence proves the build
 that reports them; there is no generation key.
 
-- `participant_id`: this server's provider participant UUID, for joining its actual
-  process lifecycle to the serving instance row. A workers child publishes no instance row.
-- `serves`: `LOOM_SERVES_TRAFFIC`.
+- `participant_id`: this process's provider participant UUID, for joining its actual
+  process lifecycle. A workers child publishes a cell heartbeat but no instance row.
+- `serves`: `LOOM_SERVES_TRAFFIC` on a server, false on a workers child.
+- `attach_observation`: protocol `1`, the permanent lifecycle role (`server` or `worker`),
+  the same canonical participant UUID, its certified host/birth proof, the actual
+  deployment root-key fingerprint, whether the cell gate currently accepts this process,
+  and the configured heartbeat period in integer milliseconds. The period must be finite,
+  positive and exactly representable in milliseconds; an unsupported cadence, role or
+  uncertified birth reports `null`. This object carries no private key material and sits
+  outside the comparable fingerprint's unchanged `v` and `fields`. These observations
+  alone do not activate later-cell attach or prove freshness, peer separation or retirement.
+  After reading its cell state, a workers child with `LOOM_CELL` set acknowledges its
+  first cell heartbeat before starting supervised work, then refreshes it at the existing
+  instance interval. A failed first write refuses boot; a missed later write is logged
+  and retried on the next interval. Its tracked loop stops before guarded retirement.
 - `marked`: whether this process's pooled Postgres sessions keep the tenancy marker
   (`loom.tenancy_checked`). The cell refresh reads it with the state rows, after `RESET ALL`
   in the same transaction: a startup value survives the reset, a `SET` does not, so a
