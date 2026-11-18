@@ -1066,6 +1066,11 @@ settings:
   # the only source. [restart]
   # code_self_service_enabled: true
 
+  # True leaves code.repo.remote_branches, code.repo.add and code.repo.add_branch to
+  # platform admins: a token scoped to namespaces, or a trusted caller acting for
+  # another subject, is refused too. False: each op's own role decides. [restart]
+  # code_self_service_platform_admin_only: false
+
   # Where the code ingest worker clones a self-service entry's bare mirror (one per
   # GitHub repository, shared by its branches). [restart]
   # code_repos_root: "var/code_repos/self"
@@ -1162,6 +1167,12 @@ settings:
   # False: without the sandbox, jobs fall back to plain processes as "Without the
   # sandbox" in code-index-operations.md says. [restart]
   # code_sandbox_required: false
+
+  # True lets a host without the sandbox add and fetch a self-service entry with a
+  # network remote: its git jobs (ls-remote, clone, fetch) run as plain processes and it
+  # gets no compiler tier. Refused at load without code_self_service_platform_admin_only
+  # or with code_sandbox_required. False: such an entry needs the sandbox. [restart]
+  # code_self_service_git_unsandboxed: false
 
   # Largest file one process of a sandboxed repository job may write, in MiB (a pack or
   # index.scip). [restart]

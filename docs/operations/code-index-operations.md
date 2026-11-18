@@ -592,7 +592,8 @@ these hosts without the sandbox.
 
 Unless `LOOM_CODE_SANDBOX_REQUIRED` is set, every host still indexes the repositories
 listed in `LOOM_CODE_REPOS_JSON`; only repositories added from the page need the
-sandbox. _Without the sandbox_ says what that runs, and the
+sandbox, or `LOOM_CODE_SELF_SERVICE_GIT_UNSANDBOXED` for their parser tier alone.
+_Without the sandbox_ says what that runs, and the
 [quickstart](../getting-started/quickstart.md#optional-index-a-repository-on-the-released-stack)
 has the released stack's commands.
 
@@ -726,6 +727,32 @@ restrict user namespaces, but they drop the whole profile.
 - self-registered repositories on a local path keep the parser tier and the static
   compiler tiers but get no build-based tier (C/C++);
 - adding a repository or a branch from the page is refused with `SANDBOX_UNAVAILABLE`.
+
+**Self-registered repositories without the sandbox.**
+`LOOM_CODE_SELF_SERVICE_GIT_UNSANDBOXED=true` changes the second and the last item on a
+host that cannot run the sandbox. `code.repo.remote_branches`, `code.repo.add` and
+`code.repo.add_branch` are no longer refused for the missing sandbox, and the ingest pass
+and history reads clone and fetch a self-registered repository whose remote is a network
+URL, so it gets the parser tier. It still gets no compiler tier, build-based or static:
+their dependency installs, module downloads and submodule fetches would run without the
+egress proxy too. `workers.status` names the skip.
+
+The git jobs this allows (`ls-remote`, the bare clone, fetches) run as plain processes.
+They run no repository code: a clone or a fetch transfers objects and refs, never hooks
+or configuration, the mirror is bare, and git reads no system or global configuration.
+Nothing vets where they connect. Git reaches the host and port the remote names and a
+host that one redirects to, private and link-local addresses included, and an `ssh`
+remote runs `ssh` with the server's `HOME` and the keys in it. Whoever names a remote
+therefore chooses what the server connects to, so Loom refuses to load the setting unless
+`LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY=true` leaves those three ops to platform
+admins ([self-service repositories](../features/code-index/repositories.md#self-service-repositories)).
+It also refuses it together with `LOOM_CODE_SANDBOX_REQUIRED=true`, under which no
+repository job runs as a plain process.
+
+`/v1/health` and `loom doctor` keep reporting `repo_jobs_unsandboxed` as a warning, with
+a message that names the setting. The dashboard reads that warning, not the setting, and
+offers no **Add repository** or **Add branch** while it stands: call `code.repo.add` and
+`code.repo.add_branch` directly.
 
 Each Go entry has its own module cache under `LOOM_CODE_SCIP_GO_MODCACHE`
 (`<root>/<org>/<namespace>`): `go` does not re-check the sums of modules already in its

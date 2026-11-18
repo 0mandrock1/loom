@@ -109,9 +109,11 @@ remote, and any host can rebuild the mirror from it.
   `LOOM_CODE_REPOS_ROOT`: mirrors, `checkout-*` trees and mirror lock files no active
   entry names (restricted entries included) and half-done clones. It sweeps nothing
   when the registry cannot be read.
-- **Sandbox.** A host without the repository-job sandbox never clones or fetches a
-  viewer-added entry with a network remote, on the read path as in the worker
-  (`compiler_tier.unsandboxed_skip`).
+- **Sandbox.** A host without the repository-job sandbox clones or fetches a
+  self-registered entry with a network remote only where
+  `LOOM_CODE_SELF_SERVICE_GIT_UNSANDBOXED` is set, on the read path as in the worker
+  (`compiler_tier.unsandboxed_skip`). The entry's compiler tiers are skipped there
+  either way.
 - **Merges the remote lost.** A ledger merge the remote no longer serves ("not our
   ref" in two calls, so one transient refusal does not count) is recorded in the
   mirror (`loom-unpinned-merges`), never asked for again, and

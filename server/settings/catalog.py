@@ -956,6 +956,10 @@ class CodeSettings(BaseModel):
     # for a namespace a member added from the page is skipped.
     # Off = the operator's JSON is the only source.
     code_self_service_enabled: bool = True
+    # True leaves code.repo.remote_branches, code.repo.add and code.repo.add_branch to
+    # platform admins: a token scoped to namespaces, or a trusted caller acting for
+    # another subject, is refused too. False: each op's own role decides.
+    code_self_service_platform_admin_only: bool = False
     # Where the code ingest worker clones a self-service entry's bare mirror (one per
     # GitHub repository, shared by its branches).
     code_repos_root: str = "var/code_repos/self"
@@ -1030,6 +1034,12 @@ class CodeSettings(BaseModel):
     # missing sandbox as an error. False: without the sandbox, jobs fall back
     # to plain processes as "Without the sandbox" in code-index-operations.md says.
     code_sandbox_required: bool = False
+    # True lets a host without the sandbox add and fetch a self-service entry with a
+    # network remote: its git jobs (ls-remote, clone, fetch) run as plain processes and
+    # it gets no compiler tier. Refused at load without
+    # code_self_service_platform_admin_only or with code_sandbox_required. False: such
+    # an entry needs the sandbox.
+    code_self_service_git_unsandboxed: bool = False
     # Largest file one process of a sandboxed repository job may write, in MiB (a
     # pack or index.scip).
     code_sandbox_max_file_mb: int = 32768
