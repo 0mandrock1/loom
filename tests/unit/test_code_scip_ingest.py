@@ -234,3 +234,18 @@ def test_an_operators_entry_and_one_added_through_the_api_both_take_uploads(
         )
         repos.set_registry_repos([added], frozenset({("o", "n")}))
     assert _ingest().parts_received == 1
+
+
+def test_an_upload_waits_for_the_registry_read_where_mcp_serves_the_upload_ops(
+    repo: _Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Until the self-service registry is read, which namespaces have an entry is not
+    known: the op answers 503 and stores nothing."""
+    from server.code.domain.index import repos
+
+    monkeypatch.setattr(settings, "mcp_code_upload_tools", True)
+    monkeypatch.setattr(settings, "code_self_service_enabled", True)
+    monkeypatch.setattr(repos, "_registry_loaded", False)
+    with pytest.raises(repos.RegistryUnread):
+        _ingest()
+    assert repo.parts == {} and repo.upserts == []

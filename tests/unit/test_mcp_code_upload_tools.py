@@ -24,7 +24,7 @@ import server.transport.mcp_call as mcp_call
 from server.code.app import ingest
 from server.operations.capabilities import capability_snapshot
 from server.operations.registry import OPERATIONS_BY_NAME
-from server.operations.toolsets import MCP_TOOLSETS
+from server.operations.toolsets import _MCP_HIDDEN_OPS, MCP_TOOLSETS
 from server.settings import settings
 from server.transport import mcp_op, post_rows
 from server.transport.mcp_tools import _tools_descriptor
@@ -145,6 +145,21 @@ def test_on_both_ops_are_callable_by_tool_name_and_through_loom_op(
     ):
         assert answer["isError"] is False and answer["structuredContent"]["status"] == "pending"
     assert {row["op"] for row in mcp_op.catalog("scip")["ops"]} == UPLOAD_OPS
+
+
+def test_on_every_other_hidden_op_stays_off_mcp(
+    client: TestClient, store: _Store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The setting serves the two upload ops and no other hidden op: `code.refresh`, hidden
+    beside them, still answers as an op kept off MCP."""
+    monkeypatch.setattr(settings, "mcp_code_upload_tools", True)
+    assert {name for name in _MCP_HIDDEN_OPS if not mcp_op.is_hidden(name)} == UPLOAD_OPS
+    refresh = {"org": "acme", "namespace": "code-widgets"}
+    for answer in (
+        _call(client, "loom_code_refresh", refresh),
+        _call(client, "loom_op", {"op": "code.refresh", "arguments": refresh}),
+    ):
+        assert answer["isError"] and answer["structuredContent"]["code"] == "OP_NOT_ON_MCP"
 
 
 def test_on_all_lists_them_where_it_lists_code_tools_and_no_curated_roster_does(

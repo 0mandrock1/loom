@@ -226,9 +226,11 @@ repository entry, self-service or operator-configured
 ([adding repositories](../features/code-index/repositories.md)), over HTTP as over MCP.
 Without that rule a caller could store upload batches in any namespace it may write,
 its own memory namespace included. A part for another namespace answers
-`RESOURCE_NOT_FOUND` (404 over HTTP). `ops.capabilities` and the generated
-[operations reference](./operations.md) describe the default: they report both ops as
-hidden whatever the setting.
+`RESOURCE_NOT_FOUND` (404 over HTTP). Send the namespace itself: when a code tool's
+`namespace` names a repository and is not a namespace the caller can read, MCP resolves
+it to the index of the repository's default branch, and the upload lands there.
+`ops.capabilities` and the generated [operations reference](./operations.md) describe
+the default: they report both ops as hidden whatever the setting.
 
 ### Toolsets
 
