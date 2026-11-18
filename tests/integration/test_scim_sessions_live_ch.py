@@ -79,16 +79,27 @@ async def sessions(people: People, monkeypatch: pytest.MonkeyPatch) -> AsyncIter
     try:
         yield store
     finally:
+        first_error: BaseException | None = None
         for key in store.keys:
-            current = await claims.get(people.client, key)
-            if current is not None:
-                await claims._drop(people.client, key, current)
-        if store.families:
-            await people.client.execute(
-                "ALTER TABLE loom.revoked_tokens DELETE WHERE jti IN {ids:Array(String)} "
-                "SETTINGS mutations_sync = 2",
-                params={"ids": list(store.families)},
-            )
+            try:
+                current = await claims.get(people.client, key)
+                if current is not None:
+                    await claims._drop(people.client, key, current)
+            except BaseException as exc:  # noqa: BLE001 — attempt every owned key
+                if first_error is None:
+                    first_error = exc
+        try:
+            if store.families:
+                await people.client.execute(
+                    "ALTER TABLE loom.revoked_tokens DELETE WHERE jti IN {ids:Array(String)} "
+                    "SETTINGS mutations_sync = 2",
+                    params={"ids": list(store.families)},
+                )
+        except BaseException as exc:  # noqa: BLE001 — preserve the first cleanup failure
+            if first_error is None:
+                first_error = exc
+        if first_error is not None:
+            raise first_error
 
 
 async def test_real_refresh_round_trip_putback_and_rotation_preserve_email(

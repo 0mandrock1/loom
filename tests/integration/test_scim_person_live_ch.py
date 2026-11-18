@@ -139,13 +139,23 @@ async def people(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[People]:
     try:
         yield made
     finally:
-        if made.emails:
-            await client.execute(
-                "ALTER TABLE loom.scim_users DELETE WHERE id IN {ids:Array(String)} "
-                "SETTINGS mutations_sync = 2",
-                params={"ids": [scim.user_id(e) for e in made.emails]},
-            )
-        await client.disconnect()
+        first_error: BaseException | None = None
+        try:
+            if made.emails:
+                await client.execute(
+                    "ALTER TABLE loom.scim_users DELETE WHERE id IN {ids:Array(String)} "
+                    "SETTINGS mutations_sync = 2",
+                    params={"ids": [scim.user_id(e) for e in made.emails]},
+                )
+        except BaseException as exc:  # noqa: BLE001 — disconnect must still run
+            first_error = exc
+        try:
+            await client.disconnect()
+        except BaseException as exc:  # noqa: BLE001 — preserve the first cleanup failure
+            if first_error is None:
+                first_error = exc
+        if first_error is not None:
+            raise first_error
 
 
 async def test_verified_reverse_owner_still_requires_its_own_email(people: People) -> None:
