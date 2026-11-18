@@ -639,3 +639,120 @@ async def test_native_bootstrap_checks_persisted_independent_write_policy(
     else:
         await native.proof(instance.s, output, bootstrap=True)
         assert native.read(output)["namespace_registered"] is True
+
+
+@pytest.mark.parametrize("role", ["inspect", "keeper-prefix", "create", "private-role"])
+def test_nonzero_native_command_retains_only_structural_metadata(monkeypatch, role):
+    import json
+    from types import SimpleNamespace
+
+    from scripts.gates.testsupport.cell_trigger import fixture
+
+    owner = fixture.Owner({}, None, lambda *args, **kwargs: None)
+    owner.phase, owner.serial = "setup", 5
+    item = {"process": SimpleNamespace(returncode=7)}
+    monkeypatch.setattr(owner, "start", lambda *args, **kwargs: item)
+    monkeypatch.setattr(owner, "poll", lambda _: 7)
+    with pytest.raises(fixture.Refused) as caught:
+        owner.command(role, ["private-argv"], {"TOKEN": "private-token"})
+    owner.select(caught.value)
+    record = owner.failure_summary()["records"][0]
+    assert owner.first is caught.value
+    assert record["command"] == {
+        "role": role if role != "private-role" else "other",
+        "serial": 5,
+        "returncode": 7,
+    }
+    assert record["site"]["file"] == "fixture.py"
+    assert record["site"]["function"] == "command"
+    assert "private-" not in json.dumps(record)
+
+
+def test_native_failure_site_reaches_published_evidence_without_private_logs(
+    keeper_config_case, monkeypatch, tmp_path, capsys
+):
+    import json
+    import sys
+
+    from scripts.gates.cell_trigger_acceptance import publish
+    from scripts.gates.testsupport.cell_trigger import fixture
+
+    native, instance, owner, _, _ = keeper_config_case
+    context, output = tmp_path / "failure-context.json", tmp_path / "pg_cell-created.json"
+    instance.context = context
+    instance.s["databases"]["pg_cell"] = "bench_cell"
+    instance.s["python"] = "unused"
+    native.write(context, instance.s | {"root": str(tmp_path)})
+
+    async def failed(*args, **kwargs):
+        raise ValueError("private-native-secret")
+
+    monkeypatch.setattr(native, "stores", failed)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "native.py",
+            "--task",
+            "create",
+            "--role",
+            "pg_cell",
+            "--context",
+            str(context),
+            "--output",
+            str(output),
+        ],
+    )
+    assert native.main() == 1
+    assert not output.exists()
+    metadata = native.read(output.with_name(output.name + ".failure.json"), limit=4096)
+    assert metadata["error_type"] == "ValueError"
+    assert metadata["site"]["file"] == "native.py"
+    assert metadata["site"]["function"] == "main"
+    assert metadata["site"]["line"] > 0
+    assert "private-native-secret" not in json.dumps(metadata) + capsys.readouterr().err
+    original = fixture.Refused("private-command-secret")
+    original.command = {"role": "create", "serial": 5, "returncode": 1}
+
+    def refused(*args, **kwargs):
+        raise original
+
+    owner.command = refused
+    with pytest.raises(fixture.Refused) as caught:
+        instance.action("create", role="pg_cell")
+    assert caught.value is original
+    observer = fixture.Owner({}, None, lambda *args, **kwargs: None)
+    observer.select(caught.value, phase="setup")
+    evidence = observer.failure_summary()
+    assert evidence["records"][0]["native"] == metadata
+    assert evidence["records"][0]["command"] == original.command
+    folder = tmp_path / "publication"
+    (folder / "fixture").mkdir(parents=True)
+    native.write(folder / "fixture/outer-result.json", {"failure_evidence": evidence})
+    (folder / "fixture/private.log").write_text("private-log-secret")
+    (folder / "fixture/private-settings.json").write_text('{"token":"private-settings-secret"}')
+    destination = tmp_path / "published"
+    publish(folder, destination, original, phase="native", diagnostic_error_type=None)
+    assert {path.name for path in destination.iterdir()} == {"outer-result.json", "result.json"}
+    published = json.loads((destination / "outer-result.json").read_text())
+    assert published["failure_evidence"] == evidence
+    assert "private-" not in json.dumps(published)
+
+
+@pytest.mark.parametrize("contents", ["not-json", '{"error_type":"private-extra"}', "x" * 4097])
+def test_invalid_native_failure_sidecar_preserves_command_refusal(keeper_config_case, contents):
+    native, instance, owner, _, _ = keeper_config_case
+    instance.s["python"] = "unused"
+    path = instance.w / "pg_cell-created.json.failure.json"
+    path.write_text(contents)
+    path.chmod(0o600)
+    original = native.Refused("original")
+
+    def refused(*args, **kwargs):
+        raise original
+
+    owner.command = refused
+    with pytest.raises(native.Refused) as caught:
+        instance.action("create", role="pg_cell")
+    assert caught.value is original and original.native is None

@@ -39,6 +39,7 @@ from fixture import (
     child_env,
     database,
     digest,
+    error_metadata,
     need,
     pg_dsn,
     read,
@@ -1490,6 +1491,26 @@ class Fixture:
                 cleanup=cleanup,
             )
         except BaseException as error:
+            if isinstance(error, Refused):
+                try:
+                    failure = read(target.with_name(target.name + ".failure.json"), limit=4096)
+                    closed(failure, "error_type site outcome")
+                    site = failure["site"]
+                    closed(site, "file line function")
+                    need(
+                        isinstance(failure["error_type"], str)
+                        and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,63}", failure["error_type"])
+                        and failure["outcome"] in {"refused", "error", "cancelled"}
+                        and site["file"] in (*FILES, "unknown")
+                        and type(site["line"]) is int
+                        and 0 <= site["line"] < 2**31
+                        and isinstance(site["function"], str)
+                        and re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]{0,63}", site["function"]),
+                        "native failure metadata",
+                    )
+                    error.native = failure
+                except (OSError, ValueError, Refused, KeyError, TypeError):
+                    pass  # Missing or invalid diagnostics cannot replace the command failure.
             # A terminal cleanup refusal is recorded, never retried as another mutation.
             if cleanup and self.o.leaders and self.o.leaders[-1]["terminal"] is not None:
                 self.o.select(error)
@@ -2400,6 +2421,14 @@ def main() -> int:
                 )
             )
     except BaseException as error:  # noqa: BLE001 — owned cleanup must finish while retaining the first failure.
+        try:
+            write(
+                args.output.with_name(args.output.name + ".failure.json"),
+                error_metadata(error),
+                limit=4096,
+            )
+        except BaseException:  # noqa: BLE001 — diagnostic output must not replace the native failure.
+            pass
         print(type(error).__name__, file=sys.stderr)
         return 1
     return 0

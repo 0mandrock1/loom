@@ -75,7 +75,8 @@ CODEC_VERSIONS = {"clickhouse-connect": "1.9.0", "asyncpg": "0.32.0"}
 
 
 class Refused(RuntimeError):
-    pass
+    command: dict | None = None
+    native: dict | None = None
 
 
 def need(ok: object, field: str) -> None:
@@ -568,6 +569,47 @@ def load_owned(path: Path):
     return OwnedChildren()
 
 
+def error_metadata(error: BaseException) -> dict:
+    site = {"file": "unknown", "line": 0, "function": "unknown"}
+    frame = sys._getframe(1)
+    line = frame.f_lineno
+    trace = error.__traceback__
+    for _ in range(64):
+        if trace is None:
+            break
+        candidate = trace.tb_frame
+        if Path(candidate.f_code.co_filename).name in FILES and candidate.f_code.co_name not in {
+            "need",
+            "closed",
+            "equal",
+            "integer",
+            "identifier",
+            "hex64",
+        }:
+            frame = candidate
+            line = trace.tb_lineno
+        trace = trace.tb_next
+    while frame is not None and frame.f_code.co_name in {"select", "block_teardown"}:
+        frame = frame.f_back
+        if frame is not None:
+            line = frame.f_lineno
+    if frame is not None and Path(frame.f_code.co_filename).name in FILES:
+        site = {
+            "file": Path(frame.f_code.co_filename).name,
+            "line": line,
+            "function": frame.f_code.co_name[:64],
+        }
+    return {
+        "error_type": type(error).__name__[:64],
+        "site": site,
+        "outcome": "refused"
+        if isinstance(error, Refused)
+        else "error"
+        if isinstance(error, Exception)
+        else "cancelled",
+    }
+
+
 class Owner:
     def __init__(self, spec: dict, owned, note) -> None:
         self.spec, self.owned, self.note = spec, owned, note
@@ -601,47 +643,12 @@ class Owner:
         selected_phase = entry[1]["phase"]
         unknown = {"file": "unknown", "line": 0, "function": "unknown"}
         try:
-            site = unknown
-            frame = sys._getframe(1)
-            line = frame.f_lineno
-            trace = error.__traceback__
-            for _ in range(64):
-                if trace is None:
-                    break
-                candidate = trace.tb_frame
-                if Path(
-                    candidate.f_code.co_filename
-                ).name in FILES and candidate.f_code.co_name not in {
-                    "need",
-                    "closed",
-                    "equal",
-                    "integer",
-                    "identifier",
-                    "hex64",
-                }:
-                    frame = candidate
-                    line = trace.tb_lineno
-                trace = trace.tb_next
-            while frame is not None and frame.f_code.co_name in {"select", "block_teardown"}:
-                frame = frame.f_back
-                if frame is not None:
-                    line = frame.f_lineno
-            if frame is not None and Path(frame.f_code.co_filename).name in FILES:
-                site = {
-                    "file": Path(frame.f_code.co_filename).name,
-                    "line": line,
-                    "function": frame.f_code.co_name[:64],
-                }
-            entry[1] = {
-                "phase": selected_phase,
-                "error_type": type(error).__name__[:64],
-                "site": site,
-                "outcome": "refused"
-                if isinstance(error, Refused)
-                else "error"
-                if isinstance(error, Exception)
-                else "cancelled",
-            }
+            entry[1] = {"phase": selected_phase, **error_metadata(error)}
+            if isinstance(error, Refused):
+                if error.command is not None:
+                    entry[1]["command"] = error.command
+                if error.native is not None:
+                    entry[1]["native"] = error.native
         except BaseException as secondary:  # noqa: BLE001 — owned cleanup must finish while retaining the first failure.
             entry[1] = {
                 "phase": selected_phase,
@@ -928,7 +935,14 @@ class Owner:
             self.monitor(cleanup=cleanup)
             need(time.monotonic() < end, "serial command deadline")
             time.sleep(0.05)
-        need(item["process"].returncode == 0, "native command refused")
+        if item["process"].returncode != 0:
+            error = Refused("native command refused")
+            error.command = {
+                "role": role if role in {"inspect", "keeper-prefix", "create"} else "other",
+                "serial": self.serial,
+                "returncode": item["process"].returncode,
+            }
+            raise error
         if self.first is not None and not cleanup:
             raise self.first
         return item
