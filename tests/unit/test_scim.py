@@ -23,6 +23,7 @@ from server.auth import (
     grant_claims,
     login,
     oauth,
+    person_erasure,
     revocation,
     scim,
     scim_routes,
@@ -157,7 +158,7 @@ def test_active_takes_booleans_and_their_strings() -> None:
 class _Table:
     """loom.scim_users, loom.namespaces as `_subjects` reads it, and
     loom.revoked_tokens as the revocation module reads and writes it,
-    with an empty connected-account inventory."""
+    with verified namespace contacts and empty connected-account/crawl inventories."""
 
     def __init__(
         self,
@@ -260,6 +261,27 @@ class _Table:
         return row
 
     async def query_all(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        if "SELECT n.namespace, n.owner_email, n.contact_email, n.password_hash," in sql:
+            assert set(params) == {"org", "sub", "owner"}
+            assert "FROM loom.namespaces FINAL" in sql and "FROM loom.sso_links FINAL" in sql
+            assert "active = 1 AND contact_email != ''" in sql and "LIMIT 129" in sql
+            return [
+                {
+                    "namespace": f"verified-{subject}",
+                    "owner_email": subject,
+                    "contact_email": email,
+                    "password_hash": "verified-password-hash",
+                    "hosted_domain": "",
+                    "issuer": "",
+                }
+                for email, subjects in self.accounts.items()
+                for subject in subjects
+                if params["org"] in self.reached_in.get(subject, ["acme"])
+                and (
+                    subject.lower() == params["owner"].lower()
+                    or email.lower() == params["sub"].lower()
+                )
+            ]
         if sql == (
             "SELECT org, subject, kind, connection_id, account_id, workspace_id, "
             "account_email_enc, credential_enc, scopes, active, refresh_id, connected_at, "
@@ -320,6 +342,51 @@ class _Table:
         self.rows.extend(dict(r) for r in rows)
 
 
+class _PersonCleanup:
+    """An empty crawl inventory with real capture and durable pending validation."""
+
+    def __init__(self, world: _World) -> None:
+        self.world = world
+        self.prepared: list[person_erasure.Capture] = []
+        self.cleaned: list[person_erasure.Capture] = []
+        self.finalized: list[person_erasure.Capture] = []
+
+    async def prepare(
+        self, pending: person_erasure.Pending
+    ) -> tuple[person_erasure.Workspace, ...]:
+        assert self.world.holding > 0
+        await pending.validate(before_delete=True)
+        assert not pending.captured.prepared and not pending.captured.workspaces
+        self.prepared.append(pending.captured)
+        return ()
+
+    async def cleanup(self, pending: person_erasure.Pending) -> None:
+        assert self.world.holding == 0
+        await pending.validate()
+        assert pending.captured.prepared and not pending.captured.workspaces
+        self.cleaned.append(pending.captured)
+
+    async def finalize(self, pending: person_erasure.Pending) -> None:
+        assert self.world.holding > 0 and pending.captured in self.cleaned
+        await pending.validate()
+        for row in self.world.table.rows:
+            if row["id"] != pending.captured.id:
+                continue
+            if row["crawl_erasure_enc"]:
+                historical = person_erasure.load(row["id"], row["crawl_erasure_enc"])
+                assert all(
+                    any(
+                        (old.org, old.subject) == (new.org, new.subject)
+                        and set(old.emails) <= set(new.emails)
+                        and set(old.spellings) <= set(new.spellings)
+                        for new in pending.captured.people
+                    )
+                    for old in historical.people
+                )
+            row.update(crawl_erasure_enc="", crawl_erasure_required=True, crawl_erasure_done=True)
+        self.finalized.append(pending.captured)
+
+
 class _World:
     """The tables, the real revocation writes and reads over them, and the audit log."""
 
@@ -328,6 +395,7 @@ class _World:
         self.elsewhere: dict[str, list[str]] = {}  # subject -> other orgs it is in
         self.reached_in: dict[str, list[str]] = {}  # subject -> orgs its email reaches it in
         self.table = _Table(self.accounts, self.elsewhere, self.reached_in)
+        self.person_cleanup = _PersonCleanup(self)
         self.audits: list[tuple[str, dict[str, Any]]] = []
         self.revoked_at_audit: list[dict[str, Any]] = []  # SCIM's revocations as each audit lands
         self.claim_limit: int | None = None  # names held at once before a claim runs out
@@ -380,6 +448,10 @@ class _World:
         monkeypatch.setattr(settings, "scim_token", _TOKEN)
         monkeypatch.setattr(scim, "get_client", lambda: self.table)
         monkeypatch.setattr(ch, "get_client", lambda: self.table)
+        monkeypatch.setattr(person_erasure, "get_client", lambda: self.table)
+        monkeypatch.setattr(person_erasure, "_preparer", self.person_cleanup.prepare)
+        monkeypatch.setattr(person_erasure, "_cleanup", self.person_cleanup.cleanup)
+        monkeypatch.setattr(person_erasure, "_finalizer", self.person_cleanup.finalize)
         monkeypatch.setattr(scim, "_held", held)
         monkeypatch.setattr(grant_claims, "service_account_change", name_claim)
         monkeypatch.setattr(revocation, "asyncio", SimpleNamespace(sleep=no_wait))
@@ -388,6 +460,7 @@ class _World:
         monkeypatch.setattr(audit, "emit", emit)
 
     def person(self, email: str, *subjects: str) -> None:
+        """Seed verified namespace contacts, separately from grants in other orgs."""
         self.accounts[email] = list(subjects)
 
     @property
@@ -686,7 +759,29 @@ async def test_every_row_written_carries_every_column(world) -> None:
     await scim.create(
         "lee@example.com", "lee@example.com", active=True, emails=[]
     )  # a reactivation
-    assert [sorted(r) for r in world.table.rows] == [sorted(column_names("scim_users"))] * 4
+    # Creation, deactivation, canonical capture, prepared capture, deletion, reactivation.
+    assert [sorted(r) for r in world.table.rows] == [sorted(column_names("scim_users"))] * 6
+    assert [(r["active"], r["deleted"]) for r in world.table.rows] == [
+        (1, 0),
+        (0, 0),
+        (0, 0),
+        (0, 0),
+        (0, 1),
+        (1, 0),
+    ]
+    assert all(r["id"] == uid and r["email"] == "lee@example.com" for r in world.table.rows)
+    [captured] = world.person_cleanup.prepared
+    assert captured.id == uid and not captured.prepared and not captured.workspaces
+    assert [(p.org, p.subject, p.emails) for p in captured.people] == [
+        ("acme", "lee", ("lee@example.com",))
+    ]
+    [cleaned] = world.person_cleanup.cleaned
+    assert cleaned.people == captured.people and cleaned.prepared and not cleaned.workspaces
+    assert world.person_cleanup.finalized == [cleaned]
+    assert all(
+        not r["crawl_erasure_enc"] and r["crawl_erasure_required"] and r["crawl_erasure_done"]
+        for r in world.table.rows
+    )
     columns = sorted(column_names("revoked_tokens"))
     assert [sorted(r) for r in world.table.revocations] == [columns] * 2
 

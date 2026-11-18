@@ -178,7 +178,7 @@ async def test_configured_cleanup_deadline_cancels_external_io_without_completin
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     world, _canonical, prepared = finalizing
-    monkeypatch.setattr(settings, "knowledge_crawl_person_cleanup_timeout_s", 0.001)
+    monkeypatch.setattr(settings, "knowledge_crawl_person_cleanup_timeout_s", 1.0)
     monkeypatch.setattr(erasure, "_cleanup", crawl_person_erasure.finish)
     monkeypatch.setattr(crawl_person_erasure, "get_client", lambda: world)
     original = world.query_one
@@ -198,8 +198,9 @@ async def test_configured_cleanup_deadline_cancels_external_io_without_completin
         return await original(sql, params, **kwargs)
 
     monkeypatch.setattr(world, "query_one", blocked)
-    with pytest.raises(TimeoutError):
-        await erasure.finish("scim-person-id", prepared)
+    async with asyncio.timeout(3):
+        with pytest.raises(TimeoutError):
+            await erasure.finish("scim-person-id", prepared)
     assert entered and cancelled
     assert (world.exclusion_keys, world.source) == before
     assert world.pending["crawl_erasure_enc"] == prepared
