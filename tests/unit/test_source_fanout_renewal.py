@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from server.core import request_tail
 from server.core.diagnostics import private_work
 from server.knowledge.api.models_conversations import ConversationSearchOutput
 from server.knowledge.api.models_knowledge import (
@@ -15,7 +16,7 @@ from server.knowledge.api.models_knowledge import (
     KnowledgeSearchOutput,
     _SearchHit,
 )
-from server.knowledge.app import repo_docs
+from server.knowledge.app import repo_docs, source_publication
 from server.knowledge.app.knowledge_search import CheckedSearch, SearchRequest
 from server.knowledge.app.source_access import ReadPlan
 from server.knowledge.app.source_corpus import LostCorpus
@@ -64,7 +65,9 @@ def result(name, *, lost=False, fail_render=False, needs_widen=False, ordinary_f
         return ordinary
 
     proof = SimpleNamespace(
-        check=AsyncMock(side_effect=LostCorpus() if lost else None), fresh=lambda: not lost
+        mirrored=True,
+        check=AsyncMock(side_effect=LostCorpus() if lost else None),
+        fresh=lambda: not lost,
     )
     renderer = SimpleNamespace(marked=True, render=AsyncMock(side_effect=render))
     checked = CheckedSearch(mixed, proof, renderer, [], 7)
@@ -147,6 +150,46 @@ async def test_independently_cancelled_knowledge_child_is_propagated(monkeypatch
             repo_namespace="",
             tracker_plan=None,
         )
+
+
+@pytest.mark.parametrize("reranked", [False, True])
+@pytest.mark.parametrize("count_changed", [False, True])
+@pytest.mark.parametrize("rerank_possible", [False, True])
+async def test_displaced_base_keeps_only_surviving_private_metadata_dependencies(
+    reranked, count_changed, rerank_possible
+):
+    first, _renderer = result("base")
+    first.base.ordinary_rerank_possible = rerank_possible
+    first.base.output.reranked_by = "private-ranker" if reranked else ""
+    first.base._ordinary_dropped = 7 if count_changed else first.base.output.stale_dropped
+    private = first.base.proofs
+    extra = KnowledgeSearchOutput(
+        results=[hit("ordinary-a"), hit("ordinary-b")], embedding_model="fake"
+    )
+    for item in extra.results:
+        item.score = 1
+    first.extra = CheckedSearch(extra, None, first.base._renderer, [], 0)
+    sent = []
+
+    async def app(scope, receive, send):
+        output = await first.current()
+        assert [item.source_uri for item in output.results] == ["ordinary-a", "ordinary-b"]
+        for proof in first.publication_proofs:
+            source_publication.retain(proof)
+        private.check.side_effect = LostCorpus()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": output.model_dump_json().encode()})
+
+    async def send(message):
+        sent.append(message)
+
+    if reranked or count_changed or rerank_possible:
+        with pytest.raises(request_tail.RequiredTailError):
+            await request_tail.RequestTailMiddleware(app)({"type": "http"}, None, send)
+        assert sent == []
+    else:
+        await request_tail.RequestTailMiddleware(app)({"type": "http"}, None, send)
+        assert b"ordinary-a" in sent[-1]["body"]
 
 
 async def test_lost_first_with_full_ordinary_page_never_renews_unused_wider(monkeypatch):

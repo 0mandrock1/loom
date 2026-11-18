@@ -358,7 +358,10 @@ def test_the_printed_sql_revokes_what_show_grants_lists_before_granting(
     first_grant = next(i for i, s in enumerate(printed) if s.startswith("GRANT "))
     assert printed[first_grant - len(revokes) : first_grant] == revokes
     # The file is run in one session, whose first statement cuts the rest from the log.
-    assert printed[0] == "SET log_queries_cut_to_length = 1, log_formatted_queries = 0"
+    assert printed[0] == (
+        "SET log_queries_cut_to_length = 1, log_formatted_queries = 0, "
+        "SQL_loom_org = '', SQL_loom_ns = '', SQL_loom_exp = '0', SQL_loom_sig = ''"
+    )
 
 
 def test_a_column_grant_in_another_database_is_outside_the_allowlist(
@@ -599,6 +602,8 @@ def test_an_unrefused_probe_is_named_by_the_column_not_the_sql(
 ) -> None:
     # /v1/health shows this text: no SQL, and no database name.
     async def run(sql: str, **_: Any) -> Any:
+        if ".agent_events" in sql:
+            raise RuntimeError("Code: 497. DB::Exception: Not enough privileges")
         if sql.startswith("SELECT count()") and "system." not in sql:
             return [], [], [(1,)] if boundary.CANARY_TABLE in sql else [(0,)]
         if "system." in sql:

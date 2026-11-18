@@ -374,6 +374,8 @@ same code for any cause. The exceptions are these:
      `response_tokens`, the stored duration), its `model` and the outcome fields a model
      call can change (`success`, `error_code`, `status_class`) go to a platform admin
      only, and the error-rate and model metrics leave marked requests out.
+     The stored argument map keeps only numeric statement/read/injection work fields.
+     Result identifiers, document tags, argument digests and error prose are omitted.
 3. A connected source's per-item and per-file codes and `too_many_documents`, to its
    owner, and its listing age, to its owner as a code (fresh or stale).
 4. A platform admin's view of a mirror's sources (every mirrored source's status, the
@@ -557,10 +559,47 @@ the public fallback. No reranking provider receives the provisional pools.
   through the fold and the mask: `sql_v1_agent_events` masks every field of a marked row
   whose value can depend on an admitted item (`model`, the tokens, cost and work fields,
   `llm_calls`, and the outcome fields a model call can change: `success`, `error_code`,
-  `status_class`), and `insights.query`'s analyst has a grant on a masked view only,
-  never on the table, with the same signed scope policy on the view (the implementing
-  pull request updates the isolation proof in [the assistant page](assistant.md)), which
-  exception 2 accepts as a cost beside `cost.summary`'s.
+  `status_class`). The `insights.query` catalog exposes `analysis_agent_events`, a
+  masked view with signed org, namespace, expiry and statement-id checks. Its analyst
+  has no raw `agent_events` grant. SQL naming the raw relation is refused; statements
+  use the catalog's view name. Deploy the canary-first probe version check across the
+  fleet before retiring that grant, so an older replica leaves newer access entities
+  to their owning build. The [assistant boundary](assistant.md) describes the view and
+  key-hiding requirements. Exception 2 accepts this fold beside `cost.summary`'s.
+
+History predicates cannot use a marked call's outcome or projected arguments. A
+potentially matching marked event in a rule's identity, operation and time scope makes
+that leaf unknown before success or argument filters run. This includes an unresolved
+argument reference and a negated condition. Breadth rules check marked participation
+under the same principal pin because marked reads write no exposure row. The compiler
+reads coarse participation and the ordinary aggregate in one statement. Protected
+unknown carries one fixed reason and no count or timestamp; every affected enforcing
+operation refuses, reads included. Shadow rules retain their non-enforcing behavior.
+`policy.check` uses the same protected-history decision. Ordinary trace-backend errors
+keep their existing read-availability policy.
+
+A checked answer retains its access proofs through required policy witnesses and
+other work that must finish before publication. All provider work for its complete
+ordinary alternative finishes before cost and event snapshots. After required tail
+work, publication renews the exact private dependencies of the already selected frame
+and checks every retained deadline after the last renewal await. This boundary does
+not render, rerank, call a provider or choose an ordinary alternative. A lost proof
+refuses the whole frame; removing a citation from private prose is insufficient.
+After awaiting the response headers, publication renews access again before sending
+the body. A checked-proof or publication failure after headers aborts with a constant
+failure and sends no unchecked body. Discarded candidate widths and optional sections
+retain no publication guard; returned metadata, counts and cursor lookahead retain
+their contributing proofs. A raw download owns the same required marked accounting
+attempt as a registered operation. Cancellation and disconnects still propagate
+through owned cleanup. These checks end at the server's response-send boundary.
+
+A multi-entry MCP batch refuses every response-bearing marked entry with the same
+instruction to send it individually, including denied and empty entries. Notifications
+remain silent. It discards each marked entry's complete frame before buffering it or
+awaiting another entry. Single calls and one-entry arrays
+retain checked reads. Each entry gets fresh local state before routing or screening;
+the enclosing HTTP request keeps a monotonic mark through later ordinary entries,
+streaming and cleanup. Middleware task boundaries do not clear that owner.
 
 A mirrored source's documents are never kept past it: `remove` retires every one it owns
 (`delete_documents` is implied), and so do a disconnect, a SCIM deactivation, the owner
@@ -1354,7 +1393,7 @@ Each implementing pull request lists its own; these pin the model:
       row.
     - A mirror-erase run with the switch still on refused, a restore that loses the
       deployment row, and a mirrored `add` after either, with the refusal still holding.
-    - A viewer's `insights.query` over `agent_events` after another person's marked
+    - A viewer's `insights.query` over `analysis_agent_events` after another person's marked
       request finding its tokens, cost, `model` and outcome fields only as the mask
       allows, the caller's own rows included.
     - A caller admitted to nothing seeing no work figure on its own marked row over a

@@ -14,6 +14,7 @@ from server.core.diagnostics import private_work
 from server.identity.app.request_scope import request_scope
 from server.identity.domain.read_scope import scope_and
 from server.knowledge.app.source_access import ReadPlan
+from server.knowledge.app.source_search_proofs import SearchProofs
 from server.memory.api.models_lifecycle import MemoryStackInput, MemoryStackOutput, _StackEntry
 from server.memory.app.stack_knowledge import StackKnowledge
 
@@ -300,6 +301,7 @@ class CheckedStack:
     _prefix: _StackFill
     _knowledge: StackKnowledge | None
     marked: bool
+    _knowledge_used: bool = field(default=False, init=False)
 
     @property
     def lost(self) -> bool:
@@ -307,7 +309,14 @@ class CheckedStack:
 
     @property
     def output(self) -> MemoryStackOutput:
-        return _render(self._prefix, self._knowledge.hits if self._knowledge else [])
+        output = _render(self._prefix, self._knowledge.hits if self._knowledge else [])
+        self._knowledge_used = output != _render(self._prefix, [])
+        return output
+
+    def publication_proofs(self) -> tuple[SearchProofs, ...]:
+        if not self._knowledge_used or self._knowledge is None or self._knowledge.lost:
+            return ()
+        return (self._knowledge.proofs,) if self._knowledge.proofs is not None else ()
 
     def fresh(self) -> bool:
         return self._knowledge is None or self._knowledge.fresh()
@@ -360,4 +369,10 @@ async def handle_memory_stack(input: MemoryStackInput) -> MemoryStackOutput:
         if input.include_knowledge and input.knowledge_top_k > 0
         else ReadPlan(input.org)
     )
-    return await (await run_checked_stack(input, plan)).current()
+    from server.knowledge.app import source_publication
+
+    checked = await run_checked_stack(input, plan)
+    output = await checked.current()
+    for proof in checked.publication_proofs():
+        source_publication.retain(proof)
+    return output

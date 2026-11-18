@@ -36,7 +36,9 @@ def world(monkeypatch):
         "during_read": "",
         "data": b"First private section. Second private section. Last section.",
     }
-    plan = SimpleNamespace(org="acme", marked=True, failed=False, unread=False)
+    plan = SimpleNamespace(
+        org="acme", marked=True, failed=False, unread=False, current=lambda _item: state["allowed"]
+    )
     row = DocumentRow(
         org="acme",
         doc_id=SID,

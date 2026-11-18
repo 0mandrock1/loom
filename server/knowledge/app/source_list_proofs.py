@@ -17,18 +17,34 @@ class ListProofs:
     plan: ReadPlan
     include_superseded: bool
     items: InitVar[tuple[Admitted, ...]]
+    source_id: str | None = None
     invalid: bool = field(default=False, init=False)
     _documents: Proofs = field(init=False, repr=False)
     _families: tuple[tuple[str, str], ...] = field(default=(), init=False, repr=False)
     _checked: bool = field(default=False, init=False, repr=False)
+    _items: tuple[Admitted, ...] = field(default=(), init=False, repr=False)
     _checking: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self, items: tuple[Admitted, ...]) -> None:
+        self._items = items
         self._documents = Proofs(self.plan, items)
         self._families = tuple(
             (item.namespace, item.candidate["source_uri"].rsplit("#", 1)[0]) for item in items
         )
         self.invalid = self._documents.invalid or len(set(self._families)) != len(items)
+
+    def selected(self, families: set[tuple[str, str]]) -> ListProofs:
+        """Keep the physical owners of the final page and its cursor lookahead."""
+        return ListProofs(
+            self.plan,
+            self.include_superseded,
+            tuple(
+                item
+                for family, item in zip(self._families, self._items, strict=True)
+                if family in families
+            ),
+            source_id=self.source_id,
+        )
 
     @property
     def mirrored(self) -> bool:
@@ -53,7 +69,7 @@ class ListProofs:
             try:
                 with private_work(), sequential_reads():
                     await self._documents.check()
-                    for start in range(0, len(self._families), 64):
+                    for start in range(0, len(self._families) if self.source_id is None else 0, 64):
                         if await store.ordinary_families(
                             self.plan.org,
                             list(self._families[start : start + 64]),

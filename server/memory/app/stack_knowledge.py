@@ -47,13 +47,18 @@ class StackKnowledge:
 
 async def _select(
     hits: list[ChunkHit], wider: list[ChunkHit] | None, agent: str, top_k: int
-) -> list[ChunkHit]:
+) -> tuple[list[ChunkHit], bool]:
+    used_wide = False
+
     async def saved(_width: int) -> list[ChunkHit]:
+        nonlocal used_wide
+        used_wide = True
         if wider is None:
             raise LostCorpus()
         return wider
 
-    return await served_hits(hits, saved, lambda hit: hit.tags, agent, top_k, keep=not_noise())
+    selected = await served_hits(hits, saved, lambda hit: hit.tags, agent, top_k, keep=not_noise())
+    return selected, used_wide
 
 
 async def collect(
@@ -108,8 +113,9 @@ async def collect(
     fallback = [[ranked.chunk for ranked in pool] for pool in passes.ordinary()]
     mixed_wide = mixed[1] if len(mixed) > 1 else None
     ordinary_wide = fallback[1] if len(fallback) > 1 else None
-    output = await _select(mixed[0], mixed_wide, agent, top_k)
-    baseline = await _select(fallback[0], ordinary_wide, agent, top_k)
+    output, used_wide = await _select(mixed[0], mixed_wide, agent, top_k)
+    passes.restrict_proofs(pools[:2] if used_wide else pools[:1])
+    baseline, _ = await _select(fallback[0], ordinary_wide, agent, top_k)
     result = StackKnowledge(output, baseline, passes.proofs if passes.proofs.mirrored else None)
     await result.current()
     return result
