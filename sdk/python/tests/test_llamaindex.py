@@ -969,7 +969,7 @@ def test_protected_flush_does_not_retry_a_failed_send_or_archive_the_buffer(tmp_
         posts.append(json.loads(request.content))
         original.mark()
         if len(posts) == 1:
-            return httpx.Response(503, json={"detail": "unavailable"})
+            return httpx.Response(408, json={"detail": "unavailable"})
         return _callback_reply(request)
 
     async def run() -> None:
