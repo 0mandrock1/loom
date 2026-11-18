@@ -49,6 +49,18 @@ class Bounds:
             raise ValueError("crawl lease bounds refused")
 
 
+def configured_bounds() -> Bounds:
+    return Bounds(
+        crawl_expansion.Limits(
+            settings.knowledge_crawl_directory_max_response_bytes,
+            settings.knowledge_crawl_directory_max_pages,
+            settings.knowledge_crawl_max_groups,
+        ),
+        settings.knowledge_crawl_lease_ttl_s,
+        settings.knowledge_crawl_lease_wait_s,
+    )
+
+
 @dataclass(frozen=True)
 class Checkout:
     authority: Authority
@@ -69,7 +81,11 @@ class Checkout:
 
 def current(source: KnowledgeSource) -> Checkout:
     checkout = _CURRENT.get()
-    if checkout is None or scope(checkout.authority.source) != scope(source):
+    if (
+        checkout is None
+        or checkout.authority.source.name != source.name
+        or scope(checkout.authority.source) != scope(source)
+    ):
         raise CredentialRefused("crawl checkout unavailable")
     return checkout
 

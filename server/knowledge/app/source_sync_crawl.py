@@ -25,6 +25,7 @@ from server.knowledge.domain.sources import (
 from server.knowledge.store import crawl_publication, documents
 from server.knowledge.store import mirrors as mirror_store
 from server.knowledge.store import sources as store
+from server.settings import settings
 
 
 async def observe(
@@ -62,7 +63,11 @@ async def observe(
             ),
         )
     await authority.validate()
-    return expansion, union.complete()
+    files = union.complete()
+    addresses = {sync.source_uri_of(file.metadata) for file in files}
+    if len(addresses) != len(files) or any(not uri.startswith("https://") for uri in addresses):
+        raise ValueError("crawl file address is unavailable or ambiguous")
+    return expansion, files
 
 
 async def turn(
@@ -70,12 +75,17 @@ async def turn(
     state: dict[str, str],
     run: sync.Pass,
     *,
-    bounds: crawl_authority.Bounds,
-    membership_bound: int,
-    maximum_files: int,
+    bounds: crawl_authority.Bounds | None = None,
+    membership_bound: int | None = None,
+    maximum_files: int | None = None,
 ) -> sync.TurnResult:
     """This worker remains unreachable from registration until all lifecycle roots bind."""
     set_query_tag("knowledge.crawl.sync")
+    bounds = bounds or crawl_authority.configured_bounds()
+    maximum_files = settings.knowledge_crawl_max_files if maximum_files is None else maximum_files
+    if membership_bound is None:
+        # A group can be reached by configured alias, primary address and provider id.
+        membership_bound = 3 * bounds.directory.groups + len(source.crawl_options["subjects"])
     authority = await crawl_authority.resolve(source, deadline=run.budget.stop_after, bounds=bounds)
     result = sync.TurnResult(full=True)
     sync.start_waits(result, json_object(state.get("detail", "")))

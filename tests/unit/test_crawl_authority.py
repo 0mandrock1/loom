@@ -45,6 +45,7 @@ class _World(_AuthorityWorld):
         self.exclusion_rows: dict[tuple[str, str], bool] = {}
         self.provider_calls: list[httpx.Request] = []
         self.claims_sent: list[dict[str, Any]] = []
+        self.storage_version = 0
         self.account = account
         self.customer = "workspace"
         self.person_email = "one@example.com"
@@ -82,6 +83,11 @@ class _World(_AuthorityWorld):
         )
 
     async def query_one(self, query: str, params: dict[str, Any], **kwargs: Any):
+        if query.startswith("SELECT greatest(") and any(
+            f"FROM {table} " in query for table in (exclusion_store.KEYS, exclusion_store.REFUSALS)
+        ):
+            self.storage_version += 1
+            return {"v": self.storage_version}
         if f"FROM {exclusion_store.KEYS} FINAL" in query:
             return self.exclusion_keys.get(params["org"])
         if f"FROM {exclusion_store.REFUSALS} FINAL" in query:

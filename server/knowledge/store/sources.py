@@ -26,6 +26,7 @@ import json
 from datetime import datetime
 from typing import Any, Literal, NamedTuple
 
+from server.core.ch import own_write_reads
 from server.core.datetimes import naive_utc_now_seconds
 from server.core.repo_base import _CHClient, _default_client
 from server.knowledge.domain.live_chunks import has_live_chunks_sql
@@ -59,6 +60,24 @@ _COLUMNS = (
     "created_by, active, pending_delete, created_at, "
     "updated_at"
 )
+
+
+async def crawl_approval_page(
+    after: tuple[str, str, str], *, maximum: int, ch: _CHClient | None = None
+) -> list[tuple[str, str, str]]:
+    if type(maximum) is not int or maximum <= 0:
+        raise ValueError("crawl approval page bound refused")
+    with own_write_reads():
+        rows = await (ch or _default_client()).query_all(
+            f"SELECT org, namespace, name FROM {TABLE} FINAL "
+            "WHERE (org, namespace, name) > {after:Tuple(String, String, String)} "
+            "AND approval_enc != '' ORDER BY org, namespace, name LIMIT {limit:UInt32}",
+            params={"after": after, "limit": maximum},
+        )
+    keys = [(str(row["org"]), str(row["namespace"]), str(row["name"])) for row in rows]
+    if len(keys) > maximum or keys != sorted(set(keys)) or any(key <= after for key in keys):
+        raise RuntimeError("crawl_approval_page_unverified")
+    return keys
 
 
 def _items(raw: str) -> list[dict[str, Any]]:

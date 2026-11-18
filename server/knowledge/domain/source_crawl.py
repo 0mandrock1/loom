@@ -186,7 +186,14 @@ class Union:
                 # A single publication must not pair one revision's text with another's ACL.
                 if any(
                     previous.metadata.get(k) != file.get(k)
-                    for k in ("version", "modifiedTime", "md5Checksum", "mimeType", "webViewLink")
+                    for k in (
+                        "version",
+                        "modifiedTime",
+                        "md5Checksum",
+                        "mimeType",
+                        "webViewLink",
+                        "name",
+                    )
                 ):
                     raise ValueError("crawl file changed during its union")
                 next_files[identifier] = File(

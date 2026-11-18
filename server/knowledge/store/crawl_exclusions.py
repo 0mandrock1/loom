@@ -6,6 +6,7 @@ from typing import Any
 
 from server.core.ch import own_write_reads
 from server.core.repo_base import _CHClient, _default_client
+from server.core.versions import next_version
 
 KEYS = "loom.knowledge_crawl_exclusion_keys"
 REFUSALS = "loom.knowledge_crawl_exclusions"
@@ -14,7 +15,8 @@ REFUSALS = "loom.knowledge_crawl_exclusions"
 async def key(org: str, *, ch: _CHClient | None = None) -> dict[str, Any] | None:
     with own_write_reads():
         return await (ch or _default_client()).query_one(
-            "SELECT key_id, key_enc, generation, pending_id, pending_digests, pending_exclude "
+            "SELECT key_id, key_enc, generation, pending_id, pending_digests, "
+            "pending_exclude, version "
             f"FROM {KEYS} FINAL "
             "WHERE org = {org:String} LIMIT 1",
             params={"org": org},
@@ -32,7 +34,8 @@ async def key_put(
     pending_exclude: bool = False,
     ch: _CHClient | None = None,
 ) -> None:
-    await (ch or _default_client()).insert(
+    client = ch or _default_client()
+    await client.insert(
         KEYS,
         [
             {
@@ -43,6 +46,7 @@ async def key_put(
                 "pending_id": pending_id,
                 "pending_digests": list(pending_digests),
                 "pending_exclude": pending_exclude,
+                "version": await next_version(client, KEYS, {"org": org}),
             }
         ],
     )
@@ -76,10 +80,31 @@ async def excluded(org: str, digests: list[str], *, ch: _CHClient | None = None)
 
 async def put(org: str, digests: list[str], *, exclude: bool, ch: _CHClient | None = None) -> None:
     if digests:
-        await (ch or _default_client()).insert(
+        client = ch or _default_client()
+        await client.insert(
             REFUSALS,
             [
-                {"org": org, "digest": digest, "excluded": exclude}
+                {
+                    "org": org,
+                    "digest": digest,
+                    "excluded": exclude,
+                    "version": await next_version(client, REFUSALS, {"org": org, "digest": digest}),
+                }
                 for digest in sorted(set(digests))
             ],
         )
+
+
+async def page(after: str, maximum: int, *, ch: _CHClient | None = None) -> list[str]:
+    if type(maximum) is not int or maximum <= 0:
+        raise ValueError("crawl registry page bound refused")
+    with own_write_reads():
+        rows = await (ch or _default_client()).query_all(
+            f"SELECT org FROM {KEYS} FINAL WHERE org > {{after:String}} "
+            "ORDER BY org LIMIT {limit:UInt32}",
+            params={"after": after, "limit": maximum},
+        )
+    orgs = [str(row["org"]) for row in rows]
+    if len(orgs) > maximum or orgs != sorted(set(orgs)) or any(org <= after for org in orgs):
+        raise RuntimeError("crawl_registry_page_unverified")
+    return orgs

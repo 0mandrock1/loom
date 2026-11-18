@@ -33,6 +33,7 @@ class _World:
         self.cleaned = 0
         self.queries = 0
         self.fail_key_write = False
+        self.version = 0
         monkeypatch.setattr(
             settings, "jwt_secret", "first-root-sealing-secret-which-is-long-enough"
         )
@@ -63,6 +64,10 @@ class _World:
 
     async def query_one(self, sql: str, *, params: dict[str, Any]):
         self.queries += 1
+        if sql.startswith("SELECT greatest("):
+            assert self.held and (f"FROM {store.KEYS} " in sql or f"FROM {store.REFUSALS} " in sql)
+            self.version += 1
+            return {"v": self.version}
         assert set(params) == {"org"}
         if f"FROM {store.KEYS} FINAL" in sql:
             return copy.deepcopy(self.keys.get(params["org"]))
@@ -87,13 +92,19 @@ class _World:
                     "pending_id",
                     "pending_digests",
                     "pending_exclude",
+                    "version",
                 }
                 self.keys[row["org"]] = copy.deepcopy(row)
                 if self.fail_key_write:
                     self.fail_key_write = False
                     raise RuntimeError("key write reply lost")
             else:
-                assert table == store.REFUSALS and set(row) == {"org", "digest", "excluded"}
+                assert table == store.REFUSALS and set(row) == {
+                    "org",
+                    "digest",
+                    "excluded",
+                    "version",
+                }
                 self.rows[row["org"], row["digest"]] = row["excluded"]
 
     async def validate(self, org: str) -> None:

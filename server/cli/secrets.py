@@ -26,6 +26,8 @@ SEALED: tuple[tuple[str, str, tuple[str, ...], str, str], ...] = (
     ("loom.qa_sources", "password_enc", (), "qa_sources.password", ""),
     ("loom.knowledge_sources", "credential_enc", (), "knowledge_sources.credential", ""),
     ("loom.knowledge_sources", "secret_enc", (), "knowledge_sources.secret", ""),
+    ("loom.knowledge_sources", "approval_enc", (), "knowledge_crawl.approval", ""),
+    ("loom.knowledge_crawl_exclusion_keys", "key_enc", (), "knowledge_crawl.exclusion_key", ""),
     ("loom.knowledge_source_push", "secret_enc", (), "knowledge_source_push.secret", ""),
     ("loom.connected_accounts", "credential_enc", (), "connected_accounts.credential", ""),
     ("loom.connected_accounts", "account_email_enc", (), "connected_accounts.email", ""),
@@ -58,6 +60,7 @@ _KEYS = {
     "loom.knowledge_sources": ("org", "namespace", "name"),
     "loom.knowledge_source_push": ("org", "namespace", "source_id"),
     "loom.connected_accounts": ("org", "subject", "kind"),
+    "loom.knowledge_crawl_exclusion_keys": ("org",),
     "loom.provider_configuration": ("config_id",),
     "loom.oauth_state": ("record_type", "id"),
     "loom.analysis_secrets": ("id",),
@@ -149,6 +152,17 @@ async def reseal_all(
     counts: dict[str, int] = {}
     lost: dict[str, list[str]] = {}
     for table, column, path, purpose, where in SEALED:
+        if table == "loom.knowledge_crawl_exclusion_keys" or (
+            table == "loom.knowledge_sources" and column == "approval_enc"
+        ):
+            from server.knowledge.app import crawl_reseal
+
+            reseal = crawl_reseal.keys if column == "key_enc" else crawl_reseal.approvals
+            n, missing = await reseal(dry_run=dry_run, ch=ch)
+            counts[f"{table}.{column}"] = n
+            if missing:
+                lost[f"{table}.{column}"] = missing
+            continue
         if table == "loom.connected_accounts":
             from server.knowledge.app.connected_accounts import reseal_registry as reseal_accounts
 
