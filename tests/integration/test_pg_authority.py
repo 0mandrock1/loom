@@ -1973,6 +1973,8 @@ async def test_a_summary_left_no_source_is_tombstoned_with_its_vectors_holding_n
     tags = ["consolidated", "src:k1"]
     made = await call("memory.set", _set(ns, "summary", "a summary of k1", tags=tags))
     assert made.status_code == 200, made.text
+    # The retirement needs the summary's initial vectors to have published.
+    await _published(pg_conn, org)
     gone = await call("memory.delete", {"namespace": ns, "agent": "a", "memory_key": "k1"})
     assert gone.status_code == 200, gone.text
     assert gone.json().get("dependents_tombstoned") == 1, gone.text
@@ -3322,6 +3324,8 @@ async def test_reconcile_status_holds_back_what_the_authority_has_not_published(
         assert (
             await call("memory.set", _set(ns, k, f"an embedded fact about {k}"))
         ).status_code == 200
+    # The divergence cases need both initial memory rows and their vectors.
+    await _published(pg_conn, org)
     ident = {k: (org, ns, "a", "-", "-", k) for k in keys}
 
     def statuses() -> dict[str, str]:
