@@ -55,6 +55,7 @@ async def test_write_on_another_bootstrap_backend_cannot_pass_an_a_b_a_read_sequ
     [
         "wrong_engine",
         "wrong_ensemble",
+        "wrong_primary_key",
         "missing_keeper",
         "expired_keeper",
         "keeper_replaced",

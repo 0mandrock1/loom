@@ -60,8 +60,10 @@ async def _one(
 async def _engines(ch: CHClient) -> uuid.UUID:
     backend, row = await _one(ch, _ENGINES, {"database": database()})
     expected = {
-        "knowledge_mirror_latch": qualify("KeeperMap('/loom/knowledge_mirror_latch')"),
-        "_migration_lock": qualify("KeeperMap('/loom/migration_lock')"),
+        "knowledge_mirror_latch": qualify(
+            "KeeperMap('/loom/knowledge_mirror_latch') PRIMARY KEY id"
+        ),
+        "_migration_lock": qualify("KeeperMap('/loom/migration_lock') PRIMARY KEY name"),
     }
     if len(row["engines"]) != 2 or dict(row["engines"]) != expected:
         raise LatchUnavailable()
@@ -109,6 +111,7 @@ async def enabled(*, ch: CHClient | None = None) -> bool:
     sent = False
     set_query_tag("knowledge.mirror.latch")
     try:
+        # not a setting: the privacy proof must end within its fixed security deadline.
         async with asyncio.timeout(5), ch.coordination_session():
             backend = await _engines(ch)
             if await _latched(ch, backend):
@@ -132,6 +135,7 @@ async def enabled(*, ch: CHClient | None = None) -> bool:
         if sent:
             try:
                 # A failed proof never admits; only its own expiring nonce is disposable.
+                # not a setting: refused requests spend at most one second on own-key cleanup.
                 async with asyncio.timeout(1):
                     await ch.execute(LOCK_RELEASE, params)
             except Exception:  # noqa: BLE001 — the refused attempt leaves only its expiring own key
@@ -143,6 +147,7 @@ async def ensure(*, ch: CHClient | None = None) -> None:
     ch = ch or get_client()
     set_query_tag("knowledge.mirror.latch_set")
     try:
+        # not a setting: positive confirmation shares the fixed privacy-proof deadline.
         async with asyncio.timeout(5):
             async with ch.coordination_session():
                 await _engines(ch)

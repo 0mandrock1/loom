@@ -39,15 +39,23 @@ class KeeperWorld:
             assert isinstance(database, str) and database
             backend = self.route("engines")
             engines = [
-                ("knowledge_mirror_latch", f"KeeperMap('/{database}/knowledge_mirror_latch')"),
-                ("_migration_lock", f"KeeperMap('/{database}/migration_lock')"),
+                (
+                    "knowledge_mirror_latch",
+                    f"KeeperMap('/{database}/knowledge_mirror_latch') PRIMARY KEY id",
+                ),
+                ("_migration_lock", f"KeeperMap('/{database}/migration_lock') PRIMARY KEY name"),
             ]
             if self.fault == "wrong_engine":
                 engines[0] = ("knowledge_mirror_latch", "MergeTree")
             elif self.fault == "wrong_ensemble":
                 engines[0] = (
                     "knowledge_mirror_latch",
-                    "KeeperMap('auxiliary:/loom/knowledge_mirror_latch')",
+                    "KeeperMap('auxiliary:/loom/knowledge_mirror_latch') PRIMARY KEY id",
+                )
+            elif self.fault == "wrong_primary_key":
+                engines[0] = (
+                    "knowledge_mirror_latch",
+                    f"KeeperMap('/{database}/knowledge_mirror_latch') PRIMARY KEY set_at",
                 )
             return {"server_id": backend, "engines": engines}
         if "FROM loom.knowledge_mirror_latch" in sql:

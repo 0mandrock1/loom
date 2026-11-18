@@ -41,6 +41,7 @@ FLOOR = frozenset(
         "memory.search",
         "memory.set",
         "memory.bulk_set",
+        "knowledge.search",
     }
 )
 

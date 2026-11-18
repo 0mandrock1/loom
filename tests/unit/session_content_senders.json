@@ -189,10 +189,6 @@
       "category": "explicit",
       "reason": "Implements the explicitly selected memory-file tool command and its caller-provided path or content."
     },
-    "sdk/python/loom/integrations/google_adk.py:knowledge.search:c6b1bd4926e412e28f33:1": {
-      "category": "explicit",
-      "reason": "Falls back from the caller-selected memory search query to document search."
-    },
     "sdk/python/loom/integrations/google_adk.py:memory.delete_version:efc537b00995de01ad26:1": {
       "category": "reference",
       "reason": "Deletes the caller-selected exact stored key and version, without a transcript payload."
@@ -214,10 +210,6 @@
       "reason": "Implements an explicit document-store or retriever request with caller-selected documents, identifiers or query."
     },
     "sdk/python/loom/integrations/haystack.py:knowledge.list:d1658eb5e9e5fe7cc4cc:1": {
-      "category": "explicit",
-      "reason": "Implements an explicit document-store or retriever request with caller-selected documents, identifiers or query."
-    },
-    "sdk/python/loom/integrations/haystack.py:knowledge.search:34f7e25197a139bc5b63:1": {
       "category": "explicit",
       "reason": "Implements an explicit document-store or retriever request with caller-selected documents, identifiers or query."
     },
@@ -244,14 +236,6 @@
     "sdk/python/loom/integrations/llamaindex.py:<dynamic>:2e86dd533337f2f7589d:1": {
       "category": "delivery",
       "reason": "Forwards a supplied operation or callable; its producers in this client are scanned separately."
-    },
-    "sdk/python/loom/integrations/llamaindex.py:knowledge.search:60be1a9a35d9e32a9c1a:1": {
-      "category": "explicit",
-      "reason": "Forwards the retriever request query chosen by its caller; the ambient latest-message memory callback is scanned separately."
-    },
-    "sdk/python/loom/integrations/llamaindex.py:knowledge.search:6c7cfef27bc1140f7fd1:1": {
-      "category": "explicit",
-      "reason": "Forwards the retriever request query chosen by its caller; the ambient latest-message memory callback is scanned separately."
     },
     "sdk/python/loom/integrations/openai_agents.py:memory.delete:8dd66e02d4041c347c35:1": {
       "category": "reference",
@@ -312,14 +296,6 @@
     "sdk/typescript/src/integrations/claude-memory.ts:knowledge.upsert:1f9de6e9d64d854927aa:1": {
       "category": "explicit",
       "reason": "Implements the explicitly selected memory-file tool command and its caller-provided path or content."
-    },
-    "sdk/typescript/src/integrations/google-adk.ts:knowledge.search:136af02e08bc3d4c9925:1": {
-      "category": "explicit",
-      "reason": "Falls back from the caller-selected memory search query to document search."
-    },
-    "sdk/typescript/src/integrations/langchain.ts:knowledge.search:87859118830a4b4df370:1": {
-      "category": "explicit",
-      "reason": "Forwards the retriever request query chosen by its caller; the ambient latest-message memory callback is scanned separately."
     },
     "sdk/typescript/src/integrations/mastra-memory.ts:<dynamic>:92469ce75e8bcc2cd8c2:1": {
       "category": "delivery",
