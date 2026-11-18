@@ -292,6 +292,7 @@ One code namespace indexes one repository. No repository is configured by defaul
 | --- | --- | --- | --- | --- |
 | `LOOM_CODE_REPOS_JSON` | `str` | *(unset)* |  | Multi-repo: JSON array of repo configs (code/domain/index/repos.py); empty = the scalar single-repo settings. Missing per-entry fields fall back to the scalars. |
 | `LOOM_CODE_SELF_SERVICE_ENABLED` | `bool` | `True` |  | Repositories added from the Repositories page (loom.code_repos) merge with the configured entries (`code_repos_json` and the scalar entry); a configured entry for a namespace a member added from the page is skipped. Off = the operator's JSON is the only source. |
+| `LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY` | `bool` | `False` |  | True leaves code.repo.remote_branches, code.repo.add and code.repo.add_branch to platform admins: a token scoped to namespaces, or a trusted caller acting for another subject, is refused too. False: each op's own role decides. |
 | `LOOM_CODE_REPOS_ROOT` | `str` | `'var/code_repos/self'` |  | Where the code ingest worker clones a self-service entry's bare mirror (one per GitHub repository, shared by its branches). |
 | `LOOM_CODE_REPOS_SHARED_GID` | `int \| None` | `None` |  | Numeric gid of the prepared var/code_repos: mirror and checkout directories in it 2770, locks 0660, server and `loom code` umask 007. Unset: 0700, 0600, the caller's umask. |
 | `LOOM_CODE_SELF_SERVICE_MAX_REPOS` | `int` | `20` |  | Active self-service entries per org (branches count); past it the add refuses with a message. |
@@ -323,6 +324,7 @@ Resource limits (rlimits) for each process of a sandboxed repository job (clone,
 | `LOOM_CODE_SANDBOX_MEMORY_MB` | `int` | `16384` |  | Data memory (heap and private mappings, RLIMIT_DATA) one process of a sandboxed repository job may use, in MiB. Not address space: node reserves far more of that than it uses. |
 | `LOOM_CODE_SANDBOX_MAX_PIDS` | `int` | `2048` |  | Processes and threads one job may run at once (RLIMIT_NPROC, set inside the job's user namespace, so other jobs and the server do not count; Linux 5.14+, older kernels count the uid's tasks host-wide). |
 | `LOOM_CODE_SANDBOX_REQUIRED` | `bool` | `False` |  | Set by deployments that ship the sandbox profiles: a repository job refuses to run rather than run unsandboxed, and /v1/health reports the missing sandbox as an error. False: without the sandbox, jobs fall back to plain processes as "Without the sandbox" in code-index-operations.md says. |
+| `LOOM_CODE_SELF_SERVICE_GIT_UNSANDBOXED` | `bool` | `False` |  | True lets a host without the sandbox add and fetch a self-service entry with a network remote: its git jobs (ls-remote, clone, fetch) run as plain processes and it gets no compiler tier. Refused at load without code_self_service_platform_admin_only, where a request can carry no principal (auth off, or mcp_auth_mode open), and with code_sandbox_required. False: such an entry needs the sandbox. |
 | `LOOM_CODE_SANDBOX_MAX_FILE_MB` | `int` | `32768` |  | Largest file one process of a sandboxed repository job may write, in MiB (a pack or index.scip). |
 
 ### Mirror fetch
@@ -975,6 +977,12 @@ Knowledge documents and conversations: chunking, search floor, thread titles.
 | `LOOM_CONNECT_LINEAR_CLIENT_ID` | `str` | `''` |  | OAuth client id for personal project-tracker connections; empty disables it. |
 | `LOOM_CONNECT_LINEAR_CLIENT_SECRET` | `str` | *(unset)* |  | Secret of that project-tracker registration; kept outside source rows. |
 | `LOOM_CONNECT_NOTION_READ_CONTENT_ONLY` | `bool` | `False` |  | The operator has restricted the public integration to read-content capability. Its token response cannot prove this registration setting; false disables it. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_TIMEOUT_S` | `float` | `5.0` |  | Seconds for the whole optional live-search leg, including final membership checks. At most five; provider credential deadlines may shorten it further. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_MAX_SOURCES` | `int` | `3` |  | Connected registrations searched per live-search request, from one to three. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_MAX_HITS` | `int` | `10` |  | Live hits across all registrations, and the per-provider page bound, from one to ten. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_RESPONSE_MAX_BYTES` | `int` | `262144` |  | Bytes read from one live-search provider response, at most 256 KiB. The document-source download limit may shorten this bound further. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_MAX_ITEMS` | `int` | `4` |  | Registered Drive items searched per source, from one to four; no pagination. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_MAX_ANCESTORS` | `int` | `3` |  | Native parent lookups per Notion membership check, from zero to three. Zero accepts directly registered pages and database membership without parent fetches. |
 | `LOOM_KNOWLEDGE_CONNECTED_STOP_TIMEOUT_S` | `float` | `20.0` |  | Seconds for local connection stops, including their source retirement writes. |
 | `LOOM_KNOWLEDGE_CONNECTED_REVOKE_TIMEOUT_S` | `float` | `5.0` |  | Seconds for best-effort provider revocation after every local stop has committed. |
 | `LOOM_KNOWLEDGE_CONNECTED_LEASE_TTL_S` | `float` | `60.0` |  | Seconds the renewed account-generation lease lives. Source leases follow it; provider requests hold neither. |
