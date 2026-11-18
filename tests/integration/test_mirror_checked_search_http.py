@@ -226,10 +226,21 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
                 access="mirrored",
                 active=True,
             )
+            await write_document(namespace, "ordinary:visible", query + " ordinary")
+            inactive_baselines = (
+                await listing(outsider),
+                await search(outsider),
+                await get(outsider),
+                await synthesize(outsider),
+                await outline(outsider),
+            )
+            inactive_inspect_baseline = await inspect(outsider)
+            inactive_download_baseline = await download(outsider)
+            for ordinary in (*inactive_baselines, inactive_inspect_baseline):
+                assert "mirrored" not in ordinary
             await sources.insert_source(registration)
             await mirrors.add_mirror(org, namespace, mirror)
             await mirrors.record_listing(org, mirror, source, "checked", now)
-            await write_document(namespace, "ordinary:visible", query + " ordinary")
             baseline = await search(outsider)
             assert [r["source_uri"] for r in baseline["results"]] == ["ordinary:visible"]
             ordinary_list = await listing(outsider)
@@ -440,23 +451,16 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
                     assert found.get("mirrored") is not True
                     assert document.get("mirrored") is not True
             await sources.insert_source(replace(registration, active=False))
-            # Active registration baselines are marked even when no private row is visible.
-            for inactive, active in (
-                (await listing(owner), ordinary_list),
-                (await search(owner), baseline),
-                (await get(owner), missing_get),
-                (await synthesize(owner), missing_synthesis),
-                (await outline(owner), missing_outline),
-            ):
-                assert active["mirrored"] is True
-                assert "mirrored" not in inactive
-                assert inactive == {
-                    key: value for key, value in active.items() if key != "mirrored"
-                }
-            inactive_inspect = await inspect(owner)
-            assert "mirrored" not in inactive_inspect
-            assert inactive_inspect["listed"] == ordinary_inspect["listed"]
-            assert await download(owner) == missing_download
+            inactive_responses = (
+                await listing(owner),
+                await search(owner),
+                await get(owner),
+                await synthesize(owner),
+                await outline(owner),
+            )
+            assert inactive_responses == inactive_baselines
+            assert await inspect(owner) == inactive_inspect_baseline
+            assert await download(owner) == inactive_download_baseline
             await sources.insert_source(registration)
             assert (await get(owner))["found"]
             stale = now - timedelta(seconds=settings.knowledge_source_acl_stale_seconds + 1)
