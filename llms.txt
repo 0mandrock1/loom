@@ -82,6 +82,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Cost and usage](docs/features/observability/cost-and-usage.md): Loom records every upstream dollar it spends on embedding and LLM calls against the operation that spent it, in the per-operation ledger `loom.agent_events`.
 - [Telemetry](docs/features/observability/telemetry.md): Loom reports on itself in three layers:
 - [Issue duplicate checks and regression candidates for agents](docs/features/tracker/overview.md): With `LOOM_TRACKER_ORG` set and a registered source, Loom lets agents check whether a bug is already reported and rank changes that may have introduced a regression, using tracker records and indexed PR history.
+- [Maintain a GitHub tracker record](docs/features/tracker/github-feed.md): `loom tracker-feed` copies repository issues, pull requests, issue comments and inline review comments into a team's dedicated ClickHouse database.
 - [Tracker record contract](docs/features/tracker/record-contract.md): The `tracker.*` ops, and the tracker legs of `code.*` and `loom_search`, read a team's issues, pull requests and incidents live from the team's own ClickHouse with a read-only credential.
 
 ## Guides
@@ -153,6 +154,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Document sources](docs/architecture/document-sources.md): A document source pulls files from a document store (a shared-folder store, a page store, a project tracker, a meeting store) into a namespace's documents and keeps them in step, on any shared namespace or collection.
 - [Documentation translation requests](docs/architecture/documentation-translation.md): The translation generator splits prepared English text into bounded requests, then checks the assembled translation before writing it.
 - [Failure and recovery](docs/architecture/failure-and-recovery.md): The primary write and every access decision fail closed.
+- [GitHub tracker feed](docs/architecture/github-feed.md): The GitHub feed maintains a team's tracker record in the team's ClickHouse database.
 - [Google ADK memory service](docs/architecture/google-adk-adapter.md): The Google ADK adapter implements the framework's memory service through Loom's Python and TypeScript SDKs.
 - [Haystack document store and retriever](docs/architecture/haystack-adapter.md): The optional Haystack 3.5 adapter implements its document-store protocol and a native retrieval component through the synchronous Loom SDK.
 - [Knowledge gaps](docs/architecture/knowledge-gaps.md): Loom records the searches that found nothing a caller could use and groups them, once a day, into knowledge gaps: the questions several people asked that the namespace's memory and documents do not answer.
