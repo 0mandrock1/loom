@@ -1301,8 +1301,9 @@ Table-level retention and tiering are operator TTLs, off by default
 
 Restores, rollback reinstatements and consolidated summaries run the current target
 blacklist before writing. A namespace restore checks its payload before creating the
-target or its grants; a rollback checks all planned live reinstatements before its
-first batch, then reads each batch's heads afresh. Under Postgres each commit holds the
+target or its grants, then rechecks the values after its own grant writes. A rollback
+checks all planned live reinstatements in bounded slices before its first batch, then
+reads each batch's heads afresh. Under Postgres each commit holds the
 policy generations captured before the guard; a changed policy refuses the commit.
 An Undo checks before recording its acceptance. Tombstone-only copies remain allowed.
 

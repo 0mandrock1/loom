@@ -162,7 +162,7 @@ async def handle_namespace_snapshot(
 
 async def _restore_payload(
     input: NamespaceRestoreInput, version_base: int
-) -> tuple[list[dict[str, Any]], int, dict[tuple[str, str], int]]:
+) -> tuple[list[dict[str, Any]], int]:
     """Validate all restored values before the namespace or its grants change."""
     memories, erased = await memory_snapshot.without_erased(
         input.org, input.target_namespace, input.payload.memories
@@ -177,7 +177,8 @@ async def _restore_payload(
             actor=writer_actor(),
         )
     )
-    return rows, erased, await blacklist_guard.enforce_rows(rows)
+    await blacklist_guard.enforce_rows(rows)
+    return rows, erased
 
 
 async def handle_namespace_restore(
@@ -250,7 +251,7 @@ async def handle_namespace_restore(
             )
 
         version_base = _time.time_ns()
-        rows, erased, policy = await _restore_payload(input, version_base)
+        rows, erased = await _restore_payload(input, version_base)
         now = naive_utc_now_seconds()
 
         # Only CREATE the namespace row when absent — an RMT insert over an
@@ -285,9 +286,9 @@ async def handle_namespace_restore(
             )
     await _registry.insert_admin_grant(ch, input.org, input.target_namespace, caller)
 
-    pending = (
-        await memory_snapshot.insert_version_rows(rows, ch=ch, policy=policy) if rows else False
-    )
+    # Our namespace/grant writes move policy too: the insert rechecks all values and
+    # captures admission after them, so concurrent blacklist changes still refuse.
+    pending = await memory_snapshot.insert_version_rows(rows, ch=ch) if rows else False
 
     # Per-type configs.
     if payload.types:

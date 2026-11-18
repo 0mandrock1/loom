@@ -468,20 +468,31 @@ async def flush_hits() -> int:
     return len(pending)
 
 
-async def enforce_rows(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str], int]:
-    """Check every live value before a copy writes anything; return the policy its
-    Postgres commit must still hold. Tombstones remove values and never revive them."""
+async def capture_policy(org: str) -> dict[tuple[str, str], int]:
+    """Capture the policy a value check and its Postgres commit must share."""
     from server.core import pg
     from server.memory.store import pg_memory
 
-    policy: dict[tuple[str, str], int] = {}
+    return await pg_memory.policy_generations(org) if pg.enabled() else {}
+
+
+async def enforce_rows(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    policy: Mapping[tuple[str, str], int] | None = None,
+) -> dict[tuple[str, str], int]:
+    """Check every live value before a copy writes anything; return its commit policy.
+    A bounded preflight reuses one supplied policy across all its slices."""
+    from server.core import pg
+
+    generations = dict(policy or {})
     captured: set[str] = set()
     for row in rows:
         if row.get("tombstoned_at") is not None:
             continue
         org, namespace = str(row["org"]), str(row["namespace"])
-        if pg.enabled() and org not in captured:
-            policy.update(await pg_memory.policy_generations(org))
+        if pg.enabled() and policy is None and org not in captured:
+            generations.update(await capture_policy(org))
             captured.add(org)
         value = row["value"]
         await enforce_on_insert(
@@ -490,9 +501,9 @@ async def enforce_rows(rows: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str
             value=value
             if isinstance(value, str)
             else json.dumps(value, ensure_ascii=False, default=str),
-            policy=policy if pg.enabled() else None,
+            policy=generations if pg.enabled() else None,
         )
-    return policy
+    return generations
 
 
 async def enforce_on_insert(

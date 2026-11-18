@@ -67,9 +67,13 @@ def no_blacklisted_values(monkeypatch):
     encoded values and commit generations are covered in test_blacklist_restore_paths."""
     from server.memory.app import blacklist_guard
 
-    async def allow(rows):
+    async def allow(rows, *, policy=None):
         return {}
 
+    async def capture(org):
+        return {}
+
+    monkeypatch.setattr(blacklist_guard, "capture_policy", capture)
     monkeypatch.setattr(blacklist_guard, "enforce_rows", allow)
 
 

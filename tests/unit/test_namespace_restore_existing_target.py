@@ -517,7 +517,7 @@ async def test_a_restore_records_itself_after_its_memories_commit(wire, monkeypa
     )
     order: list[str] = []
 
-    async def _insert(rows: Any, *, ch: Any, policy: Any) -> bool:
+    async def _insert(rows: Any, *, ch: Any, policy: Any = None) -> bool:
         order.append(f"memories:{len(rows)}")
         return True  # a batch's publication left to the delivery worker
 

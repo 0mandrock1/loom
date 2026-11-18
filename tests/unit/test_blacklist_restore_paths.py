@@ -161,6 +161,8 @@ async def test_rollback_checks_later_batches_before_writing_the_first(
         )
     written.assert_not_awaited()
     assert applied.reinstated == applied.removed == 0
+    if pg.enabled():
+        pg_memory.policy_generations.assert_awaited_once_with("o")
 
 
 async def test_consolidation_refuses_generated_value_before_embedding(monkeypatch, guarded):

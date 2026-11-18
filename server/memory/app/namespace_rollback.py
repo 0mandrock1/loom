@@ -84,16 +84,18 @@ async def apply_rollback(
     from server.memory.domain.memory_types import is_embedded
     from server.memory.domain.trust import attests
 
-    # Check the complete reinstatement plan before its first batch writes. Each batch
-    # still reads its heads afresh, and its commit holds this policy generation.
-    values = [
-        {"org": org, "namespace": namespace, "value": stored_value_text(historical)}
-        for historical, head in (
-            await _reinstated(org, namespace, plan.reinstate, ch=ch) if plan.reinstate else []
+    # Check every slice before any write, retaining only one slice's full rows. The
+    # apply pass reads current heads afresh and holds this single captured policy.
+    policy = await blacklist_guard.capture_policy(org) if plan.reinstate else {}
+    for start in range(0, len(plan.reinstate), _INSERT_BATCH):
+        values = (
+            {"org": org, "namespace": namespace, "value": stored_value_text(historical)}
+            for historical, head in await _reinstated(
+                org, namespace, plan.reinstate[start : start + _INSERT_BATCH], ch=ch
+            )
+            if head is not None and historical.tombstoned_at is None
         )
-        if head is not None and historical.tombstoned_at is None
-    ]
-    policy = await blacklist_guard.enforce_rows(values)
+        await blacklist_guard.enforce_rows(values, policy=policy)
     embedder = get_embedder()
     # Empty: the insert gives it the width its coded column takes.
     stub_vector: list[float] = []
