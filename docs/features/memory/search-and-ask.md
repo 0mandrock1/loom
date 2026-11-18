@@ -121,6 +121,11 @@ namespace reranker (a reranker is a model call, so only one the request names ru
 | `bodies`, `body_budget_tokens`                                 | How much of each value rides the hit (`full`, `excerpt`, `none`, `unit`, `source`).                                                      |
 | `render="reader"`                                              | Also return the hits as `memory.ask` reads them (`reader_block`).                                                                        |
 
+`entity_filter` accepts at most 64 names before deduplication. Canonical aliases
+expand the filter to at most 256 names. A full page of 257 distinct aliases or a
+larger combined filter returns 422 `VECTOR_INPUT_TOO_LARGE`; aliases are never
+truncated. Narrow the filter before retrying.
+
 ### Ranking terms beyond relevance
 
 Each has a request field and a deployment default. `personalization="none"` turns every

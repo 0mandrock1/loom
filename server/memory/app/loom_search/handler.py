@@ -4,9 +4,12 @@ server/memory/api/models_loom_search.py; the legs and assembly in memory/app/loo
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 from typing import Any
 
 from server.code.app.repo_scope import repo_namespace_in_scope
+from server.core.diagnostics import private_work
+from server.core.request_work import mirror_marked
 from server.memory.api.models_loom_search import SearchInput, SearchOutput
 from server.memory.app.loom_search.fanout import search_sections
 from server.memory.app.loom_search.tracker_leg import prepare_tracker_search
@@ -59,8 +62,9 @@ async def handle_search(input: SearchInput) -> SearchOutput:
         repo_namespace=repo_namespace,
         tracker_plan=tracker_plan,
     )
-    _record_gap_miss(input, payload, repo_namespace or "")
-    return SearchOutput.model_validate(payload)
+    with private_work() if mirror_marked() else nullcontext():
+        _record_gap_miss(input, payload, repo_namespace or "")
+        return SearchOutput.model_validate(payload)
 
 
 # The `withheld` reasons that mean an answer led and the rest was set aside.

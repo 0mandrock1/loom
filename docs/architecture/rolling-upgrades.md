@@ -869,8 +869,40 @@ schema. These rules keep that safe. The operator procedure is in
     `agent_cost_rollup_daily`, before clearing the enablement latch. Stopping a client
     after its timeout does not prove a sent insert has completed.
 
-59. **User cost caps and private budget warnings** (migration
-    `103_user_cost_budgets.sql`): activate the global and namespace user caps and alert
+59. **Personal-agent reader claims and verified directory evidence** (migration
+    `103_sso_domain_evidence.sql`): N adds empty-default `hosted_domain` and `issuer`
+    String columns to `sso_links`. Direct verified sign-in writes them only for a fresh
+    active passwordless account under its ownership lock, after the SCIM check. N-1
+    ignores them and its ordinary link writes clear them to defaults; missing evidence
+    denies domain access. No backfill infers a domain from an email. N accepts the
+    optional Boolean
+    `reads_as_creator` claim, absent meaning false. Only the primary first-party
+    sign-in route `POST /v1/me/personal_tokens.create` and the assistant's one-answer
+    bridge set it; ordinary delegation omits it. Saved personal tokens use the existing
+    String `kind` column with value `personal_agent`, which N-1 lists and preserves
+    during revocation. N-1 ignores the claim and has no mirrored document leg, so it
+    grants no mirrored access. Mirrored sources remain unavailable until every process
+    implements the document and session protections. `tests/unit/test_mirror_reader_identity.py`
+    checks the claim and delegation boundaries.
+
+60. **Checked mirror reads use source-scoped group evidence** (migration
+    `104_knowledge_group_members.sql`): N reads each membership snapshot by org,
+    mirror, source id and group, and admits only a nondeleted snapshot within
+    `LOOM_KNOWLEDGE_SOURCE_ACL_STALE_SECONDS`. An empty table admits no group. N-1
+    ignores the table; namespace erasure removes its rows with the mirror. Mirrored
+    source creation remains refused until every process implements the read, marked
+    request, session and enablement protections.
+
+61. **Coarse permission keys and private lexical statistics** (migration
+    `105_mirror_access_candidates.sql`): `documents.access_keys` is materialized from
+    the existing permission JSON; N-1 writers need no new field. N still checks the
+    strict current list, and Postgres heads do not depend on published keys. Each
+    chunk-frequency view changes its query in place, retaining the input, target and
+    output columns. Both views exclude mirror namespaces for either build. Mirror creation remains
+    refused until the read, request, session and deployment protections are complete.
+
+62. **User cost caps and private budget warnings** (migration
+    `106_user_cost_budgets.sql`): activate the global and namespace user caps and alert
     inboxes only after every serving build supports the migration; keep them disabled
     and do not rely on user caps while any build is older or unknown. N-1 cannot enforce
     user caps, filters no private warning events, and has no user-erasure step for those

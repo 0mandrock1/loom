@@ -16,13 +16,13 @@
 -- Do NOT hand-edit. Edit schemas/migrations/*.sql and re-dump.
 -- CI verifies this file matches what migrations would produce.
 --
--- Counts: 191 tables + 5 views + 19 materialized views.
+-- Counts: 192 tables + 5 views + 19 materialized views.
 
 CREATE DATABASE IF NOT EXISTS `loom`;
 CREATE DATABASE IF NOT EXISTS `loom_telemetry`;
 
 -- ======================================================================
--- Tables (191)
+-- Tables (192)
 -- ======================================================================
 
 -- loom.acl_versions
@@ -1626,7 +1626,9 @@ CREATE TABLE IF NOT EXISTS loom.documents
     `coverage` String DEFAULT '',
     `ingestion_id` String DEFAULT '',
     `access_json` String DEFAULT '',
-    INDEX tags_bloom tags TYPE bloom_filter() GRANULARITY 1
+    `access_keys` Array(String) MATERIALIZED arrayDistinct(arrayConcat(arrayMap(x -> concat('e:', lowerUTF8(trimBoth(x, char(9, 10, 11, 12, 13, 28, 29, 30, 31, 32)))), JSONExtract(access_json, 'emails', 'Array(String)')), arrayMap(x -> concat('d:', lowerUTF8(trimBoth(x, char(9, 10, 11, 12, 13, 28, 29, 30, 31, 32)))), JSONExtract(access_json, 'domains', 'Array(String)')), if(JSONExtractString(access_json, 'owner') != '', ['owner'], []), if(notEmpty(JSONExtract(access_json, 'groups', 'Array(String)')), ['group'], []), if(JSONExtractBool(access_json, 'anyone'), ['anyone'], []), if(arrayExists(x -> (NOT isASCII(x)), JSONExtract(access_json, 'emails', 'Array(String)')), ['email_unicode'], []), if(arrayExists(x -> (NOT isASCII(x)), JSONExtract(access_json, 'domains', 'Array(String)')), ['domain_unicode'], []))),
+    INDEX tags_bloom tags TYPE bloom_filter() GRANULARITY 1,
+    INDEX access_keys_bloom access_keys TYPE bloom_filter(0.01) GRANULARITY 4
 )
 ENGINE = ReplacingMergeTree(version)
 PARTITION BY toYYYYMM(ingested_at)
@@ -2074,6 +2076,23 @@ CREATE TABLE IF NOT EXISTS loom.knowledge_gaps
 ENGINE = MergeTree
 ORDER BY (org, namespace, build, gap_id)
 TTL built_at + toIntervalDay(7)
+SETTINGS non_replicated_deduplication_window = 1000, index_granularity = 8192;
+
+-- loom.knowledge_group_members
+CREATE TABLE IF NOT EXISTS loom.knowledge_group_members
+(
+    `org` LowCardinality(String),
+    `namespace` LowCardinality(String),
+    `source_id` String,
+    `group` String,
+    `name` String,
+    `members` Array(String),
+    `read_at` DateTime64(3, 'UTC'),
+    `deleted` Bool DEFAULT false,
+    `version` UInt64
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY (org, namespace, source_id, group)
 SETTINGS non_replicated_deduplication_window = 1000, index_granularity = 8192;
 
 -- loom.knowledge_ingest_cancels
@@ -3376,9 +3395,7 @@ CREATE TABLE IF NOT EXISTS loom.namespaces
     `retrieval_defaults` String DEFAULT '',
     `proposal_policy` String DEFAULT '',
     `code_change_policy` LowCardinality(String) DEFAULT '',
-    `released_aliases` Array(String) DEFAULT [],
-    `daily_user_cost_cap_usd` Float64 DEFAULT 0,
-    `budget_alert_inbox` String DEFAULT ''
+    `released_aliases` Array(String) DEFAULT []
 )
 ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY org
@@ -4070,7 +4087,9 @@ CREATE TABLE IF NOT EXISTS loom.sso_links
     `linked` UInt8,
     `linked_by` String,
     `linked_at` DateTime64(3, 'UTC'),
-    `version` UInt64
+    `version` UInt64,
+    `hosted_domain` String DEFAULT '',
+    `issuer` String DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (email, org, namespace)
@@ -4133,9 +4152,6 @@ CREATE TABLE IF NOT EXISTS loom.task_events
     `patch` String DEFAULT '{}',
     `note` String DEFAULT '',
     `ts` DateTime64(3) DEFAULT now64(3),
-    `user_id` String DEFAULT '-',
-    `session_id` String DEFAULT '-',
-    `source_class` LowCardinality(String) DEFAULT '',
     INDEX idx_from_subject from_subject TYPE bloom_filter GRANULARITY 4
 )
 ENGINE = MergeTree
@@ -4933,7 +4949,7 @@ AS SELECT
     now() AS df_added_at
 FROM loom.chunks
 ARRAY JOIN arrayDistinct(arrayFilter(t -> (length(t) >= 3), arrayMap(t -> lowerUTF8(t), splitByNonAlpha(context)))) AS term
-WHERE (content != '') AND (context != '') AND (doc_superseded_at IS NULL)
+WHERE (content != '') AND (context != '') AND (doc_superseded_at IS NULL) AND (NOT match(namespace, '^acl-[0-9a-f]{24}$'))
 GROUP BY
     org,
     namespace,
@@ -4958,7 +4974,7 @@ AS SELECT
     now() AS df_added_at
 FROM loom.chunks
 ARRAY JOIN arrayDistinct(arrayFilter(t -> (length(t) >= 3), arrayMap(t -> lowerUTF8(t), splitByNonAlpha(content)))) AS term
-WHERE (content != '') AND (doc_superseded_at IS NULL)
+WHERE (content != '') AND (doc_superseded_at IS NULL) AND (NOT match(namespace, '^acl-[0-9a-f]{24}$'))
 GROUP BY
     org,
     namespace,

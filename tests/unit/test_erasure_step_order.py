@@ -283,6 +283,7 @@ NS_TRACE: list[tuple[str, tuple[tuple[str, str], ...]]] = [
     ("idempotency.delete", ((D, "loom.idempotency"), (L, "loom.embedding_cache"))),
     ("code_index.purge", ()),
     ("knowledge_source_listings.delete", ((D, "loom.knowledge_source_listings"),)),
+    ("knowledge_group_members.delete", ((D, "loom.knowledge_group_members"),)),
     ("knowledge_mirrors.forget", ()),
 ]
 
@@ -407,6 +408,7 @@ NS_PURGE_TRACE: list[tuple[str, tuple[tuple[str, str], ...]]] = [
     ("idempotency.delete", ((D, "loom.idempotency"), (L, "loom.embedding_cache"))),
     ("code_index.purge", ()),
     ("knowledge_source_listings.delete", ((D, "loom.knowledge_source_listings"),)),
+    ("knowledge_group_members.delete", ((D, "loom.knowledge_group_members"),)),
     ("knowledge_mirrors.forget", ()),
 ]
 

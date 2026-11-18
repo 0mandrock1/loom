@@ -48,7 +48,7 @@ upgrade. Unknown fleet state defers publication until a later check.
 
 ## Activation and rollback
 
-User caps and budget warnings require every serving build to support migration 103.
+User caps and budget warnings require every serving build to support migration 106.
 Keep `LOOM_DEFAULT_DAILY_USER_COST_CAP_USD` and every namespace's
 `daily_user_cost_cap_usd` at zero, and `budget_alert_inbox` empty, while any deployment
 sharing the stores runs an older build or its version is unknown. Do not rely on user
@@ -73,7 +73,7 @@ rollback. Rollback requires a maintenance interval:
    unsettled write blocks rollback. Namespace or user erasure is not a substitute: it
    also deletes unrelated data.
 4. Keep user caps and warnings disabled while older builds serve. After every serving
-   process supports migration 103 again, restore the saved global default and reapply
+   process supports migration 106 again, restore the saved global default and reapply
    the namespace user caps and alert inboxes with `namespace.register`. Read the
    namespace policies and check the effective caps before resuming warning production.
 

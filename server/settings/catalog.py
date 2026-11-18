@@ -2339,6 +2339,9 @@ class KnowledgeSettings(BaseModel):
     # credential, spends embedding calls on every changed document and model calls
     # mining it for decisions.
     knowledge_source_sync_enabled: bool = False
+    # Mirrored reads require a complete listing and group observation within this
+    # many seconds; missing or older evidence admits nobody.
+    knowledge_source_acl_stale_seconds: int = Field(default=3600, ge=1)
     # Seconds between sync passes while there are sources.
     knowledge_source_sync_interval_seconds: int = Field(default=900, ge=60)
     # Seconds between passes that found no source to sync; one idle sleep plus one

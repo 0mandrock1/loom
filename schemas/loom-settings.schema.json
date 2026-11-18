@@ -3257,6 +3257,12 @@
           "type": "integer",
           "description": "How many fused hits a rerank reads (the legs fetch at least this many)."
         },
+        "knowledge_source_acl_stale_seconds": {
+          "default": 3600,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Mirrored reads require a complete listing and group observation within this many seconds; missing or older evidence admits nobody."
+        },
         "knowledge_source_max_documents": {
           "default": 50000,
           "maximum": 200000,
