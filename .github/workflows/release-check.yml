@@ -150,9 +150,9 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/npm" && cd "$RUNNER_TEMP/npm"
           npm init -y >/dev/null
-          npm install --registry=https://registry.npmjs.org --no-audit --no-fund "@clickhouse/loom@$VERSION"
-          node -e 'const { SDK_VERSION } = require("@clickhouse/loom"); if (SDK_VERSION !== process.argv[1]) { throw new Error(SDK_VERSION) }' "$VERSION"
+          npm install --registry=https://registry.npmjs.org --ignore-scripts --no-audit --no-fund "@clickhouse/loom@$VERSION"
           npm audit signatures
+          node -e 'const { SDK_VERSION } = require("@clickhouse/loom"); if (SDK_VERSION !== process.argv[1]) { throw new Error(SDK_VERSION) }' "$VERSION"
       - name: Install the metadata checker separately from the SDKs
         run: |
           python -m venv "$RUNNER_TEMP/metadata-check"
@@ -298,6 +298,7 @@ jobs:
           npm init -y >/dev/null
           packages=("@clickhouse/loom@$VERSION")
           [ -z "$PEER_SPEC" ] || packages+=("$PEER_SPEC")
-          npm install --registry=https://registry.npmjs.org --no-audit --no-fund "${packages[@]}"
+          npm install --registry=https://registry.npmjs.org --ignore-scripts --no-audit --no-fund "${packages[@]}"
+          npm audit signatures
           node -e 'const { SDK_VERSION } = require("@clickhouse/loom"); if (SDK_VERSION !== process.argv[1]) { throw new Error(SDK_VERSION) }' "$VERSION"
           npm ls --depth=0
