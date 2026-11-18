@@ -958,7 +958,7 @@ HTTP 422, raised as `server.core.errors.ValidationError`. Category `input`, retr
 
 #### `VECTOR_INPUT_TOO_LARGE`
 
-HTTP 422, raised as `server.core.errors.VectorInputTooLargeError`. 422 — an entity filter exceeds 64 raw names or its canonical alias expansion cannot fit within 256 names. Category `input`, retryable: no.
+HTTP 422, raised as `server.core.errors.VectorInputTooLargeError`. 422 — an entity filter exceeds 64 raw names, or its canonical aliases or summary seeds exceed 256 distinct names. Category `input`, retryable: no.
 
 #### `VIEWS_NOT_READABLE`
 

@@ -78,7 +78,7 @@ async def test_search_scope_does_not_replace_refused_aliases_with_the_raw_filter
             await scope._resolve_entity_scope(request, run, [], {})
         assert len(ch.calls) == 1
     finally:
-        run.close()
+        await run.close()
 
 
 async def test_alias_backend_cannot_hide_a_typed_input_refusal() -> None:
