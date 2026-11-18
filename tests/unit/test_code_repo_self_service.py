@@ -578,6 +578,34 @@ async def test_the_git_waiver_admits_the_three_ops_without_the_sandbox(
 
 
 @pytest.mark.asyncio
+async def test_on_the_waiver_path_a_request_without_a_principal_reaches_the_remote(
+    plane, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The handler has no caller to refuse when a request carries no principal: with
+    both settings on and no sandbox the add asks the remote the request names and
+    registers the entry. The settings stop it instead: the waiver does not load in a
+    mode that admits such a request (the load test in test_repo_job_sandbox.py)."""
+    from server.code.app.index import sandbox
+    from server.settings import settings
+
+    asked: list[str] = []
+
+    async def _remote(repo: str, branch: str, token: str, *, git_remote: str = "") -> str:
+        asked.append(git_remote)
+        return "abc123def456" + "0" * 28
+
+    monkeypatch.setattr(reg, "remote_has_branch", _remote)
+    monkeypatch.setattr(sandbox, "_available", False)
+    monkeypatch.setattr(settings, "code_self_service_platform_admin_only", True)
+    monkeypatch.setattr(settings, "code_self_service_git_unsandboxed", True)
+    set_current_auth(None)
+    remote = "https://git.example:8443/acme/widgets.git"
+    out = await admin.handle_code_repo_add(CodeRepoAddInput(org=ORG, repo=remote, branch="main"))
+    assert asked == [remote]
+    assert (out.namespace, out.index_stage) == ("code-widgets", "queued")
+
+
+@pytest.mark.asyncio
 async def test_code_repo_add_branch_inherits_the_repository(plane) -> None:
     await admin.handle_code_repo_add(
         CodeRepoAddInput(

@@ -31,8 +31,9 @@ A deployment that cannot run the sandbox can instead index the repositories its
 platform admins add. `LOOM_CODE_SELF_SERVICE_GIT_UNSANDBOXED=true` lifts the refusal and
 runs the clone and the fetches of a repository added here as plain processes, which
 connect to its remote with nothing vetting the address. It loads only together with
-`LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY=true`. Such a repository gets the fast tier
-and no compiler tier
+`LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY=true`, and only where every request carries
+a principal: with auth on and MCP not in `open` mode. Such a repository gets the fast
+tier and no compiler tier
 ([without the sandbox](../../operations/code-index-operations.md#repository-job-sandbox)).
 
 Each org holds at most `LOOM_CODE_SELF_SERVICE_MAX_REPOS` (20) entries.

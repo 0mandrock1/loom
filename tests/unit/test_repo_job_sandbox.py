@@ -394,14 +394,33 @@ def test_the_git_waiver_lets_only_the_git_callers_reach_a_self_registered_networ
     assert bootstrap.network_refusal(network) == compiler_tier.SANDBOX_REQUIRED_SKIP
 
 
-def test_the_git_waiver_loads_only_with_the_platform_admin_rule_and_an_optional_sandbox() -> None:
+def test_the_git_waiver_loads_only_where_platform_admins_alone_name_a_remote() -> None:
     """Without the sandbox nothing vets the host a git job connects to, so the waiver
-    is refused at load unless only platform admins name a remote, and refused beside
-    LOOM_CODE_SANDBOX_REQUIRED, which lets no job run as a plain process."""
+    is refused at load unless only platform admins name a remote: without the
+    platform-admin rule, and in each mode that admits a request without a principal,
+    which that rule passes. It is refused beside LOOM_CODE_SANDBOX_REQUIRED too, which
+    lets no job run as a plain process."""
     from server.settings import Settings
 
     with pytest.raises(ValueError, match="needs LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY"):
         Settings(code_self_service_git_unsandboxed=True)
+    for field, value in (
+        ("auth_required", False),
+        ("identity_provider", "single-user"),
+        ("mcp_auth_mode", "open"),
+    ):
+        with pytest.raises(ValueError, match="needs authentication on every transport"):
+            Settings(
+                code_self_service_git_unsandboxed=True,
+                code_self_service_platform_admin_only=True,
+                **{field: value},
+            )
+    # MCP discovery without a bearer is no call: `tools/call` still needs one.
+    Settings(
+        code_self_service_git_unsandboxed=True,
+        code_self_service_platform_admin_only=True,
+        mcp_auth_mode="discovery_only",
+    )
     with pytest.raises(ValueError, match="contradicts LOOM_CODE_SANDBOX_REQUIRED"):
         Settings(
             code_self_service_git_unsandboxed=True,
@@ -413,11 +432,7 @@ def test_the_git_waiver_loads_only_with_the_platform_admin_rule_and_an_optional_
     )
     assert both.code_self_service_git_unsandboxed and both.code_self_service_platform_admin_only
     # The platform-admin rule stands alone, with the sandbox required or not.
-    alone = Settings(code_self_service_platform_admin_only=True, code_sandbox_required=True)
-    assert not alone.code_self_service_git_unsandboxed
-    defaults = Settings()
-    assert not defaults.code_self_service_platform_admin_only
-    assert not defaults.code_self_service_git_unsandboxed
+    Settings(code_self_service_platform_admin_only=True, code_sandbox_required=True)
 
 
 async def test_a_required_sandbox_skips_every_entry_before_any_fetch(

@@ -229,9 +229,11 @@ class Settings(
     def _check_unsandboxed_git(self) -> Settings:
         """`code_self_service_git_unsandboxed` lets a plain git process connect to the
         host and port a self-service entry's remote names, with no egress proxy to vet
-        the address, so it loads only where platform admins alone name that remote.
-        Where the sandbox is required no job runs as a plain process: the two
-        settings contradict each other."""
+        the address, so it loads only where platform admins alone name that remote:
+        with the platform-admin rule, and with authentication on every transport,
+        since that rule passes a request that carries no principal. Where the sandbox
+        is required no job runs as a plain process: the two settings contradict each
+        other."""
         if not self.code_self_service_git_unsandboxed:
             return self
         if not self.code_self_service_platform_admin_only:
@@ -240,6 +242,13 @@ class Settings(
                 "LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY: without the sandbox nothing vets "
                 "the host a repository's git jobs connect to, so only a platform admin may "
                 "name one"
+            )
+        if not self.auth_actually_required() or self.mcp_auth_mode == "open":
+            raise ValueError(
+                "LOOM_CODE_SELF_SERVICE_GIT_UNSANDBOXED needs authentication on every transport "
+                "(LOOM_AUTH_REQUIRED on, LOOM_IDENTITY_PROVIDER not single-user, "
+                "LOOM_MCP_AUTH_MODE not open): a request without a principal passes the "
+                "platform-admin rule"
             )
         if self.code_sandbox_required:
             raise ValueError(

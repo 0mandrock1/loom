@@ -1037,8 +1037,9 @@ class CodeSettings(BaseModel):
     # True lets a host without the sandbox add and fetch a self-service entry with a
     # network remote: its git jobs (ls-remote, clone, fetch) run as plain processes and
     # it gets no compiler tier. Refused at load without
-    # code_self_service_platform_admin_only or with code_sandbox_required. False: such
-    # an entry needs the sandbox.
+    # code_self_service_platform_admin_only, where a request can carry no principal
+    # (auth off, or mcp_auth_mode open), and with code_sandbox_required. False: such an
+    # entry needs the sandbox.
     code_self_service_git_unsandboxed: bool = False
     # Largest file one process of a sandboxed repository job may write, in MiB (a
     # pack or index.scip).

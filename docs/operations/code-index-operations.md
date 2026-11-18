@@ -746,8 +746,18 @@ remote runs `ssh` with the server's `HOME` and the keys in it. Whoever names a r
 therefore chooses what the server connects to, so Loom refuses to load the setting unless
 `LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY=true` leaves those three ops to platform
 admins ([self-service repositories](../features/code-index/repositories.md#self-service-repositories)).
-It also refuses it together with `LOOM_CODE_SANDBOX_REQUIRED=true`, under which no
-repository job runs as a plain process.
+That rule passes a request that carries no principal, so the setting is refused as well
+where one can arrive: with auth off (`LOOM_AUTH_REQUIRED=false` or
+`LOOM_IDENTITY_PROVIDER=single-user`) and with `LOOM_MCP_AUTH_MODE=open`. It is also
+refused together with `LOOM_CODE_SANDBOX_REQUIRED=true`, under which no repository job
+runs as a plain process.
+
+The setting also resumes the git jobs of entries that members added before
+`LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY` was set. They keep the remotes their adders
+named and are cloned and fetched the same way. Before turning it on, list the branches in
+the registry (the active rows of `loom.code_repos` whose `row_kind` is not `access`;
+`code.repos` lists only what its caller may read) and have those a platform admin would
+not add removed with `code.repo.remove`.
 
 `/v1/health` and `loom doctor` keep reporting `repo_jobs_unsandboxed` as a warning, with
 a message that names the setting. The dashboard reads that warning, not the setting, and
