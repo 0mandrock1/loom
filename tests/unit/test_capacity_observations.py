@@ -14,6 +14,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from server import health
 from server.auth import authz, tenancy
@@ -21,7 +22,7 @@ from server.auth.jwt import mint_token
 from server.core import ch as ch_module
 from server.core import pg, ratelimit, readiness
 from server.core.schema import status as schema_status
-from server.settings import settings
+from server.settings import Settings, settings
 from tests.unit.test_health_placement_capacity import _headers
 from tests.unit.test_health_placement_capacity import router as router
 
@@ -456,3 +457,39 @@ async def test_operator_capacity_projection_reuses_existing_row_without_rotation
     assert answer["placed_orgs"] == 7
     assert "next_credential_pending" not in answer and "credential_sha256" not in answer
     read.assert_awaited_once_with("eu-1", audited=True)
+
+
+@pytest.mark.parametrize(
+    ("name", "valid", "invalid"),
+    [
+        (
+            "capacity_rollup_max_lag_s",
+            (0.25, 300.0),
+            (0, -1, float("nan"), float("inf"), float("-inf")),
+        ),
+        (
+            "capacity_observation_timeout_s",
+            (0.25, 3.0),
+            (0, -1, float("nan"), float("inf"), float("-inf")),
+        ),
+        ("capacity_scope_max_rows", (1, 1_000_000), (0, -1, 1_000_001)),
+        (
+            "capacity_read_max_execution_s",
+            (0.001, 2.0),
+            (0, -1, 0.0009, float("nan"), float("inf"), float("-inf")),
+        ),
+        ("capacity_read_max_bytes", (1, 67_108_864), (0, -1)),
+        ("capacity_pg_work_mem_mib", (1, 4), (0, -1)),
+    ],
+)
+def test_capacity_settings_require_bounded_positive_budgets(
+    name: str,
+    valid: tuple[int | float, ...],
+    invalid: tuple[int | float, ...],
+) -> None:
+    for value in valid:
+        loaded = Settings(_env_file=None, **{name: value})
+        assert getattr(loaded, name) == value
+    for value in invalid:
+        with pytest.raises(ValidationError, match=name):
+            Settings(_env_file=None, **{name: value})
