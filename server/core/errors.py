@@ -43,6 +43,14 @@ class ValidationError(LoomServerError):
     status_code = 422
 
 
+class VectorInputTooLargeError(ValidationError):
+    """422 — an entity filter exceeds 64 raw names or its canonical alias expansion
+    cannot fit within 256 names. Narrow the filter; aliases are never truncated."""
+
+    code = "VECTOR_INPUT_TOO_LARGE"
+    status_code = 422
+
+
 class BadConfigError(ValidationError):
     """422 — a document source's config or items it cannot use, or a change it cannot
     make; the message, Loom's own, names what to fix."""

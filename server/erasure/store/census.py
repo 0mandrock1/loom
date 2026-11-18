@@ -319,6 +319,8 @@ _CENSUS: tuple[Substrate, ...] = (
     Substrate(
         "loom.knowledge_source_listings", "1", None, "knowledge_source_listings.delete", None
     ),
+    # Source-scoped ACL evidence, under the mirror: retain none after its erasure.
+    Substrate("loom.knowledge_group_members", "1", None, "knowledge_group_members.delete", None),
     # A replayed response body quotes whatever the op returned. The rows name
     # the caller's org and subject but no namespace and no end user, so both
     # scopes clear and count the org's rows (a cache — the cost is one miss
@@ -671,7 +673,9 @@ NO_MEMORY_CONTENT: dict[str, str] = {
     "loom.machine_identities": "auth plane: registered bots and their public keys; no memory.",
     "loom.org_model_calls": "whether an org's data may go to a model, and who said so; no memory.",
     "loom.extraction_policies": "the operator's rules for what extraction stores; no memory.",
-    "loom.sso_links": "auth plane: which password accounts SSO sign-ins reach; no memory.",
+    "loom.sso_links": (
+        "auth plane: verified account links and signed issuer/domain evidence; no memory content."
+    ),
     "loom.scim_users": (
         "auth plane: the people the identity provider provisions (email, the emails "
         "list it sent, userName, active) and the subjects a deactivation revoked; no memory."

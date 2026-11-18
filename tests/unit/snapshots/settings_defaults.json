@@ -580,6 +580,7 @@
  "knowledge_search_rerank_excerpt_chars": 800,
  "knowledge_search_rerank_timeout_s": 8.0,
  "knowledge_search_rerank_top": 30,
+ "knowledge_source_acl_stale_seconds": 3600,
  "knowledge_source_max_documents": 50000,
  "knowledge_source_mirror_documents_per_pass": 40,
  "knowledge_source_probe_timeout_s": 20.0,

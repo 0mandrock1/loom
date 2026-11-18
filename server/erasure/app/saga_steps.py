@@ -417,5 +417,6 @@ NAMESPACE_STEPS: tuple[NamespaceStep, ...] = (
     ("documents.tombstone", _step_tombstone_documents_by_ns),
     *_LATE_STEPS_NS,
     ("knowledge_source_listings.delete", ledger_steps.delete_source_listings_by_namespace),
+    ("knowledge_group_members.delete", ledger_steps.delete_group_members_by_namespace),
     ("knowledge_mirrors.forget", _step_forget_mirrors_by_ns),
 )

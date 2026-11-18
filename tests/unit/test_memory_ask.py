@@ -15,8 +15,11 @@ from typing import Any
 
 import pytest
 
+from server.knowledge.api.models_knowledge import KnowledgeSearchOutput
 from server.memory.api.models_ask import MemoryAskInput
 from server.memory.api.models_search import MemorySearchOutput, _MemorySearchHit
+from tests.unit.ch_fake import RecordingCH
+from tests.unit.checked_pack_fakes import install_pack_knowledge
 
 
 class _FakeLLM:
@@ -65,6 +68,7 @@ def ask_env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     env.search_inputs = []
     env.over_cap = False
     env.llm = _FakeLLM("Your favorite color is blue [m1].")
+    env.ch = RecordingCH(strict=False).install(monkeypatch, "server.memory.app.working_memory")
 
     async def fake_search(search_input: Any) -> MemorySearchOutput:
         env.search_inputs.append(search_input)
@@ -73,9 +77,17 @@ def ask_env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     async def fake_over_cap(org: str, ns: str) -> bool:
         return env.over_cap
 
+    async def fake_knowledge(_input: Any) -> KnowledgeSearchOutput:
+        return KnowledgeSearchOutput(results=[], embedding_model="fake-embed")
+
+    async def no_pending(*args: Any, **kwargs: Any) -> int:
+        return 0
+
     monkeypatch.setattr(hsearch, "handle_memory_search", fake_search)
     monkeypatch.setattr(budget, "namespace_over_cap", fake_over_cap)
     monkeypatch.setattr(llm_client, "get_llm_client", lambda: env.llm)
+    install_pack_knowledge(monkeypatch, fake_knowledge)
+    monkeypatch.setattr("server.memory.app.pending_disclosure.pending_extraction", no_pending)
     return env
 
 
@@ -750,11 +762,13 @@ async def test_knowledge_lookup_overlaps_retrieval(ask_env, monkeypatch) -> None
     order: list[str] = []
     inner_search = hsearch.handle_memory_search
 
-    async def slow_knowledge(search_input, question, *, enabled=None):
+    async def slow_knowledge(search_input, question, *, enabled=None, prepared=None):
+        from server.memory.app.ask.context_blocks import AskKnowledge
+
         order.append("knowledge_start")
         await asyncio.sleep(0.05)
         order.append("knowledge_end")
-        return "", 0
+        return AskKnowledge()
 
     async def observed_search(search_input):
         order.append("search_start")
