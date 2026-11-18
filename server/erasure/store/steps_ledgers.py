@@ -13,6 +13,7 @@ from typing import Any
 from server.core import lease_writes, leases, rmt_carry
 from server.core.ch_params import chunks
 from server.core.errors import BackendUnavailableError
+from server.core.lease_writes import fenced
 from server.core.repo_base import _CHClient, _default_client, query_all_sliced
 from server.erasure.store import mutations as erasure_mutations
 from server.erasure.store.mutations import delete_scoped, namespaces_of, tombstone_scoped
@@ -26,11 +27,28 @@ from server.erasure.store.predicates import (
     UID,
 )
 from server.erasure.store.steps_pg import delete_pg_idempotency
+from server.knowledge.domain.source_push import writer_lease_name as push_writer_lease_name
 from server.observability import events_stream
 from server.observability.budget_notifications import writer_lease_name
 from server.settings import settings
 
 log = logging.getLogger(__name__)
+
+
+async def delete_source_push_by_namespace(
+    org: str, namespace: str | Sequence[str], *, ch: _CHClient | None = None
+) -> int:
+    """Retirement fenced new setup; settle deletion of every sealed version."""
+    total = 0
+    for ns in namespaces_of(namespace):
+        async with fenced(push_writer_lease_name(org, ns), ch=ch) as uncertain:
+            uncertain(True)
+            total += await delete_scoped(
+                "loom.knowledge_source_push", org=org, scope_where=NS_EQ, params={"ns": ns}, ch=ch
+            )
+            uncertain(False)
+    return total
+
 
 # ---------------------------------------------------------------------------
 # Steps for the ledger, trace and queue tables. Every `loom.*` table is a census row,

@@ -16,13 +16,13 @@
 -- Do NOT hand-edit. Edit schemas/migrations/*.sql and re-dump.
 -- CI verifies this file matches what migrations would produce.
 --
--- Counts: 193 tables + 5 views + 19 materialized views.
+-- Counts: 194 tables + 5 views + 19 materialized views.
 
 CREATE DATABASE IF NOT EXISTS `loom`;
 CREATE DATABASE IF NOT EXISTS `loom_telemetry`;
 
 -- ======================================================================
--- Tables (193)
+-- Tables (194)
 -- ======================================================================
 
 -- loom.acl_versions
@@ -2193,6 +2193,31 @@ CREATE TABLE IF NOT EXISTS loom.knowledge_source_listings
     `source_id` String,
     `name` String,
     `started_at` DateTime64(3),
+    `version` UInt64 DEFAULT toUInt64(toUnixTimestamp64Nano(now64(9)))
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY (org, namespace, source_id)
+SETTINGS non_replicated_deduplication_window = 1000, index_granularity = 8192;
+
+-- loom.knowledge_source_push
+CREATE TABLE IF NOT EXISTS loom.knowledge_source_push
+(
+    `org` LowCardinality(String),
+    `namespace` LowCardinality(String),
+    `name` String,
+    `source_id` String,
+    `provider` LowCardinality(String),
+    `generation` String,
+    `fingerprint` String,
+    `provider_id` String DEFAULT '',
+    `status` LowCardinality(String) DEFAULT 'pending',
+    `secret_enc` String DEFAULT '',
+    `agent` LowCardinality(String) DEFAULT '-',
+    `user_id` String DEFAULT '-',
+    `session_id` String DEFAULT '-',
+    `actor` String DEFAULT '',
+    `source_class` LowCardinality(String) DEFAULT 'derived',
+    `updated_at` DateTime64(3) DEFAULT now64(3),
     `version` UInt64 DEFAULT toUInt64(toUnixTimestamp64Nano(now64(9)))
 )
 ENGINE = ReplacingMergeTree(version)

@@ -6,7 +6,9 @@ in step, on any shared namespace or collection. This page is the design of sourc
 many items given as pasted links, per-user connected accounts, an org-wide crawl, and
 access that follows the store's own permissions. The caller's view of today's sources is
 in [knowledge: document sources](../features/knowledge.md#document-sources); parsing is
-in [document extraction](document-extraction.md).
+in [document extraction](document-extraction.md). Optional provider notifications
+request the same sync path; [source push](source-push.md) describes their setup,
+authentication and lifecycle.
 
 ## What changes
 
