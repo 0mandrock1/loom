@@ -467,6 +467,14 @@ trimming policy (`SlidingWindowPolicy`, `TokenBudgetPolicy`), which can cut the 
 request out of the events the policy reads. Those policies trim events, not the prompt, so
 `top_k` is what bounds the memory block.
 
+Use one recall policy per conversation, with its Loom client bound to the
+application-owned `SessionProtection` family. The policy retains constructor and
+callback contributors across context exit and client rebinding. Native user and session
+ids do not select protection. A protected contributor stops automatic recall with
+`AutomaticCaptureSuppressed` before dispatch. A marked recall is durably observed before
+its content reaches the current prompt; later automatic recalls stop. Model-selected
+`loom_tools` calls remain explicit operations.
+
 ## Microsoft Agent Framework
 
 `LoomContextProvider` implements Agent Framework's `ContextProvider`, which an `Agent`
