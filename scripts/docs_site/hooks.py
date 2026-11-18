@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.codegen.page_summary import SECTIONS, page_key, page_summary, shorten  # noqa: E402
-from scripts.docs_site.indexnow import page_path  # noqa: E402
+from scripts.docs_site.paths import page_path  # noqa: E402
 
 BLOB = "https://github.com/ClickHouse/loom/blob/main/"
 RAW = "https://raw.githubusercontent.com/ClickHouse/loom/main/"
