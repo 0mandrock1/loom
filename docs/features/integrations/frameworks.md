@@ -259,6 +259,18 @@ the same name reads the same Python history for the same session id and user, an
 handoff between agents of one run keeps it. Python and TypeScript histories are separate
 because the frameworks use different item formats.
 
+Bind the application's existing protection family before constructing either
+native session. The instance retains constructor and callback client families,
+including after rebinding. Python also retains contributors active in the
+callback's context. Use one instance per logical conversation family; restore it
+with the same application-owned protection capsule. The native user and session
+ids select history, without establishing protection authority. History reads and
+additions are automatic work: a marked reply protects every contributor before
+returning and suppresses later automatic calls. An initial complete history reply
+may return; follow-up pages, hydration and batch writes stop. Explicit pop, clear
+and model-selected tools remain available, with reply observation retained for the
+session's manual deletions.
+
 ```python
 from loom.integrations.openai_agents import LoomSession
 
