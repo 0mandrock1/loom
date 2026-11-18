@@ -108,10 +108,7 @@ def provider_fixture(image: str, root: Path) -> Path:
                             "retries": 20,
                         },
                     },
-                    "loom": {
-                        "depends_on": {"provider-smoke": {"condition": "service_healthy"}},
-                        "environment": {"LOOM_CODE_INGEST_ENABLED": "true"},
-                    },
+                    "loom": {"depends_on": {"provider-smoke": {"condition": "service_healthy"}}},
                 }
             }
         )
@@ -220,6 +217,20 @@ def smoke(image: str, extractor_image: str, clickhouse_image: str) -> None:
                 assert got in want, f"the extractor's {mode} connection to {host}:{port}: {got}"
             code = (ROOT / "scripts/gates/docker_code_smoke.py").read_text()
             run(*compose, "exec", "-T", "loom", "python", "-", input=code, text=True)
+            # Finish the explicit seed before the scheduled ingest worker starts.
+            update_env(stack / ".env", {"LOOM_CODE_INGEST_ENABLED": "true"})
+            run(*compose, "up", "-d", "--force-recreate", "--wait", "--wait-timeout", "120", "loom")
+            run(
+                *compose,
+                "exec",
+                "-T",
+                "loom",
+                "python",
+                "-",
+                "--link-lifecycle",
+                input=code,
+                text=True,
+            )
             run(*compose, "restart", "loom")
             run(*compose, "up", "-d", "--wait", "--wait-timeout", "120")
             saved = request(base, "/v1/memory.get", {**identity, "memory_key": "docker/smoke"})

@@ -2,8 +2,8 @@
 
 Local Git fixtures enter the same registry/bootstrap path used after code.repo.add
 validates a remote. This keeps compiler tests independent of a public repo changing.
-The smoke enables code ingest with the normal worker intervals. Initial compiler
-passes run explicitly; MCP memory links and the later source edit wait for workers.
+Initial compiler passes run explicitly. The smoke then enables code ingest with
+normal worker intervals; MCP memory links and the later edit wait for workers.
 """
 
 from __future__ import annotations
@@ -234,6 +234,7 @@ async def code_link_lifecycle(repo: CodeRepo, entries: list[dict[str, str]]) -> 
     deadline = time.monotonic() + (
         SEED_TIMEOUT_S
         + settings.code_ingest_interval_seconds
+        + settings.code_scip_py_delta_interval_seconds
         + settings.memory_code_links_interval_seconds
         + settings.memory_code_links_settle_seconds
     )
@@ -285,12 +286,14 @@ async def code_link_lifecycle(repo: CodeRepo, entries: list[dict[str, str]]) -> 
             "change greeting",
         )
         entry["head"] = await asyncio.to_thread(run, source, "git", "rev-parse", "HEAD")
-        while await repo.get_state("dev", entry["namespace"], "git_head") != entry["head"]:
-            assert time.monotonic() < deadline, "The ingest worker did not index the source edit"
+        while any(
+            [
+                await repo.get_state("dev", entry["namespace"], watermark) != entry["head"]
+                for watermark in ("git_head", "scip_commit_py")
+            ]
+        ):
+            assert time.monotonic() < deadline, "The workers did not index the source edit"
             await asyncio.sleep(SEED_POLL_S)
-        # Keep the existing compiler watermark check on the edited Python fixture too.
-        result = await scip_py_delta.run_pass()
-        assert not result.errors and not result.skipped, result
         await wait_for_link(client, entry, "changed", deadline)
         MANIFEST.write_text(json.dumps(entries))
 
@@ -345,10 +348,12 @@ async def main() -> None:
     try:
         await refresh_db_repos(force=True)
         repo = CodeRepo()
-        entries = (
-            json.loads(MANIFEST.read_text()) if "--verify-only" in sys.argv else await seed(repo)
-        )
-        await code_link_lifecycle(repo, entries)
+        lifecycle = "--link-lifecycle" in sys.argv or "--verify-only" in sys.argv
+        if not lifecycle:
+            assert not settings.code_ingest_enabled, "Seed before starting scheduled ingest"
+        entries = json.loads(MANIFEST.read_text()) if lifecycle else await seed(repo)
+        if lifecycle:
+            await code_link_lifecycle(repo, entries)
         await verify(repo, entries)
     finally:
         await client.disconnect()
