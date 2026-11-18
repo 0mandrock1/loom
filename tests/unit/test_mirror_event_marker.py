@@ -44,7 +44,7 @@ async def test_logical_mark_reaches_normal_and_waited_event_rows(
         return rules
 
     async def write(table, row):
-        assert table == "loom.agent_events_private"
+        assert table == "loom.agent_events"
         rows.append(row)
 
     async def insert(table, data, *, settings, required_columns):
