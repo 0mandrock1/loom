@@ -53,6 +53,7 @@ async def test_real_source_row_roundtrip_keeps_separate_crawl_authority_and_neve
         name="meeting-notes",
         kind="gdrive",
         source_id="a8895a80-d41c-4515-8c89-57fc1f7b4994",
+        config={"include": ["docs"]},
         credential_mode="crawl",
         access="mirrored",
         items=[{"type": "file", "id": "file-identifier"}],
