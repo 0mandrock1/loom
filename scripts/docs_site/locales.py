@@ -19,6 +19,7 @@ from scripts.codegen.page_summary import page_summary  # noqa: E402
 from scripts.docs_site.hooks import _TOKEN, BLOB, _with_source  # noqa: E402
 from scripts.docs_site.messages import COPY, SECTION_TITLES  # noqa: E402
 from scripts.docs_site.paths import page_path  # noqa: E402
+from scripts.docs_site.video_labels import translated_video_labels  # noqa: E402
 
 LANGUAGES = {
     "zh-CN": "简体中文",
@@ -339,6 +340,8 @@ def on_page_markdown(markdown, page, config, files):
 
 def on_post_page(output, page, config):
     language = html.escape(page.meta.get("language", "en"), quote=True)
+    if language != "en":
+        output = translated_video_labels(output)
     return re.sub(r'(<html\b[^>]*\blang=")[^"]*(")', rf"\g<1>{language}\2", output, count=1)
 
 
