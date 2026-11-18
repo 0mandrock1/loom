@@ -18,6 +18,67 @@
 
 import type { Agent, Scope } from "./agent.js";
 import { LoomError } from "./errors.js";
+import type { MemorySearchOutput } from "./generated/ops.js";
+
+const MEMORY_INSUFFICIENT = JSON.stringify({
+  insufficient: true,
+  metadata_omitted: true,
+  reason: "max_result_chars",
+});
+const RECALL_FIELDS = [
+  "abstain",
+  "abstain_code",
+  "abstain_reason",
+  "pending_extraction",
+  "degraded",
+  "retrieval_confidence",
+  "retrieval_risk",
+  "fallback_budget_exhausted",
+  "namespaces_searched",
+  "namespaces_skipped",
+  "next_page",
+  "next",
+  "bodies_elided",
+] as const;
+const RECALL_HIT_FIELDS = [
+  "namespace",
+  "memory_type",
+  "version",
+  "status",
+  "code_state",
+  "source_class",
+  "source_resource_id",
+  "verified",
+  "valid_at",
+  "created_at",
+  "below_threshold",
+  "superseded_by",
+  "superseded_at",
+  "resolved_from",
+  "body_truncated",
+  "next",
+  "source",
+  "parent_memory_key",
+  "derived_from",
+] as const;
+
+function present(source: object, fields: readonly string[]): Record<string, unknown> {
+  return Object.fromEntries(
+    fields.filter((key) => key in source).map((key) => [key, (source as Record<string, unknown>)[key]]),
+  );
+}
+
+function recallResult(r: MemorySearchOutput) {
+  return {
+    ...present(r, RECALL_FIELDS),
+    memories: (r.results ?? []).map((h) => ({
+      ...present(h, RECALL_HIT_FIELDS),
+      memory_key: h.memory_key,
+      content: h.content_excerpt,
+      similarity: Number(h.similarity.toFixed(3)),
+    })),
+  };
+}
 
 export type ToolFormat = "anthropic" | "openai" | "generic";
 
@@ -49,7 +110,7 @@ const SPECS = [
   {
     name: "loom_remember",
     description:
-      "Store one fact about the user or the task under a stable key so it can be recalled in later sessions. Use a short snake_case key; the same key updates the fact.",
+      "Store one fact about the user or the task under a stable key so it can be recalled in later sessions. Use a stable scoped key; the same key updates the fact. Read the receipt: noop or merged_into_key means no new row; conflicts need resolution.",
     parameters: {
       type: "object",
       properties: {
@@ -68,7 +129,7 @@ const SPECS = [
   {
     name: "loom_recall",
     description:
-      "Search stored memories by meaning. Returns the closest facts with a similarity score; call before answering anything the user may have told you earlier. A result too long to return leaves out its lowest-ranked memories and counts them in omitted.",
+      "Search stored memories by meaning. Returns the closest facts with a similarity score; call before answering anything the user may have told you earlier. A result too long to return leaves out its lowest-ranked memories and counts them in omitted. Respect abstention, below_threshold, code_state and provenance; verified requires attestation.",
     parameters: {
       type: "object",
       properties: {
@@ -216,28 +277,27 @@ export class AgentTools {
     const spec = LOOM_TOOL_SPECS.find((s) => s.name === name);
     if (!spec || !this.has(spec.name))
       throw new LoomError(`unknown tool ${name}; this agent offers ${Array.from(this.names).join(", ")}`);
+    if ((name === "loom_remember" || name === "loom_recall") && this.maxResultChars < MEMORY_INSUFFICIENT.length)
+      throw new LoomError("maxResultChars is too small to report memory result omissions");
     const out = await this.run(spec.name, checkArgs(spec, args));
-    let text = typeof out === "string" ? out : JSON.stringify(out);
-    const recalled = out as { memories?: unknown[]; omitted?: number };
-    if (Array.isArray(recalled.memories) && recalled.memories.length > 1 && text.length > this.maxResultChars) {
-      text = this.fitMemories(recalled as { memories: unknown[]; omitted?: number });
-    }
+    if (name === "loom_remember" || name === "loom_recall") return this.fitMemoryResult(out as Record<string, unknown>);
+    const text = typeof out === "string" ? out : JSON.stringify(out);
     return text.length > this.maxResultChars ? `${text.slice(0, this.maxResultChars)}…[truncated]` : text;
   }
 
-  /** Recalled memories over the cap: keep the best ranked whole, so the JSON stays valid. */
-  private fitMemories(out: { memories: unknown[]; omitted?: number }): string {
-    const { memories } = out;
-    let used = JSON.stringify({ ...out, memories: [], omitted: memories.length }).length;
-    let keep = 0;
-    for (const memory of memories) {
-      used += JSON.stringify(memory).length + (keep ? 1 : 0); // "," between items
-      if (keep && used > this.maxResultChars) break;
-      keep += 1;
+  /** Keep whole evidence and disclose when even the metadata cannot fit. */
+  private fitMemoryResult(out: Record<string, unknown>): string {
+    let text = JSON.stringify(out);
+    const memories = out.memories;
+    if (Array.isArray(memories) && text.length > this.maxResultChars) {
+      let omitted = 0;
+      while (memories.length && text.length > this.maxResultChars) {
+        memories.pop();
+        out.omitted = ++omitted;
+        text = JSON.stringify(out);
+      }
     }
-    out.omitted = memories.length - keep;
-    memories.splice(keep);
-    return JSON.stringify(out);
+    return text.length <= this.maxResultChars ? text : MEMORY_INSUFFICIENT;
   }
 
   private async run(name: ToolName, a: Args): Promise<unknown> {
@@ -248,7 +308,12 @@ export class AgentTools {
           ...this.scope,
           ...(memoryType ? { memory_type: memoryType } : {}),
         });
-        return { stored: true, memory_key: text(a, "memory_key"), version: r.version, verdict: r.conflict_verdict };
+        return {
+          ...r,
+          stored: Boolean(r.memory_id && r.version && !r.noop && !r.dry_run),
+          memory_key: r.memory_key || text(a, "memory_key"),
+          verdict: r.conflict_verdict || "",
+        };
       }
       case "loom_recall": {
         const topK = optInt(a, "top_k");
@@ -259,13 +324,7 @@ export class AgentTools {
           bodies: "full",
           explain: false,
         });
-        return {
-          memories: (r.results ?? []).map((h) => ({
-            memory_key: h.memory_key,
-            content: h.content_excerpt,
-            similarity: Number(h.similarity.toFixed(3)),
-          })),
-        };
+        return recallResult(r);
       }
       case "loom_ask": {
         const r = await this.agent.ask(text(a, "query"), this.scope);
