@@ -165,23 +165,23 @@ def test_mcp_failures_keep_the_mark_after_protocol_unwrapping(
         500: RuntimeError("private detail"),
     }[status]
     monkeypatch.setattr(mcp_outcome, "_emit_mcp_event", lambda *a, **kw: None)
-    request_work.begin()
-    request_work.mark_mirrored()
-    with private_work():
-        result = mcp_outcome._handler_failed(
-            error,
-            1,
-            "loom_assistant_ask",
-            SimpleNamespace(name="assistant.ask", idempotent=False),
-            {},
-            None,
-            _caller(),
-            "request",
-            "session",
-            rl_ns="notes",
-            rl_org="example",
-            elapsed_ms=1,
-        )
+    with request_work.bind(request_work.RequestWork()):
+        request_work.mark_mirrored()
+        with private_work():
+            result = mcp_outcome._handler_failed(
+                error,
+                1,
+                "loom_assistant_ask",
+                SimpleNamespace(name="assistant.ask", idempotent=False),
+                {},
+                None,
+                _caller(),
+                "request",
+                "session",
+                rl_ns="notes",
+                rl_org="example",
+                elapsed_ms=1,
+            )
     assert next(iter(result)) == "mirrored" and result["mirrored"] is True
     if status == 403:
         body = result["result"]
