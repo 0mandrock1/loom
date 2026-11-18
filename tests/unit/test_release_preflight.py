@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -672,7 +673,8 @@ def _sdk_metadata_check(
     for environment in ("sdk", "metadata-check"):
         python = tmp_path / f"runner/{environment}/bin/python"
         python.parent.mkdir(parents=True)
-        python.symlink_to(sys.executable)
+        python.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        python.chmod(0o755)
     output = tmp_path / "outputs"
     env = {
         **os.environ,

@@ -1,10 +1,8 @@
 """A chunk hit obeys the read's filters.
 
-`memory_chunks` carries no tags, `valid_at` or `status`; the fact leg's hard
-tag filter, `as_of` anchor and served-status set reach the chunk leg through
-the parent row in `memory_embeddings`, with the fact leg's own predicate
-helpers and parameter names. Both stages and neighbour windows exclude chunks
-whose known parent is not served, while session-only chunks remain eligible.
+The canonical memory parent supplies the served-status and time gate. Hard
+tags additionally require a matching `memory_embeddings` parent. Both stages
+and neighbour windows share the predicates; session-only chunks remain eligible.
 """
 
 from __future__ import annotations
