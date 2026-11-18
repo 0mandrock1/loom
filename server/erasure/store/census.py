@@ -83,6 +83,9 @@ class Substrate:
 _HOLDS_TEXT = "(answer != '' OR citations != '')"
 
 _CENSUS: tuple[Substrate, ...] = (
+    # Sealed provider setup is namespace configuration; retirement fences writers
+    # before the settled deletion, including historical credential versions.
+    Substrate("loom.knowledge_source_push", "1", None, "knowledge_source_push.delete", None),
     # In the user scope `memory.tombstone` only stamps these rows, which the later steps
     # read the user's keys from; `memory.retire` owns them and, in a purge, deletes them.
     # A live summary built from the user's memories counts too: `memory.retire` retires

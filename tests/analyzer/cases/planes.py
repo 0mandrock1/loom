@@ -564,6 +564,14 @@ def _logged_turn_rows(embedded: bool):
     )
 
 
+async def _source_push(ch: RecordingCH, c: dict[str, Any]) -> None:
+    from server.knowledge.store import source_push
+
+    await source_push.get(ORG, NS, _UUID, ch=ch)
+    await source_push.drive_page(("", "", ""), ch=ch)
+    await source_push.sealed_page(("", "", ""), ch=ch)
+
+
 async def _save_logged_turn(ch: RecordingCH, c: dict[str, Any]) -> None:
     from server.knowledge.api.models_conversations import ConversationSaveMessageInput
     from server.knowledge.app.conversations import handle_conversation_save_message
@@ -1272,6 +1280,7 @@ def cases() -> list[Case]:
                 }
             ),
         ),
+        Case("source_push_repos", "server.knowledge.store.source_push", _source_push, {}),
         Case("ledger_repos", "server.insights.store.audit", _ledgers, {"filters": (False, True)}),
         Case(
             "plane_services",

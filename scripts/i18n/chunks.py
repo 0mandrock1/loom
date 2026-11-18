@@ -12,7 +12,7 @@ from markdown import Markdown
 from markdown.treeprocessors import Treeprocessor
 from markdown_it import MarkdownIt
 
-from scripts.i18n.context import Label
+from scripts.i18n.context import Label, SourceContext
 
 FENCE = re.compile(r"^(`{3,}|~{3,})")
 # A literal comparison is prose; quoted delimiters and comments belong to their tag.
@@ -212,11 +212,43 @@ def _boundaries(text: str) -> list[int]:
     return [*boundaries, len(text)]
 
 
-def split(text: str) -> list[str]:
-    """Keep code, HTML, paragraphs, list items and table rows within one bounded request."""
+def request_boundaries(text: str) -> tuple[int, ...]:
+    """Safe cuts in a complete prepared container, before separator removal."""
+    return tuple(_boundaries(text))
+
+
+def _context_boundaries(text: str, scope: SourceContext) -> list[int]:
+    if (
+        not 0 <= scope.start <= scope.end <= len(scope.english)
+        or scope.english[scope.start : scope.end] != text
+    ):
+        raise ValueError("translation range does not match its source context")
+    boundaries = _boundaries(scope.english)
+    # An assembly separator can own the newline immediately before a safe cut.
+    safe_end = scope.end in boundaries or (
+        scope.end < len(scope.english)
+        and scope.english[scope.end] == "\n"
+        and scope.end + 1 in boundaries
+    )
+    if scope.start not in boundaries or not safe_end:
+        raise ValueError("translation range endpoints are not parser-safe in its source context")
+    return [
+        0,
+        *(cut - scope.start for cut in boundaries if scope.start < cut < scope.end),
+        len(text),
+    ]
+
+
+def split(text: str, *, source_context: SourceContext | None = None) -> list[str]:
+    """Keep complete Markdown units within one bounded request.
+
+    A headerless slice uses its complete source context's table and container boundaries.
+    """
+    boundaries = _context_boundaries(text, source_context) if source_context else None
     if len(text.encode()) <= MAX_BYTES:
         return [text]
-    boundaries = _boundaries(text)
+    if boundaries is None:
+        boundaries = _boundaries(text)
     for a, b in pairwise(boundaries):
         if len(text[a:b].encode()) > MAX_BYTES:
             raise ValueError(
