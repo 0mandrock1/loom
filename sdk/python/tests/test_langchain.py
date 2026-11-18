@@ -702,6 +702,15 @@ def test_clean_native_automatic_retrieval_preserves_payloads_and_documents(
         assert not original.protected and not producer.protected
 
 
+def _release_native_callbacks(
+    workers: list[threading.Thread], release_first: threading.Event
+) -> None:
+    release_first.set()
+    for worker in workers:
+        if worker.ident is not None:
+            worker.join(timeout=10)
+
+
 def test_concurrent_native_callbacks_retain_both_entry_contributors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -752,10 +761,7 @@ def test_concurrent_native_callbacks_retain_both_entry_contributors(
             workers[1].start()
             assert second_finished.wait(10), "second callback did not finish"
         finally:
-            release_first.set()
-            for worker in workers:
-                if worker.ident is not None:
-                    worker.join(timeout=10)
+            _release_native_callbacks(workers, release_first)
         assert not any(worker.is_alive() for worker in workers)
         assert errors == []
         assert sorted(documents) == ["first", "second"]
