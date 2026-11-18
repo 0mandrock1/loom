@@ -107,7 +107,7 @@ The packaged [MCP smoke](https://github.com/ClickHouse/loom/blob/main/scripts/ga
 saves a lesson, verifies `fresh`, commits a body edit and waits for the indexing and link
 workers to return `changed` with that exact commit. The
 [quickstart harness](https://github.com/ClickHouse/loom/blob/main/scripts/gates/docker_quickstart_smoke.py)
-restarts the stack, checks the link again and deletes the test memory.
+restarts the Loom service, checks the link again and deletes the test memory.
 [CI](https://github.com/ClickHouse/loom/actions/workflows/docker-smoke.yml) runs these checks
 on amd64 and arm64 with authentication off, a local embedder and a fake model provider.
 These checks verify code-link state; authenticated clients, answer quality and agent
