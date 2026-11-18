@@ -122,7 +122,6 @@ class PolicyObserver:
                 "send_logs_level": "none",
                 "log_queries_cut_to_length": "1",
                 "log_formatted_queries": "0",
-                "log_query_settings": "0",
                 "additional_table_filters": "{}",
                 "additional_result_filter": "",
                 "limit": "0",

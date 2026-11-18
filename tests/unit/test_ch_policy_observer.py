@@ -35,11 +35,18 @@ class _HTTP:
         self.responses = list(responses)
         self.calls = []
         self.closed = False
+        self.readonly_settings = {}
 
     @asynccontextmanager
     async def post(self, origin, **options):
         self.calls.append((origin, options))
-        response = self.responses.pop(0)
+        if any(
+            name in options["params"] and options["params"][name] != value
+            for name, value in self.readonly_settings.items()
+        ):
+            response = (500, b"Cannot modify a readonly setting")
+        else:
+            response = self.responses.pop(0)
         if isinstance(response, BaseException):
             raise response
         status, payload = response
@@ -76,6 +83,23 @@ def observer(monkeypatch):
     return create
 
 
+async def test_bootstrap_and_policy_reads_preserve_readonly_query_logging(observer):
+    instance, http = observer(
+        [
+            (200, _body([_identity()])),
+            (200, _body([], ["statement"])),
+            (200, _body([{"closed": 1}])),
+        ]
+    )
+    http.readonly_settings = {"log_query_settings": "1"}
+    try:
+        await instance.bootstrap()
+        assert await instance.policies() == []
+    finally:
+        await instance.close()
+    assert http.closed and len(http.calls) == 3
+
+
 async def test_successful_bootstrap_and_policy_reads_never_recreate_or_redirect(observer):
     instance, http = observer(
         [
@@ -94,7 +118,7 @@ async def test_successful_bootstrap_and_policy_reads_never_recreate_or_redirect(
     assert len({call[1]["params"]["session_id"] for call in http.calls}) == 1
     assert http.calls[-1][1]["params"]["close_session"] == "1"
     assert all(call[1]["allow_redirects"] is False for call in http.calls)
-    assert all(call[1]["params"]["log_query_settings"] == "0" for call in http.calls)
+    assert all("log_query_settings" not in call[1]["params"] for call in http.calls)
     assert all("log_query_parameters" not in call[1]["params"] for call in http.calls)
 
 
