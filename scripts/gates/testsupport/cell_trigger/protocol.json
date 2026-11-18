@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "r5 design only; no runtime or entry implementation",
+  "status": "Runtime and entry implementation; native acceptance required",
   "memory_fields": [
     "org",
     "namespace",

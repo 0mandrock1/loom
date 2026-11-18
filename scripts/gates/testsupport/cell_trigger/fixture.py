@@ -39,7 +39,7 @@ POLICY = dict(
 HERE = Path(__file__).resolve().parent
 FILES = ("fixture.py", "native.py", "tls_proxy.py", "capture.py", "owned_children.py")
 PROTOCOL = "protocol.json"
-PROTOCOL_SHA = "7223a2018c518cfc8a58977c84aa88dec5784aa741cb34245cb092abbf848812"
+PROTOCOL_SHA = "690f1a06d0a523600a3ef4dcfa5cb58cc48052812ecad4e6e9e591c9e4582924"
 SPEC_FIELDS = {
     "schema",
     "fixture_id",
