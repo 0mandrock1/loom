@@ -231,8 +231,27 @@ def test_path_boundary_includes_symlinks_and_git_metadata(config, tmp_path):
             agent.local_path(config.checkout, name)
 
 
-def test_local_search_context_is_bounded_and_identical_in_both_arms(config):
-    (config.checkout / "context.py").write_text("before\nvalue = 1\nafter\n")
+def test_local_search_context_is_bounded_and_identical_in_both_arms(config, monkeypatch):
+    calls = []
+
+    def search(argv, **kwargs):
+        calls.append(argv)
+        assert argv[0] == "rg" and argv[argv.index("-C") + 1] == "1"
+        assert argv[argv.index("--max-count") + 1] == "12"
+        assert argv[argv.index("--max-columns") + 1] == "300"
+        assert argv[-3:] == ["--", "value", "context.py"]
+        assert kwargs == {
+            "cwd": config.checkout,
+            "capture_output": True,
+            "text": True,
+            "timeout": 10,
+            "check": False,
+        }
+        return subprocess.CompletedProcess(
+            argv, 0, stdout="context.py-1-before\ncontext.py:2:value = 1\ncontext.py-3-after\n"
+        )
+
+    monkeypatch.setattr(agent.subprocess, "run", search)
     result = agent.local_tool(
         config.checkout,
         "search_code",
@@ -242,6 +261,7 @@ def test_local_search_context_is_bounded_and_identical_in_both_arms(config):
     assert "context.py" in result["matches"] and result["truncated"] is False
     with pytest.raises(agent.ToolError, match="between 0 and 20"):
         agent.local_tool(config.checkout, "search_code", {"pattern": "value", "context_lines": 21})
+    assert len(calls) == 1
     assert agent.tools("baseline")[0] == agent.tools("loom")[1]
 
 
