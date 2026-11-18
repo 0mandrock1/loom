@@ -54,6 +54,7 @@ async def record_listing(
     started_at: datetime,
     *,
     crawl_exclusion_generation: str = "",
+    crawl_generation: str = "",
     ch: _CHClient | None = None,
 ) -> None:
     """The start of a mirrored source's last complete listing, written once every list
@@ -65,6 +66,7 @@ async def record_listing(
         "name": name,
         "started_at": started_at,
         "crawl_exclusion_generation": crawl_exclusion_generation,
+        "crawl_generation": crawl_generation,
     }
     await (ch or _default_client()).insert(LISTINGS, [row])
 

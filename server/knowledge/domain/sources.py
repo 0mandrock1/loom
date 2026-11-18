@@ -584,7 +584,7 @@ def mirror_synced(src: KnowledgeSource) -> bool:
     """Whether the sync worker writes `src` into its namespace's mirror: a mirrored
     folder-store source or a person's connected page/project source."""
     return src.access == MIRRORED_ACCESS and (
-        (src.kind == "gdrive" and src.credential_mode in {"shared", "connected"})
+        (src.kind == "gdrive" and src.credential_mode in {"shared", "connected", "crawl"})
         or (src.credential_mode == "connected" and src.kind in {"notion", "linear"})
     )
 

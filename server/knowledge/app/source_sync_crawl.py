@@ -79,7 +79,7 @@ async def turn(
     membership_bound: int | None = None,
     maximum_files: int | None = None,
 ) -> sync.TurnResult:
-    """This worker remains unreachable from registration until all lifecycle roots bind."""
+    """Publish only a complete observation under the exact retained registration."""
     set_query_tag("knowledge.crawl.sync")
     bounds = bounds or crawl_authority.configured_bounds()
     maximum_files = settings.knowledge_crawl_max_files if maximum_files is None else maximum_files
@@ -190,4 +190,5 @@ async def _publish(
             source.name,
             started,
             crawl_exclusion_generation=await authority.exclusions.version(),
+            crawl_generation=source.crawl_generation,
         )

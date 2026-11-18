@@ -530,6 +530,10 @@ def _turn_of(src: KnowledgeSource) -> Callable[..., Awaitable[TurnResult]]:
     """The turn function of a source; this module's `_turn` reads a folder, and a
     mirrored folder source writes into its namespace's mirror."""
     # Imported here: a kind's module builds on this one's helpers.
+    if src.credential_mode == "crawl" and src.kind == "gdrive" and mirror_synced(src):
+        from server.knowledge.app import source_sync_crawl
+
+        return source_sync_crawl.turn
     if (
         src.credential_mode == "connected"
         and src.kind in {"notion", "linear"}

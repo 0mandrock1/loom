@@ -137,7 +137,13 @@ def _shape(source: KnowledgeSource) -> None:
     Options.parse(source.crawl_options)
 
 
-async def resolve(source: KnowledgeSource, *, deadline: float, bounds: Bounds) -> Authority:
+async def resolve(
+    source: KnowledgeSource,
+    *,
+    deadline: float,
+    bounds: Bounds,
+    presenter: source_registration.AdminPermit | None = None,
+) -> Authority:
     """A worker-only checkout; ordinary live credential selection never calls this path."""
     if type(deadline) not in (float, int) or not math.isfinite(deadline) or deadline <= _now():
         raise TimeoutError("crawl deadline elapsed")
@@ -148,7 +154,7 @@ async def resolve(source: KnowledgeSource, *, deadline: float, bounds: Bounds) -
         )
         await approval.validate()
         index = await crawl_exclusions.Index.open(source.org, ch=get_client())
-        authority = Authority(source, approval, index, deadline, bounds)
+        authority = Authority(source, approval, index, deadline, bounds, presenter=presenter)
         await authority.validate()
         # Credentials are touched only after the source, registrant and refusal proof.
         plain = unseal(source_ops._SECRET_PURPOSE, source.secret_enc, warn=False)
@@ -159,6 +165,23 @@ async def resolve(source: KnowledgeSource, *, deadline: float, bounds: Bounds) -
         authority._account = gdrive.parse_service_account(plain)
         await authority.validate()
         return authority
+
+
+async def validate_indexed(source: KnowledgeSource) -> str:
+    """Indexed reads require live local approval and the completed exclusion epoch.
+
+    No provider request or source credential is needed to check an indexed copy.
+    """
+    _shape(source)
+    await person_erasure.require_settled(ch=get_client())
+    approval = source_registration.load(
+        source.approval_enc, scope(source), registrant=source.registrant_subject
+    )
+    await approval.validate()
+    await source_ops._require_source_namespace(source.org, source.namespace)
+    await source_ops._require_no_erasure(source.org, source.namespace)
+    index = await crawl_exclusions.Index.open(source.org, ch=get_client())
+    return await index.version()
 
 
 class Authority:
@@ -173,6 +196,7 @@ class Authority:
         "_preparing",
         "_directory_token",
         "_drive_tokens",
+        "_presenter",
     )
 
     def __init__(
@@ -182,8 +206,11 @@ class Authority:
         exclusions: crawl_exclusions.Index,
         deadline: float,
         bounds: Bounds,
+        *,
+        presenter: source_registration.AdminPermit | None = None,
     ) -> None:
         self.source, self.approval, self.exclusions = source, approval, exclusions
+        self._presenter = presenter
         self.deadline, self.bounds = deadline, bounds
         self._account: gdrive.ServiceAccount | None = None
         self._expansion: Expansion | None = None
@@ -214,6 +241,8 @@ class Authority:
             _shape(self.source)
             await person_erasure.require_settled(ch=get_client())
             await self.approval.validate()
+            if self._presenter is not None:
+                await self._presenter.validate(self.source.org)
             await self.exclusions.version()
             with own_write_reads():
                 current = await store.latest_source(

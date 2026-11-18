@@ -335,7 +335,17 @@ async def insert_source(src: KnowledgeSource, *, ch: _CHClient | None = None) ->
     writing replica's: the lease-serialized writes stay ordered while those clocks
     differ by less than the lease's handoff between writes."""
     now = naive_utc_now_seconds()
-    options = Options.parse(src.crawl_options).stored() if src.credential_mode == "crawl" else "{}"
+    options = json.dumps(
+        _crawl_options(
+            {
+                "credential_mode": src.credential_mode,
+                "active": src.active,
+                "options_json": json.dumps(src.crawl_options),
+            }
+        ),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     row = {
         "org": src.org,
         "namespace": src.namespace,

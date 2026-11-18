@@ -515,6 +515,12 @@ async def handle_knowledge_source_add(input: KnowledgeSourceAddInput) -> Knowled
     _require_kind(kind)
     sent = [f for f in ("items", "links") if getattr(input, f) is not None]
     config, items = _registration(input, kind, sent)
+    if input.credential_mode == "crawl":
+        from server.knowledge.app.crawl_sources import add
+
+        return await add(input, name=name, kind=kind, config=config, items=items)
+    if input.crawl_options is not None:
+        raise BadConfigError("crawl_options requires crawl credential mode")
     if input.credential_mode == "connected":
         from server.knowledge.app.connected_sources import add
 
@@ -663,6 +669,10 @@ async def handle_knowledge_source_check(
     input: KnowledgeSourceCheckInput,
 ) -> KnowledgeSourceCheckOutput:
     src = await _source_or_404(input.org, input.namespace, input.name)
+    if src.credential_mode == "crawl":
+        from server.knowledge.app.crawl_sources import check
+
+        return await check(src)
     if src.credential_mode == "connected":
         from server.knowledge.app.connected_sources import check
 
@@ -712,6 +722,10 @@ async def handle_knowledge_source_rotate(
     input: KnowledgeSourceRotateInput,
 ) -> KnowledgeSourceRotateOutput:
     src = await _source_or_404(input.org, input.namespace, input.name)
+    if src.credential_mode == "crawl":
+        from server.knowledge.app.crawl_sources import rotate
+
+        return await rotate(src, input.credential)
     _require_served(src)
     if not input.credential.strip():
         raise ValidationError("a credential is required", code="CREDENTIAL_REFUSED")
@@ -750,6 +764,12 @@ async def handle_knowledge_source_update(
     input: KnowledgeSourceUpdateInput,
 ) -> KnowledgeSourceUpdateOutput:
     src = await _source_or_404(input.org, input.namespace, input.name)
+    if src.credential_mode == "crawl":
+        from server.knowledge.app.crawl_sources import update
+
+        return await update(src, input)
+    if input.crawl_options is not None:
+        raise BadConfigError("crawl_options requires crawl credential mode")
     if src.credential_mode == "connected":
         from server.knowledge.app.connected_sources import update
 
@@ -1015,6 +1035,10 @@ async def handle_knowledge_source_remove(
                 from server.knowledge.app.connected_sources import require_operator
 
                 await require_operator(src)
+            elif src.credential_mode == "crawl":
+                from server.knowledge.app.crawl_sources import require_operator as crawl_operator
+
+                await crawl_operator(src)
             elif not await authz.row_in_scope(input.org, input.namespace, Role.ADMIN):
                 raise AuthInsufficientError(
                     "a namespace administrator is required for a shared source"
@@ -1053,6 +1077,10 @@ async def handle_knowledge_source_sync_now(
         from server.knowledge.app.connected_sources import require_operator
 
         await require_operator(src)
+    elif src.credential_mode == "crawl":
+        from server.knowledge.app.crawl_sources import require_operator as crawl_operator
+
+        await crawl_operator(src)
     else:
         if not await authz.row_in_scope(input.org, input.namespace, Role.ADMIN):
             raise AuthInsufficientError("a namespace administrator is required for a shared source")
@@ -1070,6 +1098,8 @@ async def handle_knowledge_source_sync_now(
             )
         if fresh.credential_mode == "connected":
             await require_operator(fresh)
+        elif fresh.credential_mode == "crawl":
+            await crawl_operator(fresh)
         state = await _read_state(fresh)
         # A full request waiting (an update's) already asks for more: a plain sync now
         # leaves it as it is, neither narrowed nor started over.
@@ -1204,13 +1234,13 @@ async def _wait_until_free(lease_name: str, deadline: float, busy: str) -> None:
 def source_add_audit_subject(input: KnowledgeSourceAddInput, response: Any) -> dict[str, Any]:
     """What an add's audit row records: the source as stored, never the
     credential. `loom.audit_log` outlives the source and must hold no secret."""
-    if input.credential_mode == "connected":
+    if input.credential_mode in {"connected", "crawl"}:
         return {
             "org": input.org,
             "namespace": input.namespace,
             "name": response["name"],
             "kind": response["kind"],
-            "credential_mode": "connected",
+            "credential_mode": input.credential_mode,
             "dry_run": input.dry_run,
         }
     return {

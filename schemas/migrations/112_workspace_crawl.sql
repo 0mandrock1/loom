@@ -12,6 +12,9 @@ ALTER TABLE loom.scim_users ADD COLUMN IF NOT EXISTS crawl_erasure_required Bool
 -- A pre-erasure full listing never proves a post-erasure crawl union.
 ALTER TABLE loom.knowledge_source_listings ADD COLUMN IF NOT EXISTS crawl_exclusion_generation String DEFAULT '';
 
+-- Only a complete listing of this exact registration generation admits its copies.
+ALTER TABLE loom.knowledge_source_listings ADD COLUMN IF NOT EXISTS crawl_generation String DEFAULT '';
+
 -- One stable, sealed refusal key per org survives rotation of the deployment root.
 CREATE TABLE IF NOT EXISTS loom.knowledge_crawl_exclusion_keys
 (

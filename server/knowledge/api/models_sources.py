@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from server.knowledge.domain.sources import (
     MAX_DEPTH,
@@ -167,6 +167,31 @@ _LINKS_DESCRIPTION = (
 )
 
 
+class KnowledgeSourceCrawlSubject(BaseModel):
+    """An explicitly selected Workspace person or group, resolved through Directory."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["person", "group"]
+    email: str = Field(..., max_length=512, description="The selected person's or group's address.")
+
+
+class KnowledgeSourceCrawlOptions(BaseModel):
+    """Delegation identity and the complete bounded union of selected people."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    directory_subject: str = Field(
+        ..., max_length=512, description="The delegated Directory reader's address."
+    )
+    subjects: list[KnowledgeSourceCrawlSubject] = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="The people and groups to expand, at most 2000 people in total.",
+    )
+
+
 class KnowledgeSourceAddInput(BaseModel):
     """Register a document source on a namespace: a kind, what it reads (items
     and links, or a config) and a read-only credential. A namespace admin may. The
@@ -213,9 +238,15 @@ class KnowledgeSourceAddInput(BaseModel):
         description="gdrive with items or links: the file kinds read, of docs, slides, pdf, "
         "pptx, docx (default all but docx).",
     )
-    credential_mode: Literal["shared", "connected"] = Field(
+    credential_mode: Literal["shared", "connected", "crawl"] = Field(
         "shared",
-        description="Use the supplied shared credential, or your own mirrored connected account.",
+        description=(
+            "Use shared credentials, your connected account, or approved Workspace delegation."
+        ),
+    )
+    crawl_options: KnowledgeSourceCrawlOptions | None = Field(
+        None,
+        description="Crawl only: delegation identity and explicit people or groups; default none.",
     )
     credential: str = Field(
         "",
@@ -292,6 +323,10 @@ class KnowledgeSourceUpdateInput(BaseModel):
             "Links to remove, read as items; a folder link also removes a shared drive of "
             "the same id the source holds."
         ),
+    )
+    crawl_options: KnowledgeSourceCrawlOptions | None = Field(
+        None,
+        description="Crawl only: replace the explicit delegation selectors; default unchanged.",
     )
     include: list[str] | None = Field(
         None,

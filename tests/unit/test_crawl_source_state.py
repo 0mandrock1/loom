@@ -74,7 +74,7 @@ async def test_real_source_row_roundtrip_keeps_separate_crawl_authority_and_neve
     assert json.loads(row["options_json"]) == _options()
     restored = sources._source(row)
     assert dataclasses.replace(restored, created_at=None, updated_at=None) == source
-    assert not mirror_synced(restored)  # No crawl worker/admission is enabled by this preparation.
+    assert mirror_synced(restored)  # Crawl writes remain confined to the checked mirror.
     assert restored.registrant_subject != restored.created_by
 
 
