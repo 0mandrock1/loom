@@ -1,6 +1,7 @@
 """Agno MemoryManager reads, revises and clears its bound user's Loom memories."""
 
 import json
+import os
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -222,21 +223,52 @@ def _protection_sync_agent(
         posts.append((op, body))
         return httpx.Response(200, json=reply(op, body))
 
-    with SyncAgent(
-        org="acme",
-        namespace="support",
-        agent="bot",
-        base_url="http://inert.invalid",
-        api_key="test-token",
-        session_protection=root,
-        pacing=False,
-        coalesce_sets=False,
-        auto_run=False,
-        mentor_brief=False,
-        retry={"max_attempts": 1},
-    ) as agent:
-        agent.transport._client._transport = httpx.MockTransport(respond)
-        yield agent, posts
+    with pytest.MonkeyPatch.context() as environment:
+        environment.setenv("NO_PROXY", "*")
+        environment.setenv("no_proxy", "*")
+        with SyncAgent(
+            org="acme",
+            namespace="support",
+            agent="bot",
+            base_url="http://inert.invalid",
+            api_key="test-token",
+            session_protection=root,
+            pacing=False,
+            coalesce_sets=False,
+            auto_run=False,
+            mentor_brief=False,
+            retry={"max_attempts": 1},
+        ) as agent:
+            agent.transport._client._transport = httpx.MockTransport(respond)
+            yield agent, posts
+
+
+def test_protection_sync_agent_mock_transport_ignores_inherited_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    monkeypatch.setenv("NO_PROXY", "localhost")
+    monkeypatch.setenv("no_proxy", "localhost")
+
+    def reply(op: str, body: dict[str, Any]) -> dict[str, Any]:
+        raise AssertionError("Transport selection must not send a request")
+
+    with _protection_sync_agent(None, reply) as (agent, posts):
+        selected = agent.transport._client._transport_for_url(
+            httpx.URL("http://inert.invalid/v1/memory.list")
+        )
+        assert isinstance(selected, httpx.MockTransport)
+        assert not posts
+    assert os.environ["NO_PROXY"] == "localhost"
+    assert os.environ["no_proxy"] == "localhost"
 
 
 def _protection_reply(op: str, body: dict[str, Any]) -> dict[str, Any]:

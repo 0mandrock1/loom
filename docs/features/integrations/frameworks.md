@@ -748,6 +748,13 @@ bound user; a different user is refused. Agno's manager defaults an omitted user
 Loom session include both user and store digests. Separate namespaces and restricted
 tokens remain the boundary for mutually untrusted applications.
 
+Bind one database per conversation to its application-owned `SessionProtection`
+family. Constructor and callback contributors remain bound across context exit and
+client rebinding. Automatic invocations join those retained contributors, so a protected
+family stops later automatic reads and writes before dispatch. Explicit database calls
+remain explicit after the automatic invocation ends, and every response still observes
+the known families. Native user and store ids do not select protection.
+
 The database implements single/bulk upsert, get, list, content/topic/agent/team filters,
 sorting, pagination, topic listing, statistics and deletion. Reads hydrate full values
 and page through the bound store. Filters and sorting run over those rows locally;
