@@ -370,6 +370,14 @@ with SyncAgent(org="acme", namespace="research") as agent:
     crew.kickoff()
 ```
 
+Use one `LoomCrewMemory` per conversation, bound to that conversation's logical session
+family. Constructor and callback contributors remain bound after client rebinding,
+including contributors seen by `extract_memories`. Inside an application-owned automatic
+scope, protected contributors refuse recall and capture before HTTP. Recalled protection
+is observed before matches return to the crew. Native memory tools called outside an
+automatic scope remain explicit. `user_id` and the native `private` flag do not select
+session protection.
+
 | A crew run asks memory to                               | Loom                                                                                                                 |
 | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | recall what bears on a task (`recall`)                  | `memory.search` of the namespace the crew writes to; nothing when Loom abstains, `score` is the similarity           |
