@@ -23,9 +23,12 @@ together with a successful `insert()` is the proof the retry happened.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 import json
+import os
 import re
+import signal
 import ssl
 import sys
 import threading
@@ -898,3 +901,324 @@ async def test_native_parser_executor_retires_after_caller_cancellation(vector_n
                     pending_future.exception()
         finally:
             await _vector_cleanup(state.direct, request_id, failure or sys.exception())
+
+
+# One finite native client, not a serving web worker or a reusable command server.
+_VECTOR_RESTART_CHILD = """
+import asyncio, hashlib, json, os, ssl, sys, time
+from pathlib import Path
+from types import SimpleNamespace
+from server.core import ch
+from server.core.vectors import admission
+from server.settings import settings
+from tests.integration.test_ch_fault_injection import (
+    _vector_call, _vector_drained, _vector_running,
+)
+
+def note(kind, **fields):
+    print(json.dumps({"kind": kind, **fields}, sort_keys=True), flush=True)
+
+async def main(payload):
+    for name, value in payload["settings"].items():
+        setattr(settings, name, value)
+    client = ch.CHClient()
+    caller = None
+    try:
+        await client.connect()
+        assert await client.query_one("SELECT 1 AS ready") == {"ready": 1}
+        verified = False
+        if settings.ch_secure:
+            context = client.client._backend.ssl_context
+            assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+            verified = True
+        stat = Path("/proc/self/stat").read_text().rsplit(")", 1)[1].split()
+        note("ready", pid=os.getpid(), uid=os.getuid(), parent=os.getppid(),
+             start_ticks=stat[19], settings=payload["settings"], verified_tls=verified,
+             query_retries=client.client.query_retries,
+             core_sha256=hashlib.sha256(Path(ch.__file__).read_bytes()).hexdigest())
+        deadline = time.monotonic() + 10
+        while not Path(payload["start_file"]).exists():
+            assert time.monotonic() < deadline, "own start barrier was not released"
+            await asyncio.sleep(0.01)
+        request_id = payload["request_id"]
+        caller = asyncio.create_task(_vector_call(
+            client, payload["hot"], request_id, payload["query"], weight=2
+        ))
+        deadline = time.monotonic() + 2
+        while not (active := await _vector_running(client, request_id)):
+            assert not caller.done(), "held native read ended before observation"
+            assert time.monotonic() < deadline, "held native read never started"
+            await asyncio.sleep(0.01)
+        gate = admission._admission
+        assert len(active) == 1 and gate.population == 2 and gate.orgs[payload["hot"]].held == 2
+        note("held", query_ids=[r["query_id"] for r in active], population=gate.population,
+             held=gate.orgs[payload["hot"]].held, pool_in_use=ch.pool_reading()["in_use"])
+        light = await _vector_call(
+            client, payload["light"], request_id + "-light",
+            "SELECT cosineDistance([1.0, 0.0], [1.0, 0.0]) AS score, 7 AS complete",
+        )
+        assert light == [{"score": 0.0, "complete": 7}]
+        active = await _vector_running(client, request_id)
+        assert active and not caller.done() and gate.orgs[payload["hot"]].held == 2
+        note("light", result=light, hot_query_ids=[r["query_id"] for r in active])
+        result = await caller
+        assert len(result) == 1 and result[0]["total"] == 6
+        _vector_drained(SimpleNamespace(client=client, gate=gate))
+        note("drained", result=result, population=gate.population, orgs=gate.orgs,
+             pool=ch.pool_reading(), generation=client.generation,
+             inflight=client._inflight, retired=client._retired)
+    finally:
+        if caller is not None and not caller.done():
+            caller.cancel()
+        if caller is not None:
+            await asyncio.gather(caller, return_exceptions=True)
+        await client.disconnect()
+
+asyncio.run(main(json.loads(sys.argv[1])))
+"""
+
+
+def _native_child_identity(process):
+    stat = Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()
+    identity = {
+        "pid": process.pid,
+        "uid": Path(f"/proc/{process.pid}").stat().st_uid,
+        "parent": int(stat[1]),
+        "start_ticks": stat[19],
+    }
+    assert identity["uid"] == os.getuid() and identity["parent"] == os.getpid()
+    return identity
+
+
+async def _native_child_note(process, expected):
+    line = await asyncio.wait_for(process.stdout.readline(), timeout=30)
+    assert line and len(line) < 16384, "own child exited or exceeded its finite receipt bound"
+    note = json.loads(line)
+    assert note.get("kind") == expected, note
+    return note
+
+
+async def test_native_process_death_restart_keeps_local_caps_and_observes_remote_work(
+    vector_native, tmp_path
+):
+    from server.core import ch
+    from server.settings import settings
+    from tests.integration._redact import redact
+    from tests.integration._resources import ch_target
+
+    ch_target()  # The child inherits the explicitly configured CI store's credentials.
+    state = vector_native
+    names = (
+        "ch_host",
+        "ch_port",
+        "ch_secure",
+        "ch_pool_maxsize",
+        "ch_pool_wait_ms",
+        "ch_timeout_read_s",
+        "ch_caller_shaped_max_execution_s",
+        "ch_caller_shaped_max_memory_bytes",
+        "vector_scan_max_concurrent_per_org",
+        "vector_scan_max_waiters_per_org",
+        "vector_scan_max_rows_to_read",
+    )
+    configuration = {name: getattr(settings, name) for name in names}
+    assert configuration["ch_pool_maxsize"] == 4
+    assert configuration["vector_scan_max_concurrent_per_org"] == 2
+    query = (
+        "SELECT sum(number) AS total, "
+        "sum(cosineDistance([toFloat32(number + 1), 1.0], [1.0, 0.0])) AS score "
+        "FROM numbers(4) WHERE sleepEachRow(0.4) = 0"
+    )
+    owned = []
+    requests = []
+    parent_reuse_id = "vector-process-parent-reuse-" + uuid.uuid4().hex
+    requests.append(parent_reuse_id)
+    root = (await asyncio.to_thread(Path(__file__).resolve)).parents[2]
+    expected_core = hashlib.sha256(
+        await asyncio.to_thread(Path(ch.__file__).read_bytes)
+    ).hexdigest()
+
+    async def start(label, barrier):
+        request_id = "vector-process-" + uuid.uuid4().hex
+        requests.extend((request_id, request_id + "-light"))
+        payload = {
+            "request_id": request_id,
+            "settings": configuration,
+            "query": query,
+            "hot": state.hot,
+            "light": state.light,
+            "start_file": str(barrier),
+        }
+        log_path = tmp_path / (label + ".stderr")
+        log = log_path.open("wb")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                _VECTOR_RESTART_CHILD,
+                json.dumps(payload),
+                cwd=root,
+                env=os.environ.copy(),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=log,
+            )
+        except BaseException:  # A failed/canceled spawn must close its private log descriptor.
+            log.close()
+            raise
+        record = {
+            "process": process,
+            "log": log,
+            "log_path": log_path,
+            "request_id": request_id,
+            "identity": None,
+            "pidfd": None,
+        }
+        owned.append(record)  # Register before any identity/readiness failure can unwind.
+        record["identity"] = _native_child_identity(process)
+        record["pidfd"] = os.pidfd_open(process.pid)
+        assert _native_child_identity(process) == record["identity"]
+        ready = await _native_child_note(process, "ready")
+        assert all(ready[key] == value for key, value in record["identity"].items())
+        assert ready["settings"] == configuration and ready["core_sha256"] == expected_core
+        assert ready["verified_tls"] == bool(settings.ch_secure)
+        record["ready"] = ready
+        return record
+
+    async def complete(record):
+        process = record["process"]
+        light = await _native_child_note(process, "light")
+        assert light["result"] == [{"score": 0.0, "complete": 7}] and light["hot_query_ids"]
+        drained = await _native_child_note(process, "drained")
+        assert drained["population"] == 0 and drained["orgs"] == {}
+        assert drained["inflight"] == {} and drained["retired"] == {}
+        assert drained["pool"]["in_use"] == 0 and drained["pool"]["waiters"] == 0
+        assert await asyncio.wait_for(process.wait(), timeout=5) == 0
+        record["light"], record["drained"] = light, drained
+        return drained["result"]
+
+    try:
+        barrier = tmp_path / "initial.start"
+        first, peer = await start("first", barrier), await start("peer", barrier)
+        assert first["identity"]["pid"] != peer["identity"]["pid"]
+        assert first["ready"]["query_retries"] == peer["ready"]["query_retries"]
+        barrier.touch()
+        first_held = await _native_child_note(first["process"], "held")
+        peer_held = await _native_child_note(peer["process"], "held")
+        for record, held in ((first, first_held), (peer, peer_held)):
+            assert held["held"] == held["population"] == 2
+            assert held["pool_in_use"] >= 1 and len(held["query_ids"]) == 1
+            active = await _vector_running(state.direct, record["request_id"])
+            assert {row["query_id"] for row in active} == set(held["query_ids"])
+        assert first_held["held"] + peer_held["held"] == 4  # Two local C2 gates, no fleet lock.
+        immediately_before_stop = await _vector_running(state.direct, first["request_id"])
+        assert {r["query_id"] for r in immediately_before_stop} == set(first_held["query_ids"])
+        assert first["process"].returncode is None
+        assert _native_child_identity(first["process"]) == first["identity"]
+        signal.pidfd_send_signal(first["pidfd"], signal.SIGKILL)
+        assert await asyncio.wait_for(first["process"].wait(), timeout=5) == -signal.SIGKILL
+        after_reap = await _vector_running(state.direct, first["request_id"])
+        # Restart promptly; waiting for old native retirement here would hide overlap.
+        restart_barrier = tmp_path / "restart.start"
+        replacement = await start("replacement", restart_barrier)
+        assert replacement["ready"]["query_retries"] == peer["ready"]["query_retries"]
+        restart_barrier.touch()
+        restarted_held = await _native_child_note(replacement["process"], "held")
+        assert restarted_held["held"] == restarted_held["population"] == 2
+        peer_result = await complete(peer)
+        restarted_result = await complete(replacement)
+        assert restarted_result == peer_result and len(peer_result) == 1
+        old_events = await _vector_remote_end(
+            state.direct, first["request_id"], first_held["query_ids"]
+        )
+        new_events = await _vector_remote_end(
+            state.direct, replacement["request_id"], restarted_held["query_ids"]
+        )
+        peer_events = await _vector_remote_end(
+            state.direct, peer["request_id"], peer_held["query_ids"]
+        )
+        for record in (peer, replacement):
+            await _vector_remote_end(state.direct, record["request_id"] + "-light", [])
+        starts = [r for r in old_events if r["event"] == "QueryStart"]
+        ends = [r for r in old_events if r["event"] != "QueryStart"]
+        new_starts = [r for r in new_events if r["event"] == "QueryStart"]
+        new_ends = [r for r in new_events if r["event"] != "QueryStart"]
+        peer_starts = [r for r in peer_events if r["event"] == "QueryStart"]
+        peer_ends = [r for r in peer_events if r["event"] != "QueryStart"]
+        assert len(starts) == len(ends) == len(new_starts) == len(new_ends) == 1
+        assert len(peer_starts) == len(peer_ends) == 1
+        initial_overlap_us = min(ends[0]["at_us"], peer_ends[0]["at_us"]) - max(
+            starts[0]["at_us"], peer_starts[0]["at_us"]
+        )
+        assert initial_overlap_us > 0, "two owned native clients did not actually overlap"
+        overlap_us = max(
+            0,
+            min(ends[0]["at_us"], new_ends[0]["at_us"])
+            - max(starts[0]["at_us"], new_starts[0]["at_us"]),
+        )
+        _vector_drained(state)
+        assert await _vector_call(
+            state.client,
+            state.light,
+            parent_reuse_id,
+            "SELECT cosineDistance([1.0, 0.0], [1.0, 0.0]) AS score, 7 AS complete",
+        ) == [{"score": 0.0, "complete": 7}]
+        await _vector_remote_end(state.direct, parent_reuse_id, [])
+        _vector_drained(state)
+        print(
+            "vector-native-process-restart "
+            + json.dumps(
+                {
+                    "local_capacity_per_child": 2,
+                    "simultaneous_local_held_sum": 4,
+                    "first_identity": first["identity"],
+                    "peer_identity": peer["identity"],
+                    "replacement_identity": replacement["identity"],
+                    "actual_core_sha256": expected_core,
+                    "configuration": configuration,
+                    "killed_child_returncode": first["process"].returncode,
+                    "old_native_immediately_before_stop": immediately_before_stop,
+                    "old_native_after_reap": after_reap,
+                    "old_native_terminal": ends,
+                    "replacement_native_start": new_starts,
+                    "initial_two_process_native_overlap_us": initial_overlap_us,
+                    "old_native_overlap_after_restart_us": overlap_us,
+                    "peer_light": peer["light"],
+                    "replacement_light": replacement["light"],
+                    "complete_result": restarted_result,
+                    "all_owned_processes_reaped": True,
+                    "client_processes_are_not_web_workers": True,
+                },
+                sort_keys=True,
+            )
+        )
+    finally:
+        failure = sys.exception()
+        cleanup_errors = []
+        for record in reversed(owned):
+            process, descriptor = record["process"], record["pidfd"]
+            try:
+                if process.returncode is None and descriptor is not None:
+                    try:
+                        assert _native_child_identity(process) == record["identity"]
+                        signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                    except (ProcessLookupError, FileNotFoundError):
+                        pass
+                await asyncio.wait_for(process.wait(), timeout=5 if descriptor is not None else 20)
+            except Exception as error:  # noqa: BLE001 — attempt every owned child/native cleanup
+                cleanup_errors.append(type(error).__name__)
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+                record["log"].close()
+                if failure is not None:
+                    failure.add_note(redact(record["log_path"].read_text(errors="replace")[-4000:]))
+        for request_id in requests:
+            try:
+                await _vector_cleanup(state.direct, request_id, failure)
+            except Exception as error:  # noqa: BLE001 — remaining exact owned queries still need cleanup
+                cleanup_errors.append(type(error).__name__)
+        if cleanup_errors:
+            if failure is not None:
+                failure.add_note("own process cleanup: " + ",".join(cleanup_errors))
+            else:
+                raise AssertionError("own process cleanup: " + ",".join(cleanup_errors))
