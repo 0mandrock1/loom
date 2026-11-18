@@ -36,11 +36,11 @@ jobs:
       LOOM_KNOWLEDGE_SOURCE_SYNC_INTERVAL_SECONDS: "60"
       LOOM_KNOWLEDGE_SOURCE_SYNC_IDLE_INTERVAL_SECONDS: "60"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-node@v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
       - name: Install locked dependencies and build dashboard assets
@@ -51,6 +51,7 @@ jobs:
       - name: Configure the test signer
         run: |
           crawl_signer_material="$(openssl rand -hex 32)"
+          printf '::add-mask::%s\n' "$crawl_signer_material"
           printf 'LOOM_JWT_SECRET=%s\n' "$crawl_signer_material" >> "$GITHUB_ENV"
       - name: Start the owned backend
         id: clickhouse
@@ -70,7 +71,7 @@ jobs:
       - name: Preserve backend diagnostics
         if: always() && steps.clickhouse.outputs.admitted == 'true'
         run: docker logs "$LOOM_CH_CONTAINER" > crawl-native-clickhouse.log 2>&1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: crawl-native-privacy

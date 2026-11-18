@@ -169,7 +169,7 @@ async def native_app(provider: dict[str, Any]) -> AsyncIterator[httpx.AsyncClien
 
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
 
             async def ready() -> bool:
@@ -183,9 +183,10 @@ async def native_app(provider: dict[str, Any]) -> AsyncIterator[httpx.AsyncClien
 
 
 def _bearer(subject: str, org: str, namespaces: list[str], role: str) -> str:
-    from server.auth.jwt import mint_token
+    from server.auth.jwt import mint_token, verify_token
+    from server.auth.reader_identity import reader_subject
 
-    return mint_token(
+    bearer = mint_token(
         subject,
         org,
         namespaces,
@@ -194,6 +195,10 @@ def _bearer(subject: str, org: str, namespaces: list[str], role: str) -> str:
         session_id=uuid.uuid4().hex,
         ttl_seconds=1800,
     )
+    verified = verify_token(bearer)
+    assert verified.subject == subject
+    assert reader_subject(verified) == subject
+    return bearer
 
 
 async def _post(
@@ -210,11 +215,12 @@ async def identities(native_app: httpx.AsyncClient, provider: dict[str, Any]) ->
     set_query_tag("test.crawl_native_privacy.identities")
     ch = get_client()
     org, other_org = unique_org("crawl-native"), unique_org("crawl-other")
+    # Account login handles are distinct from gateway grant principals (user:*).
     subjects = {
-        "admin": "user:registrant",
-        "a": "user:reader-a",
-        "b": "user:reader-b",
-        "c": "user:reader-c",
+        "admin": "registrant",
+        "a": "reader-a",
+        "b": "reader-b",
+        "c": "reader-c",
     }
     contacts = {
         "admin": "registrant@example.test",
