@@ -20,6 +20,26 @@ from pathlib import Path
 GIB = 1024**3
 SUPPORT = Path(__file__).resolve().parent / "testsupport/cell_trigger"
 
+_CLICKHOUSE_READY = """import http.client
+import sys
+
+connection = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=2)
+ready = False
+try:
+    connection.request(
+        "POST", "/", body="SELECT 1",
+        headers={"X-ClickHouse-User": "loom", "X-ClickHouse-Key": "loomdev"},
+    )
+    response = connection.getresponse()
+    ready = response.status == 200 and response.read(3) == b"1\\n"
+except (OSError, http.client.HTTPException):
+    pass
+finally:
+    connection.close()
+if ready:
+    print("1")
+"""
+
 
 def require(ok: object, message: str) -> None:
     if not ok:
@@ -245,6 +265,12 @@ class Stores:
                 pass
             require(time.monotonic() < end, "Owned store readiness deadline")
             time.sleep(1)
+
+    def _clickhouse_ready(self, port: int) -> bool:
+        return (
+            self.command(sys.executable, "-I", "-S", "-c", _CLICKHOUSE_READY, str(port), timeout=2)
+            == "1"
+        )
 
     def failure_diagnostics(self) -> dict:
         observations = []
@@ -517,24 +543,7 @@ exec postgres -D "$PGDATA" -c shared_buffers=128MB
                 == "sync"
             ),
         )
-        self.wait(
-            "clickhouse_query",
-            lambda: (
-                self.command(
-                    "docker",
-                    "exec",
-                    ch["id"],
-                    "clickhouse-client",
-                    "--user",
-                    "loom",
-                    "--password",
-                    "loomdev",
-                    "--query",
-                    "SELECT 1",
-                )
-                == "1"
-            ),
-        )
+        self.wait("clickhouse_query", lambda: self._clickhouse_ready(ch_port))
         return ch, pg, standby, selected
 
     def observation(self, item: dict, role: str) -> dict:

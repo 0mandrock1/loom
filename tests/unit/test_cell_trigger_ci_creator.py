@@ -219,6 +219,9 @@ def test_replication_waits_for_primary_tcp_after_temporary_socket_ready(tmp_path
             self.tcp_attempts = 0
             self.tcp_ready = False
 
+        def _clickhouse_ready(self, port):
+            return True
+
         def create(self, role, args):
             return {"id": role}
 
@@ -790,3 +793,38 @@ def test_fatal_native_diagnostic_preserves_original_command_refusal(
         assert error is original and original.native is None
     else:
         pytest.fail("command refusal was swallowed")
+
+
+def test_clickhouse_waits_for_published_http_after_temporary_native_ready(tmp_path, monkeypatch):
+    from scripts.gates import cell_trigger_acceptance as creator
+
+    monkeypatch.setattr(creator, "ports", lambda count: list(range(18000, 18000 + count)))
+    monkeypatch.setattr(creator.time, "sleep", lambda _: None)
+
+    class InitializingClickHouse(Stores):
+        def __init__(self):
+            super().__init__(tmp_path, tmp_path, "fixture", {"run_id": "123"})
+            self.published_attempts = 0
+            self.native_attempts = 0
+
+        def create(self, role, args):
+            return {"id": role}
+
+        def command(self, *argv, timeout=120, cleanup=False):
+            if "clickhouse-client" in argv:
+                self.native_attempts += 1
+                return "1"  # The temporary loopback-only server already accepts native queries.
+            if "pg_isready" in argv:
+                return "127.0.0.1:5432 - accepting connections"
+            return "sync" if "SELECT sync_state" in argv[-1] else "network-id"
+
+        def _clickhouse_ready(self, port):
+            assert port == 18000
+            self.published_attempts += 1
+            return self.published_attempts == 2
+
+    stores = InitializingClickHouse()
+    stores.start("test-image")
+    assert stores.published_attempts == 2
+    assert stores.native_attempts == 0
+    assert stores.phase == "clickhouse_query"
