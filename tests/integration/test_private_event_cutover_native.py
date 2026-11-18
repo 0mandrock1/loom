@@ -36,7 +36,6 @@ async def _observer_principal(world, monkeypatch):
             f"SELECT ON {world.db}.*",
             "SELECT ON system.*",
             "SHOW ROW POLICIES ON *.*",
-            "SHOWPROCESSLIST ON *.*",
         ):
             await world.client.execute(f"GRANT {access} TO {username}")
         with monkeypatch.context() as patch:
@@ -241,7 +240,7 @@ async def test_native_insert_with_old_metadata_drains_before_the_private_census(
                     assert observed["old"]
                     assert await _running(world.client, marker) is None
                     observed["census"] = True
-                rows = await read(sql, params=params)
+                rows = await read(sql, params)
                 if "FROM system.processes" in sql:
                     observed["old"] |= any(
                         (producer_user, query_id) == tuple(item)
