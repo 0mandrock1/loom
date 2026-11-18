@@ -220,6 +220,51 @@ def _authorization(token: DelegatedToken, scope: gdrive.ReadScope) -> str:
     return "Bearer " + _text(token._value)
 
 
+async def require_write_denied(
+    account: gdrive.ServiceAccount,
+    *,
+    subject: str,
+    scope: gdrive.WriteScope,
+    deadline: float,
+    max_bytes: int,
+) -> None:
+    """Only a bounded, explicit OAuth scope denial proves this fixed grant absent."""
+    _positive(max_bytes)
+    if not isinstance(scope, gdrive.WriteScope) or not isinstance(subject, str):
+        raise CredentialRefused("write-scope proof refused")
+    assertion = gdrive._signed_assertion(account, scope=scope, subject=subject)
+    try:
+        async with asyncio.timeout_at(deadline):
+            async with get_client().stream(
+                "POST",
+                _TOKEN_URL,
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": assertion,
+                },
+                timeout=_remaining(deadline),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code != 400:
+                    raise_for_status(httpx.Response(response.status_code), "write-scope proof")
+                    raise CredentialRefused("write delegation is not refused")
+                raw = await read_capped(response, max_bytes)
+    except httpx.RequestError:
+        raise VendorError("write-scope proof unavailable") from None
+    _remaining(deadline)
+    if raw is None:
+        raise TooLarge("write-scope proof exceeds its byte bound")
+    try:
+        value = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise VendorError("write-scope proof unavailable") from None
+    if not isinstance(value, dict) or value.get("error") not in {
+        "unauthorized_client",
+        "invalid_scope",
+    }:
+        raise CredentialRefused("write-scope proof is not an explicit scope denial")
+
+
 @dataclass(frozen=True, repr=False)
 class DirectoryUser:
     id: str

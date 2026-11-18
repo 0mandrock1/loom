@@ -133,7 +133,11 @@ class _World(_AuthorityWorld):
                 audience="https://oauth2.googleapis.com/token",
             )
             self.claims_sent.append(claims)
-            drive = claims["scope"] == gdrive.ReadScope.DRIVE.value
+            if claims["scope"] in {write.value for write in gdrive.WriteScope}:
+                assert claims["sub"] == "directory@example.com"
+                return httpx.Response(400, json={"error": "unauthorized_client"})
+            drive = claims["sub"] == "one@example.com"
+            assert not drive or claims["scope"] == gdrive.ReadScope.DRIVE.value
             assert claims["sub"] == ("one@example.com" if drive else "directory@example.com")
             if drive:
                 self.after_grant()

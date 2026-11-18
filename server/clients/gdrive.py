@@ -74,6 +74,13 @@ class ReadScope(StrEnum):
     DIRECTORY_MEMBERS = "https://www.googleapis.com/auth/admin.directory.group.member.readonly"
 
 
+class WriteScope(StrEnum):
+    DRIVE = "https://www.googleapis.com/auth/drive"
+    DIRECTORY_USERS = "https://www.googleapis.com/auth/admin.directory.user"
+    DIRECTORY_GROUPS = "https://www.googleapis.com/auth/admin.directory.group"
+    DIRECTORY_MEMBERS = "https://www.googleapis.com/auth/admin.directory.group.member"
+
+
 def parse_service_account(credential: str) -> ServiceAccount:
     """The service account a JSON key names; CredentialRefused when it is not one."""
     try:
@@ -90,11 +97,11 @@ def parse_service_account(credential: str) -> ServiceAccount:
 
 
 def _signed_assertion(
-    account: ServiceAccount, *, scope: ReadScope, subject: str | None = None
+    account: ServiceAccount, *, scope: ReadScope | WriteScope, subject: str | None = None
 ) -> str:
     import jwt
 
-    if not isinstance(scope, ReadScope):
+    if not isinstance(scope, (ReadScope, WriteScope)):
         raise CredentialRefused("the delegated scope is not supported")
     if subject is not None and (
         not isinstance(subject, str)

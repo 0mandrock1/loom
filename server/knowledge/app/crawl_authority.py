@@ -20,7 +20,7 @@ from server.clients._checked_access import CheckedAccess
 from server.clients._vendor import CredentialRefused
 from server.core.ch import get_client, own_write_reads
 from server.core.secrets_at_rest import unseal
-from server.knowledge.app import crawl_exclusions, crawl_expansion
+from server.knowledge.app import crawl_delegation, crawl_exclusions, crawl_expansion
 from server.knowledge.app import sources as source_ops
 from server.knowledge.domain.source_crawl import Expansion, Options, Person
 from server.knowledge.domain.sources import MIRRORED_ACCESS, KnowledgeSource
@@ -215,6 +215,13 @@ class Authority:
                     )
                     if result.customer != self.source.crawl_customer_id:
                         raise CredentialRefused("crawl workspace changed")
+                    await crawl_delegation.require_read_only(
+                        self._service_account(),
+                        subject=Options.parse(self.source.crawl_options).directory_subject,
+                        standing=self,
+                        deadline=self.deadline,
+                        max_bytes=self.bounds.directory.body_bytes,
+                    )
                     await self.validate()
                     self._expansion = result
                 return self._expansion
