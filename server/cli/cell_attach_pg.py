@@ -13,8 +13,9 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import Awaitable, Callable, Iterable, Iterator
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from server.cli.cell_ch import Refusal, Refused
@@ -91,6 +92,53 @@ class Wait:
         with self.counting():
             await _sleep(step)
         return True
+
+
+@dataclass
+class _Interrupted:
+    error: BaseException
+
+
+async def _work_result[T](work: Callable[[], Awaitable[T]]) -> T | _Interrupted:
+    try:
+        return await work()
+    except (KeyboardInterrupt, SystemExit) as error:
+        # These exceptions otherwise stop asyncio's loop before the owner can close.
+        return _Interrupted(error)
+
+
+async def supervise[T](conn: Any, work: Coroutine[Any, Any, T], *, end: float) -> T:
+    """Bound owned work, reserving cleanup inside its original phase deadline.
+
+    A failed borrowed transaction must remain alive until public close sends its
+    cancellation. Closing the transport first can leave its backend locks held.
+    """
+    task = asyncio.create_task(_work_result(lambda: work))
+    reserve = min(1.0, max(0.0, end - time.monotonic()) / 4)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=max(0.0, end - reserve - time.monotonic()))
+        if not done:
+            raise TimeoutError("attach Postgres phase deadline expired")
+        result = task.result()
+        if isinstance(result, _Interrupted):
+            raise result.error
+        return result
+    except BaseException:
+        try:
+            await pg.close_owned(conn, end=end)
+        except BaseException:  # noqa: BLE001 — preserve the work failure or cancellation.
+            pass
+        if not task.done():
+            task.cancel()
+        task.add_done_callback(pg._retrieve_task)
+        try:
+            await asyncio.wait({task}, timeout=max(0.0, end - time.monotonic()))
+        except BaseException:  # noqa: BLE001 — repeated cancellation preserves the first failure.
+            try:
+                pg._terminate(conn)
+            except BaseException:  # noqa: BLE001 — abort cannot replace the work failure.
+                pass
+        raise
 
 
 def _split(key: int) -> str:
@@ -806,15 +854,17 @@ async def _wait_transactions(conn: Any, xmax: int, wait: Wait) -> None:
 # -- the tenancy rows -------------------------------------------------------------------
 
 
-async def write_tenancy(orgs: Iterable[str]) -> int:
-    """The tenancy rows of `orgs`, on a marked session, as one statement per thousand; the
-    rows written."""
+async def write_tenancy(owner: Owner, orgs: Iterable[str]) -> int:
+    """Write each thousand-org batch on the exact ATTACH backend, returning rows added."""
     batch = sorted(orgs)
     written = 0
     for i in range(0, len(batch), 1000):
-        status = await pg.execute(
-            "INSERT INTO loom.tenancy (org) SELECT unnest($1::text[]) ON CONFLICT DO NOTHING",
-            batch[i : i + 1000],
+        status = await owner.transaction(
+            partial(
+                owner.conn.execute,
+                "INSERT INTO loom.tenancy (org) SELECT unnest($1::text[]) ON CONFLICT DO NOTHING",
+                batch[i : i + 1000],
+            )
         )
         written += int(status.split()[-1])
     return written

@@ -349,6 +349,21 @@ def require_identity_settings() -> None:
     cell.require_settings()
 
 
+async def require_session_protection(ch: Any) -> None:
+    """Persist an on switch before startup can admit clients or start workers."""
+    from server.knowledge.app.session_admission import reassert_local_switch
+
+    await reassert_local_switch(ch)
+
+
+async def refresh_instance_state(ch: Any) -> None:
+    """Reassert privacy state on the existing beat before reading the workers lease."""
+    from server.workers import leader
+
+    await require_session_protection(ch)
+    await leader.read_holder(ch)
+
+
 async def require_storage_authority(ch: Any) -> None:
     """The memory authority this replica is configured for, checked against the
     deployment's record (`server.core.pg_profile`); the Postgres profile first opens
@@ -463,6 +478,9 @@ def _spawn_boot_loop(coro: Coroutine[Any, Any, Any], *, name: str) -> asyncio.Ta
     """A task that runs for the process's life: cancelled at shutdown, never
     registered as deferred, since a model transition's drain waits for those."""
     task = asyncio.get_running_loop().create_task(coro, name=name)
+    from server.core.retirement import get_gate
+
+    get_gate().track(task)
     _BOOT_TASKS.add(task)
     task.add_done_callback(_BOOT_TASKS.discard)
     return task

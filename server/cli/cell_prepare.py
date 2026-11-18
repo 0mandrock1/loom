@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import secrets
@@ -295,35 +296,46 @@ async def _register(
     router: httpx.URL,
     body: dict[str, Any],
     transport: httpx.AsyncBaseTransport | None,
+    *,
+    path: str = "/register",
+    command: str = "prepare",
 ) -> dict[str, Any]:
     """The router's 200 answer, retrying a busy or unreachable probe listener within
     `--wait`; Refused otherwise."""
     token = settings.router_operator_token
-    url = cell_cli.at(router, f"/cells/v1/operator/cells/{args.cell}/register")
+    url = cell_cli.at(router, f"/cells/v1/operator/cells/{args.cell}{path}")
     deadline = time.monotonic() + args.wait
-    async with httpx.AsyncClient(
+    manager = httpx.AsyncClient(
         timeout=_register_timeout(), trust_env=router.scheme == "https", transport=transport
-    ) as client:
+    )
+    client = await manager.__aenter__()
+    try:
         while True:
             try:
                 r = await client.post(url, json=body, headers={"Authorization": f"Bearer {token}"})
             except httpx.HTTPError as e:
                 # A rerun answers the row a lost answer may have written.
                 raise Refused(
-                    f"no answer from the router ({type(e).__name__}): run prepare again"
+                    f"no answer from the router ({type(e).__name__}): run {command} again"
                 ) from None
             answer = cell_cli.router_answer(r, {"cell": args.cell}, cell_cli.OPERATOR_REFUSALS)
+            if (
+                command == "update"
+                and r.status_code == 404
+                and (answer is None or answer.get("code") != "NO_SUCH_CELL")
+            ):
+                raise Refused("a router replica is not upgraded for cell update")
             if answer is None:
                 raise Refused(
-                    f"{cell_cli.not_the_router(r)}; run prepare again once the router answers"
+                    f"{cell_cli.not_the_router(r)}; run {command} again once the router answers"
                 )
             if r.status_code == 200:
-                return answer
+                break
             code = answer.get("code")
             if code == "BACKEND_UNAVAILABLE":
                 raise Refused(
                     f"the directory did not answer ({answer['error']}); the registration may "
-                    "have landed: run prepare again"
+                    f"have landed: run {command} again"
                 )
             if code not in ("PROBE_BUSY", "PROBE_UNREACHABLE"):
                 raise Refused(f"the router refused ({r.status_code}): {answer['error']}")
@@ -337,8 +349,16 @@ async def _register(
                 raise Refused(
                     f"the router could not probe the cell within --wait: {answer['error']}"
                 )
-            print(f"loom cell prepare: {answer['error']}; retrying", file=sys.stderr)
+            print(f"loom cell {command}: {answer['error']}; retrying", file=sys.stderr)
             await _sleep(pause)
+
+    except BaseException:  # Client exit preserves the first request or refusal.
+        with contextlib.suppress(BaseException):
+            await manager.__aexit__(*sys.exc_info())
+        raise
+    else:
+        await manager.__aexit__(None, None, None)
+    return answer
 
 
 def _own_rows(
@@ -502,7 +522,11 @@ async def _prepare_locked(
     try:
         await _write_nonces(ch, body["nonces"])
         answer = await _register(args, router, body, transport)
-    finally:
+    except BaseException:  # Nonce cleanup preserves the first failure or cancellation.
+        with contextlib.suppress(BaseException):
+            await _delete_nonces(ch, body["nonces"])
+        raise
+    else:
         await _delete_nonces(ch, body["nonces"])
     # The processes may have changed while the probe was retried: judge the ones live now.
     beats = await _read_beats(ch)

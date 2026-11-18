@@ -894,8 +894,7 @@ def _analysis_problems(settings: Any, state: HealthState) -> list[Problem]:
             or "Act on the cause above; the server log names what it refers to. Where "
             "it names a write the analyst user needs, give LOOM_CH_USER access management (the "
             "bundled ClickHouse's loom user has it), which the next probe uses, or run "
-            "`loom ch-setup` as a user that has it, or have an admin run the SQL "
-            "`loom ch-setup --print-analyst-sql` prints.",
+            "`loom ch-setup --apply-analyst-sql` with existing access-management credentials.",
             source="runtime",
         )
     ]
@@ -936,8 +935,9 @@ def _participant_problems(state: HealthState) -> list[Problem]:
             f"A provider reconfiguration would wait on these participants: {ids}. "
             "`heartbeat_expired` ones stopped heartbeating (they may be paused), "
             "and `queries_running` ones did so with a query still running.",
-            "Once a participant's process is confirmed stopped, retire it with "
-            "`loom participant retire --participant <id> --yes`.",
+            "On its trusted host, verify exact physical death and settled queries with "
+            "`loom participant retire --participant <id>`. Expiry or a deleted pod "
+            "object does not prove death.",
             source="runtime",
         )
     ]

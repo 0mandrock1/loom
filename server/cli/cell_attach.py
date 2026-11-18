@@ -6,7 +6,8 @@ A run holds the attach lock on a direct session of the cell's Postgres for its l
 goes, each step idempotent, so a rerun resumes by the directory row and the cell's mode.
 Steps 1 to 4 are the design's, as cells.md numbers them:
 
-- the directory row: on `serving` it is done (exit 0) once the cell reads `enforced`;
+- the directory row: on `serving` it is done (exit 0) once the connected authority and
+  configured cell and bucket match the registration and the cell reads `enforced`;
 - the refusals, before any write: the stores are the registered ones, the session is
   direct and marked, the cell's processes (their heartbeats), the roles, settings and
   subscriptions that would let an unchecked writer through, the ClickHouse writers, the
@@ -90,10 +91,19 @@ class Router:
     async def health(self, host: str) -> str:
         """The deployment id `https://<host>/v1/health/deployment` answers ('' when none)."""
         try:
-            async with httpx.AsyncClient(
-                timeout=_HEALTH_TIMEOUT, transport=self.transport
-            ) as client:
+            manager = httpx.AsyncClient(timeout=_HEALTH_TIMEOUT, transport=self.transport)
+            client = await manager.__aenter__()
+            try:
                 r = await client.get(f"https://{host}/v1/health/deployment")
+            except BaseException:  # Client exit preserves the request's first failure.
+                with contextlib.suppress(BaseException):
+                    await manager.__aexit__(*sys.exc_info())
+                raise
+        except (httpx.HTTPError, ValueError):
+            return ""
+        # A required close failure after a successful read must reach the owner.
+        await manager.__aexit__(None, None, None)
+        try:
             answer = r.json()
         except (httpx.HTTPError, ValueError):
             return ""
@@ -367,7 +377,11 @@ class Run:
             await _write_nonces(self.ch, nonces)
             self.row = {**self.row, **await self.mutate("/attach/begin", body)}
             self.begun_keys_fp = self.keys_fp
-        finally:
+        except BaseException:  # Nonce cleanup preserves the first failure or cancellation.
+            with contextlib.suppress(BaseException):
+                await _delete_nonces(self.ch, nonces)
+            raise
+        else:
             await _delete_nonces(self.ch, nonces)
 
     # -- the scans ---------------------------------------------------------------------
@@ -498,7 +512,7 @@ class Run:
             listed = await cell_scan.list_tables(self.ch, self.lock_conn, topology, names)
             found = await self.scan(topology, listed)
             orgs = set(found.orgs)
-            self.report["tenancy_rows_written"] = await apg.write_tenancy(orgs)
+            self.report["tenancy_rows_written"] = await apg.write_tenancy(self.owner, orgs)
             placed = 0
             for batch in batches(orgs, self.row["deployment_id"]):
                 await self.confirm_lock()
@@ -533,19 +547,25 @@ class Run:
         nonces = _new_nonces()
         try:
             await _write_nonces(self.ch, nonces)
-            return await self.mutate(
+            answer = await self.mutate(
                 "/attach/serving", {"deployment_id": self.row["deployment_id"], "nonces": nonces}
             )
-        finally:
+        except BaseException:  # Nonce cleanup preserves the first failure or cancellation.
+            with contextlib.suppress(BaseException):
+                await _delete_nonces(self.ch, nonces)
+            raise
+        else:
             await _delete_nonces(self.ch, nonces)
+        return answer
 
     # -- the run -----------------------------------------------------------------------
 
     async def done(self) -> bool:
-        """On a `serving` row: True once the cell reads `enforced`; Refused otherwise."""
+        """Require matching Postgres and cell settings, then `enforced` mode."""
         from server.core import pg
 
         async with pg.dedicated(statement_timeout_ms=_LOCK_STATEMENT_MS) as conn:
+            await cell_control.paired(conn, self.row)
             state, _ = await apg.read_mode(conn)
         if state != "enforced":
             raise _refused(
@@ -580,7 +600,7 @@ class Run:
             found = await self.scan(topology, listed)
             if found.too_long:
                 raise Refused(_too_long(found))
-            written = await apg.write_tenancy(found.orgs)
+            written = await apg.write_tenancy(self.owner, found.orgs)
             self.log(f"step 2: {len(found.orgs)} orgs found, {written} tenancy rows written")
             await self.triggers()
             await self.precommit(found)

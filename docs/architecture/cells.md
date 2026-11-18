@@ -18,6 +18,60 @@ that every transport enforces (`auth_actually_required()`, and `LOOM_MCP_AUTH_MO
 refuses to boot without them. [Storage authority](storage-authority.md) describes what a
 cell holds and how its two stores agree.
 
+## Participant lifecycle baseline
+
+A participant advertising the ninth `host_proof` field `cell-retirement-v1`
+enrolls before its first fresh primary acceptance read and uses permanent guarded
+retirement. A serving cell heartbeat includes its `participant_id` beside the
+fingerprint, allowing a replacement to be joined to the participant registry.
+Workers children enroll independently and do not publish serving instance rows.
+Native commands hold one admission scope through their complete org or principal
+work and drain: claim lookup and release share that scope; token readiness, keyring
+read, signing and audit share another. Connections and helper calls do not retire
+a command that still has principal work to perform. Store pairing is verified
+before enrollment and fresh acceptance. Org-free diagnostics do not install an
+accepting view. The pre-schema `ch-setup` ownership probe discards its diagnostic
+mode result and checks only store/cell identity before raw database user/profile
+setup; its optional analyst-row work opens a separate verified, enrolled scope
+and obtains fresh acceptance. That bootstrap exception admits no tenant or token
+work.
+
+Local physical-death evidence requires the same host, kernel boot and PID namespace.
+It accepts an absent PID, a different process birth, or the captured birth in a
+single fresh kernel process record showing a zombie with exactly one thread. A
+zombie leader with other threads is unproved. Known-zero tagged queries remain a
+separate requirement before retirement; kernel process exit does not settle a
+query still executing in a store.
+
+The capability identifies installed code; it does not prove that every older
+process or unsafe retirement client has disappeared.
+
+Before online configuration finalization is supported, stop every unsafe manual
+retirement and pruning writer and prevent its binary/image from restarting.
+Inventory and positively terminate every accepting server, workers child,
+standalone worker and native command that overlapped those writers. Include paused
+boots, already retired/pruned identities and lifecycle-capable processes started
+during the overlap: old maintenance code could have hidden their rows too. Only
+then start replacement accepting and maintenance processes with this lifecycle.
+A shared image tag, pod deletion, readiness or heartbeat expiry is insufficient.
+Keep exact PID/boot/namespace/start or trusted runtime termination evidence with
+the deployment's upgrade record. No CLI flag or stored acknowledgement substitutes
+for that evidence, and the runtime census does not verify the external inventory.
+
+Census retained legacy rows while unsafe writers are stopped. Recertify a retained
+identity only after exact verifiable physical death and known-zero cross-replica
+queries. Keep empty or unknown proofs quarantined. If the legacy inventory is
+incomplete, stop all accepting/native-command and retirement/pruning processes,
+positively terminate or fence every runtime that could execute an old binary, and
+prevent old restarts. Only after that physical quiescence may the operator request
+an exact audited cleanup of selected unknown legacy participant identities. There
+is no automatic age-based cleanup or affirmation bypass. Restart only guarded
+lifecycle processes afterward. Unknown or partitioned runtimes remain blockers.
+
+This baseline is an operational prerequisite, not a release-cut requirement.
+Configuration finalization also needs the directory's controller-fencing protocol;
+the lifecycle certificate alone cannot authorize reservation release.
+
 ## Why whole deployments
 
 A cell shares no store, key, lease or worker with another. Every guarantee a single
@@ -371,8 +425,12 @@ replaces a later cell's under the directory lock after the same check and a fres
 echo. The first cell's probe and upstream addresses are copied from the router's
 configuration at registration, and `loom cell update` replaces them from it, once every
 router replica runs the new values, after the same probe and a check that the new
-upstream reports the cell's deployment id. A prepare rerun never moves an address: it
-refuses while the router replica it reaches is configured with others.
+upstream reports the cell's deployment id. The generation/address CAS does not prove
+all-router agreement: an old router can read fresh expected values and reverse the
+addresses. Keep old endpoints reachable until every router refreshes its routing table
+or restarts after the directory write; config rollout alone does not flush the cache,
+which can persist indefinitely during directory failure. A prepare rerun never moves
+an address: it refuses while the router replica it reaches is configured with others.
 
 **The `first` row.** Prepare writes an explicit, immutable `first` row into every cell's
 Postgres (`loom.cell_first`: a row trigger refuses its update and delete and a statement
@@ -479,25 +537,39 @@ directory, both values of `loom.cell_self`. A prepared cell's issuers and org pa
 are reserved nowhere: the router routes no issuer to it and takes no placement from it
 until attach has run its overlap refusals and written its directory row.
 
-A change to what a cell accepts goes through `loom cell update --config <file>`, under
-the same directory lock as attach; it computes `next` from that configuration with the
-same function the processes use, and refuses while a different `next` is pending; rerun
-with the same configuration, or `--finish`, first writes `next` wherever it is missing.
-It reruns attach's overlap refusals against every other cell's directory row, counting
-both values of each, writes the new fingerprint as `next` to the directory and then to
-`loom.cell_self`, so old and new processes both serve while the new configuration rolls
-out. `loom cell update --finish` waits, at most `--wait` (default 10 minutes), until
-every live process reports `next` and the longest request deadline has passed; when the
-change turns SCIM on or changes the cell's OIDC client it then runs attach's SCIM
-precondition (refusing, or `--revoke-unprovisioned`); only then does it make `next` the
-only value, in `loom.cell_self` first and the directory last. A widened issuer or
-pattern is reserved in the directory before any process accepts it, and a narrowed one
-is released only after none does. A refusal or a wait that runs out keeps both values
-and prints the processes not yet reporting `next`; rerunning resumes, and
-`loom cell update --revert` waits the same way until no live process matches only `next`
-(refusing when `--wait` runs out), then drops `next`, in `loom.cell_self` first, under
-the same lock; a configured org the update placed stays placed in the cell (a placement
-is never deleted).
+A change to what a cell accepts goes through `loom cell update --config <file>`
+([operator procedure](../operations/cell-update.md)). The nonsecret settings file
+overlays the CLI's effective settings without installing them. It computes `next`
+with the same function the processes use and refuses while a different `next` is
+pending. Under the directory lock, overlap checks count both values of every other
+cell. Configured placements, their counts, issuer routing and the directory pair
+commit together before local tenancy repair and acceptance of the pair.
+
+`--finish` selects next; `--revert` selects current. Each repairs local tenancy from
+actual same-cell immutable placement winners for both reserved values, using an
+operator read fenced by the generation, exact registration and pair, locked
+root-secret fingerprint, audit and synchronous WAL acknowledgement. First-cell
+lookup fallback is not evidence of a placement. The attaching first cell may still
+lack placements for its preexisting configured orgs; other missing placements
+require directory metadata recovery.
+
+Finalization durably narrows local acceptance while the directory keeps both
+reservations. It then takes a complete post-cutoff participant census and requires
+permanent guarded retirement or verified exact death for every captured identity,
+including target processes, and a serving target replacement outside that set.
+Only then may the directory release its old reservation. Heartbeat expiry,
+request deadlines, missing participant rows and workers-only replacements do not
+prove this. Online finalization needs the
+[lifecycle baseline](#participant-lifecycle-baseline) and controller fencing;
+SCIM-on candidates and finish remain refused until per-cell SCIM is implemented.
+Revert to SCIM-off current remains supported.
+
+A timeout after cutoff keeps local acceptance single and the directory dual; the
+command reports incomplete turnover. Repeating the selected action takes a fresh
+census. An identical `--config` repairs directory-first interruption and can widen
+local acceptance again; subsequent finalization takes another cutoff and census.
+A singleton no-op still proves local synchronous durability. Every configured org
+placed by an update stays placed and retains its tenancy row after revert.
 
 A new SCIM token changes no fingerprint and needs no `loom cell update`. A cell changes
 its identity provider application as a single deployment does ([SSO and
@@ -515,6 +587,8 @@ version and fields, and beside them keys that no fingerprint compares: they are 
 needs no column for them (`server.core.instances.cell_row`). Their presence proves the build
 that reports them; there is no generation key.
 
+- `participant_id`: this server's provider participant UUID, for joining its actual
+  process lifecycle to the serving instance row. A workers child publishes no instance row.
 - `serves`: `LOOM_SERVES_TRAFFIC`.
 - `marked`: whether this process's pooled Postgres sessions keep the tenancy marker
   (`loom.tenancy_checked`). The cell refresh reads it with the state rows, after `RESET ALL`
@@ -673,8 +747,9 @@ it only while the mode is `recording`, reading the mode row `FOR SHARE`; it runs
 `READ COMMITTED` in its own transaction and commits before the request goes on. Attach's
 write of `enforced` and these inserts never cross: an insert already running when attach
 writes the mode is placed by step 4, one that starts after reads `enforced`, a stream of
-inserts cannot hold the write off, a new-org request waits on attach for a few seconds
-at most, and an attach that stalls holding the write's lock releases it within seconds.
+inserts cannot hold the write off. If attach stalls while holding the mode lock, it
+attempts bounded cleanup. A client abort does not prove that the lock was released;
+stop and verify the exact holder before retrying.
 Attach takes `LOCK TABLE loom.tenancy_mode IN EXCLUSIVE MODE` (which waits for running
 inserts and queues later ones behind it) in short tries, in one transaction with
 server-side timeouts, then writes the mode and commits on its exact ATTACH backend.
@@ -764,8 +839,13 @@ read-only scope, lists any tenancy row the directory does not place.
   session, requires a full enforced local cell state and the full accepted configuration
   fingerprint, and checks both again before inserting. A transactional durability message
   makes even a no-op insert flush an earlier primary-only tenancy row to the standby.
-  Opening the session, local statements, COMMIT and cleanup have client deadlines derived
-  from `LOOM_PG_STATEMENT_TIMEOUT_MS`. An unknown outcome names rerunning the same command;
+  Opening the session, initial checks and the local transaction through COMMIT each have
+  a separate client deadline derived from `LOOM_PG_STATEMENT_TIMEOUT_MS`; the directory
+  request keeps its own transport timeout. Each local phase reserves cleanup inside its
+  original deadline. On failure the shared control owner closes the exact backend before
+  cancelling or reaping its work, deferring repeated signals within that same deadline.
+  Successful exit and failures outside a local phase have a separate cleanup allowance
+  derived from the same setting. An unknown outcome names rerunning the same command;
   the permanent directory winner and idempotent local insert let that rerun finish. The
   route checks directory state; a direct operator API caller is trusted to check local
   Postgres mode as the CLI does. For an org the directory does not place yet it
@@ -797,9 +877,9 @@ read-only scope, lists any tenancy row the directory does not place.
   serves past a table whose lock it cannot take, logged with the holders of its locks, or
   one the role cannot alter, logged as such (the third exception under Invariants). A
   first cell is `recording` until attach sets `enforced` while it runs, so no boot can
-  have created them: attach creates them itself with the same pass
-  (`cell_triggers.ensure`) once it has set `enforced`, and the cell goes `serving` only
-  once `cell_triggers.missing` names no defect. A later cell is `enforced` from prepare
+  have created them: attach creates them with `cell_triggers.ensure_table`, passing
+  `recording_first=True`, before step 2 and again before setting `enforced`.
+  The cell goes `serving` only once `cell_triggers.missing` names no defect. A later cell is `enforced` from prepare
   and gets them at its first migrating boot after prepare, which its attach requires the
   same way. `loom doctor` names a disabled or altered one in any state, a missing one on
   an `enforced` cell, and a partitioned table with an `org` column as unsupported, since
@@ -1128,9 +1208,10 @@ before the wait is judged spent, so `--wait 0` is one try of each wait with no r
 `--scan-budget` (default 2 hours) bounds each full scan, which `--wait` does not count.
 `--dry-run` runs the refusals and the scan, prints what would be placed and skipped and the
 scan's time, and writes nothing; the router's checks at `attach/begin` do not run. On a
-`serving` row attach reads the cell's mode: `enforced` is done (exit 0), and any other mode
-refuses: the directory and the cell's Postgres disagree, as after a restore of one of them,
-and attach lowers and repairs neither.
+`serving` row attach first verifies that the connected authority, configured cell and
+bucket match the directory registration. It then reads the cell's mode: `enforced` is
+done (exit 0), and any other mode refuses: the directory and the cell's Postgres disagree,
+as after a restore of one of them, and attach lowers and repairs neither.
 
 A later cell is attached only once the first is `serving`. It must hold no org data
 (attach refuses otherwise) and starts in `enforced`. Its attach runs, in order: the
@@ -1306,21 +1387,27 @@ The source census for acceptance and operator directory writes is checked by
 `tests/unit/test_cell_control_census.py`, including dynamic cleanup tables, guarded
 entry points and the named exceptions:
 
-| Writer                                                                                  | Fence                                                                                                  |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `cell_prepare._write_rows`                                                              | Fresh claim, observed local rows, exact lock backend                                                   |
-| `cell_attach_pg._mode_transaction`                                                      | Attach's claim, supervised mode try, recording/first/fingerprint comparison, exact lock backend        |
+| Writer                                                                                  | Fence                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cell_prepare._write_rows`                                                              | Fresh claim, observed local rows, exact lock backend                                                                                                                                                           |
+| `cell_attach_pg._mode_transaction`                                                      | Attach's claim, supervised mode try, recording/first/fingerprint comparison, exact lock backend                                                                                                                |
 | `cell_restore` schema, tenancy, state and trigger repair                                | Fresh claim before repair, same lock backend, retained generation at restart and final acknowledgement |
-| `cell_control.backout`                                                                  | Fresh claim, fenced close and zero-placement read, observed local rows, exact lock backend             |
-| `directory.attach_begin`, `attach_place`, `attach_enforced`, `attach_serving`, `remove` | Claimed generation, full registration and exact pair, including retries/no-ops                         |
-| `directory.set_limit`, `rotate_credential`                                              | Read and compare the current generation/registration/pair; do not claim or rotate                      |
-| `directory.register`                                                                    | Bootstrap default or immutable rerun lookup; never replaces existing acceptance or generation          |
-| `directory.place`                                                                       | Immutable placement only; keeps its org/cell locks and quota checks; never writes local acceptance     |
+| `cell_control.backout`                                                                  | Fresh claim, fenced close and zero-placement read, observed local rows, exact lock backend                                                                                                                     |
+| `cell_update_pg.write.change`                                                           | Fresh directory claim; owner's bounded transaction on the exact ATTACH backend, paired registration and exact observed local identity/pair before tenancy repair and acceptance write                          |
+| `directory.attach_begin`, `attach_place`, `attach_enforced`, `attach_serving`, `remove` | Claimed generation, full registration and exact pair, including retries/no-ops                                                                                                                                 |
+| `directory.update_addresses`                                                            | Claimed generation, full registration and exact pair under directory/row locks; commit-time address check, audit and synchronous WAL acknowledgement in one bounded transaction                                |
+| `directory.update_configuration`, `_configuration_commit`                               | Claimed generation, full registration and exact pair under ordered org/directory/row locks; root-secret and reservation checks, placements, audit and acceptance commit in one bounded synchronous transaction |
+| `directory.configuration_placements`                                                    | Claimed generation, full registration and exact pair under directory/row locks; root-secret and actual winner checks with audit and synchronous WAL acknowledgement in one bounded transaction                 |
+| `directory.set_limit`, `rotate_credential`                                              | Read and compare the current generation/registration/pair; do not claim or rotate                                                                                                                              |
+| `directory.register`                                                                    | Bootstrap default or immutable rerun lookup; never replaces existing acceptance or generation                                                                                                                  |
+| `directory.place`                                                                       | Immutable placement only; keeps its org/cell locks and quota checks; never writes local acceptance                                                                                                             |
 
-Read-only routes are exempt. Router migrations and an offline directory restore are
-maintenance operations. Configuration update acceptance writers use the same claim
-and lock-session helpers; a directory mutation uses the common comparison
-before its no-op branch as well. Direct privileged SQL is not an online control writer.
+Ordinary read-only routes are exempt; `configuration_placements` is an audited,
+WAL-fenced proof before local tenancy repair. Router migrations and an offline
+directory restore are maintenance operations. Update acceptance writers use the
+same claim and lock-session helpers; any additional acceptance writer must do so
+as well. A directory mutation uses the common comparison before its no-op branch.
+Direct privileged SQL is not an online control writer.
 The [control upgrade and recovery procedure](../operations/cell-control.md) defines the
 required fleet turnover and offline restore of generations. N-1 data-plane builds can
 read and insert on the additive schema; old control clients and router handlers cannot
@@ -1506,7 +1593,7 @@ pass; heartbeat expiry cannot prove that every process is stopped.
 | A cell in `recording`, the directory unreadable                                                                                                                              | a new org answers 503; the orgs it holds keep serving                                                                                                                                                                                                                                                                                                                                                                                |
 | A process stuck during first attach                                                                                                                                          | before step 3, attach refuses after `--wait` and the cell stays `recording`; after it, attach refuses, leaving the cell `enforced` and `attaching`, and a rerun resumes                                                                                                                                                                                                                                                              |
 | A recording insert held open during first attach                                                                                                                             | the mode commit's tries wait behind its `FOR SHARE` lock within `--wait`; past it attach refuses and the cell stays `recording`; a rerun resumes                                                                                                                                                                                                                                                                                     |
-| Attach stalls while it holds the mode table's lock                                                                                                                           | Postgres ends its session within seconds and releases the lock; new orgs answer within their deadline                                                                                                                                                                                                                                                                                                                                |
+| Attach stalls while it holds the mode table's lock                                                                                                                           | the client attempts bounded cleanup; if backend or lock release is unproved, stop and verify the exact holder before retrying                                                                                                                                                                                                                                                                                                        |
 | A transaction open since before step 4's snapshot                                                                                                                            | attach refuses once `--wait` runs out (a prepared one at once), naming what it waited on, and leaves `enforced`                                                                                                                                                                                                                                                                                                                      |
 | A CLI command with `LOOM_CELL` unset, started before attach's step 3                                                                                                         | it read the state while the first cell was `recording` and keeps writing ClickHouse after `serving`; the runbook sets `LOOM_CELL` on every CLI before attach, and `loom doctor --stray-orgs` names the orgs it left without a tenancy row                                                                                                                                                                                            |
 | A CLI of a build before the state read                                                                                                                                       | it is not refused on an `enforced` cell; every CLI and CI image runs a build with the read before attach ([upgrades](../operations/upgrades.md#upgrade-procedure))                                                                                                                                                                                                                                                                   |
@@ -1916,10 +2003,10 @@ An integration test with two cells and a router in CI's Postgres job:
   value, a winner of this cell's name under another deployment id answers 503 and writes
   no tenancy row, and a process whose configuration differs from its cell's row places
   nothing;
-- a cell attached with SCIM off and switched on by `loom cell update` refuses while an
-  agent-signup token is live, one minted while the update rolls out included, and a
-  process configured with another cell's issuer answers 503 to every bearer request,
-  reached through the router or directly;
+- `loom cell update --config` and `--finish` refuse a SCIM-on target before an
+  acceptance write until per-cell SCIM support exists; reverting a SCIM-on pending
+  value to SCIM-off current remains supported; a process configured with another
+  cell's issuer answers 503 to every bearer request, through the router or directly;
 - during a `loom cell update`, processes on the old and the new configuration both
   serve, `--finish` releases a narrowed issuer only after no process accepts it, an
   update that dies after its directory write keeps the widened issuer reserved, and
@@ -1933,7 +2020,8 @@ An integration test with two cells and a router in CI's Postgres job:
   refused, and a cell that starts accepting another cell's issuer takes no placements;
 - a process matching neither value of its row answers 503 to sign-in, refresh, the OAuth
   token and device endpoints, the sign-in callback and signup, and its probe route still
-  echoes prepare's nonce; `--revert` waits for processes matching only `next`;
+  echoes prepare's nonce; `--revert` requires permanent retirement of every captured
+  participant, including ones already on current;
   `update --config` refuses while a different `next` is pending, and an update that died
   before its `loom.cell_self` write resumes forward; prepare refuses while a pre-N
   process is live; a configuration change while `attaching` goes through

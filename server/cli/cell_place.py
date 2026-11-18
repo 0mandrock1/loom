@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import sys
 from typing import Any
@@ -14,9 +15,13 @@ from server.cli import cell as cell_cli
 from server.cli import cell_attach_pg as apg
 from server.cli._ch import run_connected, writes
 from server.cli.cell_ch import Refused
+from server.cli.cell_control import Owner
 from server.core import cell, pg
 from server.router.directory import PLACE_MAX_S
 from server.settings import settings
+
+# The directory statement bound plus connection and client cleanup.
+REQUEST_S = PLACE_MAX_S + 10.0  # not a setting: derived
 
 
 class PlacementRefused(Exception):
@@ -65,13 +70,21 @@ async def _directory(
     router: httpx.URL, name: str, org: str, deployment: str, fingerprint: dict[str, Any]
 ) -> None:
     url = cell_cli.at(router, f"/cells/v1/operator/cells/{name}/place")
-    async with httpx.AsyncClient(trust_env=router.scheme == "https") as client:
+    manager = httpx.AsyncClient(trust_env=router.scheme == "https")
+    client = await manager.__aenter__()
+    try:
         answer = await client.post(
             url,
             headers={"Authorization": f"Bearer {settings.router_operator_token}"},
             json={"org": org, "deployment_id": deployment, "fingerprint": fingerprint},
-            timeout=httpx.Timeout(PLACE_MAX_S + 10.0, connect=5.0),
+            timeout=httpx.Timeout(REQUEST_S, connect=5.0),
         )
+    except BaseException:  # Client exit preserves the request's first failure.
+        with contextlib.suppress(BaseException):
+            await manager.__aexit__(*sys.exc_info())
+        raise
+    else:
+        await manager.__aexit__(None, None, None)
     posted = cell_cli.router_answer(answer, {"org": org}, cell_cli.OPERATOR_REFUSALS)
     if posted is None:
         raise PlacementRefused(cell_cli.not_the_router(answer))
@@ -87,19 +100,38 @@ async def _directory(
 
 async def place(args: argparse.Namespace, router: httpx.URL) -> dict[str, str]:
     """Hold the operator lock through directory placement and an acknowledged local commit.
-    Every local phase, including opening and closing the direct session, has a deadline."""
-    cm = pg.dedicated(statement_timeout_ms=settings.pg_statement_timeout_ms)
-    conn = None
-    try:
-        async with asyncio.timeout(_bound_s()):
-            conn = await cm.__aenter__()
-        async with asyncio.timeout(_bound_s()):
-            if refusals := await apg.direct_refusals(conn, "place"):
-                raise Refused(refusals)
-            await apg.take_lock(conn, "place")
-            deployment, fingerprint = await _identity(conn, args.cell)
-        await _directory(router, args.cell, args.org, deployment, fingerprint)
-        async with asyncio.timeout(_bound_s()):
+    Local phases and the complete directory exchange have separate deadlines."""
+    owner = Owner(exit_s=_bound_s())
+
+    async def opening() -> None:
+        owner.conn = await pg._connect_dedicated(
+            statement_timeout_ms=settings.pg_statement_timeout_ms
+        )
+        if owner.closed:
+            await owner.close()
+            raise PlacementRefused("connection arrived after the placement attempt ended")
+        try:
+            await pg._check_deployment(owner.conn)
+            await pg.init_connection(owner.conn)
+        except Exception as error:
+            pg._raise_if_unavailable(error)
+            raise
+
+    async def initial() -> tuple[str, dict[str, Any]]:
+        if refusals := await apg.direct_refusals(owner.conn, "place"):
+            raise Refused(refusals)
+        await apg.take_lock(owner.conn, "place")
+        return await _identity(owner.conn, args.cell)
+
+    async def work() -> dict[str, str]:
+        deployment, fingerprint = await owner.call(initial, total_s=_bound_s())
+        await owner.call(
+            lambda: _directory(router, args.cell, args.org, deployment, fingerprint),
+            total_s=REQUEST_S,
+        )
+
+        async def local() -> None:
+            conn = owner.conn
             tx = conn.transaction()
             await tx.start()
             if not await apg.lock_held(conn):
@@ -114,14 +146,11 @@ async def place(args: argparse.Namespace, router: httpx.URL) -> dict[str, str]:
             # A no-op insert must also flush a primary-only predecessor to the standby.
             await conn.execute(pg._DURABLE_MESSAGE)
             await tx.commit()
-    finally:
-        if conn is not None:
-            try:
-                async with asyncio.timeout(_bound_s()):
-                    await cm.__aexit__(None, None, None)
-            finally:
-                conn.terminate()
-    return {"org": args.org, "cell": args.cell, "deployment_id": deployment}
+
+        await owner.call(local, total_s=_bound_s())
+        return {"org": args.org, "cell": args.cell, "deployment_id": deployment}
+
+    return await owner.run(opening, work, opening_s=_bound_s())
 
 
 def cmd_place(args: argparse.Namespace) -> int:

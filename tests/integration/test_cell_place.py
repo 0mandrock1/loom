@@ -27,7 +27,8 @@ ROUTER = httpx.URL("http://127.0.0.1:7901")
 async def stores(monkeypatch):
     admin = os.environ.get("LOOM_ROUTER_PG_DSN") or pytest.skip("LOOM_ROUTER_PG_DSN not set")
     name, dsn = await create_database(admin)
-    async with contextlib.AsyncExitStack() as stack:
+    stack = contextlib.AsyncExitStack()
+    try:
         stack.push_async_callback(drop_database, admin, name)
         first = await stack.enter_async_context(own_database())
         second = await stack.enter_async_context(own_database())
@@ -40,6 +41,8 @@ async def stores(monkeypatch):
             settings, "router_operator_sha256", hashlib.sha256(OPERATOR.encode()).hexdigest()
         )
         await directory.migrate()
+        stack.push_async_callback(pg.close_pool)
+        stack.callback(pg.expect_deployment, None)
         pg.expect_deployment(None)
         router_app = app.build_app(app.Router())
         real_client = httpx.AsyncClient
@@ -51,14 +54,15 @@ async def stores(monkeypatch):
             ),
         )
         targets = {"first": first, "second": second}
-        try:
-            for cell_name, cell_dsn in targets.items():
-                await _initialize(cell_dsn, cell_name)
-            yield targets
-        finally:
-            pg.expect_deployment(None)
-            await pg.close_pool()
-            await directory.close()
+        for cell_name, cell_dsn in targets.items():
+            await _initialize(cell_dsn, cell_name)
+        yield targets
+    except BaseException:  # Cleanup must preserve the setup failure.
+        with contextlib.suppress(BaseException):
+            await stack.aclose()
+        raise
+    else:
+        await stack.aclose()
 
 
 async def _initialize(dsn, name):

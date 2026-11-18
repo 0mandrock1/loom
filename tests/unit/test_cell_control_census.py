@@ -102,6 +102,7 @@ def test_cell_control_migrations_are_classified():
 # Entries name every sink, including nested callbacks and dynamic table expressions.
 # A new sink, including another statement in an existing owner, requires classification.
 GUARDED_WRITERS = {
+    "server/cli/cell_update_pg.py": {("write.change", "UPDATE", "loom.cell_self"): 1},
     "server/cli/cell_attach_pg.py": {("_mode_transaction", "UPDATE", "loom.tenancy_mode"): 1},
     "server/cli/cell_control.py": {
         ("backout.clear_state", "ALTER TABLE", "loom.cell_first"): 3,
@@ -119,9 +120,13 @@ GUARDED_WRITERS = {
         ("_write_rows.write", "INSERT INTO", "loom.cell_self"): 1,
     },
     "server/router/directory.py": {
+        ("update_addresses.change", "UPDATE", "loom_router.cells"): 1,
         ("set_limit.change", "UPDATE", "loom_router.cells"): 1,
         ("rotate_credential.change", "UPDATE", "loom_router.cells"): 1,
         ("claim.change_locked", "UPDATE", "loom_router.cells"): 1,
+        ("_configuration_commit", "INSERT INTO", "loom_router.placements"): 1,
+        ("_configuration_commit", "INSERT INTO", "loom_router.audit"): 2,
+        ("_configuration_commit", "UPDATE", "loom_router.cells"): 1,
         ("attach_begin.change_locked", "UPDATE", "loom_router.cells"): 1,
         ("attach_place.change_locked", "INSERT INTO", "loom_router.placements"): 1,
         ("attach_place.change_locked", "UPDATE", "loom_router.cells"): 1,
@@ -160,6 +165,10 @@ EXEMPT_WRITERS = {
 # the probe lock table. None is a cell acceptance or directory control write.
 GENERIC_SQL_EXCLUSIONS = {
     "server/cli/cell_restore_stores.py": {("nonces", "INSERT INTO", "{leases.LOCK_TABLE}"): 1},
+    # The allowlisted feed tables belong to the separate verified record database.
+    "server/tracker/store/github_feed.py": {
+        ("create_table", "CREATE TABLE IF NOT EXISTS", "{name}"): 1
+    },
     "server/cli/cell_prepare.py": {("_write_nonces", "INSERT INTO", "{leases.LOCK_TABLE}"): 1},
     "server/code/store/index/prefix_twin.py": {("fill_sql", "INSERT INTO", "{table}"): 1},
     "server/core/ch.py": {("_fenced_statement", "INSERT INTO", "{qualify(table)}"): 1},
@@ -367,6 +376,39 @@ def function(path: str, name: str) -> ast.AST:
             ["apg.lock_held(conn)", "_tables(conn, descriptor)"],
         ),
         (
+            "server/cli/cell_update_run.py",
+            "update",
+            ['cell_control.run("update", run.start)'],
+        ),
+        (
+            "server/cli/cell_update_run.py",
+            "Run.start",
+            [
+                "cell_control.claim(owner.conn, self.call, self.row)",
+                "local.paired(self.state, self.row)",
+            ],
+        ),
+        (
+            "server/cli/cell_update_pg.py",
+            "write",
+            ["owner.transaction(change)"],
+        ),
+        (
+            "server/cli/cell_update_pg.py",
+            "write.change",
+            ["cell_control.paired(conn, registered)", "read(conn, expected.cell)"],
+        ),
+        (
+            "server/router/directory.py",
+            "update_addresses",
+            ["_attach_change(cell_name, expected, change)"],
+        ),
+        (
+            "server/router/directory.py",
+            "configuration_placements",
+            ["_attach_change(cell_name, expected, read)"],
+        ),
+        (
             "server/cli/cell_prepare.py",
             "prepare",
             [
@@ -496,6 +538,15 @@ def function(path: str, name: str) -> ast.AST:
             "claim",
             ["_attach_change(cell_name, expected, change_locked, claim=True)"],
         ),
+        (
+            "server/router/directory.py",
+            "update_configuration",
+            [
+                "_control_transaction(locked, seconds=CONTROL_MAX_S)",
+                "control_refusal(found, expected)",
+                "_configuration_commit(conn, found, current, pending, new, action)",
+            ],
+        ),
         *[
             (
                 "server/router/directory.py",
@@ -554,6 +605,8 @@ def test_reads_registration_and_immutable_placement_are_explicit_exceptions():
     assert any(call.startswith("_audit(") for call in calls(found.functions["attach_read"]))
     assert "_rerun_refusal(held, reg)" in calls(found.functions["register"])
     assert "_place_one(conn, org, cell_name, candidate, refusal)" in calls(found.functions["place"])
+    assert "_cell(locked)" in calls(found.functions["place"])
+    assert "verify(candidate)" in calls(found.functions["place"])
     assert "refusal(candidate)" in calls(found.functions["_place_one"])
     for name in ("set_limit", "rotate_credential"):
         assert not any(call.startswith("claim(") for call in calls(found.functions[name]))

@@ -8,12 +8,13 @@ Every statement the router runs against it is here. Three things serialize place
   (`attach_place`) both take before they insert, so a cell's count and quota are judged one
   placement at a time; a live placement reads the winner again once it holds the lock, so an
   org a batch placed meanwhile is answered as placed;
-- a transaction-scoped lock on the org (`_PLACE_LOCK`) between live placements, so two cells
-  placing one org at once agree on the winner, and a retry of the same call answers the
-  same; a batch takes none, since no other cell exists while it runs;
-- the placements' primary key, as a backstop: every insert is `ON CONFLICT DO NOTHING`, and
-  only a row it returns is counted. Every successful call writes an audit row before
-  committing, so a duplicate winner waits for synchronous durability too.
+- transaction-scoped org locks (`_PLACE_LOCK`) before cell locks for live placements and
+  configuration updates. Configuration takes distinct numeric hash keys in order; the
+  first attach batch needs none while no other cell exists;
+- the placements' primary key, as a backstop. Live placement and first attach use
+  `ON CONFLICT DO NOTHING`; configuration inserts after its locked winner read. Only
+  inserted rows are counted. Every successful call writes an audit row before committing,
+  so a duplicate winner waits for synchronous durability too.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from uuid import UUID
 from server.core import cell as cell_state
 from server.core import pg
 from server.core.paths import ROUTER_MIGRATIONS_DIR
-from server.router.limits import MAX_BODY_BYTES
+from server.router import fingerprints
 from server.settings import settings
 
 # The directory's own migration lock: never the memory authority's.
@@ -726,9 +727,8 @@ async def _place_one(
     """Judge the locked row and insert the placement, counted only when written."""
     if reason := refusal(candidate):
         raise PlacementRefused(reason)
-    quota = candidate.placements_max
-    if quota is not None and candidate.placed >= quota:
-        raise PlacementRefused(f"cell {cell_name!r} holds its quota of orgs")
+    if reason := _quota_refusal(candidate, 1):
+        raise PlacementRefused(reason)
     inserted = await conn.fetchval(
         "INSERT INTO loom_router.placements (org, cell) VALUES ($1, $2) "
         "ON CONFLICT DO NOTHING RETURNING org",
@@ -740,6 +740,12 @@ async def _place_one(
     await conn.execute(
         "UPDATE loom_router.cells SET placed = placed + 1 WHERE cell = $1", cell_name
     )
+
+
+def _quota_refusal(row: Cell, additional: int) -> str:
+    if row.placements_max is not None and row.placed + additional > row.placements_max:
+        return f"cell {row.cell!r} holds its quota of orgs"
+    return ""
 
 
 def _refuse_long(orgs: Iterable[str]) -> None:
@@ -833,50 +839,6 @@ def attach_refusal(
     return ""
 
 
-def _fingerprint_refusal(found: Attaching, name: str, value: dict[str, Any]) -> str:
-    """Why a posted fingerprint is not this row's cell ('' when it is): its stores and
-    hosts, the servers' own values, equal the row's."""
-    fields = value["fields"]
-    row = found.row
-    expected = {
-        "deployment_id": row.deployment_id,
-        "bucket": found.bucket,
-        "bucket_prefix": found.bucket_prefix,
-        "public_host": row.host,
-    }
-    differ = [k for k, want in expected.items() if fields.get(k, cell_state.DEFAULTS[k]) != want]
-    if differ:
-        return f"{name}'s {', '.join(differ)} differ from cell {row.cell!r}'s registration"
-    issuer_host = fields.get("oauth_issuer_host", cell_state.DEFAULTS["oauth_issuer_host"])
-    if issuer_host != row.host:
-        return (
-            f"{name}'s oauth_issuer_host is not cell {row.cell!r}'s host {row.host!r}: the "
-            "router attaches no issuer host other than the cell's own"
-        )
-    return ""
-
-
-# An org as a placement body carries it at most: ORG_MAX_BYTES bytes, each escaped in JSON
-# to at most six (`\u00XX`).
-_PLACEMENT_ORG_MAX = 6 * cell_state.ORG_MAX_BYTES  # not a setting: derived
-
-
-def _placement_refusal(cell: str, name: str, value: dict[str, Any]) -> str:
-    """Why a fingerprint is too large for the cell's live placements ('' when it is not): a
-    placement body (`{org, cell, fingerprint}`, the org at its longest) past the router's
-    MAX_BODY_BYTES would refuse every new org; the largest fields are named."""
-    # The default encoding is the longest: spaces after separators, non-ASCII escaped.
-    size = len(json.dumps({"org": "", "cell": cell, "fingerprint": value})) + _PLACEMENT_ORG_MAX
-    if size <= MAX_BODY_BYTES:
-        return ""
-    sizes = sorted(((len(json.dumps(v)), k) for k, v in value["fields"].items()), reverse=True)
-    largest = ", ".join(k for _, k in sizes[:3])
-    return (
-        f"{name} makes a placement body of up to {size} bytes, past the router's "
-        f"{MAX_BODY_BYTES}: its largest fields are {largest}"
-    )
-
-
 def _as_json(*values: Any) -> str:
     """Values in one canonical JSON text, which tells `false`, `0` and `0.0` apart."""
     return json.dumps(values, sort_keys=True)
@@ -888,13 +850,17 @@ def begin_refusal(found: Attaching, begin: Begin) -> str:
     if reason := attach_refusal(found, begin.deployment_id, begun=False):
         return reason
     row = found.row
-    for name, value in (("current_fp", begin.current_fp), ("next_fp", begin.next_fp)):
-        if value is None:
-            continue
-        if reason := _fingerprint_refusal(found, name, value) or _placement_refusal(
-            row.cell, name, value
-        ):
-            return reason
+    registered = {
+        "cell": row.cell,
+        "deployment_id": row.deployment_id,
+        "bucket": found.bucket,
+        "bucket_prefix": found.bucket_prefix,
+        "host": row.host,
+    }
+    if reason := fingerprints.registration_pair_refusal(
+        registered, begin.current_fp, begin.next_fp
+    ):
+        return reason
     # Compared as JSON, not as Python values, where `false == 0` and `1 == 1.0`: a rerun
     # writes the fingerprints again only when they are the row's to the type.
     if row.current_fp is not None and _as_json(row.current_fp, row.next_fp) != _as_json(
@@ -1084,7 +1050,7 @@ class _ControlOwner:
                 self.exit_task = self.start(lambda: self.context.__aexit__(None, None, None))
             try:
                 await self.wait(self.exit_task, self.end)
-            except BaseException:
+            except BaseException:  # An interrupted pool exit must not continue without its owner.
                 self.exit_task.cancel()
                 raise
 
@@ -1188,6 +1154,227 @@ async def claim(cell_name: str, expected: Control) -> Attaching:
         return _attaching(written, _found.other)
 
     return await _attach_change(cell_name, expected, change_locked, claim=True)
+
+
+async def update_addresses(
+    cell_name: str,
+    probe_url: str,
+    upstream_url: str,
+    *,
+    expected: Control,
+    configured: Callable[[], bool],
+) -> Attaching:
+    """Commit only the addresses whose stores were just proved outside this transaction."""
+
+    async def change(conn: Any, found: Attaching) -> Attaching:
+        if not configured():
+            raise OperatorRefused(
+                "the contacted router's configured addresses changed during proof"
+            )
+        if not found.row.is_first and upstream_url != found.upstream_url:
+            raise OperatorRefused("a later cell probe refresh cannot change its upstream address")
+        await conn.execute(
+            (
+                "UPDATE loom_router.cells SET probe_url=$2, upstream_url=$3, updated_at=now() "
+                "WHERE cell=$1"
+            ),
+            cell_name,
+            probe_url,
+            upstream_url,
+        )
+        await _audit(
+            conn,
+            "addresses",
+            {"cell": cell_name, "probe_url": probe_url, "upstream_url": upstream_url},
+        )
+        row = await conn.fetchrow(f"{_CELL_ATTACH} WHERE cell=$1", cell_name)
+        return _attaching(row, found.other)
+
+    return await _attach_change(cell_name, expected, change)
+
+
+async def configuration_placements(
+    cell_name: str, orgs: list[str], *, expected: Control, keys_fp: str
+) -> list[str]:
+    """Acknowledge actual immutable winners before the cell repairs local tenancy."""
+    _refuse_long(orgs)
+
+    async def read(conn: Any, found: Attaching) -> list[str]:
+        if (
+            await conn.fetchval("SELECT keys_fp FROM loom_router.cells WHERE cell=$1", cell_name)
+            != keys_fp
+        ):
+            raise OperatorRefused(
+                "cell root-secret fingerprint changed; configuration update refuses"
+            )
+        accepted = [
+            value for value in (found.row.current_fp, found.row.next_fp) if value is not None
+        ]
+        if not accepted or any(not fingerprints.readable(value) for value in accepted):
+            raise OperatorRefused(
+                "configured placement proof needs readable directory reservations"
+            )
+        configured = {
+            org for value in accepted for org in value["fields"].get("configured_orgs", [])
+        }
+        if not set(orgs) <= configured:
+            raise OperatorRefused("placement proof names an org outside the reserved configuration")
+        rows = await conn.fetch(
+            "SELECT org, cell FROM loom_router.placements WHERE org=ANY($1::text[]) ORDER BY org",
+            sorted(set(orgs)),
+        )
+        for row in rows:
+            if row["cell"] != cell_name:
+                raise OperatorRefused(f"org {row['org']!r} is placed in cell {row['cell']!r}")
+        await _audit(
+            conn,
+            "configuration_placements",
+            {"cell": cell_name, "named": len(set(orgs)), "held": len(rows)},
+        )
+        return [str(row["org"]) for row in rows]
+
+    return await _attach_change(cell_name, expected, read)
+
+
+async def update_configuration(
+    cell_name: str,
+    target: dict[str, Any],
+    action: str,
+    *,
+    keys_fp: str,
+    refusal: Callable[[Cell], str],
+    expected: Control,
+) -> Attaching:
+    """Reserve acceptance and configured placements in one bounded directory commit."""
+    try:
+        current, pending = fingerprints.configuration_pair(
+            expected.values.get("current_fp"), expected.values.get("next_fp"), target, action
+        )
+    except ValueError as error:
+        raise OperatorRefused(str(error)) from None
+    accepted = [value for value in (current, pending) if value is not None]
+    desired_orgs = {org for value in accepted for org in value["fields"].get("configured_orgs", [])}
+    prior_orgs = {
+        org
+        for value in (expected.values["current_fp"], expected.values["next_fp"])
+        if value is not None
+        for org in value["fields"].get("configured_orgs", [])
+    }
+    orgs = sorted(desired_orgs | prior_orgs)
+    _refuse_long(orgs)
+
+    async def locked(conn: Any) -> Attaching:
+        # Numeric hash order matches live placement locks, including hash collisions.
+        await conn.execute(
+            "WITH keys AS MATERIALIZED (SELECT DISTINCT hashtext(org) AS key "
+            "FROM unnest($2::text[]) AS org ORDER BY key) "
+            "SELECT pg_advisory_xact_lock($1, key) FROM keys ORDER BY key",
+            _PLACE_LOCK,
+            orgs,
+        )
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", _DIRECTORY_LOCK)
+        raw = await conn.fetchrow(
+            f"SELECT {_CELL_COLUMNS}, {', '.join(_ATTACH_EXTRA)}, keys_fp "
+            "FROM loom_router.cells WHERE cell=$1 FOR UPDATE",
+            cell_name,
+        )
+        if raw is None:
+            raise NoSuchCell(f"cell {cell_name!r} is not in the directory")
+        row = dict(raw)
+        recorded_keys = row.pop("keys_fp")
+        others = await conn.fetch(
+            "SELECT cell, current_fp, next_fp FROM loom_router.cells WHERE cell<>$1 ORDER BY cell",
+            cell_name,
+        )
+        found = _attaching(row, str(others[0]["cell"]) if others else None)
+        if reason := control_refusal(found, expected):
+            raise OperatorRefused(reason)
+        if recorded_keys != keys_fp:
+            raise OperatorRefused(
+                "cell root-secret fingerprint changed; configuration update refuses"
+            )
+        registered = {name: getattr(found, name) for name in ("bucket", "bucket_prefix")}
+        registered.update(
+            cell=cell_name, deployment_id=found.row.deployment_id, host=found.row.host
+        )
+        if reason := fingerprints.registration_pair_refusal(registered, current, pending):
+            raise OperatorRefused(reason)
+        for other in others:
+            reserved = [
+                other[name] for name in ("current_fp", "next_fp") if other[name] is not None
+            ]
+            if reason := fingerprints.reservation_refusal(accepted, reserved):
+                raise OperatorRefused(f"cell {other['cell']!r}: {reason}")
+        await conn.execute("SELECT pg_logical_emit_message(true, 'loom.control', '')")
+        placed = await conn.fetch(
+            "SELECT org, cell FROM loom_router.placements WHERE org=ANY($1::text[]) ORDER BY org",
+            orgs,
+        )
+        elsewhere = next((row for row in placed if row["cell"] != cell_name), None)
+        if elsewhere is not None:
+            raise OperatorRefused(
+                f"org {elsewhere['org']!r} is placed in cell {elsewhere['cell']!r}"
+            )
+        new = sorted(set(orgs) - {row["org"] for row in placed})
+        if not found.row.is_first and found.row.state != "serving":
+            if desired_orgs != prior_orgs:
+                raise OperatorRefused("a later cell must be serving before configured orgs change")
+        if set(new) & prior_orgs:
+            if not (found.row.is_first and found.row.state == "attaching"):
+                raise OperatorRefused(
+                    "configured org placement is missing; "
+                    "restore the directory metadata before updating"
+                )
+            # Original first-cell orgs retain attach's placement and quota protocol.
+            new = sorted(set(new) - prior_orgs)
+        if new:
+            if reason := refusal(found.row):
+                raise OperatorRefused(reason)
+            if reason := _quota_refusal(found.row, len(new)):
+                raise OperatorRefused(reason)
+        return await _configuration_commit(conn, found, current, pending, new, action)
+
+    return await _control_transaction(locked, seconds=CONTROL_MAX_S)
+
+
+async def _configuration_commit(
+    conn: Any,
+    found: Attaching,
+    current: dict[str, Any],
+    pending: dict[str, Any] | None,
+    new_orgs: list[str],
+    action: str,
+) -> Attaching:
+    accepted_issuers = sorted(
+        {
+            issuer
+            for value in (current, pending)
+            if value is not None
+            for issuer in value["fields"].get("bearer_issuers", [])
+            if issuer
+        }
+    )
+    written = await conn.fetchrow(
+        "WITH inserted AS (INSERT INTO loom_router.placements (org, cell) "
+        "SELECT org, $1 FROM unnest($2::text[]) AS org RETURNING org), "
+        "placed_audit AS (INSERT INTO loom_router.audit (actor, action, detail) "
+        "SELECT 'operator', 'place', jsonb_build_object('org', org, 'cell', $1::text) "
+        "FROM inserted), "
+        "changed AS (UPDATE loom_router.cells SET current_fp=$3, next_fp=$4, "
+        "issuers=$5, placed=placed+(SELECT count(*) FROM inserted), updated_at=now() "
+        f"WHERE cell=$1 RETURNING {_CELL_COLUMNS}, {', '.join(_ATTACH_EXTRA)}), "
+        "changed_audit AS (INSERT INTO loom_router.audit (actor, action, detail) "
+        "SELECT 'operator', 'configuration_' || $6::text, "
+        "jsonb_build_object('cell', cell, 'placed', (SELECT count(*) FROM inserted)) FROM changed) "
+        "SELECT * FROM changed",
+        found.row.cell,
+        new_orgs,
+        current,
+        pending,
+        accepted_issuers if found.row.state == "serving" else [],
+        action,
+    )
+    return _attaching(written, found.other)
 
 
 async def _audit(conn: Any, action: str, detail: dict[str, Any]) -> None:

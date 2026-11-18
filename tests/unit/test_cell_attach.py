@@ -24,6 +24,7 @@ from server.core import cell, instances
 from server.router.limits import ATTACH_BATCH, MAX_BODY_BYTES
 from server.settings import settings
 from tests.unit.cell_control_owner import owner as _owner
+from tests.unit.clock_fake import ManualClock
 
 FIELDS = {**cell.DEFAULTS, "deployment_id": "dep-1"}
 CURRENT = cell.as_value(FIELDS)
@@ -531,6 +532,10 @@ class FakeConn:
 
 
 def _short_phases(monkeypatch: pytest.MonkeyPatch, bounds: list[float] | None = None) -> None:
+    # The work timer stays real; scheduling cannot consume the fake close budget.
+    phase_clock = ManualClock()
+    monkeypatch.setattr(cell_control, "time", phase_clock)
+    monkeypatch.setattr(cell_control.pg, "time", phase_clock)
     supervise = cell_control.Owner.call
 
     async def bounded(self: Any, work: Any, *, total_s: float) -> Any:
@@ -964,10 +969,14 @@ async def test_a_serving_row_is_done_only_once_the_cell_is_enforced(
     from server.core import pg
 
     state = ["enforced"]
+    conn = FakeConn([("SELECT deployment_id FROM loom.authority", "dep-1")])
+    monkeypatch.setattr(settings, "cell", "first")
+    monkeypatch.setattr(settings, "document_s3_bucket", "")
+    monkeypatch.setattr(settings, "document_s3_prefix", "")
 
     @asynccontextmanager
     async def dedicated(**_kw: Any) -> Any:
-        yield None
+        yield conn
 
     async def read_mode(_conn: Any) -> tuple[str, Any]:
         return state[0], (True, "first")
@@ -976,6 +985,7 @@ async def test_a_serving_row_is_done_only_once_the_cell_is_enforced(
     monkeypatch.setattr(apg, "read_mode", read_mode)
     run = cell_attach.Run(None, _args(), None, lambda _t: None)  # type: ignore[arg-type]
     run.owner = _owner(FakeConn())
+    run.row = {"deployment_id": "dep-1", "cell": "first", "bucket": "", "bucket_prefix": ""}
     assert await run.done()
     state[0] = "recording"
     with pytest.raises(Refused, match="attach lowers and repairs neither"):

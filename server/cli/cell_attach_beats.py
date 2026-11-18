@@ -293,7 +293,7 @@ class Watch:
         try:
             async with asyncio.timeout(_READ_TIMEOUT_S):
                 beats = await read_beats(self.ch, since=self.since)
-        except Exception:
+        except Exception:  # A failed read still checks whether the heartbeat watch has a gap.
             self._check_gap()
             raise
         self._check_gap()

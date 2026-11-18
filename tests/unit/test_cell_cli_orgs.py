@@ -17,7 +17,14 @@ from server.core import cell, cell_router, errors, pg, pg_profile
 from server.settings import settings
 
 ROOT = Path(__file__).resolve().parents[2]
-_CONNECTS = {"run_connected", "connect_checked", "connect_declared", "_connected"}
+_CONNECTS = {
+    "run_connected",
+    "run_control_connected",
+    "connect_checked",
+    "connect_declared",
+    "check_acceptance",
+    "_connected",
+}
 # `.connect()` receivers that are not the deployment's ClickHouse writer: the setup
 # command's own admin client and SQLite files an importer reads.
 _OTHER_CLIENTS = {"preflight", "sqlite3"}
@@ -316,7 +323,7 @@ def test_ch_setup_is_refused_before_it_writes_a_user_or_grant(
     monkeypatch.setattr(settings, "ch_user", "loom")
     monkeypatch.setattr(settings, "ch_reader_user", "")
     monkeypatch.setenv("LOOM_CH_READER_USER", "")
-    args = argparse.Namespace(print_analyst_sql=False, print_sql=False)
+    args = argparse.Namespace(print_analyst_sql=False, apply_analyst_sql=False, print_sql=False)
     with pytest.raises(_ch.OrgNotHeld, match="first row names cell 'us-1'"):
         ch_setup._cmd_ch_setup(args)
 
@@ -361,7 +368,9 @@ def test_ch_setup_is_refused_on_another_deployments_clickhouse_before_it_writes(
     monkeypatch.setenv("LOOM_CH_READER_USER", "")
     monkeypatch.setattr(settings, "ch_reader_user", "")
     with pytest.raises(pg.AuthorityMismatch):
-        ch_setup._cmd_ch_setup(argparse.Namespace(print_analyst_sql=False, print_sql=False))
+        ch_setup._cmd_ch_setup(
+            argparse.Namespace(print_analyst_sql=False, apply_analyst_sql=False, print_sql=False)
+        )
     assert armed == [("dep-other", 1)]
 
 
@@ -399,7 +408,12 @@ def test_ch_setup_on_a_fresh_clickhouse_passes_the_gate_and_sets_up(
     monkeypatch.setattr(settings, "ch_user", "loom")
     monkeypatch.setenv("LOOM_CH_READER_USER", "")
     monkeypatch.setattr(settings, "ch_reader_user", "")
-    assert ch_setup._cmd_ch_setup(argparse.Namespace(print_analyst_sql=False, print_sql=False)) == 0
+    assert (
+        ch_setup._cmd_ch_setup(
+            argparse.Namespace(print_analyst_sql=False, apply_analyst_sql=False, print_sql=False)
+        )
+        == 0
+    )
     assert set_up == [1]
 
 
@@ -467,6 +481,27 @@ def test_the_setup_check_mutes_the_drivers_own_failed_connect_line(
     with caplog.at_level(logging.DEBUG):
         asyncio.run(_ch.check_setup_stores())
     assert not [r for r in caplog.records if r.name == "clickhouse_connect"]
+
+
+@pytest.mark.parametrize("diagnostic_mode", ["open", "recording", "enforced", "partial"])
+def test_setup_identity_probe_neither_installs_nor_uses_acceptance(
+    monkeypatch: pytest.MonkeyPatch, diagnostic_mode: str
+) -> None:
+    """Bootstrap checks store ownership, never a reusable data-plane admission."""
+    from server.core import retirement
+
+    _cell_set(monkeypatch, (diagnostic_mode, "eu-1"))
+    client = AsyncMock()
+    monkeypatch.setattr("server.core.ch.get_client", lambda: client)
+    monkeypatch.setattr(pg_profile, "recorded_authority", AsyncMock(return_value=None))
+    acceptance = AsyncMock(side_effect=AssertionError("bootstrap is not admission"))
+    monkeypatch.setattr(_ch, "check_acceptance", acceptance)
+    monkeypatch.setattr(cell, "refresh", acceptance)
+    before = cell._view
+    asyncio.run(_ch.check_setup_stores())
+    assert cell._view is before
+    assert not retirement.get_gate().enrolled
+    acceptance.assert_not_awaited()
 
 
 def test_the_loom_code_drain_after_a_subcommand_is_a_read() -> None:
@@ -969,6 +1004,7 @@ def test_a_cell_whose_rows_cannot_be_read_refuses_every_declared_org(
     asyncio.run(_ch.check_orgs([]))
 
 
+@pytest.mark.usefixtures("stub_model_command")
 def test_a_command_for_an_org_the_cell_does_not_hold_never_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
