@@ -695,7 +695,14 @@ async def _protected_agent(
             mentor_brief=False,
             retry={"max_attempts": 1},
         ) as agent:
-            agent.transport._client._transport = httpx.MockTransport(respond)
+            mock = httpx.MockTransport(respond)
+            agent.transport._client._transport = mock
+            assert (
+                agent.transport._client._transport_for_url(
+                    httpx.URL("http://inert.invalid/v1/memory.search")
+                )
+                is mock
+            )
             yield agent
 
 
