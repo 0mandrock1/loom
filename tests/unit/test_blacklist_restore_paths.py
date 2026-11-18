@@ -175,3 +175,77 @@ async def test_allowed_restore_still_writes_and_binds_policy(
     )
     written.assert_awaited_once()
     assert written.await_args.kwargs["policy"] == (guarded if pg.enabled() else {})
+
+
+@pytest.mark.parametrize("copy_path", ["snapshot", "restore"])
+async def test_a_changed_policy_refuses_the_postgres_commit(monkeypatch, copy_path):
+    from server.memory.store import inserts, lifecycle, pg_publish
+
+    monkeypatch.setattr(pg, "enabled", lambda: True)
+    policy = {("o", "policy"): 4}
+    existing = row("allowed")
+    rows = [store.build_memory_version_row(existing, version=2)]
+    called = []
+
+    async def refuse(rows, **kw):
+        called.append(kw["admission"])
+        raise pg_memory.AdmissionMoved({("o", "policy"): 5})
+
+    publish = AsyncMock()
+    monkeypatch.setattr(pg_publish, "commit", refuse)
+    monkeypatch.setattr(pg_publish, "publish", publish)
+    with pytest.raises(pg_memory.AdmissionContendedError, match="policy changed"):
+        if copy_path == "snapshot":
+            await inserts.insert_memory_versions(rows, ch=object(), policy=policy)
+        else:
+            await lifecycle.insert_versions_over_heads(rows, [existing], ch=object(), policy=policy)
+    assert len(called) == 1 and called[0].generations == policy
+    publish.assert_not_awaited()
+
+
+async def test_a_blocked_payload_does_not_create_namespace_or_grants(monkeypatch, guarded):
+    from contextlib import asynccontextmanager
+
+    from server.identity.api.models import (
+        NamespaceRestoreInput,
+        NamespaceSnapshotOutput,
+        _SnapshotMemoryRow,
+    )
+    from server.identity.app import namespace_snapshot as namespaces
+
+    @asynccontextmanager
+    async def lock(*args):
+        yield
+
+    ch = SimpleNamespace(query_one=AsyncMock(return_value=None), insert=AsyncMock())
+    grant = AsyncMock()
+    monkeypatch.setattr(namespaces, "account_change", lock)
+    monkeypatch.setattr(namespaces, "get_client", lambda: ch)
+    monkeypatch.setattr(namespaces._registry, "resolve_subject", lambda: "owner")
+    monkeypatch.setattr(namespaces._registry, "insert_admin_grant", grant)
+    monkeypatch.setattr(namespaces.registration, "refused_as_in_use", AsyncMock(return_value=False))
+    monkeypatch.setattr(pg_memory, "erased_ids", AsyncMock(return_value=set()))
+    payload = NamespaceSnapshotOutput(
+        snapshot_id="22222222-2222-2222-2222-222222222222",
+        org="o",
+        source_namespace="source",
+        created_at=datetime.now(UTC),
+        memory_count=2,
+        type_count=0,
+        grant_count=0,
+        audit_tail_count=0,
+        include_embeddings=False,
+        memories=[
+            _SnapshotMemoryRow(**store.build_memory_version_row(row(value)))
+            for value in ["allowed", "blocked"]
+        ],
+        types=[],
+        grants=[],
+        audit_tail=[],
+    )
+    with pytest.raises(HTTPException, match="422"):
+        await namespaces.handle_namespace_restore(
+            NamespaceRestoreInput(org="o", target_namespace="n", payload=payload)
+        )
+    ch.insert.assert_not_awaited()
+    grant.assert_not_awaited()

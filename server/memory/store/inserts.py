@@ -53,12 +53,12 @@ async def insert_memory_versions(
     if pg.enabled() and not published:
         from server.memory.store import pg_memory, pg_publish
 
-        admission = {"admission": pg_memory.Admission(generations=dict(policy))} if policy else {}
+        admission = pg_memory.Admission(generations=dict(policy)) if policy else None
         try:
             if publish_now:
-                await pg_publish.commit_and_publish(rows, ch=ch, **admission)
+                await pg_publish.commit_and_publish(rows, ch=ch, admission=admission)
             else:
-                await pg_publish.commit(rows, publisher_lease=False, **admission)
+                await pg_publish.commit(rows, publisher_lease=False, admission=admission)
         except pg_memory.AdmissionMoved:
             raise pg_memory.AdmissionContendedError(
                 "the write policy changed while it was checked"

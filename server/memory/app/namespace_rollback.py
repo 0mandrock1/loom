@@ -78,17 +78,18 @@ async def apply_rollback(
     batch by batch: a key erased since the plan is not reinstated, and one deleted since
     is not removed again."""
     from server.embedding import get_embedder
+    from server.memory.app import blacklist_guard
     from server.memory.domain.excerpt import build_excerpt
     from server.memory.domain.memory_types import is_embedded
     from server.memory.domain.trust import attests
-
-    from server.memory.app import blacklist_guard
 
     # Check the complete reinstatement plan before its first batch writes. Each batch
     # still reads its heads afresh, and its commit holds this policy generation.
     values = [
         {"org": org, "namespace": namespace, "value": historical.value}
-        for historical, head in await _reinstated(org, namespace, plan.reinstate, ch=ch)
+        for historical, head in (
+            await _reinstated(org, namespace, plan.reinstate, ch=ch) if plan.reinstate else []
+        )
         if head is not None and historical.tombstoned_at is None
     ]
     policy = await blacklist_guard.enforce_rows(values)

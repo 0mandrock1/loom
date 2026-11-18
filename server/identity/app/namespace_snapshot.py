@@ -160,6 +160,26 @@ async def handle_namespace_snapshot(
     )
 
 
+async def _restore_payload(
+    input: NamespaceRestoreInput, version_base: int
+) -> tuple[list[dict[str, Any]], int, dict[tuple[str, str], int]]:
+    """Validate all restored values before the namespace or its grants change."""
+    memories, erased = await memory_snapshot.without_erased(
+        input.org, input.target_namespace, input.payload.memories
+    )
+    rows = memory_snapshot.checked_rows(
+        memory_snapshot.restore_rows(
+            memories,
+            org=input.org,
+            target_namespace=input.target_namespace,
+            rebind_agent=input.rebind_agent,
+            version_base=version_base,
+            actor=writer_actor(),
+        )
+    )
+    return rows, erased, await blacklist_guard.enforce_rows(rows)
+
+
 async def handle_namespace_restore(
     input: NamespaceRestoreInput,
 ) -> NamespaceRestoreOutput:
@@ -229,24 +249,8 @@ async def handle_namespace_restore(
                 counts={"erased_skipped": 0, **done},
             )
 
-        memories, erased = await memory_snapshot.without_erased(
-            input.org, input.target_namespace, payload.memories
-        )
-        # Every persisted column, through the builder, and refused before anything is
-        # written where its column cannot hold it. Versions bump off one base so restored
-        # rows win against any pre-existing row with the same identity.
         version_base = _time.time_ns()
-        rows = memory_snapshot.checked_rows(
-            memory_snapshot.restore_rows(
-                memories,
-                org=input.org,
-                target_namespace=input.target_namespace,
-                rebind_agent=input.rebind_agent,
-                version_base=version_base,
-                actor=writer_actor(),
-            )
-        )
-        policy = await blacklist_guard.enforce_rows(rows)
+        rows, erased, policy = await _restore_payload(input, version_base)
         now = naive_utc_now_seconds()
 
         # Only CREATE the namespace row when absent — an RMT insert over an

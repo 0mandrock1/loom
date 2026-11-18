@@ -8,11 +8,11 @@ import logging
 import math
 import re
 import uuid
-
-from fastapi import HTTPException
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
+
+from fastapi import HTTPException
 
 import server.memory.store as memory_repo
 from server.core import pg
