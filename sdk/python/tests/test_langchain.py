@@ -702,13 +702,23 @@ def test_clean_native_automatic_retrieval_preserves_payloads_and_documents(
         assert not original.protected and not producer.protected
 
 
-def _release_native_callbacks(
-    workers: list[threading.Thread], release_first: threading.Event
+def _run_native_callbacks(
+    workers: list[threading.Thread],
+    first_resolved: threading.Event,
+    second_finished: threading.Event,
+    release_first: threading.Event,
 ) -> None:
-    release_first.set()
-    for worker in workers:
-        if worker.ident is not None:
-            worker.join(timeout=10)
+    workers[0].start()
+    try:
+        assert first_resolved.wait(10), "first callback did not reach root resolution"
+        workers[1].start()
+        assert second_finished.wait(10), "second callback did not finish"
+    finally:
+        release_first.set()
+        for worker in workers:
+            if worker.ident is not None:
+                worker.join(timeout=10)
+    assert not any(worker.is_alive() for worker in workers)
 
 
 def test_concurrent_native_callbacks_retain_both_entry_contributors(
@@ -755,14 +765,7 @@ def test_concurrent_native_callbacks_retain_both_entry_contributors(
             threading.Thread(target=invoke, args=(first, "first"), daemon=True),
             threading.Thread(target=invoke, args=(second, "second"), daemon=True),
         ]
-        workers[0].start()
-        try:
-            assert first_resolved.wait(10), "first callback did not reach root resolution"
-            workers[1].start()
-            assert second_finished.wait(10), "second callback did not finish"
-        finally:
-            _release_native_callbacks(workers, release_first)
-        assert not any(worker.is_alive() for worker in workers)
+        _run_native_callbacks(workers, first_resolved, second_finished, release_first)
         assert errors == []
         assert sorted(documents) == ["first", "second"]
         assert all(
