@@ -908,6 +908,21 @@ Knowledge documents and conversations: chunking, search floor, thread titles.
 | `LOOM_KNOWLEDGE_GAPS_MAX_IN_FLIGHT` | `int` | `256` | live | Miss recordings in flight in one process, at most; past it a miss is dropped and counted, so a burst of abstentions cannot pile up background reads. |
 | `LOOM_KNOWLEDGE_GAPS_MAX_NAMESPACES` | `int` | `500` | live | Namespaces one pass groups, at most; the ones with the most misses first. |
 
+### Query-history definitions
+
+| Variable | Type | Default | Live | Meaning |
+| --- | --- | --- | --- | --- |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_ENABLED` | `bool` | `False` |  | Permit opt-in ClickHouse query-history sources to queue definition drafts. |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_MIN_USERS` | `int` | `3` | live | Distinct initial ClickHouse accounts required before drafting a query group. |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_MAX_DRAFTS` | `int` | `20` | live | Drafts one source may queue in a worker turn, at most. |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_MAX_GROUPS` | `int` | `200` | live | Most-used query groups inspected per source turn before skipping existing drafts. |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_WINDOW_DAYS` | `int` | `7` | live | Days of finished SELECT query history a turn groups. |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_READ_TIMEOUT_S` | `float` | `30` | live | Seconds allowed for one query-history source read. |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_MAX_PASS_SECONDS` | `float` | `120.0` |  | Deadline of one query-history pass; it starts no new group after half this budget. |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_INTERVAL_SECONDS` | `int` | `3600` |  | Seconds between query-history passes. |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_MAX_SOURCES` | `int` | `100` | live | Sources one pass reads, at most; each turn is separately time bounded. |
+| `LOOM_KNOWLEDGE_QUERY_HISTORY_MAX_BREAKERS` | `int` | `1000` |  | Query-history circuit states kept per process, at most; older sources are evicted first. |
+
 ### Chunking
 
 | Variable | Type | Default | Live | Meaning |
@@ -955,6 +970,7 @@ Knowledge documents and conversations: chunking, search floor, thread titles.
 | `LOOM_KNOWLEDGE_SOURCES_MAX_PER_NAMESPACE` | `int` | `8` | live | Active document sources (knowledge.source.add) one namespace may register; an add past it is refused with SOURCE_QUOTA. |
 | `LOOM_KNOWLEDGE_SOURCE_PROBE_TIMEOUT_S` | `float` | `20.0` | live | Seconds a document source's probe (add, update, check, rotate) or tracker short-id lookup may take in all; past it add, update and rotate answer SOURCE_UNREACHABLE and check answers reachable: false. |
 | `LOOM_KNOWLEDGE_SOURCE_SYNC_ENABLED` | `bool` | `False` |  | The knowledge_source_sync worker: pulls each registered document source's changed files into its namespace's documents. Off by default: it needs each source's credential, spends embedding calls on every changed document and model calls mining it for decisions. |
+| `LOOM_KNOWLEDGE_SOURCE_ACL_STALE_SECONDS` | `int` | `3600` |  | Mirrored reads require a complete listing and group observation within this many seconds; missing or older evidence admits nobody. |
 | `LOOM_KNOWLEDGE_SOURCE_SYNC_INTERVAL_SECONDS` | `int` | `900` |  | Seconds between sync passes while there are sources. |
 | `LOOM_KNOWLEDGE_SOURCE_SYNC_IDLE_INTERVAL_SECONDS` | `int` | `1800` |  | Seconds between passes that found no source to sync; one idle sleep plus one pass stays under three intervals, so the worker never reads as stalled. |
 | `LOOM_KNOWLEDGE_SOURCE_SYNC_MAX_PASS_SECONDS` | `int` | `600` |  | Seconds one sync pass may run before it is cancelled; it stops starting sources at three quarters of it. At least 180: 90 for the sync, then 60 of read time for one document's extraction and 30 for its writes before the deadline. |

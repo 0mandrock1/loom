@@ -2721,6 +2721,41 @@ settings:
   # Namespaces one pass groups, at most; the ones with the most misses first. [live]
   # knowledge_gaps_max_namespaces: 500
 
+  # --- query-history definitions ---
+
+  # Permit opt-in ClickHouse query-history sources to queue definition drafts. [restart]
+  # knowledge_query_history_enabled: false
+
+  # Distinct initial ClickHouse accounts required before drafting a query group. [live]
+  # knowledge_query_history_min_users: 3
+
+  # Drafts one source may queue in a worker turn, at most. [live]
+  # knowledge_query_history_max_drafts: 20
+
+  # Most-used query groups inspected per source turn before skipping existing drafts.
+  # [live]
+  # knowledge_query_history_max_groups: 200
+
+  # Days of finished SELECT query history a turn groups. [live]
+  # knowledge_query_history_window_days: 7
+
+  # Seconds allowed for one query-history source read. [live]
+  # knowledge_query_history_read_timeout_s: 30
+
+  # Deadline of one query-history pass; it starts no new group after half this budget.
+  # [restart]
+  # knowledge_query_history_max_pass_seconds: 120.0
+
+  # Seconds between query-history passes. [restart]
+  # knowledge_query_history_interval_seconds: 3600
+
+  # Sources one pass reads, at most; each turn is separately time bounded. [live]
+  # knowledge_query_history_max_sources: 100
+
+  # Query-history circuit states kept per process, at most; older sources are evicted
+  # first. [restart]
+  # knowledge_query_history_max_breakers: 1000
+
   # --- chunking ---
 
   # Sliding-window chunking on knowledge.add/upsert, in characters. chunk_size 0 = one
@@ -2808,6 +2843,10 @@ settings:
   # credential, spends embedding calls on every changed document and model calls mining
   # it for decisions. [restart]
   # knowledge_source_sync_enabled: false
+
+  # Mirrored reads require a complete listing and group observation within this many
+  # seconds; missing or older evidence admits nobody. [restart]
+  # knowledge_source_acl_stale_seconds: 3600
 
   # Seconds between sync passes while there are sources. [restart]
   # knowledge_source_sync_interval_seconds: 900

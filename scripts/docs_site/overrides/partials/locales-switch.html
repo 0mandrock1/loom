@@ -1,0 +1,13 @@
+{% if page and (page.meta.alternates or page.meta.language_landings) %}
+<nav aria-label="Language" lang="en">
+  <span>Language:</span>
+  {% for alternate in page.meta.language_landings or page.meta.alternates %}
+  {% if alternate.lang != 'x-default' %}
+  <a href="{{ alternate.url | e }}" lang="{{ alternate.lang }}" hreflang="{{ alternate.lang }}"{% if alternate.lang == page.meta.language %} aria-current="page"{% endif %}>{{ alternate.name }}</a>
+  {% endif %}
+  {% endfor %}
+</nav>
+{% endif %}
+{% if page and page.meta.translation_stale and not page.meta.translation_obsolete %}
+<p role="note" lang="en">The English source has changed since this machine translation. Read the <a href="{{ page.meta.alternates[0].url | e }}">English page</a> for the current instructions.</p>
+{% endif %}

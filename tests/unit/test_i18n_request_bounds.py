@@ -272,7 +272,11 @@ def test_valid_table_reflow_is_written_in_each_supported_container(
         "commonmark-list": ("1. Loom\n\n", "      "),
     }[container]
     source = prefix + "".join(indent + line for line in table.splitlines(keepends=True))
+    source_file = tmp_path / "docs/example.md"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text(source)
     monkeypatch.setattr(t, "ROOT", tmp_path)
+    monkeypatch.setattr(t, "sources", lambda: ("docs/example.md",))
     monkeypatch.setattr(t, "prepare", lambda path, lang: (source, ""))
     monkeypatch.setattr(t, "blob", lambda path: "0" * 40)
     monkeypatch.setattr(
@@ -285,5 +289,9 @@ def test_valid_table_reflow_is_written_in_each_supported_container(
     t.translate_page("docs/example.md", t.LANGUAGES[0], None, t.Spend(t.DEFAULT_MODEL, 1))
     assert (
         f"{translated} | {translated}"
-        in (tmp_path / t.target_path(t.LANGUAGES[0].code, "docs/example.md")).read_text()
+        in (
+            tmp_path
+            / t.lifecycle.checkpoint_path(t.target_path(t.LANGUAGES[0].code, "docs/example.md"))
+        ).read_text()
     )
+    assert not (tmp_path / t.target_path(t.LANGUAGES[0].code, "docs/example.md")).exists()

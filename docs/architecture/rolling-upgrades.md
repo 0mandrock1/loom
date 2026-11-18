@@ -858,6 +858,49 @@ schema. These rules keep that safe. The operator procedure is in
     Mirrored registration remains unavailable. `tests/unit/test_knowledge_source_retirements.py`
     checks name replacement, bounded progress and cursor persistence.
 
+58. **Mirrored work keeps diagnostics inside its namespace**: N suppresses shared
+    logs, spans, metrics and work figures while syncing or retiring mirrored content.
+    Its worker summaries carry fixed codes and no elapsed time or document figures;
+    billing rows stay in the mirror namespace. N-1 has no equivalent boundary, so
+    mirrored source creation remains refused until every process implements the read,
+    session and enablement protections. Before N-1 can serve after enablement, stop
+    writers, settle outstanding inserts and sagas, scrub marked receipts and audit
+    figures, and erase every mirror store, including `agent_events` and
+    `agent_cost_rollup_daily`, before clearing the enablement latch. Stopping a client
+    after its timeout does not prove a sent insert has completed.
+
+59. **Personal-agent reader claims and verified directory evidence** (migration
+    `103_sso_domain_evidence.sql`): N adds empty-default `hosted_domain` and `issuer`
+    String columns to `sso_links`. Direct verified sign-in writes them only for a fresh
+    active passwordless account under its ownership lock, after the SCIM check. N-1
+    ignores them and its ordinary link writes clear them to defaults; missing evidence
+    denies domain access. No backfill infers a domain from an email. N accepts the
+    optional Boolean
+    `reads_as_creator` claim, absent meaning false. Only the primary first-party
+    sign-in route `POST /v1/me/personal_tokens.create` and the assistant's one-answer
+    bridge set it; ordinary delegation omits it. Saved personal tokens use the existing
+    String `kind` column with value `personal_agent`, which N-1 lists and preserves
+    during revocation. N-1 ignores the claim and has no mirrored document leg, so it
+    grants no mirrored access. Mirrored sources remain unavailable until every process
+    implements the document and session protections. `tests/unit/test_mirror_reader_identity.py`
+    checks the claim and delegation boundaries.
+
+60. **Checked mirror reads use source-scoped group evidence** (migration
+    `104_knowledge_group_members.sql`): N reads each membership snapshot by org,
+    mirror, source id and group, and admits only a nondeleted snapshot within
+    `LOOM_KNOWLEDGE_SOURCE_ACL_STALE_SECONDS`. An empty table admits no group. N-1
+    ignores the table; namespace erasure removes its rows with the mirror. Mirrored
+    source creation remains refused until every process implements the read, marked
+    request, session and enablement protections.
+
+61. **Coarse permission keys and private lexical statistics** (migration
+    `105_mirror_access_candidates.sql`): `documents.access_keys` is materialized from
+    the existing permission JSON; N-1 writers need no new field. N still checks the
+    strict current list, and Postgres heads do not depend on published keys. Each
+    chunk-frequency view changes its query in place, retaining the input, target and
+    output columns. Both views exclude mirror namespaces for either build. Mirror creation remains
+    refused until the read, request, session and deployment protections are complete.
+
 ## What checks them
 
 `scripts/gates/mixed_version.py` (`make test-mixed-version`, the `mixed-version` CI job,
@@ -882,3 +925,32 @@ It does not check new enum values (rule 3), wire formats (rule 4), signing keys 
 than `default` (rule 5), new revocation keys (rule 18), an `/assistant` history entry
 (rule 46), or a process killed mid-migration. It skips with exit 0 where docker is
 unreachable; CI passes `--require`, which fails there instead.
+
+### Analyst event-view cutover
+
+The marked-event boundary replaces the analyst's raw event grant with the signed,
+typed `analysis_agent_events` view and advances the entity version. The raw table
+keeps a deny policy for the analyst while interrupted provisioning repairs its grants.
+The entity stamp is written after the view and grants, under the existing access lease.
+
+Deploy the probe ordering described in [Analyst probes across catalog versions](#analyst-probes-across-catalog-versions)
+across the fleet before this cutover. A capable older probe checks the key canary,
+then trusts the newer catalog; supported ordinary statements keep working without
+restoring raw access. Earlier probes count their raw event grant first and can refuse
+`insights.query` until rolled forward. Complete the fleet while mirrored creation is
+disabled. Raw SQL statements must use the catalog's masked relation. Starting an older
+build after enablement still requires the marked-event rollback cleanup; regranting
+raw access cannot substitute for it.
+
+### Analyst probes across catalog versions
+
+The analyst probe checks its signed key canary before reading the stored entity version.
+When a newer build owns the entities, the older probe leaves that build's catalog and
+grant checks to it. It does not query retired tables or overwrite the newer entities.
+A failed key canary still refuses analysis, regardless of the version stamp.
+
+Deploy this probe ordering across the fleet before a later catalog change revokes a raw
+relation. Builds with the earlier probe order can refuse `insights.query` after that
+cutover because they probe the retired relation before checking the entity version.
+Statements naming a removed relation still fail its grant check; trusting the newer
+catalog does not restore a retired grant.

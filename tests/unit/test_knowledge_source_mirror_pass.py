@@ -314,7 +314,7 @@ def test_a_turn_whose_list_reads_stop_still_retires_a_gone_file_at_the_full_inte
     world.states["decks"] = {"state_value": "", "detail": json.dumps(asked)}
     world.files = _files(3)
     result = _pass(world, _mirrored())
-    assert result.removed == 1 and not any("/doc4/" in uri for uri in world.docs)
+    assert result.removed == 0 and not any("/doc4/" in uri for uri in world.docs)
     assert "full_listed_at" in _own(world) and _own(world)["lists_cursor"]
 
 

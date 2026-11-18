@@ -985,6 +985,15 @@ before serialization; the field grants no additional read or write access.
 module each. The SQL is in `server/memory/app/retrieval/` and
 `server/memory/domain/search_sql.py`.
 
+Entity-summary seeds keep the filter's order, followed by query handles and known
+vocabulary tokens, deduplicated case-insensitively. Their union accepts at most 256
+names; the 257th refuses with `VECTOR_INPUT_TOO_LARGE` rather than truncating the
+ranking input. This typed input refusal propagates through optional re-reads, ask
+widening and composed search sections. Other failures retain their documented
+fallbacks. A search joins its cancelled local children before returning a refusal;
+the repository decision pass also joins its sibling when either search fails.
+Local coroutine completion does not prove remote query retirement.
+
 1. **Settle the request** (`request.py`): recipe and namespace `retrieval_defaults`, read
    scope, the `top_k` ceiling. A parked `page` handle is served directly.
 2. **Read-your-writes** (`consistency.py`): a namespace this process just wrote re-reads
@@ -1453,6 +1462,25 @@ supporter that lands between that read and the delete can lose its candidate. A 
 carries no `user_id`, and once a user's supporter rows are gone nothing ties an
 unsupported candidate to that user, so the census counts every unsupported candidate that
 still holds its rule in the org, whichever erasure left it.
+
+Private definition candidates retain their original proposal time in every version.
+Claim, model-completion and review writes share an org lease with the namespace queue
+erasure step and historical candidate redaction. A private review holds this lease from
+its evidence check through source creation, shared promotion and the status insert.
+Before any publication, the writer reads the erasure ledger under that lease;
+an erasure that may cover the evidence and was unfinished at the proposal time refuses
+the write, including one completed since then. User erasures count conservatively because
+the candidate holds no user identities. An unreadable ledger refuses the write. A send
+whose completion is unknown retains the lease until its server deadline has passed, so
+erasure and historical redaction cannot finish while the insert may still land. Draft
+model generation runs outside the lease. Private writes in one org serialize with its
+queue erasure, including erasure of a namespace list.
+
+Query-history registration and removal share a separate org writer lease with registry
+erasure. The ledger check uses the operation's start before its first await. Remote
+credential probes run outside this lease. Successful inserts finish before erasure can
+delete their rows; an insert with an unknown outcome retains its lease until its server
+deadline has passed.
 
 ## Audit rows
 

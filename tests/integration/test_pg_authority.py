@@ -1938,6 +1938,8 @@ async def test_a_summary_left_a_source_is_downgraded_with_its_vectors_and_search
     tags = ["consolidated", "src:k1", "src:k2"]
     made = await call("memory.set", _set(ns, "summary", "a summary of k1 and k2", tags=tags))
     assert made.status_code == 200, made.text
+    # The downgrade copies vectors from the summary's initial publication.
+    await _published(pg_conn, org)
     gone = await call("memory.delete", {"namespace": ns, "agent": "a", "memory_key": "k1"})
     assert gone.status_code == 200, gone.text
     assert gone.json().get("dependents_downgraded") == 1, gone.text
