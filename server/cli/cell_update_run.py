@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from server.cli import cell_control, cell_update_config
+from server.cli import cell_control, cell_scim, cell_update_config
 from server.cli import cell_update_pg as local
 from server.cli import cell_update_probe as probe
 from server.core import cell, deployment_config, pg_profile
@@ -65,7 +66,8 @@ class Run:
                 self.row,
             )
         if self.args.config or self.args.finish or self.args.revert:
-            self.selection()
+            _action, _recorded, _current, _pending, target, _desired, _next = self.selection()
+            await self.scim_precondition(target)
         elif self.row["is_first"] and self.args.probe_url:
             raise cell_control._refused(
                 "the first cell refreshes router-configured addresses without --probe-url"
@@ -79,6 +81,20 @@ class Run:
         from server.cli.cell_update_addresses import refresh
 
         return await refresh(self)
+
+    async def scim_precondition(self, target: dict[str, Any]) -> None:
+        from server.cli.cell_attach import _SCAN_BUDGET_S
+
+        await cell_scim.check(
+            self.ch,
+            self.owner.conn,
+            self.row,
+            (self.state.current, self.state.pending),
+            target=target,
+            seconds=_SCAN_BUDGET_S,
+            revoke=getattr(self.args, "revoke_unprovisioned", False),
+            log=lambda message: print(f"loom cell update: {message}", file=sys.stderr),
+        )
 
     def check_answer(
         self, answer: dict[str, Any], current: dict[str, Any], pending: dict[str, Any] | None
@@ -177,6 +193,7 @@ class Run:
         self.state = await self.durable()
         if not same((self.state.current, self.state.pending), (desired, nxt)):
             raise cell_control._refused("local acceptance differs after its durable update")
+        await self.scim_precondition(target)
         if action != "config" and old_pending:
             from server.cli.cell_update_participants import settle
 
@@ -184,6 +201,7 @@ class Run:
             self.state = await self.durable()
             if not same((self.state.current, self.state.pending), (target, None)):
                 raise cell_control._refused("local cutoff changed while participants turned over")
+            await self.scim_precondition(target)
             # A fresh full-row read refuses a delayed claim before final reservation release.
             latest = await self.call("")
             if not same(cell_control.preconditions(latest), cell_control.preconditions(self.row)):

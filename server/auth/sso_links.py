@@ -206,6 +206,8 @@ async def _write(
 ) -> None:
     """Write the link rows through `ch`; the grant watermark goes through the
     default client (`grant_cache.changed`), as every grant write's does."""
+    from server.auth.authz import identity_write
+
     if not accounts:
         return
     ch = ch or get_client()
@@ -221,23 +223,24 @@ async def _write(
         for org in orgs:
             await announced.enter_async_context(grant_cache.announced(org))
         try:
-            await ch.insert(
-                TABLE,
-                [
-                    {
-                        "email": email.strip().lower(),
-                        "org": org,
-                        "namespace": namespace,
-                        "linked": linked,
-                        "hosted_domain": hosted_domain,
-                        "issuer": issuer,
-                        "linked_by": by,
-                        "linked_at": now,
-                        "version": version,
-                    }
-                    for org, namespace in accounts
-                ],
-            )
+            with identity_write():
+                await ch.insert(
+                    TABLE,
+                    [
+                        {
+                            "email": email.strip().lower(),
+                            "org": org,
+                            "namespace": namespace,
+                            "linked": linked,
+                            "hosted_domain": hosted_domain,
+                            "issuer": issuer,
+                            "linked_by": by,
+                            "linked_at": now,
+                            "version": version,
+                        }
+                        for org, namespace in accounts
+                    ],
+                )
         finally:
             for org in orgs:
                 aliases.invalidate_org(org)

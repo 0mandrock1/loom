@@ -213,7 +213,7 @@ async def test_scim_on_refuses_before_generation_claim_or_acceptance(
         run.args.finish = True
     claim = AsyncMock(side_effect=AssertionError("must not claim"))
     monkeypatch.setattr(cell_control, "claim", claim)
-    with pytest.raises(ValueError, match="SCIM"):
+    with pytest.raises(cell_control.Refused, match="census client differs"):
         await run.start(run.owner)
     claim.assert_not_awaited()
 

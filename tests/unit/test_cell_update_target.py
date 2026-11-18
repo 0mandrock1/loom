@@ -78,11 +78,15 @@ def test_target_refuses_different_deployment_and_bucketless_adoption() -> None:
         )
 
 
-def test_target_refuses_scim_before_any_state_work() -> None:
+def test_target_refuses_invalid_scim_credentials_before_any_state_work() -> None:
     from server.cli.cell_update_config import target_fingerprint
 
-    with pytest.raises(ValueError, match="per-cell SCIM") as error:
-        target_fingerprint(_config(scim_token="private-scim-token"), "deployment", REGISTERED)
+    with pytest.raises(ValueError, match="SCIM") as error:
+        target_fingerprint(
+            _config(scim_token="private-scim-token"),
+            "deployment",
+            REGISTERED | {"is_first": True},
+        )
     assert "private-scim-token" not in str(error.value)
 
 

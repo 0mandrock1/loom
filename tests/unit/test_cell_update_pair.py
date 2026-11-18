@@ -73,16 +73,13 @@ def test_configuration_pair_uses_type_sensitive_unknown_field_equality() -> None
 
 
 @pytest.mark.parametrize("action", ["config", "finish", "revert"])
-def test_configuration_pair_refuses_scim_without_enforcement(action: str) -> None:
+def test_configuration_pair_selects_scim_for_the_native_owner_precondition(action: str) -> None:
     target = value("new")
     target["fields"]["scim"] = True
-    with pytest.raises(ValueError, match="per-cell SCIM"):
-        fingerprints.configuration_pair(
-            target if action == "revert" else value("old"),
-            target if action == "finish" else None,
-            target,
-            action,
-        )
+    current = target if action == "revert" else value("old")
+    assert fingerprints.configuration_pair(
+        current, target if action == "finish" else None, target, action
+    ) == ((current, target) if action == "config" else (target, None))
 
 
 def test_configuration_pair_allows_revert_from_an_existing_scim_candidate() -> None:
