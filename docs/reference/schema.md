@@ -246,7 +246,7 @@ the `loom` tables each view reads, and, for each materialized view, its target, 
 | `knowledge_ingestions` | `ReplacingMergeTree(version)` | `(org, namespace, ingestion_id)` |  | `toDateTime(updated_at) + toIntervalDay(30)` |  |
 | `knowledge_mirrors` | `ReplacingMergeTree(version)` | `(org, namespace, mirror)` |  |  |  |
 | `knowledge_source_listings` | `ReplacingMergeTree(version)` | `(org, namespace, source_id)` |  |  |  |
-| `knowledge_source_push` | `ReplacingMergeTree(version)` | `(org, source_id)` |  |  |  |
+| `knowledge_source_push` | `ReplacingMergeTree(version)` | `(org, namespace, source_id)` |  |  |  |
 | `knowledge_sources` | `ReplacingMergeTree(version)` | `(org, namespace, name)` |  |  |  |
 | `knowledge_uploads` | `MergeTree` | `(org, namespace, upload_id)` |  | `toDateTime(expires_at) + toIntervalDay(7)` |  |
 | `learnings_queue` | `ReplacingMergeTree(version)` | `(org, namespace, candidate_id)` | `toYYYYMM(proposed_at)` |  |  |
