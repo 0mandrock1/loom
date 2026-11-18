@@ -534,6 +534,19 @@ async def _read_latest_word(
     return rows
 
 
+def _note_identifier_injections(out: list[Any]) -> None:
+    """Record injection counts without failing the answer."""
+    try:
+        from server.core import request_work as _rw
+
+        _n_chunk_rows = sum(
+            1 for h in out if str(getattr(h, "memory_key", "")).startswith("chunk:")
+        )
+        _rw.note_injected(facts=len(out) - _n_chunk_rows, chunks=_n_chunk_rows)
+    except Exception:  # noqa: BLE001 — a counter never fails an answer
+        pass
+
+
 async def _inject_identifier_memories(
     search_input: Any, idents: list[str], ranked: list[Any], *, case_insensitive: bool = False
 ) -> list[Any]:
@@ -669,13 +682,5 @@ async def _inject_identifier_memories(
             continue
         hit._row_identity = row_identity(r)  # the row read (none for a chunk), for the authority
         out.append(hit)
-    try:
-        from server.core import request_work as _rw
-
-        _n_chunk_rows = sum(
-            1 for h in out if str(getattr(h, "memory_key", "")).startswith("chunk:")
-        )
-        _rw.note_injected(facts=len(out) - _n_chunk_rows, chunks=_n_chunk_rows)
-    except Exception:  # noqa: BLE001 — a counter never fails an answer
-        pass
+    _note_identifier_injections(out)
     return out

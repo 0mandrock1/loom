@@ -9,6 +9,7 @@ from server.core import pg, request_work
 from server.core.ch import sequential_reads, set_query_tag
 from server.core.diagnostics import private_work
 from server.core.errors import VectorCapacityError
+from server.core.vectors.admission import vector_work
 from server.core.vectors.private_first import each
 from server.knowledge.app.search import HybridSearchQuery, _common_where
 from server.knowledge.app.source_access import Admitted, ReadPlan
@@ -80,17 +81,18 @@ async def collect_leg(
             sql, params = store.statement(where, params, leg=leg, access_keys=coarse)
             # Open and consume in this coroutine: acquiring all streams first can
             # deadlock when selected legs exceed the available stream slots.
-            async with store.candidates(sql, params) as stream:
-                batch = []
-                async for row in stream:
-                    batch.append(row)
-                    if len(batch) == 64:
+            with vector_work(query.org, mirrors):
+                async with store.candidates(sql, params) as stream:
+                    batch = []
+                    async for row in stream:
+                        batch.append(row)
+                        if len(batch) == 64:
+                            await take(batch)
+                            batch = []
+                            if len(out) >= limit:
+                                break
+                    if batch and len(out) < limit:
                         await take(batch)
-                        batch = []
-                        if len(out) >= limit:
-                            break
-                if batch and len(out) < limit:
-                    await take(batch)
     except VectorCapacityError:
         raise
     except Exception:  # noqa: BLE001 — an unconditional discovery failure invalidates every mirror leg

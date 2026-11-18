@@ -27,6 +27,7 @@ _SINKS = {
     "query_columns",
     "raw_bytes",
     "raw_stream",
+    "candidates",
     "_rows",
     "_chunk_query",
     "_call_retrying_empty_block",
@@ -117,15 +118,9 @@ _CLASSIFIED = {
     ),
     "server/knowledge/app/source_search.py:collect_leg": (
         0,
-        (),
-        (),
+        (("query.org", "mirrors", "1"),),
+        (("candidates", ("query.org", "mirrors", "1")),),
         (("server/knowledge/store/source_candidates.py:statement", 1),),
-    ),
-    "server/knowledge/store/source_candidates.py:candidates": (
-        0,
-        (("str(params['org'])", "list(params['nss'])", "1"),),
-        (("_rows", ("str(params['org'])", "list(params['nss'])", "1")),),
-        (),
     ),
     "server/knowledge/store/source_candidates.py:statement": (1, (), (), ()),
     "server/memory/app/conflicts.py:_foreign_pinned_rows": (
@@ -214,7 +209,7 @@ _CLASSIFIED = {
         (),
         (("server/memory/app/retrieval/fact_rank.py:_bm25_hybrid_rank_score", 1),),
     ),
-    "server/memory/app/retrieval/fact_sql.py:_fact_distance_expr": (3, (), (), ()),
+    "server/memory/app/retrieval/fact_sql.py:_fact_distance_expr": (2, (), (), ()),
     "server/memory/app/retrieval/fact_sql.py:_fact_leg_sql": (
         2,
         (),

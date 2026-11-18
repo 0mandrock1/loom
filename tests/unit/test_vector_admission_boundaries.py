@@ -10,6 +10,7 @@ import pytest
 from server.core import ch as ch_module
 from server.core import ch_schema_guard
 from server.core.schema import status
+from server.core.vectors.admission import vector_work
 from server.knowledge.store import source_candidates
 from server.memory.app.search import ann_entity_boosts
 from server.settings import settings
@@ -69,15 +70,16 @@ async def test_mirror_stream_clears_only_consumer_attribution_and_closes_in_its_
     driver = StreamingDriver()
     driver.release.set()
     monkeypatch.setattr(ch, "_client", driver)
-    async with source_candidates.candidates(
-        "SELECT namespace, cosineDistance(embedding, {q:Array(Float32)}) AS distance FROM loom.chunks",
-        {"org": "one-org", "nss": ["private"], "q": [1.0, 0.0]},
-        ch=ch,
-    ) as rows:
-        assert await anext(rows) == {"namespace": "private", "chunk_idx": 0}
-        assert driver.stream.opened and not driver.stream.closed
-        assert await ch.query_all("SELECT 1") == []
-        assert "max_rows_to_read" not in driver.settings[-1]
+    with vector_work("one-org", ["private"]):
+        async with source_candidates.candidates(
+            "SELECT namespace, cosineDistance(embedding, {q:Array(Float32)}) AS distance FROM loom.chunks",
+            {"org": "one-org", "nss": ["private"], "q": [1.0, 0.0]},
+            ch=ch,
+        ) as rows:
+            assert await anext(rows) == {"namespace": "private", "chunk_idx": 0}
+            assert driver.stream.opened and not driver.stream.closed
+            assert await ch.query_all("SELECT 1") == []
+            assert "max_rows_to_read" not in driver.settings[-1]
     assert driver.stream.closed
     assert driver.stream_settings["max_rows_to_read"] == 1_000_000
     assert driver.stream_settings["read_overflow_mode"] == "throw"

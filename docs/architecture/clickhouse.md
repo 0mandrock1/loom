@@ -1022,7 +1022,6 @@ rows. When any replica is older, every Loom session turns the cache off when it 
 - [Troubleshooting](../operations/troubleshooting.md): too many parts, slow inserts.
 - [Performance tuning](../guides/performance-tuning.md): traffic classes, vector knobs.
 
-
 ## Vector read admission
 
 Vector dispatches carry their target org, authorized namespaces and probe weight.

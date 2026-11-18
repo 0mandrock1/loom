@@ -269,7 +269,7 @@ async def find_chunks_by_identifier(
             FROM loom.memory_chunks FINAL
             WHERE {where_sql}
               AND ({_CHUNK_KEY}) IN (
-                  SELECT DISTINCT {_CHUNK_KEY} FROM loom.memory_chunks WHERE {where_sql}
+              SELECT DISTINCT {_CHUNK_KEY} FROM loom.memory_chunks WHERE {where_sql}
               )
             ORDER BY {order_by}
             LIMIT {{lim:UInt32}}
