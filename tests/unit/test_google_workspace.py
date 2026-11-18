@@ -176,6 +176,7 @@ async def test_shared_grant_keeps_its_original_payload_and_response_contract(
 @pytest.mark.parametrize(
     ("subject", "scope"),
     [
+        (None, gdrive.ReadScope.DRIVE),
         ("not-an-email", gdrive.ReadScope.DRIVE),
         ("person@example.com\n", gdrive.ReadScope.DIRECTORY_USERS),
         (_SUBJECT, "https://www.googleapis.com/auth/drive"),
@@ -183,7 +184,7 @@ async def test_shared_grant_keeps_its_original_payload_and_response_contract(
     ],
 )
 async def test_subject_and_scope_refusals_make_no_http_request(
-    monkeypatch: pytest.MonkeyPatch, account: Any, subject: str, scope: Any
+    monkeypatch: pytest.MonkeyPatch, account: Any, subject: Any, scope: Any
 ) -> None:
     async with _http(monkeypatch, lambda request: pytest.fail("no request permitted")) as calls:
         with pytest.raises(CredentialRefused):

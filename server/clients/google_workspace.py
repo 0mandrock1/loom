@@ -151,6 +151,8 @@ async def delegated_token(
     """An exact read-scope grant; neither scope probing nor source admission."""
     _positive(max_bytes)
     _remaining(deadline)
+    if not isinstance(subject, str):
+        raise CredentialRefused("the delegated subject is not an email")
     assertion = gdrive._signed_assertion(account, scope=scope, subject=subject)
     value = await _request(
         "POST",
