@@ -2906,6 +2906,10 @@ settings:
   # sources. [restart]
   # knowledge_crawl_identity_capture_timeout_s: 30.0
 
+  # Whole local canonical-person crawl cleanup, including publisher fencing and residue.
+  # [restart]
+  # knowledge_crawl_person_cleanup_timeout_s: 60.0
+
   # Seconds one connected-account OAuth request may take, including its response. The
   # caller's remaining deadline can shorten this bound. [restart]
   # knowledge_connected_oauth_timeout_s: 30.0

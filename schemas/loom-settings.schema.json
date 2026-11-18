@@ -3173,6 +3173,12 @@
           "type": "integer",
           "description": "Groups across one complete crawl expansion; the total-person ceiling stays fixed."
         },
+        "knowledge_crawl_person_cleanup_timeout_s": {
+          "default": 60.0,
+          "exclusiveMinimum": 0,
+          "type": "number",
+          "description": "Whole local canonical-person crawl cleanup, including publisher fencing and residue."
+        },
         "knowledge_crawl_registry_page_size": {
           "default": 256,
           "maximum": 4096,
