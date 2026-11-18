@@ -12,8 +12,8 @@ header read:
   `413 PAYLOAD_TOO_LARGE` in the same `{"detail": {code, message}}` shape
   every other loom error uses — the body is never read;
 * a chunked / undeclared body is counted as it streams and cut off at the
-  cap with the same 413 (the handler's `await request.json()` then fails
-  closed as a 400, since the body was never delivered whole).
+  cap with the same 413; an overflow aborts the downstream body read
+  before a complete JSON prefix can reach a handler.
 
 The cap is `LOOM_MAX_REQUEST_BYTES` (32 MiB by default — a 400-message
 `memory.set_from_messages` is a few hundred KB, the largest `memory.import`
@@ -64,6 +64,10 @@ def _too_large_response(limit: int, declared: int | None) -> tuple[dict[str, Any
     return {"type": "http.response.start", "status": 413, "headers": headers}, body
 
 
+class _BodyTooLarge(Exception):
+    """Stop body parsing without exposing a valid truncated prefix."""
+
+
 class BodyLimitMiddleware:
     """Refuse bodies above the global and fixed administration caps."""
 
@@ -109,9 +113,7 @@ class BodyLimitMiddleware:
                 seen += len(message.get("body") or b"")
                 if seen > limit:
                     tripped = True
-                    # Starve the downstream reader: a truncated body with
-                    # more_body=False makes `request.json()` fail closed.
-                    return {"type": "http.request", "body": b"", "more_body": False}
+                    raise _BodyTooLarge
             return message
 
         sent_start = False
@@ -130,7 +132,13 @@ class BodyLimitMiddleware:
                 sent_start = True
             await send(message)
 
-        await self.app(scope, counting_receive, guarded_send)
+        try:
+            await self.app(scope, counting_receive, guarded_send)
+        except _BodyTooLarge:
+            if not sent_start:
+                start, body = _too_large_response(limit, None)
+                await send(start)
+                await send({"type": "http.response.body", "body": body})
 
 
 __all__ = ["CODE", "BodyLimitMiddleware"]
