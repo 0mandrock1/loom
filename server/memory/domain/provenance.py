@@ -120,6 +120,7 @@ PIPELINE_ACTORS: Final = frozenset(
         "process:session_brief",
         "process:source-push",
         "process:task_lease_sweep",
+        "process:tracker-github-feed",
     }
 )
 
