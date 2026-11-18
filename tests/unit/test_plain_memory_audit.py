@@ -79,7 +79,9 @@ def _write(*, kind: str = "episodic", high: bool = False, dry_run: bool = False)
 
 
 @pytest.mark.parametrize("kind,high", [("episodic", False), ("profile", False), ("semantic", True)])
-async def test_plain_ch_write_emits_one_hash_only_receipt(plain: Any, kind: str, high: bool) -> None:
+async def test_plain_ch_write_emits_one_hash_only_receipt(
+    plain: Any, kind: str, high: bool
+) -> None:
     writes, receipts = plain
     w = _write(kind=kind, high=high)
     out = await set_commit._set_plain_insert(w, object())
@@ -145,7 +147,9 @@ async def test_plain_receipt_survives_later_lift_failure(plain: Any, monkeypatch
 
 
 @pytest.mark.parametrize("high", [False, True])
-async def test_plain_pg_commit_already_owns_audit_receipt(plain: Any, monkeypatch: Any, high: bool) -> None:
+async def test_plain_pg_commit_already_owns_audit_receipt(
+    plain: Any, monkeypatch: Any, high: bool
+) -> None:
     writes, receipts = plain
     monkeypatch.setattr(set_commit.pg, "enabled", lambda: True)
     commit = AsyncMock(return_value="committed")

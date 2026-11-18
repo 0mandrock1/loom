@@ -78,7 +78,12 @@ async def test_plain_memory_write_has_hash_only_receipt(
     if event == "memory.set":
         assert subject["verdict"] == ""
         assert set(subject) == {
-            "memory_key", "memory_id", "content_sha256", "source_class", "verdict", "pinned"
+            "memory_key",
+            "memory_id",
+            "content_sha256",
+            "source_class",
+            "verdict",
+            "pinned",
         }
     assert "value" not in subject and "serialized_value" not in subject
     assert value["private_note"] not in raw_subject
