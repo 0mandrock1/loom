@@ -380,8 +380,9 @@ included, leaves out the people an erasure excluded ([erasure](#erasure-and-audi
 
 The probe checks that the delegation grants no write on what the crawl reads: it asks
 for each of the three scopes, which must be granted, and for
-`https://www.googleapis.com/auth/drive`, `admin.directory.user` and
-`admin.directory.group`, which the store must refuse; a credential the store grants any
+`https://www.googleapis.com/auth/drive`, `admin.directory.user`,
+`admin.directory.group` and the distinct `admin.directory.group.member` write scope,
+which the store must refuse; a credential the store grants any
 of them is refused (`CREDENTIAL_REFUSED`). It cannot prove the delegation grants nothing
 else (a mail scope, say), and the page says so to the admin who registers it. The audit
 rows of `add`, `update` and `rotate` record the configured subjects as keyed hashes (an
