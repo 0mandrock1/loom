@@ -1,13 +1,14 @@
 # Knowledge gaps
 
-Loom records the searches that found nothing a caller could use and groups them, once a day,
-into knowledge gaps: the questions several people asked that the namespace's memory and
-documents do not answer. An admin reads them with `knowledge.gaps.list` and on the Library
-page. Gaps are the first part of the curation loop; drafting a definition for a gap is
-designed in the [curation loop design](../development/curation-loop-design.md), and
-[governed definitions in
-search](../concepts/identities-and-namespaces.md#governed-definitions-in-search) describes
-how a governed definition is served.
+Loom records the searches that found nothing a caller could use and groups them, once a
+day, into knowledge gaps: the questions several people asked that the namespace's memory
+and documents do not answer. An admin reads them with `knowledge.gaps.list` and on the
+Library page. The **Draft definition** action queues a private candidate from currently eligible
+questions. An admin reviews it before publication; [definition drafts](definition-drafts.md)
+describes the claim, privacy and promotion rules.
+
+[Governed definitions in search](../concepts/identities-and-namespaces.md#governed-definitions-in-search)
+describes how a published definition is served.
 
 ```mermaid
 flowchart LR

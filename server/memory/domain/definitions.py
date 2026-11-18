@@ -15,6 +15,7 @@ from typing import Any
 from server.core.hashing import query_text
 
 DEFINITION_KEY_PREFIX = "definition/"
+DEFINITION_DRAFT_KINDS = ("knowledge_gap", "query_history")
 
 
 def fold_name(name: str) -> str:

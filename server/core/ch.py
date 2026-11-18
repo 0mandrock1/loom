@@ -16,9 +16,10 @@ import re
 import sys
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Set
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import FrameType
 from typing import Any, cast
@@ -42,6 +43,11 @@ from server.core.ch_errors import (
     strip_quantized_setting,
 )
 from server.core.ch_names import NamedClient, qualify, split_table
+from server.core.ch_observer import (
+    ObservationUnavailable,
+    PolicyObserver,
+    observer_origins,
+)
 from server.core.ch_request_cost import note_result_summary, request_query_id
 from server.core.ch_schema_guard import guard_pending_schema
 from server.core.ch_statement_text import capture_statement, statement_digest, statement_shape
@@ -167,6 +173,37 @@ _analyst_var: ContextVar[tuple[str, str, dict[str, Any]] | None] = ContextVar(
 )
 
 
+class CoordinationSessionLost(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("ClickHouse coordination session was not preserved")
+
+
+@dataclass
+class _CoordinationSession:
+    owner: CHClient
+    driver: AsyncClient
+    generation: int
+    identifier: str
+    checked: bool = False
+    closed: bool = False
+
+    def check(self, client: CHClient | None = None) -> None:
+        if (
+            self.closed
+            or (client is not None and client is not self.owner)
+            or self.owner.generation != self.generation
+            or self.owner.client is not self.driver
+            or _analyst_var.get() is not None
+        ):
+            self.closed = True
+            raise CoordinationSessionLost()
+
+
+_coordination_session: ContextVar[_CoordinationSession | None] = ContextVar(
+    "ch_coordination_session", default=None
+)
+
+
 @contextmanager
 def as_analyst(user: str, password: str, extra: dict[str, Any]) -> Iterator[None]:
     """Every statement in this block logs in as `user` and carries `extra`
@@ -201,6 +238,9 @@ def _reader_auth() -> dict[str, Any]:
     Only the query path sends it, where every statement is read-class and so
     carries the caller-shaped ceilings too. Inside `as_analyst` it sends the
     analyst user instead, always."""
+    if session := _coordination_session.get():
+        session.check()
+        return {}
     analyst = _analyst_var.get()
     if analyst is not None:
         user, password = analyst[0], analyst[1]
@@ -512,6 +552,9 @@ def statement_settings(
     LOOM_CH_SETTINGS_BY_TRAFFIC_CLASS (`priority`, `max_threads`, …) — the
     caller's own `extra` wins on a name it already sets, and neither setting
     changes which rows the statement returns."""
+    session = _coordination_session.get()
+    if session is not None:
+        session.check()
     out = query_settings(extra)
     cls = cls or statement_class(sql)
     _apply_class_timeout(out, cls)
@@ -540,6 +583,14 @@ def statement_settings(
         for name, value in traffic_class_settings(tclass).items():
             out.setdefault(name, value)
     _apply_caller_ceilings(out, cls)
+    if session is not None:
+        out.update(
+            session_id=session.identifier,
+            session_check=int(session.checked),
+            session_timeout=30,
+            use_query_cache=0,
+            use_query_condition_cache=0,
+        )
     return _with_request_query_id(out)
 
 
@@ -812,6 +863,25 @@ class CHClient:
         if "_reconnect_lock" not in d:
             d["_reconnect_lock"] = asyncio.Lock()
 
+    @asynccontextmanager
+    async def coordination_session(self) -> AsyncIterator[None]:
+        """Keep a checked named session, service principal and local client identity.
+
+        Creation can retry, so callers also attest the backend at each proof step.
+        Later queries require the named session; errors and client changes invalidate it.
+        """
+        if _coordination_session.get() is not None or _analyst_var.get() is not None:
+            raise CoordinationSessionLost()
+        session = _CoordinationSession(self, self.client, self.generation, uuid.uuid4().hex)
+        token = _coordination_session.set(session)
+        try:
+            await self.query_one("SELECT 1 AS coordination_ready")
+            session.checked = True
+            yield
+        finally:
+            session.closed = True
+            _coordination_session.reset(token)
+
     @property
     def connected(self) -> bool:
         return self._client is not None
@@ -820,8 +890,9 @@ class CHClient:
         limit = int(settings.ch_pool_maxsize)
         # Streaming reads have connections of their own beside the pool; 0 is unbounded.
         connector_limit = limit + STREAM_SLOTS if limit > 0 else 0
+        configuration = connection_kwargs()
         driver = await clickhouse_connect.get_async_client(
-            **connection_kwargs(),
+            **configuration,
             compress=True,
             # The driver's read timeout is the outer backstop
             # at the largest class bound (the driver's own 300 s when that
@@ -862,6 +933,7 @@ class CHClient:
         # Settled before any task can use it: a reconnect publishes it only now.
         await _turn_off_unsafe_condition_cache(client)
         self._client = client
+        self._connection_config = configuration
         await _probe_vector_state(self)
 
     async def disconnect(self) -> None:
@@ -887,6 +959,80 @@ class CHClient:
     def generation(self) -> int:
         self._ensure_state()
         return int(self._generation)
+
+    @asynccontextmanager
+    async def policy_observers(self) -> AsyncIterator[tuple[PolicyObserver, ...]]:
+        """Read native access policy authority without replaying a session bootstrap."""
+        self._ensure_state()
+        owner, generation = self.client, self.generation
+        configuration = connection_kwargs()
+        origins = tuple(settings.ch_analysis_observer_urls)
+        if (
+            self.__dict__.get("_connection_config") != configuration
+            or _analyst_var.get() is not None
+            or str(configuration["username"]) == "loom_analyst"
+        ):
+            raise ObservationUnavailable()
+        normalized = observer_origins(configuration, origins)
+
+        async def guarded(
+            sql: str, send: Callable[[], Awaitable[list[dict[str, Any]]]]
+        ) -> list[dict[str, Any]]:
+            def unchanged() -> None:
+                if (
+                    self.client is not owner
+                    or self.generation != generation
+                    or connection_kwargs() != configuration
+                    or tuple(settings.ch_analysis_observer_urls) != origins
+                    or _analyst_var.get() is not None
+                ):
+                    raise ObservationUnavailable()
+
+            unchanged()
+            await guard_pending_schema("policy_observer", sql, "read")
+            took = await self._acquire_slot("policy_observer")
+            try:
+                unchanged()
+                result: list[dict[str, Any]] = await self._bounded("policy_observer", "read", send)
+                unchanged()
+                return result
+            finally:
+                if took:
+                    self._release_slot()
+
+        def options(sql: str) -> dict[str, Any]:
+            # Native policy bodies can contain access keys. Keep local capture and
+            # statement heads out of this channel.
+            with uncaptured():
+                return statement_settings(sql, cls="read")
+
+        observers: list[PolicyObserver] = []
+        failed = False
+        try:
+            for origin in normalized:
+                observer = PolicyObserver(
+                    origin,
+                    str(configuration["username"]),
+                    str(configuration["password"]),
+                    str(configuration["database"]),
+                    guarded,
+                    options,
+                )
+                # Register ownership before a bootstrap can fail or be cancelled.
+                observers.append(observer)
+                await observer.bootstrap()
+            yield tuple(observers)
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            # Concurrent bounded closes give one cleanup interval for all routes.
+            # A primary refusal/cancellation stands even if its session never formed.
+            results = await asyncio.gather(
+                *(observer.close() for observer in observers), return_exceptions=True
+            )
+            if not failed and any(isinstance(result, BaseException) for result in results):
+                raise ObservationUnavailable()
 
     async def _reconnect(self, seen: int | None = None) -> None:
         """Replace the shared client with a fresh one.
@@ -1004,6 +1150,26 @@ class CHClient:
         if self._slots is not None:
             self._slots.release()
 
+    async def _guard_schema(
+        self, op_name: str, sql: str, cls: str, *, insert_table: str | None = None
+    ) -> None:
+        session = _coordination_session.get()
+        if session is None:
+            await guard_pending_schema(op_name, sql, cls, insert_table=insert_table)
+            return
+        try:
+            session.check(self)
+            # The advisory ledger refresh uses the global client, outside the proof.
+            token = _coordination_session.set(None)
+            try:
+                await guard_pending_schema(op_name, sql, cls, insert_table=insert_table)
+            finally:
+                _coordination_session.reset(token)
+            session.check(self)
+        except BaseException:
+            session.closed = True
+            raise
+
     async def _with_retry(  # type: ignore[no-untyped-def]
         self,
         op_name: str,
@@ -1017,9 +1183,22 @@ class CHClient:
         retried batch lands once); a replica-bound server error gets up to two
         more connections; a class deadline and every other error raise at once."""
         self._ensure_state()
-        took = await self._acquire_slot(op_name)
+        session = _coordination_session.get()
+        took = False
         try:
+            if session is not None:
+                session.check(self)
+            took = await self._acquire_slot(op_name)
+            if session is not None:
+                session.check(self)
+                result = await self._bounded(op_name, cls, fn)
+                session.check(self)
+                return result
             return await self._retry_ladder(op_name, fn, cls=cls)
+        except BaseException:
+            if session is not None:
+                session.closed = True
+            raise
         finally:
             if took:
                 self._release_slot()
@@ -1110,7 +1289,7 @@ class CHClient:
             note_result_summary(res)
             return res
 
-        await guard_pending_schema(op_name, sql, "read")
+        await self._guard_schema(op_name, sql, "read")
         try:
             return await self._with_retry(op_name, lambda: _q(sql), cls="read")
         except Exception as e:
@@ -1168,7 +1347,7 @@ class CHClient:
                 **_reader_auth(),
             )
 
-        await guard_pending_schema("raw_bytes", sql, "read")
+        await self._guard_schema("raw_bytes", sql, "read")
         return bytes(await self._with_retry("raw_bytes", _q, cls="read"))
 
     @asynccontextmanager
@@ -1184,6 +1363,9 @@ class CHClient:
         of the `STREAM_SLOTS` until the block exits, not a pool slot, since the client sets
         how long that takes. `settings` are this statement's own ClickHouse settings."""
 
+        if session := _coordination_session.get():
+            session.closed = True
+            raise CoordinationSessionLost()
         held: list[int] = []  # the generation whose client opened the stream
 
         async def _open() -> Any:
@@ -1203,7 +1385,7 @@ class CHClient:
             return stream
 
         self._ensure_state()
-        await guard_pending_schema("raw_stream", sql, "read")
+        await self._guard_schema("raw_stream", sql, "read")
         await acquire_slot(self._stream_slots, "streaming read")
         try:
             stream = await self._retry_ladder("raw_stream", _open, cls="read")
@@ -1249,7 +1431,7 @@ class CHClient:
             )
             note_result_summary(res)
 
-        await guard_pending_schema("execute", sql, cls)
+        await self._guard_schema("execute", sql, cls)
         await self._with_retry("execute", _q, cls=cls)
 
     async def insert(
@@ -1257,6 +1439,8 @@ class CHClient:
         table: str,
         rows: list[dict[str, Any]],
         settings: dict[str, Any] | None = None,
+        *,
+        required_columns: Set[str] = frozenset(),
     ) -> None:
         """Batch insert via the native typed insert path. `settings` forwards
         CH query settings. An `insert_deduplication_token` in `settings`
@@ -1267,27 +1451,36 @@ class CHClient:
         (table, column) per process — instead of failing the batch. A process
         running code newer than the service's schema (an isolated server, or
         the deployment between an image build and its boot migration) then
-        loses a column's values, not its rows."""
+        loses a column's values, not its rows.
+
+        `required_columns` must occur in every row and every INSERT attempt;
+        they are never projected away when cached or live schema is behind."""
         if not rows:
             return
+        required = frozenset(required_columns)
+        _validate_required_insert_columns(table, rows, required)
         # Before the DESCRIBE — that read is the first statement
         # to raise code 60 against a table the service does not have yet.
-        await guard_pending_schema("insert", "", "write", insert_table=table)
+        if session := _coordination_session.get():
+            session.closed = True
+            raise CoordinationSessionLost()
+        await self._guard_schema("insert", "", "write", insert_table=table)
         from server.core import rmt_carry
 
         if not rmt_carry.carries(table):
-            await self._insert_batch(table, rows, settings)
+            await self._insert_batch(table, rows, settings, required)
             return
         async with rmt_carry.writing():
             # A version row keeps the columns a newer build's migration added.
             for batch in await rmt_carry.carry_unknown_columns(self, table, rows):
-                await self._insert_batch(table, batch, settings)
+                await self._insert_batch(table, batch, settings, required)
 
     async def _insert_batch(
         self,
         table: str,
         rows: list[dict[str, Any]],
         settings: dict[str, Any] | None,
+        required_columns: frozenset[str] = frozenset(),
     ) -> None:
         # A coded vector column needs every row at full length.
         from server.core.vectors import codes_state, placeholders
@@ -1295,7 +1488,7 @@ class CHClient:
         await codes_state.refuse_other_widths(table, rows)  # skips the empty vectors
         padded = placeholders.pad_rows(table, rows)
         try:
-            await self._insert_rows(table, rows, settings)
+            await self._insert_rows(table, rows, settings, required_columns)
             return
         except Exception as e:
             if error_code(e) != WIDTH_MISMATCH_CODE:
@@ -1312,7 +1505,7 @@ class CHClient:
         # before it: a background probe may have published the new width mid-insert.
         if all(codes_state.stored_width(table, c) == n for c, n in sized.items()):
             raise refused  # the fresh reading does not explain it
-        await self._insert_rows(table, rows, settings)
+        await self._insert_rows(table, rows, settings, required_columns)
 
     async def _fenced_insert(
         self,
@@ -1348,11 +1541,13 @@ class CHClient:
         table: str,
         rows: list[dict[str, Any]],
         settings: dict[str, Any] | None,
+        required_columns: frozenset[str] = frozenset(),
     ) -> None:
+        _validate_required_insert_columns(table, rows, required_columns)
         columns = list(rows[0].keys())
         project_onto_table = table in PROJECTED_TABLES
         if project_onto_table:
-            columns = await self._project_columns(table, columns)
+            columns = await self._project_columns(table, columns, required_columns)
         # Rows must agree on their key set: the column list comes from row 0,
         # so a row missing a key would raise a bare KeyError deep in the
         # driver (and a row with an extra key would silently drop it). Name
@@ -1462,6 +1657,7 @@ class CHClient:
             # refused slot or a cut deadline.
             if isinstance(e, LoomServerError) or error_code(e) == WIDTH_MISMATCH_CODE:
                 raise
+            _validate_required_insert_columns(table, rows, required_columns)
             had_cache = type_names is not None or table in _COLUMN_TYPES
             _COLUMN_TYPES.pop(table, None)
             reprojected = columns
@@ -1469,7 +1665,9 @@ class CHClient:
                 # The cached column set may be stale (a migration ran, or the
                 # first describe failed): re-describe, re-project, and retry
                 # once with what the table has NOW.
-                reprojected = await self._project_columns(table, list(rows[0].keys()))
+                reprojected = await self._project_columns(
+                    table, list(rows[0].keys()), required_columns
+                )
             if reprojected != columns:
                 columns = reprojected
                 type_names = await self._column_type_names(table, columns)
@@ -1529,17 +1727,19 @@ class CHClient:
         except KeyError:
             return None
 
-    async def _project_columns(self, table: str, columns: list[str]) -> list[str]:
-        """`columns` minus those the live `table` lacks. One
+    async def _project_columns(
+        self, table: str, columns: list[str], required_columns: frozenset[str] = frozenset()
+    ) -> list[str]:
+        """Keep required columns and optional columns present on the live table. One
         WARNING per (table, column) per process — the same column is missing
         on every flush until the migration runs. Unchanged when the describe
         fails: the driver then reports the real error."""
         types = await self._live_column_types(table)
         if types is None:
             return columns
-        kept = [c for c in columns if c in types]
+        kept = [c for c in columns if c in types or c in required_columns]
         for c in columns:
-            if c in types or (table, c) in _PROJECTION_WARNED:
+            if c in types or c in required_columns or (table, c) in _PROJECTION_WARNED:
                 continue
             _PROJECTION_WARNED.add((table, c))
             log.warning(
@@ -1550,6 +1750,19 @@ class CHClient:
                 table,
             )
         return kept
+
+
+def _validate_required_insert_columns(
+    table: str, rows: list[dict[str, Any]], required_columns: frozenset[str]
+) -> None:
+    if not required_columns:
+        return
+    for index, row in enumerate(rows):
+        missing = required_columns - row.keys()
+        if missing:
+            raise ValueError(
+                f"insert {table}: row {index} lacks required columns {sorted(missing)}"
+            )
 
 
 # Per-process column types by table, for inserts. Bounded by

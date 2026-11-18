@@ -80,6 +80,7 @@ import { EditDocumentMetadataDialog } from "../flows/EditDocumentMetadataDialog"
 import { PageContainer } from "../layout/PageContainer";
 import { EmptyState } from "../components/EmptyState";
 import { KnowledgeGaps } from "./KnowledgeGaps";
+import { QueryHistorySources } from "./QueryHistorySources";
 import { useAcrossRead } from "./useAcrossRead";
 import { ScopeBadge } from "../components/ScopeBadge";
 import { oneOf } from "../lib/oneOf";
@@ -1508,6 +1509,14 @@ export function Documents() {
                   panel={sourcesPanel}
                 />
               </Suspense>
+            )}
+            {seesGaps && !resolving && !all && (
+              <QueryHistorySources
+                key={`${identity.org}/${identity.namespace}`}
+                org={identity.org}
+                namespace={identity.namespace}
+                panel={sourcesPanel}
+              />
             )}
             {share.button}
             {/* The empty state's own Add is the one primary while it shows. */}

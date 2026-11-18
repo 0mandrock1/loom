@@ -28,10 +28,12 @@ from server.assistant.domain.steps import Step, steps_of
 from server.assistant.domain.support import UNCHECKED
 from server.assistant.store import ledger
 from server.auth import fail_closed, sharing
+from server.auth.answer_tokens import ANSWER_JTI_PREFIX, is_answer_token
 from server.auth.authz import CachedGate, check_authorized
 from server.auth.delegation import delegate
 from server.auth.directory import directory
 from server.auth.jwt import AuthInfo, new_jti
+from server.auth.session_protection import protected_for
 from server.core.ch import set_query_tag
 from server.core.errors import (
     AssistantSelfCallError,
@@ -151,17 +153,10 @@ def refuse_org_wide(auth: AuthInfo) -> None:
         )
 
 
-# Every answer token's id starts with this, so a token delegated from one names it among
-# its parents: that is how a descendant is told from the caller's own token.
-ANSWER_JTI_PREFIX = "assistant-answer-"
-
-
 def refuse_self_call(auth: AuthInfo) -> None:
     """ASSISTANT_SELF_CALL for an answer's own token (consumer `loom-assistant`) or any
     token delegated from one: calls go one way, so an answer never asks the assistant."""
-    if auth.consumer == ASSISTANT_CONSUMER or any(
-        p.startswith(ANSWER_JTI_PREFIX) for p in auth.parents
-    ):
+    if is_answer_token(auth):
         raise AssistantSelfCallError("an assistant answer's token cannot ask the assistant")
 
 
@@ -297,8 +292,15 @@ async def answer_token(auth: AuthInfo, org: str, namespace: str) -> str:
         is_service_account=auth.is_service_account,
         ends_with_session=True,
     )
+    from server.auth.reader_identity import reader_subject
+
+    reader = reader_subject(auth)
     return delegated.mint(
-        auth.subject, consumer=ASSISTANT_CONSUMER, jti=f"{ANSWER_JTI_PREFIX}{new_jti()}"
+        auth.subject,
+        consumer=ASSISTANT_CONSUMER,
+        jti=f"{ANSWER_JTI_PREFIX}{new_jti()}",
+        reads_as_creator=bool(reader and reader == delegated.creator),
+        session_protection=protected_for(auth),
     )
 
 
