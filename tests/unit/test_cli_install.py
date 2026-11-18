@@ -390,8 +390,11 @@ def test_install_reads_the_saved_token_and_the_shared_base_url(
     }
 
 
+@pytest.mark.parametrize(
+    "tok", ["NEW.TOKEN.VALUE", 'secret"quote', "secret\\path", "secret\nline", "secret\U0001f512"]
+)
 def test_dry_run_previews_only_the_keys_it_sets_and_masks_the_token(
-    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tok: str
 ) -> None:
     """A dry run printed the whole merged file: this token plus every other
     credential the file already held. It prints only what it would set."""
@@ -408,7 +411,6 @@ def test_dry_run_previews_only_the_keys_it_sets_and_masks_the_token(
     lcfg.parent.mkdir(parents=True)
     lcfg.write_text(json.dumps({"token": "OLD-SECRET", "note": "kept"}))
 
-    tok = "NEW.TOKEN.VALUE"
     assert cli._install_one("cursor", token=tok, server_url="https://h", name="loom", dry_run=True)
     assert cli._install_claude_code_capture("https://h", tok, dry_run=True)
     assert cli._install_codex_capture("https://h", tok, dry_run=True)
@@ -416,11 +418,29 @@ def test_dry_run_previews_only_the_keys_it_sets_and_masks_the_token(
     out = capsys.readouterr().out
     for secret in (tok, "OTHER-SECRET", "sk-ENV-SECRET", "OLD-SECRET"):
         assert secret not in out
+        assert json.dumps(secret)[1:-1] not in out
     assert out.count("<token>") == 3
     assert '"url": "https://h/mcp?toolset=coding"' in out and '"LOOM_BASE_URL": "https://h"' in out
     # nothing was written
     assert json.loads(cfg.read_text()) == other
     assert json.loads(lcfg.read_text()) == {"token": "OLD-SECRET", "note": "kept"}
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_codex_manual_setup_uses_a_token_placeholder(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], dry_run: bool
+) -> None:
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    token = 'secret"token\\value'
+    assert cli._install_one(
+        "codex", token=token, server_url="https://h", name="loom", dry_run=dry_run, toolset="coding"
+    )
+    out = capsys.readouterr().out
+    assert token not in out
+    assert cli._shell_words([token]) not in out
+    assert 'export LOOM_API_KEY="<token>"' in out
 
 
 @pytest.mark.parametrize("client", sorted(set(MCP_CLIENTS) - {"claude-code", "codex"}))
@@ -581,7 +601,8 @@ def test_zed_install_refuses_unmerged_jsonc_without_touching_bytes(
     err = capsys.readouterr().err
     assert "not changed" in err
     assert _ZED_URL in err
-    assert _ZED_TOKEN in err
+    assert _ZED_TOKEN not in err
+    assert "Bearer <token>" in err
     assert "context_servers" in err
 
 
