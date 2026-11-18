@@ -92,3 +92,20 @@ the example cancels unfinished work with its current owner's token and deletes
 the result memory, then checks that the memory is missing. The inbox and task
 history remain; there is no inbox-delete operation. A failed check or API call
 raises an error.
+
+## code_lookup.py
+
+An explicit code lookup through the same `AgentTools` dispatcher used by a model's
+selected call. Requires an existing code index and a token with read access; it creates
+no namespace or memory and calls no agent model. Search uses server embeddings.
+
+```bash
+LOOM_BASE_URL=https://loom.example LOOM_API_KEY=… python code_lookup.py \
+  --org acme --memory-namespace assistant-memory --code-namespace code-repo \
+  --kind callers --depth 2 pkg.Reader.read
+```
+
+`--help` sends no requests. Mocked SDK transport tests cover the binding; no live
+result or performance claim is attached to this example. See the
+[code tools guide](https://clickhouse.github.io/loom/guides/code-tools/) for budgets,
+scope and evidence limits.

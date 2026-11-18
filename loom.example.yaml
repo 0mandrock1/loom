@@ -2886,6 +2886,30 @@ settings:
   # token response cannot prove this registration setting; false disables it. [restart]
   # connect_notion_read_content_only: false
 
+  # Seconds for the whole optional live-search leg, including final membership checks.
+  # At most five; provider credential deadlines may shorten it further. [restart]
+  # knowledge_live_search_timeout_s: 5.0
+
+  # Connected registrations searched per live-search request, from one to three.
+  # [restart]
+  # knowledge_live_search_max_sources: 3
+
+  # Live hits across all registrations, and the per-provider page bound, from one to
+  # ten. [restart]
+  # knowledge_live_search_max_hits: 10
+
+  # Bytes read from one live-search provider response, at most 256 KiB. The
+  # document-source download limit may shorten this bound further. [restart]
+  # knowledge_live_search_response_max_bytes: 262144
+
+  # Registered Drive items searched per source, from one to four; no pagination.
+  # [restart]
+  # knowledge_live_search_max_items: 4
+
+  # Native parent lookups per Notion membership check, from zero to three. Zero accepts
+  # directly registered pages and database membership without parent fetches. [restart]
+  # knowledge_live_search_max_ancestors: 3
+
   # Seconds for local connection stops, including their source retirement writes.
   # [restart]
   # knowledge_connected_stop_timeout_s: 20.0

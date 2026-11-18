@@ -568,7 +568,7 @@ Is this already tested?
 | `search_terms` | `dict[str, str]` | The literals the grep ran, each with the tier a hit counts as — the SQL names the class registers and the qualified form are `exact_scoped`, the bare method name `short_name_grep`. |
 | `resolved_by` | `str` | `registration` when the subject was a SQL-level name bound to its implementing class through the registration statement; '' and off the wire otherwise. |
 | `control` | `dict[str, Any]` | {symbol, ok[, via]}: the positive control this call ran; ok=False ⇒ unknown. |
-| `measured` | `dict[str, Any]` | What the newest imported coverage run measured, {} when no run covered the subject's files: {measured, executed, paths, hits: {path: [[start, end], ...]}, commit}. |
+| `measured` | `dict[str, Any]` | Imported execution evidence, {} when none exists: measured, executed, paths, hits, commit (empty for mixed commits), commits, index_commit, run_current, files (per-path commit, indexed_commit, symbol_commits, freshness), freshness… |
 | `trace_run_id` | `str` | Id of this call's row in `loom.code_search_trace`. |
 
 ## `code.enclosing`
