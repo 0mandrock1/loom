@@ -15,13 +15,13 @@ def _digest(text):
     return sha256(text.encode()).hexdigest()
 
 
-def _partition(parts):
-    text = "\n".join(parts)
+def _partition(parts, separator="\n"):
+    text = separator.join(parts)
     source = PreparedSource("docs/cost.md", text, _digest(text))
     ranges, at = [], 0
     for part in parts:
         ranges.append(h.RequestRange(at, at + len(part), _digest(part)))
-        at += len(part) + 1
+        at += len(part) + len(separator)
     ranges = tuple(ranges)
     return h.RequestPartition(source, ranges, h.partition_manifest_sha256(source, ranges))
 
@@ -84,6 +84,25 @@ def test_two_generations_preserve_two_faults_and_three_good_neighbors():
     )
     assert "old-2" in dict(plan.eligible_reuse)
     assert "old-2" not in selected
+
+
+@pytest.mark.parametrize(
+    ("old_separator", "current_separator"),
+    [("\n", ""), ("", "\n")],
+    ids=["LF-to-empty", "empty-to-LF"],
+)
+def test_exact_matches_preserve_each_origin_separator(old_separator, current_separator):
+    parts = ("First.\n\n", "Last.\n")
+    partition = _partition(parts, old_separator)
+    text = current_separator.join(parts)
+    current = PreparedSource(partition.source.path, text, _digest(text))
+    catalog = tuple(
+        h.CompletionOrigin(partition.manifest_sha256, i, f"reply-{i}") for i in range(2)
+    )
+    selected = tuple(origin.reply_ref for origin in catalog)
+    eligible = {key: True for key in selected}
+    plan = _plan((current, (partition,), catalog, selected, eligible), faults=())
+    assert plan.conflicts and not plan.units
 
 
 @pytest.mark.parametrize("invalid", ["source", "manifest", "range", "unsafe", "coverage"])

@@ -241,9 +241,12 @@ def _selected_units(
         _require(projected is not None or bool(matches), "changed whole needs raw source origins")
         start, end = projected[origin.slot] if projected is not None else matches[0]
         separator = current.english[at:start]
+        previous_end = partition.ranges[origin.slot - 1].end if origin.slot else 0
+        original_separator = partition.source.english[previous_end : slot.start]
         _require(
             at <= start < end <= len(current.english)
             and separator in {"", "\n"}
+            and separator == original_separator
             and start in cuts
             and _safe_end(current.english, end, cuts),
             "selected ranges overlap, reorder, omit source or change separators",
