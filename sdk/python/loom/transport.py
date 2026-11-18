@@ -28,6 +28,7 @@ from typing import Any
 import httpx
 
 from loom._logging import logger, redact_headers, redact_secret
+from loom._protected_stream import protect_event_stream
 from loom._version import __version__
 from loom.credentials import StoredLogin
 from loom.errors import (
@@ -43,6 +44,15 @@ from loom.errors import (
 )
 from loom.machine import MachineLogin
 from loom.retry import DEFAULT_MAX_RETRY_AFTER_S, DEFAULT_RETRY_POLICY, RetryPolicy, coerce_policy
+from loom.session_protection import (
+    SessionProtection,
+    has_protection,
+    observation_scope,
+    observe_response,
+    refuse_response,
+    require_automatic_allowed,
+    response_roots,
+)
 from loom.token import TokenClaims, decode_token_claims
 
 SDK_NAME = "loom-py"
@@ -300,6 +310,7 @@ class Transport:
         retry: RetryPolicy | dict[str, Any] | None = None,
         consumer: str = "",
         auth: StoredLogin | MachineLogin | None = None,
+        session_protection: SessionProtection | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         if not _sendable(self._base_url):
@@ -318,6 +329,7 @@ class Transport:
         api_key = (api_key or "").strip() or None
         # `auth` (a `loom login` profile) sends and refreshes its own token.
         self._auth = auth
+        self.session_protection = session_protection
         if auth is not None:
             self._key_hint = f"login:{auth.profile}"
         else:
@@ -337,6 +349,7 @@ class Transport:
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=50),
             headers={"Authorization": f"Bearer {api_key}"} if api_key else {},
             auth=auth,
+            event_hooks={"request": [self._before_dispatch], "response": [self._before_response]},
         )
         self._timeout_s = float(timeout_s)
         self._pacing = pacing
@@ -350,6 +363,52 @@ class Transport:
         # hook run before every POST; the ambient run uses it to stamp writes
         # and to label reads with `X-Loom-Run-Id`. None = no hook.
         self.before_post: Callable[[str, dict[str, Any]], Awaitable[dict[str, str]]] | None = None
+
+    async def _before_dispatch(self, request: httpx.Request) -> None:
+        # httpx invokes this after authentication and on each replay.
+        require_automatic_allowed(self.session_protection)
+        if has_protection(self.session_protection) and (
+            "text/event-stream" in request.headers.get("Accept", "").lower()
+            or request.url.path == "/v1/assistant/chat/completions"
+        ):
+            request.headers["Accept-Encoding"] = "identity"
+
+    async def _before_response(self, response: httpx.Response) -> None:
+        roots = response_roots(self.session_protection)
+        if not roots:
+            return
+        content_type = response.headers.get("content-type", "").lower()
+        if response.status_code >= 400 or "json" in content_type:
+            await response.aread()
+            self._observe_json(response)
+        elif "text/event-stream" in content_type:
+            protect_event_stream(response, roots)
+
+    def _observe_json(self, response: httpx.Response) -> Any:
+        if "_loom_observed_json" not in response.extensions:
+            try:
+                decoded = (
+                    {}
+                    if not response.content and response.status_code in {204, 304}
+                    else response.json()
+                )
+            except (ValueError, RecursionError):
+                refuse_response(self.session_protection)
+            if not isinstance(decoded, dict):
+                refuse_response(self.session_protection)
+            observe_response(decoded, self.session_protection)
+            response.extensions["_loom_observed_json"] = decoded
+        return response.extensions["_loom_observed_json"]
+
+    def _response_object(
+        self, path: str, response: httpx.Response, request_id: str
+    ) -> dict[str, Any]:
+        if has_protection(self.session_protection):
+            body = self._observe_json(response)
+            if not isinstance(body, dict):
+                refuse_response(self.session_protection)
+            return body
+        return _json_object(path, response, request_id)
 
     @property
     def pacing(self) -> bool:
@@ -480,6 +539,8 @@ class Transport:
         `Transport`). Raises the typed error for a 4xx/5xx; returns the response
         for the caller to read. `path` is a path on this server: the credential goes
         nowhere else."""
+        require_automatic_allowed(self.session_protection)
+        roots = response_roots(self.session_protection)
         if not path.startswith("/") or path.startswith("//"):
             raise ValueError(f"not a path on {self.base_url}: {path!r}")
         request_id = str(uuid.uuid4())
@@ -489,9 +550,10 @@ class Transport:
         waited_s = 0.0
         while True:
             try:
-                resp = await self._client.request(
-                    method, path, json=json, params=params, content=content, headers=headers
-                )
+                with observation_scope(roots):
+                    resp = await self._client.request(
+                        method, path, json=json, params=params, content=content, headers=headers
+                    )
             except httpx.RequestError as e:
                 raise unreachable_error(self.base_url, e, request_id=request_id) from e
             if resp.status_code < 400:
@@ -518,7 +580,7 @@ class Transport:
     ) -> dict[str, Any]:
         """`request`, decoded: the JSON object the route answers."""
         resp = await self.request(method, path, json=json, params=params, content=content)
-        return _json_object(path, resp, resp.headers.get("X-Request-Id", ""))
+        return self._response_object(path, resp, resp.headers.get("X-Request-Id", ""))
 
     @contextlib.asynccontextmanager
     async def stream(
@@ -537,6 +599,8 @@ class Transport:
         Raises the typed error for a 4xx/5xx, and `unreachable_error` for a
         connection that fails before or while the body is read. `read_timeout_s`
         bounds each read (default: the transport's timeout)."""
+        require_automatic_allowed(self.session_protection)
+        roots = response_roots(self.session_protection)
         if not path.startswith("/") or path.startswith("//"):
             raise ValueError(f"not a path on {self.base_url}: {path!r}")
         request_id = str(uuid.uuid4())
@@ -546,16 +610,23 @@ class Transport:
             "Accept": "text/event-stream",
             "X-Request-Id": request_id,
         }
+        if roots:
+            sent["Accept-Encoding"] = "identity"
         timeout = httpx.Timeout(self._timeout_s, read=read_timeout_s or self._timeout_s)
         try:
-            async with self._client.stream(
-                "POST", path, json=dict(json), headers=sent, timeout=timeout
-            ) as resp:
+            async with contextlib.AsyncExitStack() as stack:
+                with observation_scope(roots):
+                    resp = await stack.enter_async_context(
+                        self._client.stream(
+                            "POST", path, json=dict(json), headers=sent, timeout=timeout
+                        )
+                    )
                 if resp.status_code >= 400:
                     await resp.aread()
                     raise self._error_for(
                         path, resp, resp.headers.get("X-Request-Id") or request_id
                     )
+                protect_event_stream(resp, roots)
                 yield resp
         except httpx.RequestError as e:
             raise unreachable_error(self.base_url, e, request_id=request_id) from e
@@ -600,6 +671,7 @@ class Transport:
             RateLimited: On a 429 past the pacing budget (see `Transport`).
             LoomError: Any other failure, after the policy's retries.
         """
+        require_automatic_allowed(self.session_protection)
         headers: dict[str, str] = dict(extra_headers or {})
         if idempotency_key is None and _replayed(op_path):
             idempotency_key = str(uuid.uuid4())
@@ -778,7 +850,7 @@ class Transport:
         self, op_path: str, resp: httpx.Response, echoed: str, attempt: int, elapsed_ms: float
     ) -> CallResult:
         """The `CallResult` of a 2xx response, its hint logged once per text."""
-        body = _json_object(op_path, resp, echoed)
+        body = self._response_object(op_path, resp, echoed)
         logger.info(
             "%s %d %.0f ms attempts=%d rid=%s",
             op_path,
