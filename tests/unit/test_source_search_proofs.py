@@ -62,7 +62,7 @@ def world(monkeypatch):
         events.append("documents")
         return [items[0]]
 
-    async def keys(org, model, selected):
+    async def keys(org, model, selected, *, embedded_only=True):
         assert (org, model) == ("acme", MODEL)
         events.append("chunks")
         return list(selected)
@@ -89,7 +89,9 @@ async def test_search_proof_checks_document_then_live_model_keys_then_documents(
     checked = proof(world)
     await checked.check()
     assert world[2] == ["documents", "chunks", "documents"]
-    store.chunk_keys.assert_awaited_once_with("acme", MODEL, [key(item) for item in world[1]])
+    store.chunk_keys.assert_awaited_once_with(
+        "acme", MODEL, [key(item) for item in world[1]], embedded_only=True
+    )
     assert not checked.invalid
 
 
@@ -120,7 +122,7 @@ async def test_bad_live_key_evidence_invalidates_the_whole_proof_monotonically(w
 async def test_permission_loss_during_key_probe_is_detected_by_final_document_renewal(world):
     checked = proof(world)
 
-    async def revoke(_org, _model, selected):
+    async def revoke(_org, _model, selected, *, embedded_only=True):
         world[0].check.side_effect = None
         world[0].check.return_value = []
         return list(selected)
@@ -203,7 +205,7 @@ async def test_full_check_sequences_are_serialized(world):
     checked = proof(world)
     entered, release = asyncio.Event(), asyncio.Event()
 
-    async def pause(_org, _model, selected):
+    async def pause(_org, _model, selected, *, embedded_only=True):
         entered.set()
         await release.wait()
         return list(selected)

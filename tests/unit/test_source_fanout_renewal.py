@@ -152,9 +152,15 @@ async def test_independently_cancelled_knowledge_child_is_propagated(monkeypatch
 
 
 @pytest.mark.parametrize("reranked", [False, True])
-async def test_displaced_base_keeps_only_surviving_private_metadata_dependencies(reranked):
+@pytest.mark.parametrize("count_changed", [False, True])
+@pytest.mark.parametrize("rerank_possible", [False, True])
+async def test_displaced_base_keeps_only_surviving_private_metadata_dependencies(
+    reranked, count_changed, rerank_possible
+):
     first, _renderer = result("base")
+    first.base.ordinary_rerank_possible = rerank_possible
     first.base.output.reranked_by = "private-ranker" if reranked else ""
+    first.base._ordinary_dropped = 7 if count_changed else first.base.output.stale_dropped
     private = first.base.proofs
     extra = KnowledgeSearchOutput(
         results=[hit("ordinary-a"), hit("ordinary-b")], embedding_model="fake"
@@ -176,7 +182,7 @@ async def test_displaced_base_keeps_only_surviving_private_metadata_dependencies
     async def send(message):
         sent.append(message)
 
-    if reranked:
+    if reranked or count_changed or rerank_possible:
         with pytest.raises(request_tail.RequiredTailError):
             await request_tail.RequestTailMiddleware(app)({"type": "http"}, None, send)
         assert sent == []

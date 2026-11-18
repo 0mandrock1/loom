@@ -319,7 +319,12 @@ async def handle_knowledge_outline(input: KnowledgeOutlineInput) -> KnowledgeOut
     output = _outline_output(input, checked.row.title or "", chunks)
     source_publication.retain_document(plan, checked)
     source_publication.retain(
-        SearchProofs(plan, get_embedder().model_name, tuple(item.admitted for item in admitted))
+        SearchProofs(
+            plan,
+            get_embedder().model_name,
+            tuple(item.admitted for item in admitted),
+            embedded_only=False,
+        )
     )
     return output
 

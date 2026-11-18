@@ -178,7 +178,7 @@ class RepoSearch:
         )
         output = _merge_output(self.base.output, extra, int(self.request.base.input.top_k))
         selected = {id(hit) for hit in output.results}
-        self._base_used = bool(output.reranked_by) or any(
+        self._base_used = self.base.metadata_uses_mirrors or any(
             id(hit) in selected for hit in self.base.output.results
         )
         self._extra_used = any(id(hit) in selected for hit in extra)

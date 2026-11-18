@@ -138,7 +138,9 @@ async def admin_schema_status() -> SchemaStatusOutput:
     from server.core.schema.migrate_lease import RUNNER_TABLES
 
     expected = live_objects(MIGRATIONS_DIR.glob("*.sql")) if MIGRATIONS_DIR.exists() else set()
-    expected |= RUNNER_TABLES
+    from server.insights.domain.analysis import EVENTS_VIEW
+
+    expected |= RUNNER_TABLES | {EVENTS_VIEW}
 
     # Skip internal MV inner_id.* tables — repo helper filters them.
     present = set(await admin_repo.list_loom_tables())

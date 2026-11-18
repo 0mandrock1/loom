@@ -59,7 +59,7 @@ def public_log(record: logging.LogRecord) -> bool:
 
         if not public_diagnostics() or marked_error(sys.exception()):
             return False
-        if record.exc_info is not None:
+        if record.exc_info:
             if not isinstance(record.exc_info, tuple) or len(record.exc_info) != 3:
                 return False
             if marked_error(record.exc_info[1]):

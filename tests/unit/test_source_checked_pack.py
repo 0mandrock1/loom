@@ -96,7 +96,7 @@ def world(monkeypatch):
                 found.append(items[name])
         return found
 
-    async def keys(org, model, wanted):
+    async def keys(org, model, wanted, *, embedded_only=True):
         assert org == "acme" and model == "fake"
         return wanted
 
@@ -312,7 +312,7 @@ async def test_accounting_wait_cannot_publish_a_mixed_pack_after_either_pool_cha
             monkeypatch.setattr(world.plan, "check", updated)
         else:
 
-            async def gone(org, model, wanted):
+            async def gone(org, model, wanted, *, embedded_only=True):
                 return [key for key in wanted if key[0] != namespace]
 
             monkeypatch.setattr(source_candidates, "chunk_keys", gone)

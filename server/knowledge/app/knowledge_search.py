@@ -118,6 +118,7 @@ class CheckedSearch:
     _ordinary: list[tuple[str, list[ChunkHit]]]
     _ordinary_dropped: int
     lost: bool = False
+    ordinary_rerank_possible: bool = False
     _failed: bool = dataclasses.field(default=False, init=False)
     _checking: asyncio.Lock = dataclasses.field(
         default_factory=asyncio.Lock, init=False, repr=False
@@ -126,6 +127,15 @@ class CheckedSearch:
     @property
     def marked(self) -> bool:
         return self._renderer.marked
+
+    @property
+    def metadata_uses_mirrors(self) -> bool:
+        """Private routing can change retained metadata after all its hits are displaced."""
+        return self.proofs is not None and (
+            bool(self.output.reranked_by)
+            or self.ordinary_rerank_possible
+            or self.output.stale_dropped != self._ordinary_dropped
+        )
 
     async def _fallback(self) -> KnowledgeSearchOutput:
         if self._failed:
@@ -240,7 +250,15 @@ async def _run_search(request: SearchRequest, plan: ReadPlan) -> CheckedSearch:
     except LostCorpus:
         output = await renderer.render(ordinary, ordinary_dropped)
         proofs, lost = None, True
-    return CheckedSearch(output, proofs, renderer, ordinary, ordinary_dropped, lost=lost)
+    return CheckedSearch(
+        output,
+        proofs,
+        renderer,
+        ordinary,
+        ordinary_dropped,
+        lost=lost,
+        ordinary_rerank_possible=bool(endpoint) and sum(len(hits) for _, hits in ordinary) > 1,
+    )
 
 
 # The fields that narrow a knowledge.search to part of the namespace's documents.

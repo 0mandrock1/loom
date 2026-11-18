@@ -879,10 +879,9 @@ def test_masked_view_metadata_discloses_no_signing_key(
     control_plane_url: str, seed: _Seed, ch_client, sql: str
 ) -> None:
     r = _query(control_plane_url, seed, sql)
-    if "format_display_secrets_in_show_and_select = 1" in sql:
-        assert r.status_code in _REFUSED, r.text
-    else:
-        assert r.status_code in {200, *_REFUSED}, r.text
+    assert r.status_code in {200, *_REFUSED}, r.text
+    if r.status_code == 200 and "create_table_query" in sql:
+        assert "[HIDDEN]" in r.text, r.text
     for spelling in _key_spellings(ch_client):
         assert spelling.lower() not in r.text.lower(), r.text[:300]
 
@@ -937,11 +936,9 @@ def _event_canary_sql(ids: tuple[str, str, str]) -> str:
         "{p}loom_exp = '1'",
         "{p}loom_exp = 'abc'",
         "{p}loom_sig = 5",
-        "max_execution_time = 100000",
-        "readonly = 0",
     ],
 )
-def test_event_view_refuses_unsigned_scope_and_widened_caps(
+def test_event_view_refuses_unsigned_scope(
     control_plane_url: str,
     seed: _Seed,
     prefix: str,
@@ -957,6 +954,41 @@ def test_event_view_refuses_unsigned_scope_and_widened_caps(
     assert r.status_code in {200, *_REFUSED}, r.text
     if r.status_code == 200:
         assert r.json()["rows"] == [], r.text
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "max_execution_time = 100000",
+        "readonly = 0",
+        "format_display_secrets_in_show_and_select = 1",
+    ],
+)
+def test_nested_settings_preserve_scope_and_effective_profile_pins(
+    control_plane_url: str,
+    seed: _Seed,
+    event_scope_canaries: tuple[str, str, str],
+    setting: str,
+) -> None:
+    sql = _event_canary_sql(event_scope_canaries)
+    own = _query(control_plane_url, seed, sql + " SETTINGS " + setting)
+    assert own.status_code in {200, *_REFUSED}, own.text
+    if own.status_code == 200:
+        assert own.json()["rows"] == [[event_scope_canaries[0], seed.org_a, seed.ns_a]]
+    effective = (
+        "SELECT toUInt64(getSetting('readonly')), "
+        "toFloat64(getSetting('max_execution_time')), "
+        "toUInt64(getSetting('format_display_secrets_in_show_and_select'))"
+    )
+    baseline = _query(control_plane_url, seed, effective)
+    assert baseline.status_code == 200, baseline.text
+    [read_only, deadline, display_secrets] = baseline.json()["rows"][0]
+    assert read_only == 2 and deadline > 0 and display_secrets == 0
+    changed = _query(control_plane_url, seed, effective + " SETTINGS " + setting)
+    assert changed.status_code in {200, *_REFUSED}, changed.text
+    if changed.status_code == 200:
+        [read_only, bounded_deadline, display_secrets] = changed.json()["rows"][0]
+        assert read_only == 2 and 0 < bounded_deadline <= deadline and display_secrets == 0
 
 
 def test_event_view_scope_signature_cannot_be_replayed(
