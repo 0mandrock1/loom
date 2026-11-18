@@ -673,7 +673,11 @@ profiles let bubblewrap run uses it whatever that value says, and then every net
 job is refused. Where the proxy is set, leave `sandbox.securityContext` and
 `sandbox.hostUsers` at their defaults as well. Repository jobs are then plain processes:
 a compiler tier's build runs as Loom's user and can read the token file, so run compiler
-tiers there only for repositories you trust.
+tiers there only for repositories you trust. To add repositories with `code.repo.add` in
+such pods, set `LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY` and
+`LOOM_CODE_SELF_SERVICE_GIT_UNSANDBOXED` as well
+([repository-job sandbox](#repository-job-sandbox)): their git goes through the proxy
+under the identity the add names, else the default one.
 
 ## Related
 

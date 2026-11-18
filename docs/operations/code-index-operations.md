@@ -806,10 +806,19 @@ the proxy an `https://` URL.
 `LOOM_CODE_GIT_PROXY_IDENTITY`: letters, digits and `. _ ~ @ -`, at most 128 characters.
 An operator entry names it in `LOOM_CODE_REPOS_JSON`; an entry with a malformed one is
 skipped. `code.repo.add` and `code.repo.remote_branches` take it from a platform admin
-only. A branch added with `code.repo.add_branch` inherits it, and adding one to such an
-index takes a platform admin too. Branches of one repository share a mirror: the ingest
-pass fetches them in one negotiation only where remote, token and identity are the same,
-and each host's own fetch round fetches the mirror as its first entry.
+only: the caller `LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY` asks for, with or without
+that setting. A branch added with `code.repo.add_branch` inherits it, and adding one to
+such an index takes a platform admin too. Branches of one repository share a mirror: the
+ingest pass fetches them in one negotiation only where remote, token and identity are
+the same, and each host's own fetch round fetches the mirror as its first entry.
+
+**Repositories added with `code.repo.add`.** The proxy is used where repository jobs
+run as plain processes, and there `code.repo.remote_branches`, `code.repo.add` and
+`code.repo.add_branch` answer `SANDBOX_UNAVAILABLE` unless
+`LOOM_CODE_SELF_SERVICE_GIT_UNSANDBOXED` is set (_Self-registered repositories without
+the sandbox_). With it, the `ls-remote` of those ops and the entry's clone and fetches
+go through the proxy under the entry's identity, so the proxy decides which host they
+reach. An entry in `LOOM_CODE_REPOS_JSON` needs no such setting.
 
 **The password.** It is in the environment of the one git process that uses it, read
 from the file for that job: not in an argument, a remote URL, a stored git config, a

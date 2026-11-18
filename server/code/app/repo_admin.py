@@ -59,28 +59,28 @@ def _require_self_service() -> None:
         )
 
 
-def _require_platform_admin() -> None:
-    """With LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY, only a platform admin starts
-    a remote job or adds an index. The role counts on a flat token used by its own
-    subject: a scoped token's authority is its namespaces, and a trusted caller's
-    role is not the subject's it acts for. A call without a principal passes only
-    where auth is off: no transport then asks for a token, so there is no caller
-    to refuse. Where auth is on such a call is no platform admin's (an MCP endpoint
-    in `open` mode takes one that sends no bearer) and is refused."""
-    if not settings.code_self_service_platform_admin_only:
-        return
+def _is_platform_admin() -> bool:
+    """Whether the caller is a platform admin, for the two rules below. The role
+    counts on a flat token used by its own subject: a scoped token's authority is
+    its namespaces, and a trusted caller's role is not the subject's it acts for.
+    A call without a principal counts only where auth is off: no transport then
+    asks for a token, so there is no caller to refuse. Where auth is on such a
+    call is no platform admin's (an MCP endpoint in `open` mode takes one that
+    sends no bearer)."""
     from server.auth.context import current_auth
     from server.operations.base import Role
 
     auth = current_auth()
-    if auth is None and not settings.auth_actually_required():
-        return
-    if (
-        auth is None
-        or auth.has_ns_roles()
-        or auth.impersonated_by
-        or not auth.has_role(Role.PLATFORM_ADMIN)
-    ):
+    if auth is None:
+        return not settings.auth_actually_required()
+    flat = not auth.has_ns_roles() and not auth.impersonated_by
+    return flat and auth.has_role(Role.PLATFORM_ADMIN)
+
+
+def _require_platform_admin() -> None:
+    """With LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY, only a platform admin
+    (`_is_platform_admin`) starts a remote job or adds an index."""
+    if settings.code_self_service_platform_admin_only and not _is_platform_admin():
         raise AuthInsufficientError(
             "only platform admins add repositories or branches on this deployment "
             "(LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY), with a token of their own that "
@@ -124,22 +124,10 @@ def _require_same_org(org: str) -> None:
 
 def _require_git_proxy_admin(identity: str, refusal: str) -> None:
     """A git proxy identity decides whose credential the operator's proxy fetches a
-    repository with, so only a platform admin attaches one to an index or reads a
-    remote under one: a flat platform-admin token acting for nobody else, or any caller
-    where auth is off. Anyone else is refused with `refusal`, before any remote job: a
-    caller without a principal too where auth is on (an MCP endpoint left open)."""
-    from server.auth.context import current_auth
-    from server.operations.base import Role
-
-    if not identity:
-        return
-    auth = current_auth()
-    if auth is None:
-        if settings.auth_actually_required():
-            raise AuthInsufficientError(refusal)
-        return
-    flat_admin = auth.has_role(Role.PLATFORM_ADMIN) and not auth.has_ns_roles()
-    if not flat_admin or auth.impersonated_by:
+    repository with, so only a platform admin (`_is_platform_admin`) attaches one to an
+    index or reads a remote under one, whatever LOOM_CODE_SELF_SERVICE_PLATFORM_ADMIN_ONLY
+    says. Anyone else is refused with `refusal`, before any remote job."""
+    if identity and not _is_platform_admin():
         raise AuthInsufficientError(refusal)
 
 

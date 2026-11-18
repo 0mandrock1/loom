@@ -655,7 +655,9 @@ async def test_with_auth_off_the_waiver_path_reaches_the_remote_a_request_names(
 
     asked: list[str] = []
 
-    async def _remote(repo: str, branch: str, token: str, *, git_remote: str = "") -> str:
+    async def _remote(
+        repo: str, branch: str, token: str, *, git_remote: str = "", proxy_identity: str = ""
+    ) -> str:
         asked.append(git_remote)
         return "abc123def456" + "0" * 28
 
@@ -1477,12 +1479,6 @@ async def test_an_add_without_the_sandbox_is_refused(
 IDENTITY = "acme.widgets-indexer"
 
 
-def _platform_admin(**claims: Any) -> AuthInfo:
-    from tests.unit.principals import principal
-
-    return principal(Role.PLATFORM_ADMIN, org=ORG, namespaces=("*",), subject="ops@x", **claims)
-
-
 def _probes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """The identity each remote read of an add was made under."""
     under: list[str] = []
@@ -1538,8 +1534,6 @@ async def test_a_platform_admin_s_add_stores_the_git_proxy_identity_and_reads_th
 async def test_only_a_platform_admin_names_a_git_proxy_identity(
     plane, monkeypatch: pytest.MonkeyPatch, caller: dict[str, Any]
 ) -> None:
-    from server.code.api.models_repos import CodeRepoRemoteBranchesInput
-    from server.core.errors import AuthInsufficientError
     from tests.unit.principals import acting_as
 
     under = _probes(monkeypatch)
@@ -1566,7 +1560,6 @@ def test_a_caller_without_a_principal_names_an_identity_only_where_auth_is_off(
 ) -> None:
     """With auth off the single user is the operator. With auth on, a caller no
     principal was bound for (an MCP endpoint left open on loopback) is nobody."""
-    from server.core.errors import AuthInsufficientError
     from server.settings import settings
     from tests.unit.principals import acting_as
 
@@ -1584,7 +1577,6 @@ def test_a_caller_without_a_principal_names_an_identity_only_where_auth_is_off(
 async def test_a_platform_admin_lists_a_remote_s_branches_under_the_identity(
     plane, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from server.code.api.models_repos import CodeRepoRemoteBranchesInput
     from tests.unit.principals import acting_as
 
     under = _probes(monkeypatch)
@@ -1599,7 +1591,6 @@ async def test_a_platform_admin_lists_a_remote_s_branches_under_the_identity(
 async def test_a_branch_inherits_the_git_proxy_identity_and_only_a_platform_admin_adds_it(
     plane, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from server.core.errors import AuthInsufficientError
     from tests.unit.principals import acting_as
 
     under = _probes(monkeypatch)
@@ -1623,8 +1614,6 @@ async def test_a_branch_inherits_the_git_proxy_identity_and_only_a_platform_admi
 @pytest.mark.parametrize("identity", ["acme:widgets", "two words", "a/b", "x" * 129, "ok\n"])
 def test_a_git_proxy_identity_outside_its_shape_is_refused_on_the_wire(identity: str) -> None:
     from pydantic import ValidationError as WireError
-
-    from server.code.api.models_repos import CodeRepoRemoteBranchesInput
 
     for model in (CodeRepoAddInput, CodeRepoRemoteBranchesInput):
         with pytest.raises(WireError, match="git_proxy_identity"):
