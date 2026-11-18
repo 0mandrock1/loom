@@ -18,6 +18,7 @@ from server.core.ch_writes import async_insert_settings
 from server.insights.api.models_cost import CostSummaryInput
 from server.insights.app import cost as handlers
 from server.insights.store import cost
+from server.observability.budget import budget_snapshot
 from server.observability.events import AgentEvent
 from server.operations.base import Role
 from tests.integration._resources import unique_org
@@ -274,5 +275,6 @@ async def test_marked_only_totals_have_no_latency_or_cache_samples(
     assert out.total_cost_usd == 5 and out.total_ops == 1 and out.total_errors == 0
     assert out.cache_hits == 0 and out.cache_saved_usd == 0
     assert out.rows[0].latency_p50_ms == out.rows[0].latency_p99_ms == 0
-    assert await cost.namespace_spend_24h(world.org, "notes", ch=world.reader) == 5.25
+    snapshot = await budget_snapshot(world.org, "notes", read_uncapped=True, ch=world.reader)
+    assert snapshot.spent == 5.25
     assert await cost.org_spend_24h(world.org, "", {}, ch=world.reader) == (10.25, 2)
