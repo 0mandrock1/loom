@@ -157,9 +157,7 @@ The model chooses `symbol`, `search`, `callers` or `impact`; tenant scope and re
 budgets stay in the application. Use `only` for a code-only tool loop:
 
 ```python
-tools = agent.tools(
-    code_namespace="code-repo", only=["loom_code_lookup"], max_result_chars=12_000
-)
+tools = agent.tools(code_namespace="code-repo", only=["loom_code_lookup"], max_result_chars=12_000)
 definitions = tools.definitions("anthropic")
 result = await tools.execute("loom_code_lookup", {"kind": "symbol", "target": "pkg.Reader.read"})
 ```
