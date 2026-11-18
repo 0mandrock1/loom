@@ -559,6 +559,19 @@
             ]
           }
         },
+        "connection": {
+          "class": "ConnectionOps",
+          "methods": {
+            "disconnect": [
+              "body",
+              "options"
+            ],
+            "list": [
+              "body",
+              "options"
+            ]
+          }
+        },
         "consolidations": {
           "class": "ConsolidationsOps",
           "methods": {
@@ -3074,6 +3087,7 @@
           "memory_type",
           "tags",
           "entities",
+          "files",
           "user_id",
           "session_id",
           "run_id",

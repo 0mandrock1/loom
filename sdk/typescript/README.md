@@ -398,7 +398,27 @@ for (const call of completion.choices[0].message.tool_calls ?? []) {
 // Anthropic: tools.definitions("anthropic"); anything that takes JSON schema: tools.definitions()
 ```
 
-`execute()` returns the string the model reads (compact JSON, or a line it can act on: "no parked text under blob_key=…"), validates required arguments with messages a model can correct, and truncates past `maxResultChars` (`loom_recall` leaves out its lowest-ranked memories whole to fit, counted in `omitted`). [`examples/session-resume`](https://github.com/ClickHouse/loom/tree/main/sdk/typescript/examples/session-resume/) is the two-process run with a real `gpt-4o-mini` tool-use turn.
+`execute()` returns the string the model reads (compact JSON, or a line it can act on:
+"no parked text under blob_key=…") and validates required arguments with messages a model
+can correct. `loom_remember` preserves the server receipt, including no-op merges,
+canonical keys and conflict peers; `stored` confirms a persisted row. `loom_recall`
+preserves abstention, code freshness, row status, provenance and verification metadata
+when supplied. `retrieval_risk` and `retrieval_confidence` score non-governed hits;
+`governed` identifies authoritative definitions and `term_leg` reports the definition
+lookup status. Memory results remain valid JSON under `maxResultChars`: whole omitted
+memories are counted in `omitted`, and metadata that cannot fit returns `insufficient`
+and `metadata_omitted`. A budget too small for that marker is rejected before the call.
+Other tools truncate oversized text.
+[`examples/session-resume`](https://github.com/ClickHouse/loom/tree/main/sdk/typescript/examples/session-resume/)
+is the two-process run with a real `gpt-4o-mini` tool-use turn.
+
+The compact `loom_remember` schema does not expose file or repository association. The
+application can pass `files` and `tags` through `bot.remember(key, value, options)` or
+`bot.call("memory.set", body)`. Use the matching `repo:<id>` tag established by the
+integration, or a configured code namespace. `code.repos` reports `primary_namespace`
+for shared file rules. Do not infer a repository from the enabled lookup tools. Linking runs
+asynchronously, and provenance does not attest that code is unchanged. See
+[memories linked to code](https://github.com/ClickHouse/loom/blob/main/docs/concepts/memory.md#memories-linked-to-code).
 
 An explicit code namespace offers a read-only lookup before the memory tools. Use
 `only` for a code-only loop; memory tools keep the Agent's memory namespace:
