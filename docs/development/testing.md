@@ -39,6 +39,21 @@ or the embedder.
   `now()` passes until the date ages past the threshold. Pin the clock through the code's
   time seam instead of hard-coding a date the check reads against the wall clock.
 
+### SDK transport properties
+
+`sdk/typescript/src/transport.property.test.ts` uses `fast-check` to exercise the transport's
+origin binding, credential handling and request-ID header boundary through public requests.
+The suite generates at most 100 cases per property, bounds generated strings and uses mocked
+fetch and token providers. It needs no server, live credential or network access. Run it with:
+
+```bash
+npm --prefix sdk/typescript test -- src/transport.property.test.ts
+```
+
+The default seed is fixed for reproducible CI. Set `LOOM_FUZZ_SEED` to explore another seed.
+On a failure, copy the reported seed and shrink path into `LOOM_FUZZ_SEED` and `LOOM_FUZZ_PATH`,
+then select that property with Vitest's `-t` option to replay its counterexample.
+
 ## Integration tests
 
 The integration suite runs against a live server, the way CI's `integration` job does:
