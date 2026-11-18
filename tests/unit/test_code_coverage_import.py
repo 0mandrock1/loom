@@ -381,6 +381,14 @@ class _FilesRepo:
     async def coverage_files_for(self, org: str, ns: str, paths: list[str]) -> dict[str, Any]:
         return {p: f for p, f in self.files.items() if p in paths}
 
+    async def get_state(self, org: str, ns: str, key: str) -> str:
+        return "c0ffee"
+
+    async def file_rows_for_paths(
+        self, org: str, ns: str, paths: list[str]
+    ) -> dict[str, dict[str, str]]:
+        return {p: {"indexed_commit": "c0ffee"} for p in paths}
+
 
 @pytest.mark.asyncio
 async def test_the_claim_reports_a_span_no_test_executed() -> None:

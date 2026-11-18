@@ -762,9 +762,9 @@ It writes:
   `code.coverage_claim` can tell "executed by many tests" from "executed by none".
 
 Rows the newest run no longer has are tombstoned, and only after every slice was read.
-`code.coverage_claim` ranks a measured row as `executed`, above every other tier, when its
-ranges meet the subject's span; a subject whose file the run covered but whose lines no
-test executed is `uncovered`, with the measurement in `measured`.
+`code.coverage_claim` ranks a verified measured row as `executed`, above every other tier,
+when its ranges meet the subject's span. Verified measurements for every source file can
+establish that no test executed the subject, with the evidence in `measured`.
 
 ```bash
 LOOM_CODE_COVERAGE_SOURCE_URL=https://<coverage server>
@@ -774,6 +774,31 @@ loom code coverage-import --namespace <namespace> --dry-run   # counts only, wri
 loom code coverage-import --namespace <namespace>
 LOOM_CODE_COVERAGE_IMPORT_ENABLED=true                         # then daily, in the workers
 ```
+
+### Coverage freshness
+
+Line ranges describe the source measured by their run. A coverage row supports current
+execution claims only when its commit matches the source file's `indexed_commit` and the
+namespace has a `git_head` watermark. An unchanged file keeps its indexing commit when
+the repository advances, so advancing the head alone does not invalidate that evidence.
+
+Other coverage rows remain file associations with method `coverage_history`, tier
+`file_reference`, and evidence marked `unverified`. Their old line numbers are never
+intersected with current symbol spans. These rows alone produce verdict `unknown`.
+Independent strong evidence can still establish `covered_by`.
+
+`measured.freshness` is `verified`, `partial`, or `unverified`. Its `files` dictionary
+reports each measurement commit, indexing commit, and freshness. `commits` lists all
+measurement commits; `commit` is empty when they differ. `paths` and `hits` include only
+verified measurements. `unverified_paths` names measurements without matching identity;
+`unmeasured_paths` names source files absent from the import. A partial or unverified
+measurement cannot establish that the current subject was not executed.
+
+Different commits do not prove different file contents. The serving read compares commit
+identities without reading historical repository objects, so an unchanged file measured
+at another commit can remain unverified. Missing identity metadata also remains
+unverified. Reimport coverage measured at the file's indexing commit to verify its line
+ranges; the import retains historical evidence until a complete run replaces it.
 
 ## Another branch
 

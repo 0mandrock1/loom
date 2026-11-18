@@ -31,6 +31,7 @@ from server.code.app.common import (
     resolve_code_identity,
     schedule_code_trace,
 )
+from server.code.app.coverage_freshness import measured_for, partition_coverage_rows
 from server.code.app.files import attach_reference_siblings
 from server.code.app.spans import code_span, set_code_span_attributes, span_attrs
 from server.code.domain.index import coverage_claim as cc
@@ -378,27 +379,6 @@ def subject_spans(rows: list[dict[str, Any]]) -> dict[str, list[tuple[int, int]]
     return out
 
 
-async def measured_for(
-    repo: CodeRepo,
-    org: str,
-    ns: str,
-    src_paths: list[str],
-    spans: dict[str, list[tuple[int, int]]] | None,
-) -> dict[str, Any]:
-    """What the newest imported coverage run says about the subject (`measured_execution`),
-    {} when no run covered its files."""
-    files = await repo.coverage_files_for(org, ns, src_paths) if src_paths else {}
-    if not files:
-        return {}
-    ranges = {p: cr.json_ranges(str(f.get("lines") or "[]")) for p, f in files.items()}
-    whole = {p: [(1, 10**9)] for p in src_paths}
-    out = cc.measured_execution(spans if spans else whole, ranges)
-    if not out["measured"]:
-        return {}
-    out["commit"] = str(next(iter(files.values())).get("commit_sha") or "")
-    return out
-
-
 async def claim_tests(
     repo: CodeRepo,
     org: str,
@@ -429,7 +409,8 @@ async def claim_tests(
         _grep_tests_many(repo, org, ns, [(t, cap) for t, _ in ordered_terms]),
         repo.coverage_rows_for(org, ns, src_paths) if src_paths else _empty_list(),
     )
-    map_rows = list(map_rows) + executed_rows(cov_rows, spans)
+    current, historical = await partition_coverage_rows(repo, org, ns, cov_rows)
+    map_rows = list(map_rows) + executed_rows(current, spans) + historical
     # The content references' evidence is registered vocabulary (the crossref
     # whitelist): a subject whose bare name is in it is itself a SQL-level
     # name, so its bare grep names the subject, not a short method name.
@@ -460,7 +441,11 @@ async def claim_tests(
         ev = str(r.get("evidence") or "")
         if m and m not in row["methods"]:
             row["methods"].append(m)
-        row["tiers"].append(cc.tier_of_method(m, scoped=_scoped_reference(ev, exact_terms)))
+        row["tiers"].append(
+            cc.FILE_REFERENCE
+            if m == "coverage_history"
+            else cc.tier_of_method(m, scoped=_scoped_reference(ev, exact_terms))
+        )
         row["confidence"] = max(row["confidence"], float(r.get("confidence") or 0.0))
         row["evidence"] = row["evidence"] or ev
     grep_total = 0
@@ -815,8 +800,15 @@ async def handle_code_coverage_claim(input: Any) -> Any:
     verdict = cc.coverage_verdict(
         ordered,
         control_ok=control_ok,
-        measured_unexecuted=bool(measured) and not measured.get("executed"),
+        measured_unexecuted=measured.get("freshness") == "verified"
+        and bool(measured.get("measured"))
+        and not measured.get("executed"),
     )
+    if verdict in {cc.UNCOVERED, cc.WEAK_EVIDENCE} and (
+        measured.get("freshness") in {"partial", "unverified"}
+        or any("coverage_history" in r["methods"] for r in ordered)
+    ):
+        verdict = cc.UNKNOWN
     trace_run_id = new_trace_run_id()
     served = ordered[: input.limit]
     schedule_code_trace(
