@@ -212,6 +212,11 @@ def _boundaries(text: str) -> list[int]:
     return [*boundaries, len(text)]
 
 
+def request_boundaries(text: str) -> tuple[int, ...]:
+    """Safe cuts in a complete prepared container, before separator removal."""
+    return tuple(_boundaries(text))
+
+
 def split(text: str) -> list[str]:
     """Keep code, HTML, paragraphs, list items and table rows within one bounded request."""
     if len(text.encode()) <= MAX_BYTES:
