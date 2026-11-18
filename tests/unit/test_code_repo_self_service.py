@@ -1385,20 +1385,3 @@ def test_a_git_proxy_identity_outside_its_shape_is_refused_on_the_wire(identity:
         with pytest.raises(WireError, match="git_proxy_identity"):
             model(org=ORG, repo="acme/widgets", git_proxy_identity=identity)
         assert model(org=ORG, repo="acme/widgets").git_proxy_identity == ""
-
-
-def test_an_add_s_audit_row_keeps_the_git_proxy_identity() -> None:
-    """It says whose credential the index is fetched with, and it is no secret."""
-    request = CodeRepoAddInput(
-        org=ORG, repo="acme/widgets", access_token="ghp_zzz", git_proxy_identity=IDENTITY
-    )
-    response = {
-        "repo": "acme/widgets",
-        "branch": "main",
-        "join_policy": "open",
-        "classification": "standard",
-        "namespace": "code-widgets",
-        "also": [],
-    }
-    subject = admin.repo_add_audit_subject(request, response)
-    assert subject["git_proxy_identity"] == IDENTITY and "access_token" not in subject

@@ -760,7 +760,9 @@ settings load.
 password the file's content (empty without a file). No request comes without them. The
 entry's access token goes to the remote, inside the tunnel, never to the proxy. A proxy
 that terminates TLS for a remote can then decide, by the identity, which repository a
-job reaches and with which credential.
+job reaches and with which credential. An `http://` proxy URL sends the identity and the
+token to the proxy in clear on every job: use one only over a path you trust, or give
+the proxy an `https://` URL.
 
 **The identity.** An entry presents its own `git_proxy_identity`, else
 `LOOM_CODE_GIT_PROXY_IDENTITY`: letters, digits and `. _ ~ @ -`, at most 128 characters.
@@ -775,7 +777,10 @@ and each host's own fetch round fetches the mirror as its first entry.
 from the file for that job: not in an argument, a remote URL, a stored git config, a
 build's environment or a sandboxed job. Loom masks it in what git prints (as the file
 holds it, percent-encoded and in the header's base64 form) before that output is logged
-or recorded.
+or recorded. That keeps it out of a build's sight, not out of its reach: on a host that
+uses the proxy, repository jobs are plain processes, so a compiler tier's build runs as
+Loom's user and can read the token file. Run compiler tiers there only for repositories
+you trust.
 
 **The CA bundle** is git's `http.sslCAInfo`, which replaces git's default roots for
 these jobs: it must hold every authority the remotes present through the proxy, the
@@ -796,8 +801,11 @@ show:
   use the proxy where repository jobs run as plain processes (_Without the sandbox_).
 
 A refusal by the proxy itself reads as kind `egress` on the tier
-([when a tier fails](#when-a-tier-fails)): a `407` means the proxy did not take the
-identity or the token, any other answer is the proxy's own rule for them.
+([when a tier fails](#when-a-tier-fails)), for an entry's clone as for its fetches. The
+clone and the `ls-remote` before an add, which show a fixed reason in place of git's
+words, name the proxy and the status it answered (`the operator's git proxy
+(LOOM_CODE_GIT_PROXY_URL) refused the connection (407)`). A `407` means the proxy did
+not take the identity or the token, any other answer is the proxy's own rule for them.
 
 **What does not use it.** A compiler tier's dependency download (the TypeScript package
 install, the Go tier's `go mod download`) runs repository code, so it gets neither the

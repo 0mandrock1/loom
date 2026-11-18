@@ -658,8 +658,17 @@ up to `LOOM_CODE_GIT_FETCH_TIMEOUT_S`, an hour by default), so the proxy must ac
 token for that long after Loom read it. With `networkPolicy.enabled`, a proxy on a port
 other than 443 needs a `networkPolicy.extraEgress` rule.
 
+An `http://` proxy URL, as above, sends the identity and the token to the proxy in clear
+on every job: keep that path inside a network you trust, or give the proxy an `https://`
+URL.
+
 The proxy and the [repository-job sandbox](#repository-job-sandbox) are not used
-together: keep `sandbox.required: false` where the proxy is set.
+together. `sandbox.required: false` alone does not keep the sandbox off: a pod whose
+profiles let bubblewrap run uses it whatever that value says, and then every network git
+job is refused. Where the proxy is set, leave `sandbox.securityContext` and
+`sandbox.hostUsers` at their defaults as well. Repository jobs are then plain processes:
+a compiler tier's build runs as Loom's user and can read the token file, so run compiler
+tiers there only for repositories you trust.
 
 ## Related
 

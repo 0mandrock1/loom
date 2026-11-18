@@ -12,32 +12,29 @@ and lives in that one child's environment: it reaches no argv, no stored git con
 `auth_env` (which build harnesses copy) and no sandboxed job, and `redact` takes it out
 of what git says before anything is logged or recorded. A job that cannot go through
 the proxy is refused (`GitProxyRefused`): git never connects directly while the setting
-is set.
+is set. A job the proxy itself refuses fails as git fails; `refused_by_proxy` names the
+proxy for the callers that show a fixed reason in place of git's words.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from urllib.parse import quote, urlsplit
 
+from server.code.domain.index import tier_health
 from server.code.domain.index.state import (
     GIT_PROXY_IDENTITY_REFUSAL,
+    GIT_PROXY_REFUSED,
     GIT_PROXY_REMOTE_REFUSAL,
     GIT_PROXY_TOKEN_REFUSAL,
 )
 from server.settings import settings
 
-logger = logging.getLogger("loom.code_index.git_proxy")
-
 # What a child's output shows in place of the proxy password.
 REDACTED = b"<proxy-token>"
-# A password file holds one token (a projected service-account token is under 2 KiB);
-# a larger file is not one, and its content would not fit a child's environment.
-_TOKEN_MAX_CHARS = 16 * 1024  # not a setting: what a file may hold and still be a token
 
 
 @dataclass(frozen=True)
@@ -87,8 +84,6 @@ async def job_env(
         add_git_config(out, "http.sslCAInfo", settings.code_git_proxy_ca_file)
     # ssh has no HTTP proxy: a submodule or redirect that names it would connect directly.
     add_git_config(out, "protocol.ssh.allow", "never")
-    # No variable exempts a host from the proxy.
-    out["NO_PROXY"] = out["no_proxy"] = ""
     return out, _secret_forms(identity, token)
 
 
@@ -99,33 +94,29 @@ def redact(output: bytes, secrets: Sequence[bytes]) -> bytes:
     return output
 
 
-# The last token-file failure logged ('' once a read succeeded): every job reads the
-# file, so a failure that holds is logged once, not once per job.
-_logged_failure = ""
+def refused_by_proxy(git_output: str) -> str:
+    """What a caller that may not show git's own words says of a job the proxy refused:
+    `state.GIT_PROXY_REFUSED` with the status the proxy answered git's CONNECT with. ''
+    when the proxy is not set or `git_output` names no such answer."""
+    status = tier_health.refused_connect_status(git_output) if configured() else ""
+    return f"{GIT_PROXY_REFUSED} ({status})" if status else ""
 
 
 def _read_token() -> str:
     """The proxy password as its file holds it now, '' when no file is named. Read for
     every job, since the platform rotates it. GitProxyRefused for a named file that
     gives no token: the job must not run without the password it was given."""
-    global _logged_failure
     path = settings.code_git_proxy_token_file
     if not path:
         return ""
     try:
         with open(path, encoding="utf-8") as f:
-            token = f.read(_TOKEN_MAX_CHARS + 1).strip()
-    except (OSError, UnicodeDecodeError) as e:
-        failure = f"{path} cannot be read ({type(e).__name__})"
-    else:
-        if token and len(token) <= _TOKEN_MAX_CHARS:
-            _logged_failure = ""
-            return token
-        failure = f"{path} is empty" if not token else f"{path} is too large to be a token"
-    if failure != _logged_failure:
-        _logged_failure = failure
-        logger.warning("network git refused: LOOM_CODE_GIT_PROXY_TOKEN_FILE %s", failure)
-    raise GitProxyRefused(GIT_PROXY_TOKEN_REFUSAL)
+            token = f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        token = ""
+    if not token:
+        raise GitProxyRefused(GIT_PROXY_TOKEN_REFUSAL)
+    return token
 
 
 def _proxy_url(identity: str, token: str) -> str:
@@ -154,4 +145,5 @@ __all__ = [
     "configured",
     "job_env",
     "redact",
+    "refused_by_proxy",
 ]

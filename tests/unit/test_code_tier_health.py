@@ -125,12 +125,16 @@ def test_an_error_is_classified_into_its_kind(text: str, kind: str) -> None:
 def test_an_egress_fix_names_the_proxy_that_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """Git prints the same words for the sandbox's egress proxy and for an operator's
     git proxy; with LOOM_CODE_GIT_PROXY_URL set only the operator's can have answered."""
-    from server.code.domain.index.state import GIT_PROXY_REFUSALS
+    from server.code.domain.index.state import GIT_PROXY_REFUSALS, GIT_PROXY_REFUSED
     from server.settings import settings
 
     refused = (
         "fatal: unable to access 'https://git.example/acme/widgets.git/': CONNECT tunnel "
         "failed, response 403"
+    )
+    # A clone shows no words of git's: the fixed sentence it gives for the proxy's refusal.
+    clone = (
+        f"clone https://git.example/acme/widgets.git: git clone failed: {GIT_PROXY_REFUSED} (407)"
     )
     assert "sandbox's egress proxy" in tier_health.fix_for("egress", refused)
     monkeypatch.setattr(settings, "code_git_proxy_url", "http://proxy.example:3128")
@@ -138,6 +142,9 @@ def test_an_egress_fix_names_the_proxy_that_refused(monkeypatch: pytest.MonkeyPa
     assert "operator's git proxy (LOOM_CODE_GIT_PROXY_URL)" in fix and "sandbox" not in fix
     assert "git.example/acme/widgets" in fix and "LOOM_CODE_GIT_PROXY_TOKEN_FILE" in fix
     assert "git.example" not in tier_health.fix_for("egress", refused, name_where=False)
+    # an entry's first network job, its clone, is the same kind with the same fix
+    assert tier_health.classify(clone) == "egress"
+    assert tier_health.fix_for("egress", clone) == fix
     # Loom's own refusal to connect without that proxy reads as the same kind
     for reason in GIT_PROXY_REFUSALS:
         record = tier_health.failed(None, "fetch", f"GitError: {reason}", T0)

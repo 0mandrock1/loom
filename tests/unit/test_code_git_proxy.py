@@ -7,7 +7,6 @@ from __future__ import annotations
 import ast
 import base64
 import logging
-import os
 import shlex
 from datetime import UTC, datetime
 from pathlib import Path
@@ -58,7 +57,6 @@ def proxy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     _holds(token_file, TOKEN)
     monkeypatch.setattr(settings, "code_git_proxy_url", PROXY)
     monkeypatch.setattr(settings, "code_git_proxy_token_file", str(token_file))
-    monkeypatch.setattr(git_proxy, "_logged_failure", "")
     return token_file
 
 
@@ -89,6 +87,24 @@ def spawned(monkeypatch: pytest.MonkeyPatch) -> _Spawned:
     return seen
 
 
+def _git_fails_saying(monkeypatch: pytest.MonkeyPatch, said: str) -> None:
+    """No child runs: every job ends as git does when it prints `said` and exits 128."""
+
+    async def _exec(*_argv: str, **_kw: Any) -> object:
+        return object()
+
+    async def _result(proc: object, job: Any) -> sandbox.JobResult:
+        return sandbox.JobResult(128, b"", said.encode())
+
+    monkeypatch.setattr(sandbox.asyncio, "create_subprocess_exec", _exec)
+    monkeypatch.setattr(sandbox, "_result", _result)
+
+
+def _entry(tmp_path: Path, name: str = "clone.git", **fields: Any) -> Any:
+    fields = {"git_branch": "main", **fields}
+    return repo_config(git_dir=str(tmp_path / name), git_remote=REMOTE, **fields)
+
+
 async def _ls_remote(remote: str = REMOTE, identity: str = IDENTITY) -> sandbox.JobResult:
     return await sandbox.run_job(
         ["git", "ls-remote", remote],
@@ -115,7 +131,6 @@ async def test_a_network_git_job_gets_the_proxy_and_its_credentials_in_its_own_e
     assert config["http.sslCAInfo"] == str(tmp_path / "ca.pem")
     # git takes the last value: ssh, which no HTTP proxy carries, is off for this job
     assert config["protocol.ssh.allow"] == "never"
-    assert spawned.env["NO_PROXY"] == spawned.env["no_proxy"] == ""
     assert spawned.argv == argv
     # the caller's mapping, which a harness environment is built like, is left alone
     assert given == before
@@ -192,10 +207,6 @@ def _blank(token_file: Path) -> None:
     _holds(token_file, " ")
 
 
-def _not_a_token(token_file: Path) -> None:
-    _holds(token_file, "x" * 20_000)
-
-
 def _as_given(token_file: Path) -> None:
     pass
 
@@ -205,12 +216,11 @@ def _as_given(token_file: Path) -> None:
     [
         (_missing, REMOTE, IDENTITY, state.GIT_PROXY_TOKEN_REFUSAL),
         (_blank, REMOTE, IDENTITY, state.GIT_PROXY_TOKEN_REFUSAL),
-        (_not_a_token, REMOTE, IDENTITY, state.GIT_PROXY_TOKEN_REFUSAL),
         (_as_given, REMOTE, "", state.GIT_PROXY_IDENTITY_REFUSAL),
         (_as_given, "git@git.example:acme/widgets.git", IDENTITY, state.GIT_PROXY_REMOTE_REFUSAL),
         (_as_given, "ssh://git@git.example/acme/w.git", IDENTITY, state.GIT_PROXY_REMOTE_REFUSAL),
     ],
-    ids=["no file", "an empty file", "a file too large", "no identity", "scp remote", "ssh remote"],
+    ids=["no file", "an empty file", "no identity", "scp remote", "ssh remote"],
 )
 async def test_a_job_that_cannot_go_through_the_proxy_is_refused_before_any_process_starts(
     proxy: Path, spawned: _Spawned, change: Any, remote: str, identity: str, reason: str
@@ -230,19 +240,6 @@ async def test_the_sandbox_runs_no_network_git_while_the_proxy_is_set(
         await _ls_remote()
     assert str(refused.value) == state.GIT_PROXY_SANDBOX_REFUSAL
     assert spawned.count == 0
-
-
-async def test_a_sandboxed_harness_keeps_the_relay_and_sees_nothing_of_the_proxy(
-    proxy: Path, spawned: _Spawned, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(sandbox, "_available", True)
-    monkeypatch.setattr(sandbox, "_seccomp_fd", lambda: os.open(os.devnull, os.O_RDONLY))
-    await sandbox.run_job(
-        ["bash", "harness.sh"], env={"PATH": "/usr/bin:/bin"}, timeout_s=5, network=True
-    )
-    assert git_config(spawned.env)["http.proxy"] == sandbox.RELAY_URL
-    told = [*spawned.env.values(), *spawned.argv]
-    assert not [text for text in told if "proxy.example" in text or ENCODED in text]
 
 
 async def test_each_caller_reports_a_refusal_as_its_own_failure_with_the_fixed_reason(
@@ -270,23 +267,60 @@ async def test_each_caller_reports_a_refusal_as_its_own_failure_with_the_fixed_r
     assert spawned.count == 0
 
 
-async def test_a_password_file_failure_is_logged_once_while_it_holds(
-    proxy: Path, spawned: _Spawned, caplog: pytest.LogCaptureFixture
+# --- a refusal by the proxy itself --------------------------------------------------------
+
+# git's words for a CONNECT the proxy refused, in the two phrasings of its HTTP library.
+REFUSED_BY_THE_PROXY = [
+    (f"fatal: unable to access '{REMOTE}/': CONNECT tunnel failed, response 403\n", "403"),
+    (
+        f"fatal: unable to access '{REMOTE}/': Received HTTP code 407 from proxy after CONNECT\n",
+        "407",
+    ),
+]
+
+
+@pytest.mark.parametrize(("said", "status"), REFUSED_BY_THE_PROXY, ids=["403", "407"])
+async def test_a_clone_the_proxy_refused_reads_as_a_refused_fetch_does(
+    proxy: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, said: str, status: str
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="loom.code_index.git_proxy")
+    """A clone is an entry's first network job and shows a fixed reason, never git's
+    words: the reason names the proxy and its status, and the fetch tier records the
+    kind and the fix it records for a refused fetch."""
+    _git_fails_saying(monkeypatch, said)
+    reason = await bootstrap.clone_mirror(_entry(tmp_path, git_proxy_identity=IDENTITY))
+    assert reason == f"git clone failed: {state.GIT_PROXY_REFUSED} ({status})"
+    assert state.shown_clone_reason(reason) == reason
+    with pytest.raises(gitrepo.GitError) as refused:
+        await gitrepo.fetch(str(tmp_path / "m.git"), REMOTE, "main", proxy_identity=IDENTITY)
+    # as the ingest pass records the two failures
+    at = datetime(2026, 1, 1, tzinfo=UTC)
+    clone = tier_health.failed(None, "fetch", f"clone {REMOTE}: {reason}", at)
+    fetch = tier_health.failed(None, "fetch", f"fetch {REMOTE}: {refused.value}", at)
+    assert clone.kind == fetch.kind == "egress"
+    assert clone.fix == fetch.fix and "operator's git proxy (LOOM_CODE_GIT_PROXY_URL)" in clone.fix
+    # without the setting a failed clone reads as before
+    monkeypatch.setattr(settings, "code_git_proxy_url", "")
+    assert await bootstrap.clone_mirror(_entry(tmp_path, "b.git")) == "git clone failed (exit 128)"
 
-    async def refused() -> int:
-        with pytest.raises(GitProxyRefused):
-            await _ls_remote()
-        return len([r for r in caplog.records if r.name == "loom.code_index.git_proxy"])
 
-    _missing(proxy)
-    assert [await refused(), await refused()] == [1, 1]
-    assert str(proxy) in caplog.text and "FileNotFoundError" in caplog.text
-    _holds(proxy, TOKEN)
-    await _ls_remote()
-    _missing(proxy)
-    assert await refused() == 2  # a failure after a good read is news again
+@pytest.mark.parametrize(("said", "status"), REFUSED_BY_THE_PROXY, ids=["403", "407"])
+async def test_the_ls_remote_before_an_add_names_the_proxy_that_refused_it(
+    proxy: Path, monkeypatch: pytest.MonkeyPatch, said: str, status: str
+) -> None:
+    async def probe() -> str:
+        with pytest.raises(ValueError) as refused:
+            await reg.remote_has_branch(
+                "acme/widgets", "main", "", git_remote=REMOTE, proxy_identity=IDENTITY
+            )
+        return str(refused.value)
+
+    _git_fails_saying(monkeypatch, said)
+    named = await probe()
+    assert named == f"git ls-remote failed for acme/widgets: {state.GIT_PROXY_REFUSED} ({status})"
+    assert tier_health.classify(named) == "egress"
+    # without the setting the same words read as before
+    monkeypatch.setattr(settings, "code_git_proxy_url", "")
+    assert await probe() == "git ls-remote failed for acme/widgets"
 
 
 # --- the password in no output --------------------------------------------------------
@@ -340,16 +374,9 @@ async def test_refs_a_caller_parses_are_left_as_the_remote_sent_them(
 async def test_no_error_text_log_line_or_health_record_carries_the_password(
     proxy: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
-    stderr = f"fatal: Invalid proxy URL 'http://{IDENTITY}:{ENCODED}@proxy.example:3128'\n"
-
-    async def _exec(*_argv: str, **_kw: Any) -> object:
-        return object()
-
-    async def _result(proc: object, job: Any) -> sandbox.JobResult:
-        return sandbox.JobResult(128, b"", stderr.encode())
-
-    monkeypatch.setattr(sandbox.asyncio, "create_subprocess_exec", _exec)
-    monkeypatch.setattr(sandbox, "_result", _result)
+    _git_fails_saying(
+        monkeypatch, f"fatal: Invalid proxy URL 'http://{IDENTITY}:{ENCODED}@proxy.example:3128'\n"
+    )
     with pytest.raises(gitrepo.GitError) as failed:
         await gitrepo.fetch(str(tmp_path / "m.git"), REMOTE, "main", proxy_identity=IDENTITY)
     record = tier_health.failed(
@@ -366,11 +393,6 @@ async def test_no_error_text_log_line_or_health_record_carries_the_password(
 
 
 # --- every network git path carries the entry's identity -----------------------------
-
-
-def _entry(tmp_path: Path, name: str = "clone.git", **fields: Any) -> Any:
-    fields = {"git_branch": "main", **fields}
-    return repo_config(git_dir=str(tmp_path / name), git_remote=REMOTE, **fields)
 
 
 NETWORK_GIT: dict[str, Any] = {

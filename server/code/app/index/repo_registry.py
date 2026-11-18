@@ -405,7 +405,7 @@ async def _ls_remote(
     stdout, or ValueError with a sentence a person can act on. Authenticates through the
     environment (the token never reaches argv); the child never outlives the call.
     `proxy_identity` names the repository to an operator's git proxy: no row holds it yet."""
-    from server.code.app.index.git_proxy import GitProxyRefused
+    from server.code.app.index.git_proxy import GitProxyRefused, refused_by_proxy
     from server.code.app.index.gitrepo import auth_env, remote_access
     from server.code.app.index.sandbox import run_job
 
@@ -425,7 +425,12 @@ async def _ls_remote(
         raise ValueError(e.reason) from None
     out, err = done.stdout, done.stderr
     if done.returncode != 0:
-        text = err.decode(errors="replace").lower()
+        said = err.decode(errors="replace")
+        # An add's first contact with the remote: the operator's git proxy is named when
+        # it is what refused.
+        if refused := refused_by_proxy(said):
+            raise ValueError(f"git ls-remote failed for {repo}: {refused}")
+        text = said.lower()
         if "not found" in text or "authentication" in text or "could not read" in text:
             raise ValueError(
                 f"{provider} remote refused {repo}: the repository does not exist, "
