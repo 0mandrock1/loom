@@ -182,6 +182,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Benchmark methodology](docs/benchmarks/methodology.md): This page covers what the harnesses compute, how a delta is judged against noise, when two numbers compare, and where the numbers are biased.
 - [Benchmark results](docs/benchmarks/results.md): This page lists only numbers that a committed file reproduces.
 - [Running the benchmarks](docs/benchmarks/running.md): Run every command from the repository root with the checkout's interpreter and the root first on `PYTHONPATH`:
+- [SDK issue resolution](docs/benchmarks/sdk-issue-resolution.md): The SDK issue harness measures proposed patches with and without Loom code lookup.
 - [Skill eval](docs/benchmarks/skill-eval.md): The skill eval grades the `loom-memory` skill by the namespace an agent leaves behind.
 
 ## Optional
