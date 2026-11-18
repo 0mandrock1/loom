@@ -210,6 +210,30 @@ def collect_patch(root: Path, out: Path, events: list[dict]) -> list[str]:
     return errors
 
 
+def recorded_refusal(events: list[dict]) -> dict | None:
+    """The first persisted refusal, with the progress known at that event."""
+    progress = {}
+    for event in events:
+        if event.get("type") == "worker_stage":
+            progress = event
+        error = event.get("error")
+        denied_error = (
+            event.get("type")
+            in {"terminal", "tool_result", "provider_cleanup_error", "sdk_cleanup_error"}
+            and isinstance(error, dict)
+            and (
+                error.get("http_status") in (401, 403, 409)
+                or error.get("type") == "PermissionError"
+            )
+        )
+        if event.get("status") == "guard_refused" or denied_error:
+            refusal = {**progress, **event, "status": "guard_refused"}
+            if event.get("type") == "tool_result":
+                refusal.update(stage="agent_inference", agent_inference_started=True)
+            return refusal
+    return None
+
+
 def finalize(
     out: Path, root: Path, manifest: dict, outcome: dict, started: float, *, setup_validated: bool
 ) -> dict:
@@ -230,7 +254,11 @@ def finalize(
                 }
             )
     terminal = next((e for e in reversed(events) if e.get("type") == "terminal"), {})
-    if outcome.get("status") == "worker_exited":
+    supervision = dict(outcome)
+    refusal = recorded_refusal(events)
+    if refusal is not None:
+        outcome = refusal
+    elif outcome.get("status") == "worker_exited":
         outcome = (
             terminal
             if terminal and outcome.get("returncode") == 0
@@ -256,6 +284,7 @@ def finalize(
         "instance_id": manifest.get("task", {}).get("instance_id"),
         "protocol_sha256": manifest.get("protocol_sha256"),
         "status": status,
+        "supervision": supervision,
         "answer": outcome.get("answer", ""),
         "error": outcome.get("error"),
         "stage": outcome.get(

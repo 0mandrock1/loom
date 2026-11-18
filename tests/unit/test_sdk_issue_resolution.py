@@ -458,6 +458,88 @@ def test_cleanup_retains_the_first_refusal_across_both_resources(
         assert result["error"]["request_id"] == "cleanup-refusal"
 
 
+@pytest.mark.parametrize("signal", ["sdk_terminal", "local_terminal", "sdk_tool", "local_tool"])
+@pytest.mark.parametrize("supervisor", ["timeout", "nonzero", "interrupted"])
+def test_persisted_refusal_survives_supervision(config, monkeypatch, signal, supervisor):
+    from loom.errors import from_response
+
+    sdk = signal.startswith("sdk")
+    config.arm = "loom" if sdk else "baseline"
+    failure = (
+        from_response(
+            {"detail": {"code": "AUTH_INSUFFICIENT", "message": "denied"}},
+            403,
+            request_id="persisted-refusal",
+        )
+        if sdk
+        else PermissionError("denied")
+    )
+    detail = agent.error_detail(failure)
+
+    def process(argv, **kwargs):
+        path = Path(argv[-1]) / "events.jsonl"
+        progress = {
+            "stage": "agent_inference",
+            "preflight_status": "passed" if sdk else "not_requested",
+            "agent_inference_started": True,
+        }
+        agent.append_event(path, {"type": "worker_stage", **progress})
+        agent.append_event(path, {"type": "model_response", "response": response(edit())})
+        (config.checkout / "code.py").write_text("value = 2\n")
+        if signal.endswith("terminal"):
+            agent.append_event(
+                path, {"type": "terminal", "status": "guard_refused", "error": detail, **progress}
+            )
+        else:
+            name = "loom_code_lookup" if sdk else "read_file"
+            agent.append_event(path, {"type": "tool_attempt", "name": name, "tool_use_id": "1"})
+            agent.append_event(
+                path,
+                {
+                    "type": "tool_result",
+                    "name": name,
+                    "status": "error",
+                    "error": detail,
+                    "duration_s": 0.125,
+                },
+            )
+        if supervisor == "interrupted":
+            raise KeyboardInterrupt("offline fixture")
+        return (None, True) if supervisor == "timeout" else (17, False)
+
+    monkeypatch.setattr(bench, "run_process_group", process)
+    result = bench.run_trial(config)
+    assert result["status"] == "guard_refused" and result["error"] == detail
+    assert result["stage"] == "agent_inference" and result["agent_inference_started"] is True
+    assert result["usage"]["inputTokens"] == 10 and result["usage_complete"] is False
+    assert result["patch_bytes"] > 0 and result["patch_errors"] == []
+    assert b"+value = 2" in (config.out / "agent.diff").read_bytes()
+    expected = {"timeout": "timeout", "nonzero": "worker_exited", "interrupted": "interrupted"}
+    assert result["supervision"]["status"] == expected[supervisor]
+    if supervisor == "nonzero":
+        assert result["supervision"]["returncode"] == 17
+    if supervisor == "interrupted":
+        assert result["supervision"]["error"]["type"] == "KeyboardInterrupt"
+
+
+@pytest.mark.parametrize(
+    "supervisor,expected",
+    [("timeout", "timeout"), ("nonzero", "worker_error"), ("zero", "completed_empty_patch")],
+)
+def test_successful_terminal_does_not_override_failed_supervision(
+    config, monkeypatch, supervisor, expected
+):
+    def process(argv, **kwargs):
+        agent.append_event(
+            Path(argv[-1]) / "events.jsonl",
+            {"type": "terminal", "status": "completed", "answer": "done"},
+        )
+        return {"timeout": (None, True), "nonzero": (17, False), "zero": (0, False)}[supervisor]
+
+    monkeypatch.setattr(bench, "run_process_group", process)
+    assert bench.run_trial(config)["status"] == expected
+
+
 def test_path_boundary_includes_symlinks_and_git_metadata(config, tmp_path):
     (config.checkout / "link").symlink_to(tmp_path, target_is_directory=True)
     for name in ("../outside", str(tmp_path / "outside"), ".git/config", "link/task.json"):

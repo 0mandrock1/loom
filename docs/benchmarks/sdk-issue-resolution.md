@@ -129,6 +129,10 @@ status, including refusals from the index preflight. Cleanup errors retain an ea
 guard refusal. Tool-time SDK refusals retain their HTTP status, code and request ID.
 Patch collection errors stay in `patch_errors` without replacing a refusal. A refusal
 originating in cleanup records `provider_cleanup` or `sdk_cleanup` as its stage.
+Recorded terminal, cleanup and denied-tool evidence keeps the first refusal primary
+even when supervision later times out, is interrupted or reports a nonzero exit.
+`supervision` retains that outer status, return code and error separately. A successful
+terminal event cannot override failed supervision when no refusal was recorded.
 A controller must stop before grading or starting another trial; it
 must also check the serialized `error.http_status` when reading results from another
 worker version. A failed preflight cannot establish a paired performance result.
