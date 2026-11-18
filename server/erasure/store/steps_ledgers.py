@@ -320,6 +320,19 @@ async def delete_query_history_by_namespace(
         return count
 
 
+async def delete_group_members_by_namespace(
+    org: str, namespace: str | Sequence[str], *, ch: _CHClient | None = None
+) -> int:
+    """A mirror's source-scoped membership snapshots leave with the namespace."""
+    return await delete_scoped(
+        "loom.knowledge_group_members",
+        org=org,
+        scope_where=NS_EQ,
+        params={"ns": namespace},
+        ch=ch,
+    )
+
+
 async def delete_memory_drops_by_namespace(
     org: str, namespace: str | Sequence[str], *, ch: _CHClient | None = None
 ) -> int:

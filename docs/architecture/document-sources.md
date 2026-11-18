@@ -433,6 +433,22 @@ mirror that holds rows. A permission column on `loom.documents` read by every pa
 make the opposite the default; [sharing](sharing.md#alternatives-not-taken) rejected
 that for collections, since one missed path leaks.
 
+Search discovers chunk keys and scores without returning chunk text. Each leg checks
+candidates in batches of at most 64 until its admitted pool fills or its stream ends;
+denied candidates consume no pool position or fusion rank. Content reads bind the
+exact admitted namespace, address, chunk index, version and revision under the requested
+embedding model. A missing key is omitted without substituting a later version.
+Duplicate or unexpected rows discard all mirrored legs. Permissions are checked again
+after content is fetched. Listing evidence and any group membership relied on must
+still be fresh before the content leaves the checked leg. Independent email, owner, domain or public grants
+can admit a document whose group evidence expired.
+
+A marked private-first search gathers both possible passes from its authorized
+namespace list and visibility settings before choosing which to return. It refreshes
+all retained mirror permissions and reranks before applying the first-pass similarity
+threshold. A provisional private hit that loses permission therefore cannot suppress
+the public fallback. No reranking provider receives the provisional pools.
+
 - **Legs with the check:** `knowledge.search`, `get`, `outline`, `list`, `download`,
   `synthesize`, `knowledge.inspect` (titles), `knowledge.source.inspect` (a mirrored
   source's documents), the `search.query` knowledge and repository-docs legs,
@@ -690,21 +706,71 @@ A reader sees a mirrored document when all of these hold:
 The reader's verified emails are its subject's directory emails that
 `VERIFIED_EMAIL_SQL` admits (an SSO account's or a linked one's,
 `server/core/grant_sql.py`), and nothing else: a subject that merely spells an address
-is not one, and neither is a connection's store email. The predicate's first arm admits
-any password-less row's `contact_email`; the implementing pull request confirms that
-only an SSO sign-in or a link writes such a row's `contact_email`, or narrows the
-predicate for this check. A domain matches only through the person's SSO account record,
-whose identity provider vouches for that domain (the store's hosted-domain claim, or the
-org's configured SSO domain), never a linked account's email or a bare verified address.
+is not one, and neither is a connection's store email. The predicate's passwordless
+arm covers nonempty contacts from verified SSO provisioning or operator linking.
+Password signup hashes the supplied password before storing its claimed address;
+ordinary namespace registration cannot write a contact address or password hash.
+The internal reader resolver retains the uncached canonical subject independently of
+verified emails and reads actual active contact rows for email proof.
+
+Signed hosted-domain evidence lives in `sso_links.hosted_domain` and `issuer`, written
+after the final SCIM check under the account ownership lock. A domain matches only
+through a current linked row naming the active passwordless account's contact, with the
+configured issuer and its signed hosted-domain claim. Empty defaults, missing claims,
+issuer changes and generic link changes deny domain access. Neither a linked password
+account's email nor a bare verified address proves domain membership. These identity
+inputs alone expose no mirrored document.
+A request keeps a monotonic mirror mark in its existing work bag, shared with child
+legs. An unbound direct helper serves no mirrored content. Active registrations, mirror
+bindings and listing starts are read in sequence before candidate permissions. A failed
+unconditional read marks `mirror_unread`; a failed candidate read invalidates the whole
+mirror plan without that marker. Checked adapters cover search, get, outline, download
+and listing. Other readers, marked-request sinks and session protections remain
+prerequisites to enabling mirrored sources.
+
+`documents.access_keys` and its bloom index select coarse candidates under the
+ClickHouse authority. Owner and group buckets retain candidates needing identity
+resolution; Unicode buckets retain matches whose database and Python normalization
+can differ. Every candidate still needs the current strict permission check. Under
+the Postgres authority these keys do not filter candidates: an unpublished head may
+widen permission. Both chunk-frequency views exclude mirrors, and a lexical-statistics
+rebuild refuses their names before reading or writing statistics. Mirrored lexical
+scores use fixed corpus constants.
+
+The checked list projection reads title, description, tags, blob metadata and the
+stored preview only at an admitted live document version and revision. Under Postgres,
+the current head supplies these fields and computes only the first 220 content bytes
+in the database, including for encoded text; no full body crosses into the list reader.
+Chunk counts belong to that same storage copy and revision. They count distinct
+embedding-model and section-index pairs, including sections awaiting embeddings. A
+Postgres count also requires the head's recorded chunk version; a current revision
+without recorded chunks counts zero. Permission and serving-state proofs must remain
+current through the list's final read before any count or lookahead is returned.
+Metadata discovery groups complete public address families before a public cursor or
+limit. Postgres reads internal pages of 64 rows, releasing the connection before
+permission checks; it reads every page without a candidate cutoff. Ordinary shadow
+checks read bounded batches independently of public filters and cursors. They cover
+the ordinary listing's published rows and its unpublished Postgres heads; requesting
+superseded rows also lets an ordinary tombstone shadow a mirrored copy. Mirrored
+candidates remain live-only.
+Listing chooses the newest admitted complete copy of a public address, with a stable
+storage-identity tie break, before applying public tags, URI prefixes or the cursor.
+An ordinary copy wins its entire family before these filters. Selection retains only
+one current family, bounded shadow batches and the requested page plus one lookahead.
+After selected projections and counts are read, ordinary shadows, permissions, identity,
+document versions and recorded chunk serving state are checked again for every retained
+copy, including the lookahead. A lost proof drops the whole mirrored leg, so it cannot
+leave a stale cursor or reveal a removed row through the page's continuation.
+
 A token reads as one person, for both the `owner` entry and the emails, or as nobody:
 
 - a person's own session token (a primary token whose own `sid` claim names a sign-in
   session, with no `creator` claim) reads as that person; a token minted for a subject
   without one reads as nobody;
 - a token minted for one person alone that says so (a `reads_as_creator` claim, which
-  only the person's own signed-in session can mint, through the dashboard's flow that
-  connects their own agent, which the coding-agent plugins use; delegation never copies
-  it) reads as its creator;
+  only the person's own primary first-party sign-in session can mint through
+  `POST /v1/me/personal_tokens.create`, for the dashboard's own-agent connection flow;
+  delegation never copies it) reads as its creator;
 - the assistant's answer token, delegated from the caller's for that answer alone,
   carries a reads-as claim that the bridge sets at delegation to the person the caller's
   token reads as, or to nobody, and reads as that; the check never infers it from the

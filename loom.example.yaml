@@ -2844,6 +2844,10 @@ settings:
   # it for decisions. [restart]
   # knowledge_source_sync_enabled: false
 
+  # Mirrored reads require a complete listing and group observation within this many
+  # seconds; missing or older evidence admits nobody. [restart]
+  # knowledge_source_acl_stale_seconds: 3600
+
   # Seconds between sync passes while there are sources. [restart]
   # knowledge_source_sync_interval_seconds: 900
 

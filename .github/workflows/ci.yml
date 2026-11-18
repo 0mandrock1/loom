@@ -721,13 +721,16 @@ jobs:
           done
           curl -sf http://127.0.0.1:5000/ >/dev/null
           echo "LOOM_TEST_S3_ENDPOINT=http://127.0.0.1:5000" >> "$GITHUB_ENV"
-      # The whole directory on every pull request, split over the parts; no test
-      # is slow enough to justify a separate merge-only tier.
+      # Split ordinary integration cases over the parts. Signed mirror HTTP cases
+      # run in the authenticated isolation step below on every pull request.
       - name: pytest (this part of tests/integration)
         if: matrix.part != 'isolation'
         env:
           LOOM_TEST_SHARD: ${{ matrix.part }}/4
-        run: pytest tests/integration -q --durations=20
+        run: >-
+          pytest tests/integration -q --durations=20
+          --ignore=tests/integration/test_mirror_checked_search_http.py
+          --ignore=tests/integration/test_mirror_checked_list_http.py
       - name: Native Google ADK live tests (Python and TypeScript)
         if: matrix.part == '1'
         run: python -m tests.integration._google_adk_ci "$RUNNER_TEMP/loom-adk-client"
@@ -777,6 +780,8 @@ jobs:
           tests/integration/test_run_begin_claims.py
           tests/integration/test_mcp_session_run_scope.py
           tests/integration/test_projection_failures_restricted.py
+          tests/integration/test_mirror_checked_search_http.py
+          tests/integration/test_mirror_checked_list_http.py
       # The statement corpus: every builder's shapes through
       # EXPLAIN QUERY TREE on the migrated service, and shapes.txt in step
       # with the builders. ~10 s; a rejection here is a statement that would
@@ -929,6 +934,12 @@ jobs:
           tests/integration/test_cell_unset_gate_pg.py
           tests/integration/test_cell_prepare.py
           tests/integration/test_cell_org_triggers_pg.py
+          tests/integration/test_source_access_store.py
+          tests/integration/test_source_document_store.py
+          tests/integration/test_mirror_reader_evidence.py
+          tests/integration/test_mirror_search_chunk_keys.py
+          tests/integration/test_mirror_title_projection.py
+          tests/integration/test_mirror_ask_http.py
       # The tenant-isolation gates again, against a second server that enforces auth:
       # the Postgres read paths (heads by key and by id, narrowed scopes) see real tokens.
       # They run whether or not the memory suites passed (`!cancelled()`).
@@ -967,6 +978,8 @@ jobs:
           tests/integration/test_mcp_session_run_scope.py
           tests/integration/test_onboard_tenant.py
           tests/integration/test_blacklist.py
+          tests/integration/test_mirror_checked_search_http.py
+          tests/integration/test_mirror_checked_list_http.py
           tests/integration/test_sensitivity_high_canary.py
           tests/integration/test_pg_authority.py
           -k "not test_a_duplicate_never_resolves_to_a_canonical_outside_the_scope
