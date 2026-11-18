@@ -153,7 +153,17 @@ async def _protected_agent(
 
 def _store_reply(request: httpx.Request, *, mirrored: bool = False) -> httpx.Response:
     if request.url.path == "/v1/memory.set":
-        return httpx.Response(200, json={"stored": True, "mirrored": mirrored})
+        body = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "version": 1,
+                "memory_id": "00000000-0000-4000-8000-000000000001",
+                "status": "active",
+                "namespace": body["namespace"],
+                "memory_key": body["memory_key"],
+            },
+        )
     assert request.url.path == "/v1/memory.search"
     return httpx.Response(
         200,
@@ -373,7 +383,8 @@ def test_protected_direct_store_calls_remain_explicit(tmp_path: Path, operation:
             else:
                 assert path == "/v1/memory.set" and body["value"] == "Alice prefers aisle seats"
                 assert body["tags"] == ["customer", "kind:preference", "topic:travel"]
-            assert original.protected and current.protected
+            assert original.protected
+            assert current.protected is (operation == "search")
 
     asyncio.run(run())
 
