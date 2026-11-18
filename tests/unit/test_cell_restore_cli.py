@@ -79,11 +79,21 @@ async def test_cancelled_supervisor_closes_owned_connection_before_reaping():
             await conn.execute("SELECT stalled")
 
     task = asyncio.create_task(budget.call(work()))
-    await conn.statement_started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert conn.is_closed() and conn.closed
+    try:
+        try:
+            await asyncio.wait_for(conn.statement_started.wait(), 0.5)
+        except TimeoutError:
+            if task.done():
+                await task
+            raise
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 0.5)
+        assert conn.is_closed() and conn.closed
+    finally:
+        task.cancel()
+        conn.terminate()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.parametrize(
@@ -213,16 +223,27 @@ async def test_second_cancellation_during_public_close_preserves_first_cancellat
     budget = cell_restore.Budget(1)
     budget.conn = conn
     task = asyncio.create_task(budget.call(conn.execute("SELECT stalled")))
-    await conn.statement_started.wait()
-    task.cancel("first cancellation")
-    await asyncio.wait_for(started.wait(), 1)
-    task.cancel("second cancellation")
-    await asyncio.sleep(0)
-    assert not cancelled_close.is_set()
-    release.set()
-    with pytest.raises(asyncio.CancelledError, match="first cancellation"):
-        await asyncio.wait_for(task, 0.5)
-    assert conn.is_closed() and conn.closed and not cancelled_close.is_set()
+    try:
+        try:
+            await asyncio.wait_for(conn.statement_started.wait(), 0.5)
+        except TimeoutError:
+            if task.done():
+                await task
+            raise
+        task.cancel("first cancellation")
+        await asyncio.wait_for(started.wait(), 1)
+        task.cancel("second cancellation")
+        await asyncio.sleep(0)
+        assert not cancelled_close.is_set()
+        release.set()
+        with pytest.raises(asyncio.CancelledError, match="first cancellation"):
+            await asyncio.wait_for(task, 0.5)
+        assert conn.is_closed() and conn.closed and not cancelled_close.is_set()
+    finally:
+        release.set()
+        task.cancel()
+        conn.terminate()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def test_budget_keeps_original_failure_when_owned_close_fails():
