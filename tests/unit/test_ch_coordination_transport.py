@@ -175,14 +175,8 @@ async def test_cancelled_admission_does_not_allocate_a_channel_or_leak_capacity(
     entered = asyncio.Event()
     in_use = ch._POOL_IN_USE
     if gate == "transport":
-        client._stream_slots = asyncio.Semaphore(0)
-        original = ch.acquire_slot
-
-        async def wait_transport(slots: Any, what: str) -> None:
-            entered.set()
-            await original(slots, what)
-
-        monkeypatch.setattr(ch, "acquire_slot", wait_transport)
+        client._stream_slots = _ObservedSlots(0)
+        entered = client._stream_slots.waiting
     else:
         client._slots = asyncio.Semaphore(0)
         acquire = client._acquire_slot
@@ -214,15 +208,8 @@ async def test_an_admitted_proof_waits_for_the_existing_transport_budget(
 ) -> None:
     channel = _RoutedDriver(pooled=False)
     client, factory = _client_with_channel(monkeypatch, channel)
-    client._stream_slots = asyncio.Semaphore(0)
-    entered = asyncio.Event()
-    acquire = ch.acquire_slot
-
-    async def waiting(slots: Any, what: str) -> None:
-        entered.set()
-        await acquire(slots, what)
-
-    monkeypatch.setattr(ch, "acquire_slot", waiting)
+    client._stream_slots = _ObservedSlots(0)
+    entered = client._stream_slots.waiting
 
     async def proof() -> None:
         async with client.coordination_session():
@@ -289,3 +276,104 @@ async def test_ordinary_connect_keeps_its_pool_settings_and_startup_probes(
     vector_probe.assert_awaited_once_with(client)
     await client.disconnect()
     assert driver.closed
+
+
+class _ObservedSlots(asyncio.Semaphore):
+    def __init__(self, value: int) -> None:
+        super().__init__(value)
+        self.waiting = asyncio.Event()
+
+    async def acquire(self) -> bool:
+        if self.locked():
+            self.waiting.set()
+        return await super().acquire()
+
+
+@pytest.mark.asyncio
+async def test_transport_queue_uses_the_original_proof_deadline_without_a_fifth_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.unit.clock_fake import ManualClock
+
+    client, factory = _client_with_channel(monkeypatch, _RoutedDriver(pooled=False))
+    channels: list[_RoutedDriver] = []
+
+    async def create(**_kwargs: Any) -> _RoutedDriver:
+        channel = _RoutedDriver(pooled=False)
+        channels.append(channel)
+        return channel
+
+    factory.side_effect = create
+    slots = _ObservedSlots(ch.STREAM_SLOTS)
+    client._stream_slots = slots
+    loop = asyncio.get_running_loop()
+    clock = ManualClock(t=loop.time())
+    monkeypatch.setattr(loop, "time", clock)
+    entered = [asyncio.Event() for _ in range(ch.STREAM_SLOTS + 1)]
+    release = [asyncio.Event() for _ in entered]
+
+    async def proof(index: int) -> None:
+        async with asyncio.timeout(5), client.coordination_session():
+            entered[index].set()
+            await release[index].wait()
+
+    tasks = [asyncio.create_task(proof(i)) for i in range(ch.STREAM_SLOTS)]
+    try:
+        await asyncio.gather(*(event.wait() for event in entered[:-1]))
+        tasks.append(asyncio.create_task(proof(ch.STREAM_SLOTS)))
+        await slots.waiting.wait()
+        clock.advance(0.6)
+        # Deliver any due short-admission timeout and its cancellation callbacks.
+        for _ in range(8):
+            await asyncio.sleep(0)
+        assert not tasks[-1].done(), "transport queue spent the statement admission budget"
+        assert len(channels) == ch.STREAM_SLOTS and slots._value == 0
+        release[0].set()
+        await entered[-1].wait()
+        assert channels[0].closed and len(channels) == ch.STREAM_SLOTS + 1
+        assert sum(not channel.closed for channel in channels) == ch.STREAM_SLOTS
+    finally:
+        for event in release:
+            event.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    assert all(channel.closed for channel in channels) and slots._value == ch.STREAM_SLOTS
+    assert not client.client.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gate", ["transport", "statement"])
+async def test_waiting_for_capacity_retains_the_proof_and_statement_deadlines(
+    monkeypatch: pytest.MonkeyPatch, gate: str
+) -> None:
+    from tests.unit.clock_fake import ManualClock
+
+    client, factory = _client_with_channel(monkeypatch, _RoutedDriver(pooled=False))
+    slots = _ObservedSlots(0)
+    if gate == "transport":
+        client._stream_slots = slots
+    else:
+        client._slots = slots
+    transport_capacity = client._stream_slots._value
+    in_use = ch._POOL_IN_USE
+    loop = asyncio.get_running_loop()
+    clock = ManualClock(t=loop.time())
+    monkeypatch.setattr(loop, "time", clock)
+
+    async def proof() -> None:
+        async with asyncio.timeout(5), client.coordination_session():
+            pytest.fail("occupied capacity admitted the proof")
+
+    pending = asyncio.create_task(proof())
+    try:
+        await slots.waiting.wait()
+        clock.advance(5.1 if gate == "transport" else 0.6)
+        expected = TimeoutError if gate == "transport" else ch.OverloadedError
+        with pytest.raises(expected):
+            await pending
+    finally:
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+    factory.assert_not_awaited()
+    assert slots._value == 0 and client._stream_slots._value == transport_capacity
+    assert ch._POOL_IN_USE == in_use and ch._coordination_session.get() is None
