@@ -6,6 +6,11 @@ gate and the handlers authorize; nothing downstream reads a raw credential. To r
 vulnerability, and for the deployment hardening checklist, see
 [SECURITY.md](../../SECURITY.md).
 
+HTTP and MCP pass the authorized target to the handler. An omitted optional
+organization or namespace takes that target, including a code read whose
+organization comes from its verified token. Explicit identities and required
+fields remain unchanged; a code read never takes the caller's memory namespace.
+
 ## Threat model
 
 | Threat                                                                | Boundary                                                                                                                                                                                                                                                                                                                                                                                                 | Enforced by                                                                                                                       |
