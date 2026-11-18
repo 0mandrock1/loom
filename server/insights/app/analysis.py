@@ -258,7 +258,7 @@ async def own_grant_revokes() -> list[str]:
     return boundary.revokes_for(lines)
 
 
-def printed_statements(revokes: list[str]) -> list[str]:
+async def printed_statements(revokes: list[str]) -> list[str]:
     """The entity statements with `revokes` before the first grant, after a
     `SET` that cuts the text of the rest from the log."""
     statements = entity_statements()
@@ -267,7 +267,10 @@ def printed_statements(revokes: list[str]) -> list[str]:
         f"{name} = {sql_string(value) if isinstance(value, str) else value}"
         for name, value in boundary.provisioning_settings(_names()).items()
     )
-    return [f"SET {cut}", *statements[:first], *revokes, *statements[first:]]
+    from server.insights.store.event_cutover import printed_fence
+
+    fence = await printed_fence()
+    return [f"SET {cut}", *fence, *statements[:first], *revokes, *statements[first:]]
 
 
 def _scope_extra(org: str, namespaces: list[str], key: bytes | None = None) -> dict[str, Any]:

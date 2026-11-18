@@ -865,8 +865,8 @@ schema. These rules keep that safe. The operator procedure is in
     mirrored source creation remains refused until every process implements the read,
     session and enablement protections. Before N-1 can serve after enablement, stop
     writers, settle outstanding inserts and sagas, scrub marked receipts and audit
-    figures, and erase every mirror store, including `agent_events` and
-    `agent_cost_rollup_daily`, before clearing the enablement latch. Stopping a client
+    figures, and erase every mirror store, including `agent_events`,
+    `agent_events_private` and `agent_cost_rollup_daily`, before clearing the enablement latch. Stopping a client
     after its timeout does not prove a sent insert has completed.
 
 59. **Personal-agent reader claims and verified directory evidence** (migration
@@ -942,21 +942,39 @@ than `default` (rule 5), new revocation keys (rule 18), an `/assistant` history 
 (rule 46), or a process killed mid-migration. It skips with exit 0 where docker is
 unreachable; CI passes `--require`, which fails there instead.
 
-### Analyst event-view cutover
+### Analyst event storage cutover
 
-The marked-event boundary replaces the analyst's raw event grant with the signed,
-typed `analysis_agent_events` view and advances the entity version. The raw table
-keeps a deny policy for the analyst while interrupted provisioning repairs its grants.
-The entity stamp is written after the view and grants, under the existing access lease.
+`agent_events` retains ordinary event rows, its columns and the analyst's signed,
+namespace-scoped grant. Both builds can insert and query ordinary events while the
+entity catalog advances to version 5. The `ordinary_events_only` CHECK rejects marked
+rows and reserved mirror namespaces. Ordinary namespaces matching the reserved
+mirror spelling are refused too; they cannot be used as an alternate private sink.
 
-Deploy the probe ordering described in [Analyst probes across catalog versions](#analyst-probes-across-catalog-versions)
-across the fleet before this cutover. A capable older probe checks the key canary,
-then trusts the newer catalog; supported ordinary statements keep working without
-restoring raw access. Earlier probes count their raw event grant first and can refuse
-`insights.query` until rolled forward. Complete the fleet while mirrored creation is
-disabled. Raw SQL statements must use the catalog's masked relation. Starting an older
-build after enablement still requires the marked-event rollback cleanup; regranting
-raw access cannot substitute for it.
+Marked requests and mirror workers write `agent_events_private`, which has no analyst
+grant. The typed, signed `analysis_agent_events` view unions both stores and masks
+private fields before predicates run. Trusted cost, budget and history-policy reads
+also cover both stores. A row policy on a shared physical table cannot replace this
+split: table metadata could disclose private rows even when a SELECT returns none.
+
+Before granting access, provisioning verifies the exact CHECK and both table UUIDs
+on every configured writer, freezes the identities of all running INSERTs, waits
+for that finite set to finish, and counts forbidden ordinary rows. Internal async
+flushes participate even after their submitting client disconnects. Queued requests
+that have not prepared a pipeline encounter the installed CHECK when they execute.
+An ALTER alone does not settle old pipelines. Missing writers, changed topology,
+unknown metadata, a deadline or any surviving forbidden row refuses provisioning;
+existing rows remain untouched. Writers continue accepting valid ordinary inserts.
+
+The printed setup file repeats its proof when executed. Run the whole file through
+one administrative SQL session that stops on its first error, without
+`--ignore-error`. Its temporary metadata snapshots belong to that session. After a
+refusal, reconnect and run the whole file again. The printed path requires no running
+INSERTs at its fence; it never kills a writer or transfers a print-time proof.
+
+Mirrored creation remains disabled until the fleet, read and session protections
+and enablement procedure are complete. Before an older build serves after enablement,
+the rollback procedure must settle writes and erase every mirror store, including
+`agent_events_private`; restoring a grant or downgrading the schema is insufficient.
 
 ### Analyst probes across catalog versions
 

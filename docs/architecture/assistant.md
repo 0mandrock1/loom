@@ -564,8 +564,11 @@ call it directly, on any transport, and it joins the
 
 The event catalog relation is `loom.analysis_agent_events`. It retains authorized request
 participation and neutralizes marked model, spend, work and outcome fields before caller
-filters, joins or aggregates. The analyst has no grant on raw `loom.agent_events`, even
-for a count. The view's definer query applies the same signed org/namespace predicate as
+filters, joins or aggregates. It unions ordinary `loom.agent_events` with
+`loom.agent_events_private`; the analyst has no grant on the private table. The
+ordinary table retains signed, namespace-scoped access for both serving builds and
+rejects marked events and reserved mirror namespaces through its permanent CHECK.
+The view's definer query applies the same signed org/namespace predicate as
 the physical tables' row policies; it does not use SQL-account grants. The typed projection
 is passed from the maintained event reader definition into the pure access-entity builder.
 Its shape, signed predicate and security mode are part of the entity version digest.

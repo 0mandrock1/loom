@@ -60,7 +60,7 @@ USER_TRACE: list[tuple[str, tuple[tuple[str, str], ...]]] = [
     ("working_memory.tombstone", ((U, "loom.working_memory"),)),
     ("shared_embeddings.tombstone", ((U, "loom.memory_embeddings"),)),
     ("shared.tombstone", ((U, "loom.shared"),)),
-    ("agent_events.scrub", ((U, "loom.agent_events"),)),
+    ("agent_events.scrub", ((U, "loom.agent_events"), (U, "loom.agent_events_private"))),
     ("derived_facts.delete", ((D, "loom.derived_facts"),)),
     ("memory_reinforcement.delete", ((D, "loom.memory_reinforcement"),)),
     ("raw_evidence.delete", ((D, "loom.memory_evidence"), (D, "loom.memory_extraction_queue"))),
@@ -430,7 +430,7 @@ USER_PURGE_TRACE: list[tuple[str, tuple[tuple[str, str], ...]]] = [
     ("working_memory.tombstone", ((D, "loom.working_memory"),)),
     ("shared_embeddings.tombstone", ((L, "loom.memory_embeddings"),)),
     ("shared.tombstone", ((D, "loom.shared"),)),
-    ("agent_events.scrub", ((U, "loom.agent_events"),)),
+    ("agent_events.scrub", ((U, "loom.agent_events"), (U, "loom.agent_events_private"))),
     ("derived_facts.delete", ((D, "loom.derived_facts"),)),
     ("memory_reinforcement.delete", ((D, "loom.memory_reinforcement"),)),
     (

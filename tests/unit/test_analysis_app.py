@@ -354,7 +354,12 @@ def test_the_printed_sql_revokes_what_show_grants_lists_before_granting(
         "REVOKE SELECT ON loom.signing_keys FROM loom_analyst",
         "REVOKE bi_reader FROM loom_analyst",
     ]
-    printed = app.printed_statements(revokes)
+    from server.insights.store import event_cutover
+
+    fence = event_cutover.printed_fence_sql("")
+    monkeypatch.setattr(event_cutover, "printed_fence", _returns(fence))
+    printed = asyncio.run(app.printed_statements(revokes))
+    assert printed[1 : 1 + len(fence)] == fence
     first_grant = next(i for i, s in enumerate(printed) if s.startswith("GRANT "))
     assert printed[first_grant - len(revokes) : first_grant] == revokes
     # The file is run in one session, whose first statement cuts the rest from the log.
@@ -602,7 +607,7 @@ def test_an_unrefused_probe_is_named_by_the_column_not_the_sql(
 ) -> None:
     # /v1/health shows this text: no SQL, and no database name.
     async def run(sql: str, **_: Any) -> Any:
-        if ".agent_events" in sql:
+        if ".agent_events_private" in sql:
             raise RuntimeError("Code: 497. DB::Exception: Not enough privileges")
         if sql.startswith("SELECT count()") and "system." not in sql:
             return [], [], [(1,)] if boundary.CANARY_TABLE in sql else [(0,)]

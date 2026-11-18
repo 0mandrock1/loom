@@ -520,7 +520,7 @@ CODE_INDEX_STEP_ONLY_TABLES: tuple[str, ...] = (
 
 STEP_ONLY_TABLES: dict[str, tuple[str, ...]] = {
     "entity_canonical_map.tombstone": ("loom.entity_canonical_map",),
-    "agent_events.scrub": ("loom.agent_events",),
+    "agent_events.scrub": ("loom.agent_events", "loom.agent_events_private"),
     "subject_last_seen.delete": ("loom.subject_last_seen",),
     "shared_embeddings.tombstone": ("loom.memory_embeddings",),
     "consolidated.tombstone": ("loom.memory", "loom.memory_embeddings", "loom.memory_code_links"),

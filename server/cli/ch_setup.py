@@ -426,7 +426,7 @@ def _analyst_sql() -> list[str]:
 
     async def _go(_ch: Any) -> list[str]:
         await analysis.load_for_print()
-        return analysis.printed_statements(await analysis.own_grant_revokes())
+        return await analysis.printed_statements(await analysis.own_grant_revokes())
 
     return run_connected(_go, org_free=writes("ClickHouse users and grants, no tenant rows"))
 
@@ -482,7 +482,10 @@ def _cmd_ch_setup(args: argparse.Namespace) -> int:
         print(
             "-- Holds the analyst password and scope key: save it to a file and run it in one "
             "session,\n-- clickhouse-client --multiquery --queries-file <file>: its first "
-            "statement keeps\n-- the text of the rest out of system.query_log.\n-- First run "
+            "statement keeps\n-- the text of the rest out of system.query_log. "
+            "Stop on the first error; "
+            "never use --ignore-error.\n-- The event cutover uses temporary metadata snapshots. "
+            "After a refusal, reconnect and rerun the complete file.\n-- First run "
             "these two checks. The first lists permissive row policies Loom did not write "
             "on\n-- the analysis tables: drop or make restrictive any it returns, since the "
             "policy below for\n-- every other user would widen them. The second lists other "
