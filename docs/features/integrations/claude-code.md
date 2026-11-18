@@ -203,10 +203,30 @@ Check the setup in this order:
    access. Have the policy owner approve the intended Loom tools; do not rename the
    registration or disable the policy to evade the denial.
 
+When a headless harness restricts `--tools`, include `ToolSearch` to preserve deferred
+MCP tool loading. Omitting it loads the MCP schemas into context up front; it does not
+show whether the task needed those tools. `--allowedTools` controls permission and
+cannot restore a tool omitted from `--tools`. See [Claude Code tool search](https://code.claude.com/docs/en/mcp#configure-tool-search).
+
+Managed settings can also set hook environment variables. Clearing the launcher's
+environment does not clear those settings; inspect the effective configuration and
+respect its policy. See [settings precedence](https://code.claude.com/docs/en/settings#settings-precedence).
+
 `LOOM_CODE_SHUNT=off` disables code-read substitution, and `LOOM_PROMPT_PACK=off`
 disables automatic code pointers on prompts. Prompt-time memory recall has its own
 `LOOM_PROMPT_RECALL` control. Record these choices in comparisons; enabling the code
 hooks alone does not establish a benchmark improvement.
+
+The prompt pack selects one bounded lookup for a clear named definition, callers or
+impact question, and uses search for concepts. It skips explicit memory questions,
+local-only changes and self-contained requests. Ambiguous or empty typed answers do
+not trigger another automatic lookup. Search still respects the server's confidence
+and abstention. Supply a task inside `<issue>...</issue>` when a harness adds instructions;
+the existing query helper extracts that block.
+
+Memory recall's default `first` mode makes one attempt on the first qualifying prompt,
+even if the answer is empty or abstains. Use `on` only when recall on each qualifying
+prompt is wanted.
 
 The plugin's startup instructions prefer Loom for indexed-code questions. Its
 `loom-code` skill can load automatically; a skill with

@@ -126,12 +126,7 @@ test("codeArbitration: fresh status keeps the taught block; a stalled mirror rew
   );
   assert.doesNotMatch(stale, /grep THIS checkout/, "information, not a stand-down");
   // every other rule survives untouched
-  for (const rule of [
-    "loom_code_symbol",
-    "loom_code_search",
-    "loom_tracker_duplicate_check",
-    "loom_code_bisect_candidates",
-  ]) {
+  for (const rule of ["loom_code_symbol", "loom_code_search", "loom_code_callers", "loom_code_impact"]) {
     assert.ok(stale.includes(rule), rule);
   }
 });

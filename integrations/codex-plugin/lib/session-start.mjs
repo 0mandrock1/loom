@@ -173,23 +173,13 @@ export function localFirstBlock(asOf, scopeLine = "") {
 // repo is actually indexed so it never confuses sessions on other projects.
 const CODE_ARBITRATION =
   "# Loom code index: this repository is indexed (per-merge fresh).\n" +
-  "- Use Loom first for indexed code: loom_code_symbol for definitions and implementation, " +
-  "loom_code_callers for callers, loom_code_search for concepts, and loom_code_impact before edits. " +
-  "Independent lookups go in one turn.\n" +
-  "- If a Loom hook already supplied the answer or a relevant pointer, use it and do not repeat " +
-  "the search. Read only the returned span when verification is needed.\n" +
-  "- Exact strings, uncommitted changes and unindexed files: use local grep/Read. " +
-  "If Loom is unavailable or abstains, use a targeted local lookup and say what was unavailable.\n" +
-  "- A hit carries the unit's path, lines and code: answer from it; open a file to change it, " +
-  "not to re-read a hit.\n" +
-  "- Already reported? loom_tracker_duplicate_check. What introduced a bug? " +
-  "loom_code_bisect_candidates. Which change made X behave like Y? git log -S / git blame on " +
-  "the code that does it, or loom_code_pr_check with the behaviour as the title — not " +
-  "loom_code_search, which finds code, not changes. Someone already on this PR? " +
-  "loom_code_pr_check. What does my " +
-  "diff break? loom_code_impact.\n" +
-  "- The index is master; this checkout may be behind it. For files you have not modified, " +
-  "report the index's path:line — do not re-read to reconcile line numbers.\n";
+  "- Use Loom first when indexed evidence is needed: loom_code_symbol for definitions, " +
+  "loom_code_callers for callers, loom_code_search for concepts, loom_code_impact for a change's effects.\n" +
+  "- If a hook already supplied the answer, use it; do not repeat the lookup. Read only a returned span " +
+  "to verify it. Skip retrieval for self-contained tasks.\n" +
+  "- Exact strings, uncommitted changes and unindexed files: use local grep/Read. If Loom is " +
+  "unavailable or abstains, use a targeted local lookup and name the limitation.\n" +
+  "- The index is master; this checkout may be behind it. For unchanged files, report the index's path:line.\n";
 
 /** The arbitration block for this session. When the entry's
  *  mirror has not been fetched for `code_fetch_stale_after_seconds`

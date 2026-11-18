@@ -93,3 +93,104 @@ test("on, in an indexed checkout: one code.search, the pointers injected, no hoo
     server.close();
   }
 });
+
+const WIRE = JSON.parse(fs.readFileSync(new URL("./fixtures/code-query-wire.json", import.meta.url), "utf8"));
+const REPLIES = WIRE.responses;
+
+async function contractFixture(t, replies = REPLIES) {
+  const dir = checkout();
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "loom-query-tmp-")));
+  fs.writeFileSync(
+    cachePathFor(dir, tmp),
+    JSON.stringify({
+      ts: Date.now(),
+      indexed: true,
+      org: "o",
+      namespace: "code-x",
+      repo: "x/y",
+      prefixes: [],
+      asOf: "base",
+    }),
+  );
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const op = req.url.slice("/v1/".length);
+      seen.push({ op, body: JSON.parse(body || "{}") });
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(replies[op] || {}));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+  const env = hostEnv({
+    PATH: process.env.PATH,
+    HOME: tmp,
+    TMPDIR: tmp,
+    LOOM_BASE_URL: `http://127.0.0.1:${server.address().port}`,
+    LOOM_API_KEY: "test-token",
+    LOOM_PROMPT_PACK: "on",
+    LOOM_HOOK_DEBUG: "on",
+  });
+  let promptId = 0;
+  return {
+    seen,
+    dir,
+    ask: (prompt) =>
+      run(
+        { session_id: "contract", prompt_id: `p-${++promptId}`, cwd: dir, hook_event_name: "UserPromptSubmit", prompt },
+        env,
+      ),
+  };
+}
+
+const CONTRACT = JSON.parse(fs.readFileSync(new URL("./fixtures/code-query-contract.json", import.meta.url), "utf8"));
+for (const fixture of CONTRACT) {
+  test(`code query contract: ${fixture.name}`, async (t) => {
+    const { seen, ask } = await contractFixture(t);
+    const result = await ask(fixture.prompt);
+    assert.equal(result.code, 0);
+    assert.equal(result.err, "");
+    assert.deepEqual(
+      seen.map((s) => s.op),
+      fixture.operation ? [fixture.operation] : [],
+    );
+    if (!fixture.operation) return assert.equal(result.out, "");
+    assert.equal(seen[0].body.org, "o");
+    assert.equal(seen[0].body.namespace, "code-x");
+    if (fixture.target) assert.deepEqual(seen[0].body, WIRE.requests[fixture.operation]);
+    const context = JSON.parse(result.out).hookSpecificOutput.additionalContext;
+    assert.ok(context.includes(fixture.context), context);
+    if (fixture.floor) assert.match(context, /floor.*treesitter_only_files/);
+  });
+}
+
+test("a later prompt receives changed evidence even at the same indexed span", async (t) => {
+  const replies = structuredClone(REPLIES);
+  const { ask, dir, seen } = await contractFixture(t, replies);
+  const prompt = "How are nested record prefixes combined before validation?";
+  assert.match((await ask(prompt)).out, /\(value\)/);
+  fs.appendFileSync(path.join(dir, "a.cpp"), "int local_change;\n");
+  replies["code.search"].results[0].signature = "(value, strict)";
+  assert.match((await ask(prompt)).out, /value, strict/);
+  assert.equal(seen.length, 2);
+});
+
+for (const op of ["code.symbol", "code.callers", "code.impact"]) {
+  test(`an unanswered ${op} request does not invent context or try another operation`, async (t) => {
+    const fixture = CONTRACT.find((c) => c.operation === op);
+    const { ask, seen } = await contractFixture(t, { [op]: WIRE.empty_responses[op] });
+    assert.deepEqual(await ask(fixture.prompt), { code: 0, out: "", err: "" });
+    assert.deepEqual(
+      seen.map((s) => s.op),
+      [op],
+    );
+  });
+}
