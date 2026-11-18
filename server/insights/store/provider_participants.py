@@ -83,9 +83,17 @@ _PRUNE_IDS_SQL = (
 _PRUNE_SQL = f"ALTER TABLE {TABLE} DELETE WHERE participant_id IN {{ids:Array(UUID)}}"
 
 
-async def participants(*, ch: _CHClient | None = None) -> list[dict[str, Any]]:
+async def participants(
+    *, ch: _CHClient | None = None, host_proof: str | None = None
+) -> list[dict[str, Any]]:
     with sequential_reads():
-        rows = await (ch or _default_client()).query_all(PARTICIPANTS_SQL)
+        if host_proof is None:
+            rows = await (ch or _default_client()).query_all(PARTICIPANTS_SQL)
+        else:
+            rows = await (ch or _default_client()).query_all(
+                PARTICIPANTS_SQL + " AND host_proof = {proof:String} LIMIT 2",
+                {"proof": host_proof},
+            )
     return [
         r
         for r in rows
