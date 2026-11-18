@@ -42,7 +42,7 @@ from server.settings._env import (
 )
 from server.settings._live import LIVE
 
-# ===== Assistant =======================================================
+# ===== Assistant ==============================================================
 
 
 class AssistantSettings(BaseModel):
@@ -72,7 +72,7 @@ class AssistantSettings(BaseModel):
     assistant_answer_ceiling_usd: float = Field(default=0.10, ge=0, le=10)
 
 
-# ===== Auth ============================================================
+# ===== Auth ===================================================================
 
 
 @functools.lru_cache(maxsize=4)
@@ -640,7 +640,8 @@ class AuthSettings(BaseModel):
     auth_oidc_discovery_ttl_s: Annotated[float, LIVE] = Field(default=3600.0, gt=0)
 
 
-# ===== ClickHouse ======================================================
+# ===== ClickHouse =============================================================
+
 # A database name Loom writes into statements and KeeperMap paths unescaped.
 _DATABASE_NAME = r"^[A-Za-z_][A-Za-z0-9_-]*$"
 # Databases a ClickHouse server or other applications on it own.
@@ -857,7 +858,7 @@ class ClickHouseSettings(BaseModel):
         return self
 
 
-# ===== Code ============================================================
+# ===== Code ===================================================================
 
 
 class CodeSettings(BaseModel):
@@ -1905,7 +1906,7 @@ class CodeSettings(BaseModel):
     code_review_brief_rationale_tokens: Annotated[int, LIVE] = Field(default=250, ge=50)
 
 
-# ===== Context =========================================================
+# ===== Context ================================================================
 
 
 class ContextSettings(BaseModel):
@@ -1936,7 +1937,7 @@ class ContextSettings(BaseModel):
     mentor_max_hints_per_session: Annotated[int, LIVE] = 6
 
 
-# ===== Erasure =========================================================
+# ===== Erasure ================================================================
 
 
 class ErasureSettings(BaseModel):
@@ -1988,7 +1989,7 @@ class ErasureSettings(BaseModel):
     external_erasure_timeout_s: float = 30.0
 
 
-# ===== Extraction ======================================================
+# ===== Extraction =============================================================
 
 
 class ExtractionSettings(BaseModel):
@@ -2154,7 +2155,7 @@ class ExtractionSettings(BaseModel):
     extraction_policy_max_namespaces: Annotated[int, LIVE] = Field(default=1000, ge=1)
 
 
-# ===== Knowledge =======================================================
+# ===== Knowledge ==============================================================
 
 
 class KnowledgeSettings(BaseModel):
@@ -2522,7 +2523,7 @@ class KnowledgeSettings(BaseModel):
         return self
 
 
-# ===== Mcp =============================================================
+# ===== Mcp ====================================================================
 
 
 class McpSettings(BaseModel):
@@ -2612,7 +2613,7 @@ class McpSettings(BaseModel):
     mcp_code_tools: bool = False
 
 
-# ===== Memory ==========================================================
+# ===== Memory =================================================================
 
 
 class MemorySettings(BaseModel):
@@ -3231,7 +3232,8 @@ class MemorySettings(BaseModel):
     # on a large table can expire replicas' Keeper sessions and leave them read-only.
     memory_usage_fold_max_pending_mutations: int = Field(default=20, ge=1)
 
-    # ===== MemoryAsk =======================================================
+    # ===== MemoryAsk ==============================================================
+
     @model_validator(mode="after")
     def _check_resolver_settings(self) -> MemorySettings:
         """Retiring takes more confidence than flagging, and flagging than clearing: the
@@ -3547,7 +3549,7 @@ class MemoryAskSettings(BaseModel):
     memory_ask_recent_block_max_chars: Annotated[int, LIVE] = Field(default=12000, ge=100)
 
 
-# ===== MemorySearch ====================================================
+# ===== MemorySearch ===========================================================
 
 
 class MemorySearchSettings(BaseModel):
@@ -3861,7 +3863,7 @@ class MemorySearchSettings(BaseModel):
     memory_search_spelling_lookup_timeout_s: Annotated[float, LIVE] = Field(default=0.4, gt=0)
 
 
-# ===== MemoryWebhook ===================================================
+# ===== MemoryWebhook ==========================================================
 
 
 def parse_backoff_steps(raw: str) -> tuple[float, ...]:
@@ -3971,7 +3973,8 @@ class MemoryWebhookSettings(BaseModel):
         return self
 
 
-# ===== Model ===========================================================
+# ===== Model ==================================================================
+
 # `local:<alias>` embedding models: alias -> (Hugging Face id, the width it emits).
 # `local` alone is DEFAULT_LOCAL_EMBEDDING_MODEL.
 LOCAL_EMBEDDING_MODELS: dict[str, tuple[str, int]] = {
@@ -4088,7 +4091,7 @@ class ModelSettings(BaseModel):
         return self
 
 
-# ===== Namespace =======================================================
+# ===== Namespace ==============================================================
 
 
 class NamespaceSettings(BaseModel):
@@ -4149,7 +4152,7 @@ class NamespaceSettings(BaseModel):
     namespace_taxonomy_ttl_s: Annotated[float, LIVE] = Field(default=300.0, gt=0)
 
 
-# ===== Observability ===================================================
+# ===== Observability ==========================================================
 
 
 def parse_latency_budgets(raw: str) -> dict[str, int | float]:
@@ -4372,7 +4375,7 @@ class ObservabilitySettings(BaseModel):
     audit_verify_max_rows_per_pass: Annotated[int, LIVE] = Field(default=500000, ge=1)
 
 
-# ===== Provider ========================================================
+# ===== Provider ===============================================================
 
 
 def ascii_host(host: str) -> str:
@@ -5160,7 +5163,7 @@ class ProviderSettings(ModelSettings):
     llm_response_cache_table: str = "loom.llm_response_cache"
 
 
-# ===== RateLimit =======================================================
+# ===== RateLimit ==============================================================
 
 
 class RateLimitSettings(BaseModel):
@@ -5193,7 +5196,7 @@ class RateLimitSettings(BaseModel):
     tenant_max_concurrent_requests: int = Field(default=256, ge=0)
 
 
-# ===== Runtime =========================================================
+# ===== Runtime ================================================================
 
 
 class RuntimeSettings(BaseModel):
@@ -5365,7 +5368,7 @@ class RuntimeSettings(BaseModel):
     readiness_check_timeout_s: Annotated[float, LIVE] = Field(default=2.0, gt=0)
 
 
-# ===== Storage =========================================================
+# ===== Storage ================================================================
 
 
 class StorageSettings(BaseModel):
@@ -5614,7 +5617,7 @@ class StorageSettings(BaseModel):
         return self
 
 
-# ===== Task ============================================================
+# ===== Task ===================================================================
 
 
 class TaskSettings(BaseModel):
@@ -5656,7 +5659,7 @@ class TaskSettings(BaseModel):
     memory_run_complete_expire_days: int = 7
 
 
-# ===== Tracker =========================================================
+# ===== Tracker ================================================================
 
 
 class TrackerSettings(BaseModel):
@@ -5992,7 +5995,8 @@ class TrackerSettings(BaseModel):
     tracker_test_candidates_timeout_s: Annotated[float, LIVE] = Field(default=3.0, gt=0)
 
 
-# ===== Operation latency budgets ========================================#
+# ===== Operation latency budgets ===============================================
+#
 # Each operation's p99 latency target in milliseconds, keyed by op name: a request
 # that runs longer emits a `budget.violated` event (`memory.budget_violations`). Every
 # registered op has an entry (tests/unit/test_op_budgets.py). A deployment tunes them
@@ -6629,7 +6633,8 @@ OP_SHAPE_BUDGETS_P99_MS: dict[str, dict[str, int]] = {
 }
 
 
-# ===== LLM output budgets ===============================================#
+# ===== LLM output budgets ======================================================
+#
 # The most tokens each LLM call may write, keyed by what the call does (its
 # `llm_stage` where it has one, the series the cost ledger reports spend under).
 # A call with a fixed cap reads it through `server.settings.budgets.llm_max_tokens`;
