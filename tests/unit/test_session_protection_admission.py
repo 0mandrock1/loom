@@ -246,7 +246,11 @@ async def test_first_on_startup_and_existing_beat_reassert_durable_state(
 
     world = mirror_latch_world
     monkeypatch.setattr(settings, "knowledge_mirrored_sources_enabled", True)
-    read_holder = AsyncMock()
+
+    async def after_repair(ch):
+        assert ch is world and world.enabled and world.counts["set"] == 2
+
+    read_holder = AsyncMock(side_effect=after_repair)
     monkeypatch.setattr(leader, "read_holder", read_holder)
     await boot.require_session_protection(world)
     assert world.enabled and world.counts["set"] == 1
