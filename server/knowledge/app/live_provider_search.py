@@ -21,11 +21,8 @@ from server.knowledge.domain.sources import (
     include_mime_types,
     item_ids,
 )
+from server.settings import settings
 
-_MAX_BYTES = 256 * 1024
-_MAX_HITS = 10
-_MAX_ITEMS = 4
-_MAX_ANCESTORS = 3
 _DRIVE_FILES = "https://www.googleapis.com/drive/v3/files"
 _NOTION_API = "https://api.notion.com/v1"
 _DRIVE_FIELDS = "id,name,webViewLink,mimeType,trashed,parents,driveId,modifiedTime"
@@ -107,7 +104,13 @@ def _hit(
 
 async def _json(access: CheckedAccess, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
     return await request_json(
-        get_client(), method, url, "live search", checked=access, max_bytes=_MAX_BYTES, **kwargs
+        get_client(),
+        method,
+        url,
+        "live search",
+        checked=access,
+        max_bytes=settings.knowledge_live_search_response_max_bytes,
+        **kwargs,
     )
 
 
@@ -178,7 +181,7 @@ async def _drive(
     source: KnowledgeSource, access: CheckedAccess, query: str, top_k: int
 ) -> list[LiveProviderHit]:
     found: dict[str, LiveProviderHit] = {}
-    for item in source.items[:_MAX_ITEMS]:
+    for item in source.items[: settings.knowledge_live_search_max_items]:
         scope = _drive_scope(source, item)
         if scope is None:
             continue
@@ -232,7 +235,8 @@ async def _notion_member(
 ) -> bool:
     pages = set(item_ids(source.items, "page"))
     databases = set(item_ids(source.items, "database"))
-    for hop in range(_MAX_ANCESTORS + 1):
+    max_ancestors = settings.knowledge_live_search_max_ancestors
+    for hop in range(max_ancestors + 1):
         ident = row.get("id")
         if (
             not isinstance(ident, str)
@@ -253,7 +257,7 @@ async def _notion_member(
         ancestor = parent.get(kind)
         if not isinstance(ancestor, str) or not notion.valid_id(ancestor):
             return False
-        if hop == _MAX_ANCESTORS:
+        if hop == max_ancestors:
             return False
         path = "/pages/" if kind == "page_id" else "/blocks/"
         row = await _notion_json(access, "GET", path + ancestor)
@@ -305,9 +309,13 @@ async def search(
     async with asyncio.timeout_at(stop):
         await access.check()
         if source.kind == "gdrive":
-            result = await _drive(source, access, query, min(top_k, _MAX_HITS))
+            result = await _drive(
+                source, access, query, min(top_k, settings.knowledge_live_search_max_hits)
+            )
         elif source.kind == "notion":
-            result = await _notion(source, access, query, min(top_k, _MAX_HITS))
+            result = await _notion(
+                source, access, query, min(top_k, settings.knowledge_live_search_max_hits)
+            )
         else:
             raise SearchUnavailable("native search is unavailable for this source")
         await access.check()

@@ -36,6 +36,10 @@ in namespace/name order and returns at most ten hits in total. Each provider
 response is capped at the smaller of 256 KiB and the configured source response
 limit. There are no retries or pagination.
 
+The `knowledge_live_search_*` settings can reduce the deadline, registration and
+hit counts, response bytes, Drive item count and Notion ancestor count. Their
+defaults are these ceilings; configuration cannot increase them.
+
 Drive uses native full-text search constrained to registered folders, shared
 drives or filters. At most four source items are searched. Folder searches cover
 direct children even when a registration permits recursive ingestion; explicit

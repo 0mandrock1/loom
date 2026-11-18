@@ -219,11 +219,10 @@ def _synthetic_tool_descriptors_core() -> list[dict[str, Any]]:
                         "enum": ["full", "excerpt", "none", "unit"],
                         "default": "excerpt",
                         "description": (
-                            "How much of each memory body to return: excerpt (the default: "
-                            "200 chars, a decision or constraint as stored), full (the "
-                            "1,200-char stored clip), unit (whole stored values by rank until "
-                            "body_budget_tokens), or none (keys and scores only). Fetch the "
-                            "rest of an excerpt with memory.get."
+                            "Memory: excerpt (default, 200 chars), full (stored "
+                            "1,200-char clip), unit (whole values ranked within "
+                            "body_budget_tokens), or none (keys and scores). More via "
+                            "memory.get."
                         ),
                     },
                 },

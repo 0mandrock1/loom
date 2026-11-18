@@ -18,11 +18,6 @@ from server.knowledge.domain.sources import MIRRORED_ACCESS
 from server.knowledge.store import sources as source_store
 from server.settings import settings
 
-# Not settings: the optional response leg has one fixed aggregate work bound.
-TIMEOUT_S = 5.0
-MAX_SOURCES = 3
-MAX_HITS = 10
-
 
 @dataclass(frozen=True, repr=False)
 class Contribution:
@@ -77,7 +72,7 @@ async def search(org: str, namespaces: list[str], query: str, *, top_k: int) -> 
         return None
     if not request_work.mark_mirrored():
         return None
-    deadline = time.monotonic() + TIMEOUT_S
+    deadline = time.monotonic() + settings.knowledge_live_search_timeout_s
     set_query_tag("search.query.live")
     with private_work():
         try:
@@ -95,13 +90,13 @@ async def search(org: str, namespaces: list[str], query: str, *, top_k: int) -> 
                     and source.owner_subject == subject
                     and source.access == MIRRORED_ACCESS
                     and source.kind in ("gdrive", "notion")
-                ][:MAX_SOURCES]
+                ][: settings.knowledge_live_search_max_sources]
                 if not selected:
                     return None
                 # Real opt-in work activates the same durable protection as mirrored sources.
                 await session_admission.require(auth)
                 contributions = []
-                remaining = min(top_k, MAX_HITS)
+                remaining = min(top_k, settings.knowledge_live_search_max_hits)
                 for source in selected:
                     authority = await connected_accounts.resolve(
                         org,
