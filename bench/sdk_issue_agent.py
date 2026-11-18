@@ -243,7 +243,7 @@ async def perform(root: Path, request: dict, sdk: Any, manifest: dict, record: A
             "content": [{"json": data}],
             "status": "success",
         }
-    except Exception as error:  # noqa: BLE001 — failed calls must be preserved in the trial
+    except Exception as error:  # Record failed calls before a refusal stops the worker.
         detail = error_detail(error)
         record(
             {
@@ -255,7 +255,8 @@ async def perform(root: Path, request: dict, sdk: Any, manifest: dict, record: A
                 "duration_s": time.monotonic() - started,
             }
         )
-        refused = guard_refused(error)
+        if guard_refused(error):
+            raise
     else:
         record(
             {
@@ -268,8 +269,6 @@ async def perform(root: Path, request: dict, sdk: Any, manifest: dict, record: A
             }
         )
         return result
-    if refused:
-        raise PermissionError("Tool permission or guard refused the action")
     return {"toolUseId": request["toolUseId"], "content": [{"json": detail}], "status": "error"}
 
 

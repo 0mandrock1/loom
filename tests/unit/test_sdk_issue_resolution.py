@@ -329,6 +329,135 @@ def test_provider_cleanup_does_not_hide_a_guard_refusal(config, monkeypatch):
     assert any(e["type"] == "provider_cleanup_error" for e in bench.events_in(config.out))
 
 
+@pytest.mark.parametrize(
+    "status,code",
+    [(401, "AUTH_INVALID"), (403, "AUTH_INSUFFICIENT"), (409, "SESSION_PROTECTION_REQUIRED")],
+)
+def test_tool_time_sdk_refusal_retains_its_metadata_and_partial_patch(
+    config, monkeypatch, status, code
+):
+    import loom
+    from loom.errors import from_response
+
+    failure = from_response(
+        {"detail": {"code": code, "message": "denied"}}, status, request_id="tool-refusal"
+    )
+
+    class SDK:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def call_with_meta(self, op, body):
+            if op == "code.index_status":
+                return SimpleNamespace(request_id="ok", data={"git_head": config.expected_base})
+            raise failure
+
+    config.arm = "loom"
+    monkeypatch.setenv("BENCH_TOKEN", "fixture-credential")
+    monkeypatch.setattr(loom, "Agent", SDK)
+    execute_fake(
+        monkeypatch,
+        [
+            response(edit()),
+            response(
+                {"name": "loom_code_lookup", "input": {"kind": "symbol", "target": "pkg.value"}}
+            ),
+        ],
+    )
+    result = bench.run_trial(config)
+    assert result["status"] == "guard_refused" and result["stage"] == "agent_inference"
+    assert result["error"]["http_status"] == status and result["error"]["code"] == code
+    assert result["error"]["request_id"] == "tool-refusal"
+    assert result["usage"]["inputTokens"] == 20
+    assert b"+value = 2" in (config.out / "agent.diff").read_bytes()
+
+
+@pytest.mark.parametrize("refusal", [True, False])
+def test_patch_failure_keeps_the_primary_refusal_and_other_error_metadata(
+    config, monkeypatch, refusal
+):
+    failure = (
+        response({"name": "read_file", "input": {"path": "../outside"}})
+        if refusal
+        else RuntimeError("provider failed")
+    )
+    execute_fake(monkeypatch, [response(edit()), failure])
+    original_git = bench.git
+
+    def patch_read_fails(root, *args):
+        if args[0] == "diff":
+            raise OSError("patch read failed")
+        return original_git(root, *args)
+
+    monkeypatch.setattr(bench, "git", patch_read_fails)
+    result = bench.run_trial(config)
+    assert result["status"] == ("guard_refused" if refusal else "artifact_error")
+    assert result["error"]["type"] == ("PermissionError" if refusal else "RuntimeError")
+    assert result["patch_errors"] == ["OSError"]
+    assert result["usage"]["inputTokens"] >= 10
+    assert (config.checkout / "code.py").read_text() == "value = 2\n"
+
+
+def test_cleanup_origin_permission_refusal_is_primary(config, monkeypatch):
+    execute_fake(monkeypatch, [response(reason="end_turn")], close_error=PermissionError("denied"))
+    result = bench.run_trial(config)
+    assert result["status"] == "guard_refused"
+    assert result["stage"] == "provider_cleanup"
+    assert result["error"]["type"] == "PermissionError"
+    assert result["usage"]["inputTokens"] == 10
+
+
+@pytest.mark.parametrize("provider_refuses", [True, False])
+def test_cleanup_retains_the_first_refusal_across_both_resources(
+    config, monkeypatch, provider_refuses
+):
+    import loom
+    from loom.errors import from_response
+
+    sdk_failure = from_response(
+        {"detail": {"code": "AUTH_INSUFFICIENT", "message": "denied"}},
+        403,
+        request_id="cleanup-refusal",
+    )
+
+    class SDK:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            raise RuntimeError("secondary cleanup") if provider_refuses else sdk_failure
+
+        async def call_with_meta(self, op, body):
+            return SimpleNamespace(request_id="ok", data={"git_head": config.expected_base})
+
+    config.arm = "loom"
+    monkeypatch.setenv("BENCH_TOKEN", "fixture-credential")
+    monkeypatch.setattr(loom, "Agent", SDK)
+    execute_fake(
+        monkeypatch,
+        [response(reason="end_turn")],
+        close_error=PermissionError("first refusal") if provider_refuses else None,
+    )
+    result = bench.run_trial(config)
+    assert result["status"] == "guard_refused"
+    assert result["stage"] == ("provider_cleanup" if provider_refuses else "sdk_cleanup")
+    if provider_refuses:
+        assert result["error"]["type"] == "PermissionError"
+        assert any(e["type"] == "sdk_cleanup_error" for e in bench.events_in(config.out))
+    else:
+        assert result["error"]["http_status"] == 403
+        assert result["error"]["request_id"] == "cleanup-refusal"
+
+
 def test_path_boundary_includes_symlinks_and_git_metadata(config, tmp_path):
     (config.checkout / "link").symlink_to(tmp_path, target_is_directory=True)
     for name in ("../outside", str(tmp_path / "outside"), ".git/config", "link/task.json"):

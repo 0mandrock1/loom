@@ -240,7 +240,7 @@ def finalize(
     status = outcome["status"]
     if status == "completed" and not patch:
         status = "completed_empty_patch"
-    if patch_errors:
+    if patch_errors and status != "guard_refused":
         status = "artifact_error"
     calls = [e for e in events if e.get("type") == "tool_result"]
     attempts = [e for e in events if e.get("type") == "tool_attempt"]
@@ -384,14 +384,17 @@ async def _sdk_preflight(sdk: Any, manifest: dict, record: Any) -> None:
 
 
 def _cleanup_error(record: Any, outcome: dict, progress: dict, kind: str, error: Exception) -> None:
-    record(
-        {
-            "type": kind if outcome.get("status") == "guard_refused" else "terminal",
-            "status": "cleanup_error",
-            "error": error_detail(error),
-            **progress,
-        }
-    )
+    cleanup = {
+        **progress,
+        "stage": kind.removesuffix("_error"),
+        "status": "guard_refused" if guard_refused(error) else "cleanup_error",
+        "error": error_detail(error),
+    }
+    if outcome.get("status") == "guard_refused":
+        record({"type": kind, **cleanup})
+    else:
+        outcome.update(cleanup)
+        record({"type": "terminal", **outcome})
 
 
 async def worker(out: Path) -> None:

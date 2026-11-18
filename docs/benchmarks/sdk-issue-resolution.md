@@ -126,7 +126,10 @@ does not establish zero billing for an attempted provider call.
 
 SDK HTTP 401, 403 and 409 refusals and local permission errors have `guard_refused`
 status, including refusals from the index preflight. Cleanup errors retain an earlier
-guard refusal. A controller must stop before grading or starting another trial; it
+guard refusal. Tool-time SDK refusals retain their HTTP status, code and request ID.
+Patch collection errors stay in `patch_errors` without replacing a refusal. A refusal
+originating in cleanup records `provider_cleanup` or `sdk_cleanup` as its stage.
+A controller must stop before grading or starting another trial; it
 must also check the serialized `error.http_status` when reading results from another
 worker version. A failed preflight cannot establish a paired performance result.
 The refusal does not authorize switching credentials, scopes or retrying the action.
