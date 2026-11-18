@@ -5,7 +5,6 @@ first, the public ones only when that pass found nothing close enough."""
 from __future__ import annotations
 
 import asyncio
-import sys
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractContextManager
 from typing import Any
@@ -30,12 +29,15 @@ def each[I, R](
         results: list[R] = []
         for offset in range(0, len(inputs), _READ_WINDOW):
             tasks: list[asyncio.Future[R]] = []
+            failure: BaseException | None = None
             try:
                 for item in inputs[offset : offset + _READ_WINDOW]:
                     tasks.append(asyncio.ensure_future(search_one(item)))
                 results.extend(await asyncio.gather(*tasks))
+            except BaseException as error:
+                failure = error
+                raise
             finally:
-                failure = sys.exception()
                 for task in tasks:
                     task.cancel()
 

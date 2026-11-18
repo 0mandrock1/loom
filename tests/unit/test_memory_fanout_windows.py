@@ -380,3 +380,53 @@ async def test_sub_query_duplicate_keeps_the_original_phrase_score(monkeypatch) 
     assert [h.namespace for h in ctx.all_hits] == ctx.namespaces
     assert [h.rank_score for h in ctx.all_hits] == pytest.approx([0.6] * 9)
     assert ctx.actual_work["sub_query_count"] == 2
+
+
+async def test_successful_window_inside_except_propagates_cleanup_cancellation(monkeypatch) -> None:
+    from server.core.vectors import private_first
+
+    cleaning, release, finished = (asyncio.Event() for _ in range(3))
+    children: list[asyncio.Task[Any]] = []
+    inputs: list[int] = []
+    to_its_end = private_first.to_its_end
+
+    async def held_cleanup(write, *, name):
+        async def held():
+            cleaning.set()
+            await release.wait()
+            return await write
+
+        try:
+            return await to_its_end(held(), name=name)
+        finally:
+            finished.set()
+
+    async def read(i):
+        inputs.append(i)
+        children.append(asyncio.current_task())
+        return i
+
+    async def request_from_except():
+        try:
+            raise LookupError("unrelated caller exception")
+        except LookupError:
+            return await each(read)(list(range(8)))
+
+    monkeypatch.setattr(private_first, "to_its_end", held_cleanup)
+    request = asyncio.create_task(request_from_except())
+    try:
+        async with asyncio.timeout(2):
+            await cleaning.wait()
+            assert inputs == [0, 1, 2, 3] and all(t.done() for t in children)
+            assert request.cancel()
+            await asyncio.sleep(0)
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+        assert finished.is_set() and all(t.done() for t in children)
+        assert inputs == [0, 1, 2, 3]
+    finally:
+        release.set()
+        if not request.done():
+            request.cancel()
+        await asyncio.gather(request, *children, return_exceptions=True)
