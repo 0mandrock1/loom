@@ -1521,7 +1521,8 @@ across two databases, each needing a protocol of its own.
 ## Source entry points
 
 - `schemas/schema.sql`, `schemas/pg_migrations/`: the tables the rows place.
-- `server/erasure/store/census.py` (`_CENSUS`, `STEP_ONLY_TABLES`, `NO_MEMORY_CONTENT`)
+- `server/erasure/store/census.py` (`_CENSUS`, `STEP_ONLY_TABLES`,
+  `CANONICAL_OWNER_TABLES`, `NO_MEMORY_CONTENT`)
   and `server/erasure/store/steps_pg.py` (`PG_CENSUS`, `PG_NO_MEMORY_CONTENT`): the
   census each Erasure cell names.
 - `server/erasure/app/saga_steps.py` (`PG_ONLY_STEPS`) and
