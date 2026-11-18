@@ -10,10 +10,11 @@ string the model reads::
     # … the model returns a tool call {name, arguments} …
     result = await tools.execute(call.name, call.arguments)
 
+An explicit ``code_namespace`` also offers one read-only code lookup tool.
 The parameter schemas are hand-written subsets of the generated op inputs:
 what a model should decide (key, value, query), not what the SDK stamps
 (identity) or the operator tunes (budgets, modes). The TypeScript SDK
-carries the same six with the same schemas.
+carries the same tools with the same schemas.
 """
 
 # ruff: noqa: E501  (tool descriptions are prose the model reads)
@@ -24,6 +25,7 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
+from loom.code_tools import CODE_TOOL_SPEC, code_request, fit_code_result
 from loom.errors import LoomError
 from loom.run import credit_answer
 
@@ -217,7 +219,8 @@ def tool_definitions(
 ) -> list[dict[str, Any]]:
     """Tool definitions in a provider's shape."""
     keep = set(only) if only is not None else None
-    specs = [s for s in LOOM_TOOL_SPECS if keep is None or s["name"] in keep]
+    available = (CODE_TOOL_SPEC, *LOOM_TOOL_SPECS) if keep is not None else LOOM_TOOL_SPECS
+    specs = [s for s in available if keep is None or s["name"] in keep]
     if fmt == "anthropic":
         return [
             {"name": s["name"], "description": s["description"], "input_schema": s["parameters"]}
@@ -251,6 +254,7 @@ class AgentTools:
         run_id: str | None = None,
         only: Iterable[str] | None = None,
         max_result_chars: int = 8_000,
+        code_namespace: str | None = None,
     ) -> None:
         self.agent = agent
         self.scope: dict[str, str | None] = {
@@ -259,7 +263,20 @@ class AgentTools:
             "run_id": run_id,
         }
         keep = set(only) if only is not None else None
-        self.names: tuple[str, ...] = tuple(n for n in TOOL_NAMES if keep is None or n in keep)
+        if keep and "loom_code_lookup" in keep and code_namespace is None:
+            raise LoomError("loom_code_lookup requires code_namespace")
+        if code_namespace is not None:
+            if not isinstance(code_namespace, str) or not code_namespace.strip():
+                raise LoomError("code_namespace must be a non-empty string")
+            if (
+                isinstance(max_result_chars, bool)
+                or not isinstance(max_result_chars, int)
+                or max_result_chars < 256
+            ):
+                raise LoomError("code tools require max_result_chars of at least 256")
+        self.code_namespace = code_namespace.strip() if code_namespace is not None else None
+        available = ("loom_code_lookup", *TOOL_NAMES) if self.code_namespace else TOOL_NAMES
+        self.names: tuple[str, ...] = tuple(n for n in available if keep is None or n in keep)
         self.max_result_chars = max_result_chars
 
     def definitions(self, fmt: ToolFormat = "generic") -> list[dict[str, Any]]:
@@ -277,6 +294,29 @@ class AgentTools:
         ):
             raise LoomError("max_result_chars is too small to report memory result omissions")
         a = _parse_args(args)
+        if name == "loom_code_lookup":
+            if "depth" in a:
+                if a["depth"] in (None, ""):
+                    del a["depth"]
+                else:
+                    a["depth"] = _int(a, "depth")
+            op, body = code_request(a)
+            response = await self.agent.call_with_meta(
+                op,
+                {**body, "namespace": self.code_namespace},
+                user_id=self.scope["user_id"],
+                session_id=self.scope["session_id"],
+                run_id=self.scope["run_id"],
+            )
+            return fit_code_result(
+                {
+                    "op": op,
+                    "request_id": response.request_id,
+                    "scope": {"org": self.agent.org, "namespace": self.code_namespace},
+                    "data": response.data,
+                },
+                self.max_result_chars,
+            )
         out = await self._run(name, a)
         if name in ("loom_remember", "loom_recall"):
             return self._fit_memory_result(out)
