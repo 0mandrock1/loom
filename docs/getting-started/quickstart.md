@@ -3,8 +3,9 @@
 This page boots Loom on a laptop and saves a first memory over HTTP, Python and MCP. It
 needs no API key and no account. A fresh install of the released stack embeds with a small
 local model the image carries, so search returns meaningful hits with no network (an
-upgraded one keeps the embedder its `.env` names); its LLM is fake, so extraction and
-`memory.ask` answers produce nothing. A checkout's `.env` uses fake providers for both.
+upgraded one keeps the embedder its `.env` names). Its fake LLM returns deterministic
+output for development and tests. Configure a real LLM for meaningful extraction and
+grounded `memory.ask` answers. A checkout's `.env` uses fake providers for both.
 
 **The stock Docker installation is single-user:** no login, localhost-only access and
 a default `dev/local` namespace. One person can connect multiple agents without enabling
@@ -620,7 +621,7 @@ the answer and the chunks it cited. With the fake LLM it prints the top
 
 | Symptom                                                                       | Cause and fix                                                                                                                                                                                                                                                                |
 | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `set_from_messages` writes no facts                                           | The LLM is the fake one. Follow [Models and keys](./models-and-keys.md) to configure one.                                                                                                                                                                                    |
+| `set_from_messages` writes no facts                                           | An empty result can be valid when the text contains nothing memorable. Check the provider configuration in [Models and keys](./models-and-keys.md); meaningful extraction needs a real LLM.                                                                                  |
 | Search results look arbitrary                                                 | The embedder is a fake one (`fake-ngram-*` in `.env`). Switch it as [Models and keys](./models-and-keys.md) says, which re-embeds what is stored. Do not delete your volumes to change models.                                                                               |
 | 401 `AUTH_INVALID` after turning auth on                                      | No token, or one signed with another `LOOM_JWT_SECRET`. Re-mint with the Compose command in [Get a token](#3-get-a-token).                                                                                                                                                   |
 | The dashboard returns 503                                                     | The server runs from source (`make server`) without a built frontend. Run `make frontend-build`.                                                                                                                                                                             |

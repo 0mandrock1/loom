@@ -3,8 +3,9 @@
 This tutorial builds a small agent with the Python SDK. It continues from the
 [quickstart](./quickstart.md): the stack runs on `http://localhost:7777` and the Python
 SDK is installed ([quickstart step 5](./quickstart.md#5-first-memory-from-python)). Every
-step runs on the stock stack. Extraction and `memory.ask` synthesis need a real LLM;
-ranking is meaningful on the released stack's local embedder, not on a checkout's fake one
+step runs on the stock stack. Meaningful extraction and grounded `memory.ask` answers
+need a configured real LLM; ranking is meaningful on the released stack's local embedder,
+not on a checkout's fake one
 ([providers](../operations/deployment.md#providers)).
 
 ## 1. Give the agent an identity
@@ -92,7 +93,8 @@ the ranking terms.
 
 For a grounded natural-language answer instead of hits, `await a.memory.ask("Which seat
 does the user prefer?", user_id=USER)` returns `answer`, `abstain` and the `memory_keys`
-it cited. It needs a real LLM; with the fake one there is no synthesis.
+it cited. Grounded answers need a configured real LLM; the fake one can return
+deterministic output for development and tests.
 
 ## 3. Hold a conversation as a session
 
