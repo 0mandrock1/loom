@@ -38,9 +38,11 @@ def test_a_product_name_does_not_hide_its_ordinary_descriptor():
 @pytest.mark.parametrize("name", ["README", "README.md", "claude-code.md"])
 def test_filename_identity_comes_from_the_source_link_target(name):
     target = "README.md" if name == "README" else name
-    node = Label(name, links=((name, "https://example.test/docs/" + target),))
-    assert protected(node, "docs/other.md") == (name,)
-    assert protected(Label(name, links=((name, "other.md"),)), "docs/other.md") == ()
+    node = Label(name, links=((name, target),))
+    files = frozenset({"docs/" + target})
+    assert protected(node, "docs/other.md", files=files) == (name,)
+    assert protected(node, "docs/other.md") == ()
+    assert protected(Label(name, links=((name, "other.md"),)), "docs/other.md", files=files) == ()
 
 
 def test_quoted_prose_is_not_a_returned_string_declaration():
@@ -109,12 +111,14 @@ def test_exact_source_names_pass_but_changed_or_relocated_names_fail(path, name)
 @pytest.mark.parametrize("name", ["README", "README.md", "claude-code.md"])
 def test_source_filename_links_pass_and_cannot_be_translated(name):
     target = "README.md" if name == "README" else name
+    target = "../../../integrations/ax/README.md" if target == "README.md" else target
+    path = "docs/features/integrations/index.md"
     source = f"[{name}]({target})\n"
-    assert t.differences(source, source) == []
-    assert t.differences(source, f"[名前]({target})\n")
+    assert t.differences(source, source, source_path=path) == []
+    assert t.differences(source, f"[名前]({target})\n", source_path=path)
     mixed = f"[{name} guide]({target})\n"
-    assert t.differences(mixed, mixed)
-    assert t.differences(mixed, f"[{name} ガイド]({target})\n") == []
+    assert t.differences(mixed, mixed, source_path=path)
+    assert t.differences(mixed, f"[{name} ガイド]({target})\n", source_path=path) == []
 
 
 @pytest.mark.parametrize(
@@ -314,3 +318,46 @@ def test_narrative_tier_descriptions_are_not_returned_wire_values():
     source = "## Scope (namespace, cluster, scalar)\n"
     output = "## 範囲（名前空間、クラスター、スカラー）\n"
     assert t.differences(source, output, source_path="docs/guides/debugging.md") == []
+
+
+@pytest.mark.parametrize("particle", ["を", "の", "용", "的"])
+@pytest.mark.parametrize("name,path", [("n8n", "frameworks"), ("Agent Substrate", "index")])
+def test_native_particles_preserve_the_complete_name(particle, name, path):
+    source = f"## {name}\n"
+    assert (
+        t.differences(
+            source, f"## {name}{particle}\n", source_path=f"docs/features/integrations/{path}.md"
+        )
+        == []
+    )
+    assert t.differences(
+        source, f"## {name}Custom\n", source_path=f"docs/features/integrations/{path}.md"
+    )
+
+
+@pytest.mark.parametrize("target", ["https://arbitrary.example/report.txt", "missing.txt"])
+def test_a_remote_or_untracked_basename_does_not_attest_a_filename(target):
+    name = target.rsplit("/", 1)[-1]
+    source = f"[{name}]({target})\n"
+    assert t.differences(source, source, source_path="docs/other.md")
+    assert t.differences(source, f"[レポート]({target})\n", source_path="docs/other.md") == []
+
+
+def test_canonical_repo_url_requires_the_actual_tracked_target():
+    target = t.REPO_URL + "/blob/main/docs/features/integrations/claude-code.md"
+    source = f"[claude-code.md]({target})\n"
+    assert t.differences(source, source, source_path="docs/features/integrations/index.md") == []
+    assert t.differences(
+        source, f"[名前]({target})\n", source_path="docs/features/integrations/index.md"
+    )
+    wrong = source.replace("/blob/main/", "/blob/arbitrary/")
+    assert t.differences(wrong, wrong, source_path="docs/features/integrations/index.md")
+
+
+@pytest.mark.parametrize(
+    "name,changed", [("n8n", "n8n_extra"), ("n8n", "n8né"), ("Mastra", "Mastração")]
+)
+def test_longer_unicode_or_latin_identifiers_do_not_preserve_a_name(name, changed):
+    assert t.differences(
+        f"## {name}\n", f"## {changed}\n", source_path="docs/features/integrations/frameworks.md"
+    )

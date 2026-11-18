@@ -376,12 +376,26 @@ def _residual_label(node: context.Label, atoms: tuple[str, ...]) -> str:
     return " ".join(residual.split()) if len(_words(residual)) >= minimum else ""
 
 
+def _source_protections(
+    nodes: dict[tuple, context.Label], source_path: str
+) -> dict[tuple, tuple[str, ...]]:
+    # Only tracked repository targets attest filenames; a remote basename proves nothing.
+    files = frozenset()
+    if any(node.links for node in nodes.values()) and (ROOT / ".git").exists():
+        paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode()
+        files = frozenset(paths.rstrip("\0").split("\0"))
+    return {
+        key: context.protected(node, source_path, files=files, repo_url=REPO_URL)
+        for key, node in nodes.items()
+    }
+
+
 def labels(text: str, *, source_path: str = "") -> Counter[str]:
     """Translatable labels after protecting only source-attested spelling spans."""
+    nodes = _label_nodes(text)
+    protections = _source_protections(nodes, source_path)
     return Counter(
-        label
-        for node in _label_nodes(text).values()
-        if (label := _residual_label(node, context.protected(node, source_path)))
+        label for key, node in nodes.items() if (label := _residual_label(node, protections[key]))
     )
 
 
@@ -400,10 +414,10 @@ def _label_differences(
     wanted, actual = _label_nodes(english), _label_nodes(candidate)
     source_labels: Counter[str] = Counter()
     target_labels: Counter[str] = Counter()
-    protections = {}
+    protections = _source_protections(wanted, source_path)
     problems = []
     for key, node in wanted.items():
-        atoms = protections[key] = context.protected(node, source_path)
+        atoms = protections[key]
         if not (start <= node.start and node.end <= end):
             continue
         if label := _residual_label(node, atoms):

@@ -146,10 +146,31 @@ class SourceContext:
 
 def pattern(atoms: tuple[str, ...]) -> re.Pattern[str]:
     choices = "|".join(map(re.escape, sorted(atoms, key=len, reverse=True)))
-    return re.compile(r"(?<![\w-])(?:" + choices + r")(?![\w-])")
+    # Native particles can touch a name; other Unicode identifier continuations cannot.
+    native = r"\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af"
+    left = rf"(?:(?<![\w-])|(?<=[{native}]))"
+    right = rf"(?:(?![\w-])|(?=[{native}]))"
+    return re.compile(left + "(?:" + choices + ")" + right)
 
 
-def protected(label: Label, source_path: str) -> tuple[str, ...]:
+def _file_target(target: str, source_path: str, files: frozenset[str], repo_url: str) -> str:
+    url = urlsplit(target)
+    if url.scheme or url.netloc:
+        prefixes = (repo_url + "/blob/main/", repo_url + "/raw/main/") if repo_url else ()
+        prefix = next((p for p in prefixes if target.startswith(p)), None)
+        resolved = unquote(url.path[len(urlsplit(prefix).path) :]) if prefix else ""
+    elif source_path and url.path and not url.path.startswith("/"):
+        resolved = posixpath.normpath(
+            posixpath.join(posixpath.dirname(source_path), unquote(url.path))
+        )
+    else:
+        resolved = ""
+    return resolved if resolved in files else ""
+
+
+def protected(
+    label: Label, source_path: str, *, files: frozenset[str] = frozenset(), repo_url: str = ""
+) -> tuple[str, ...]:
     """Derive protection from the source node, never from a translated assertion."""
     atoms = [name for name in _NAMES.get(source_path, ()) if pattern((name,)).search(label.text)]
     declared = _FIELDS.get((source_path, label.field), ())
@@ -162,11 +183,11 @@ def protected(label: Label, source_path: str) -> tuple[str, ...]:
     ):
         atoms.extend(value[1:-1] for value in re.findall(_QUOTED, label.text))
     for text, target in label.links:
-        basename = posixpath.basename(unquote(urlsplit(target).path))
+        basename = posixpath.basename(_file_target(target, source_path, files, repo_url))
         name = basename
         if basename == "README.md" and not pattern((basename,)).search(text):
             name = "README"
-        if "." in basename and name and pattern((name,)).search(text):
+        if name and pattern((name,)).search(text):
             atoms.append(name)
     return tuple(dict.fromkeys(atoms))
 

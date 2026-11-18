@@ -41,7 +41,7 @@ failures, and structural checks do not establish translation quality or prose co
 
 Label validation distinguishes source spelling from ordinary descriptions. Source-specific
 name declarations protect exact product and project spans. A filename label must match
-its source link target; the conventional `README` label may omit the `.md` suffix.
+a tracked repository file at its source link target; the conventional `README` label may omit the `.md` suffix.
 Operation field declarations protect returned string vocabularies and one documented
 field formula. A string-typed field whose whole description is quoted identifier
 alternatives also declares literal values. Quotation, capitalization and filename-like
