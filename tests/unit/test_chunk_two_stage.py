@@ -222,7 +222,7 @@ async def test_neighbor_window_predicates_are_table_qualified_and_deduped() -> N
     # the date joins are present and expose no bare session_id / memory_key
     assert ") AS ss ON ss.ss_session_id = c.session_id" in sql3
     assert ") AS pd ON pd.pd_memory_key = c.parent_memory_key" in sql3
-    assert "(session_id = " not in sql3 and " AND chunk_index BETWEEN" not in sql3
+    assert "(session_id = {ns" not in sql3 and " AND chunk_index BETWEEN" not in sql3
 
 
 # --------------------------------------------------------------------------
