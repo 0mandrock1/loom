@@ -14,7 +14,9 @@ import pytest
 from server.core import provider_process
 from server.insights.app import provider_barrier as barrier
 from server.insights.store import provider_participants as store
+from server.settings import Settings
 from server.workers import child
+from tests.unit.clock_fake import ManualClock
 
 
 @pytest.mark.asyncio
@@ -227,6 +229,44 @@ async def test_naturally_exited_owned_child_is_retired_within_restart_delay(monk
         assert record.await_args.args[0].host_proof == proof
         assert sleeps == [pytest.approx(child.RESTART_DELAY_S - 0.4)]
         assert workers.restarts == 1
+    finally:
+        workers._close_pipe()
+        publish.cancel()
+        await asyncio.gather(publish, return_exceptions=True)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf"), -float("inf")])
+def test_child_retirement_proof_timeout_requires_a_positive_finite_setting(value):
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, workers_child_retirement_timeout_s=value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "remaining", "expected"),
+    [(0.125, 2.0, 0.125), (1.0, 0.25, 0.25), (2.0, 0.0625, 0.0625)],
+)
+async def test_child_retirement_setting_caps_only_the_original_remaining_allowance(
+    monkeypatch, configured, remaining, expected
+):
+    workers, proc, _, record, publish = await _owned(monkeypatch)
+    clock = ManualClock(t=100.0)
+    allowances = []
+    original_timeout = asyncio.timeout
+
+    def observed_timeout(delay):
+        allowances.append(delay)
+        return original_timeout(delay)
+
+    monkeypatch.setattr(child.settings, "workers_child_retirement_timeout_s", configured)
+    monkeypatch.setattr(child, "time", clock)
+    monkeypatch.setattr(child.asyncio, "timeout", observed_timeout)
+    try:
+        await workers._reap(clock.monotonic() + remaining)
+        assert proc.returncode == -signal.SIGTERM and proc.waits >= 1
+        assert record.await_count == 1
+        assert allowances == [expected]
+        assert clock.monotonic() == 100.0
     finally:
         workers._close_pipe()
         publish.cancel()
