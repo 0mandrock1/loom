@@ -149,10 +149,24 @@ def english_fallback(link: str) -> tuple[str, str] | None:
     return (source, url.fragment) if source_path(source) else None
 
 
-def english_live(source: str, anchor: str, inventory: frozenset[str]) -> bool:
+def english_live(
+    source: str,
+    anchor: str,
+    inventory: frozenset[str],
+    *,
+    _bodies: dict[str, tuple[str, str]] | None = None,
+) -> bool:
     if source not in inventory or not regular(source):
         return False
-    body = "\n".join(t.english_requests((t.ROOT / source).read_text()))
+    # Recheck the file and its bytes per link; reuse only the derived parse within a pass.
+    text = (t.ROOT / source).read_text()
+    cached = _bodies.get(source) if _bodies is not None else None
+    if cached is None or cached[0] != text:
+        body = "\n".join(t.english_requests(text))
+        if _bodies is not None:
+            _bodies[source] = (text, body)
+    else:
+        body = cached[1]
     return not anchor or f'<a id="{unquote(anchor)}"></a>' in body
 
 
@@ -162,6 +176,7 @@ def link_failures(extra: dict[str, str] | None = None) -> list[tuple[str, str, s
     }
     pages.update(extra or {})
     inventory = frozenset(t.sources())
+    english_bodies: dict[str, tuple[str, str]] = {}
     problems = []
     for path, text in pages.items():
         for match in t.prose_links(text[body_start(path, text) :]):
@@ -169,7 +184,7 @@ def link_failures(extra: dict[str, str] | None = None) -> list[tuple[str, str, s
             fallback = english_fallback(match[2])
             if fallback:
                 source, fragment = fallback
-                if not english_live(source, fragment, inventory):
+                if not english_live(source, fragment, inventory, _bodies=english_bodies):
                     problems.append(
                         (
                             path,
@@ -200,6 +215,7 @@ def link_failures(extra: dict[str, str] | None = None) -> list[tuple[str, str, s
 def repair_english_fallbacks(codes: list[str] | None = None) -> None:
     """Keep deleted English body links on an owned published target that retains the anchor."""
     inventory = frozenset(t.sources())
+    english_bodies: dict[str, tuple[str, str]] = {}
     for path in output_files():
         if not regular(path):
             continue
@@ -212,7 +228,7 @@ def repair_english_fallbacks(codes: list[str] | None = None) -> None:
         def fix(prose: str, path: str = path, language: str = owned[1].code) -> str:
             def replace(match: re.Match[str]) -> str:
                 fallback = english_fallback(match[2])
-                if not fallback or english_live(*fallback, inventory):
+                if not fallback or english_live(*fallback, inventory, _bodies=english_bodies):
                     return match[0]
                 source, anchor = fallback
                 target = t.target_path(language, source)

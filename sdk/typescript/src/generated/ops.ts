@@ -84,6 +84,8 @@ export interface AssistantCitation {
 }
 
 export interface AssistantAskOutput {
+  /** True when this answer is private to the caller's protected session; false by default. */
+  mirrored?: boolean;
   answer?: string;
   run_id?: string;
   model?: string;

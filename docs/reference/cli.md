@@ -334,6 +334,10 @@ python scripts/codegen/docs_reference.py
 | `loom tracker-contract-check` | Read-only: does each tracker source's schema meet the record contract (docs/features/tracker/record-contract.md)? | `--source`, `--namespace`, `--json` |
 | `loom tracker-dupcheck-fit` | Refit tracker.duplicate_check's calibrated confidence for one tracker namespace now: replays the duplicate gold at filing time, fits, stores the fit. | `--namespace`, `--org`, `--negatives`, `--dry-run`, `--out` |
 | `loom tracker-embed-reset` | Clear the tracker_embed pass cursors of one tracker namespace so the next pass re-walks the window and re-embeds every item whose text recipe changed. | `--namespace`, `--org`, `--kind`, `--apply`, `--dry-run` |
+| `loom tracker-feed` | Maintain a team's GitHub tracker record |  |
+| `loom tracker-feed init` |  | `--org`, `--writer-user`, `--writer-password-env`, `--host`, `--port`, `--database`, `--insecure` |
+| `loom tracker-feed configure` |  | `--org`, `--writer-user`, `--writer-password-env`, `--source`, `--repo`, `--token-env`, `--read-only-token`, `--max-pages` |
+| `loom tracker-feed sync` |  | `--org`, `--writer-user`, `--writer-password-env`, `--source`, `--repo` |
 | `loom namespaces-adopt` | Give namespaces that hold live memory and no registry row an owner row: kind=bench under the bench prefixes, else memory; retention_days 0, no TTL. | `--org`, `--owner`, `--prefix`, `--namespace`, `--kind`, `--apply`, `--dry-run`, `--show` |
 | `loom sensitivity-sweep` | Label live rows the sensitivity detector would have labelled on write but a path skipped. | `--org`, `--namespace`, `--since-days`, `--limit`, `--show`, `--only-shape`, `--apply`, `--dry-run` |
 | `loom integrity-repair` | Read the row-level integrity gauges (dim-0 rows holding a vector, tombstoned_at/status drift, active rows past valid_to) and, with --apply, re-emit the dim-0 rows with their true dimension so search… | `--org`, `--namespace`, `--limit`, `--show`, `--apply`, `--dry-run` |

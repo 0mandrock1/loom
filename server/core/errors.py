@@ -686,12 +686,14 @@ def register_exception_handler(app: FastAPI) -> None:
     from fastapi.responses import JSONResponse, Response
     from starlette.exceptions import HTTPException as StarletteHTTPException
 
+    from server.core.request_work import flag_response, mirror_marked
+
     @app.exception_handler(LoomServerError)
     async def _handle_loom_error(_: Request, exc: LoomServerError) -> JSONResponse:
         detail = classified(exc.to_detail(), exc.status_code)
         return JSONResponse(
             status_code=exc.status_code,
-            content={"detail": detail},
+            content=flag_response({"detail": detail}),
             headers=_with_help_link(exc.headers(), detail),
         )
 
@@ -701,6 +703,12 @@ def register_exception_handler(app: FastAPI) -> None:
         detail = exc.detail
         if isinstance(detail, dict) and detail.get("code"):
             detail = classified(detail, exc.status_code)
+        if mirror_marked() and exc.status_code not in (204, 304):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=flag_response({"detail": detail}),
+                headers=headers,
+            )
         # Never write onto exc: a module-level HTTPException is raised on every request.
         answer = StarletteHTTPException(exc.status_code, detail=detail, headers=headers)
         return await http_exception_handler(request, answer)
@@ -710,4 +718,4 @@ def register_exception_handler(app: FastAPI) -> None:
         # FastAPI's own 422, except that a non-finite input (`1e400`) is echoed as a
         # string: JSON has no inf, and the response would fail as a 500.
         errors = loads_keeping_non_finite(json.dumps(jsonable_encoder(exc.errors())))
-        return JSONResponse(status_code=422, content={"detail": errors})
+        return JSONResponse(status_code=422, content=flag_response({"detail": errors}))

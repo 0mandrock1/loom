@@ -1584,10 +1584,11 @@ class CHClient:
         settings = dedup_settings(token, settings)
         from server.core import rmt_carry
 
+        send_clock = None
         if rmt_carry.sent_under_lease() and not rmt_carry.carries(table):
-            # Its start deadline is on the server's clock, which a carried insert's
-            # admission measures: measured here, before the send holds a slot.
-            await rmt_carry.measure_server_clock(self)
+            # An external record can have a different server clock from the
+            # deployment. Measure its receiver before the send holds a slot.
+            send_clock = await rmt_carry.measure_send_clock(self)
 
         async def _q() -> None:
             attempt = query_settings(settings)
@@ -1616,7 +1617,11 @@ class CHClient:
                 fenced["query_id"] = rmt_carry.carry_query_id(
                     str(fenced.get("query_id") or uuid.uuid4().hex)
                 )
-                deadline = rmt_carry.send_deadline()
+                deadline = (
+                    rmt_carry.clock_send_deadline(send_clock)
+                    if send_clock is not None
+                    else rmt_carry.send_deadline()
+                )
                 rmt_carry.note_send(
                     str(fenced["query_id"]), deadline, float(fenced["max_execution_time"])
                 )
@@ -1787,6 +1792,47 @@ PROJECTED_TABLES: frozenset[str] = frozenset(
 )
 # (table, column) pairs already warned about — one line per process.
 _PROJECTION_WARNED: set[tuple[str, str]] = set()
+
+
+class ExternalCHClient(CHClient):
+    """The statement wrapper for an operator's separately owned record database."""
+
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        secure: bool,
+        database: str,
+        username: str,
+        password: str,
+        address: str = "",
+    ) -> None:
+        super().__init__()
+        self._connection: dict[str, Any] = dict(
+            host=address or host,
+            server_host_name=host if address else None,
+            port=port,
+            secure=secure,
+            database=database,
+            username=username,
+            password=password,
+        )
+        self._slots = asyncio.Semaphore(2)
+
+    async def connect(self) -> None:
+        # A record database has no Loom schema or vector-capability probes.
+        client = await clickhouse_connect.get_async_client(
+            **self._connection,
+            compress=True,
+            tz_source="server",
+            send_receive_timeout=_driver_read_timeout_s(),
+            connector_limit=2,
+            connector_limit_per_host=2,
+            settings={"session_timezone": "UTC", "async_insert": 0, "wait_for_async_insert": 1},
+        )
+        client.server_tz = UTC
+        self._client = client
 
 
 def describe_cache_clear() -> None:
