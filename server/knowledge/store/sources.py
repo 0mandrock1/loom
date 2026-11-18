@@ -80,6 +80,26 @@ async def crawl_approval_page(
     return keys
 
 
+async def crawl_history(
+    org: str, *, maximum: int, ch: _CHClient | None = None
+) -> list[KnowledgeSource]:
+    """Raw registrations include retired sources and earlier names, not only FINAL rows."""
+    if not isinstance(org, str) or not org or type(maximum) is not int or maximum <= 0:
+        raise ValueError("crawl history scope refused")
+    with own_write_reads():
+        rows = await (ch or _default_client()).query_all(
+            f"SELECT DISTINCT {_COLUMNS} FROM {TABLE} WHERE org = {{org:String}} "
+            "AND credential_mode = 'crawl' "
+            "ORDER BY namespace, name, source_id, updated_at LIMIT {limit:UInt32}",
+            params={"org": org, "limit": maximum + 1},
+        )
+    if len(rows) > maximum or any(
+        row["org"] != org or row["credential_mode"] != "crawl" for row in rows
+    ):
+        raise RuntimeError("crawl_history_unverified")
+    return [_source(row) for row in rows]
+
+
 def _items(raw: str) -> list[dict[str, Any]]:
     """The stored items, or [] (the source's config names them)."""
     try:

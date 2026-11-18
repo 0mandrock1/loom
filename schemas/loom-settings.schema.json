@@ -3143,6 +3143,12 @@
           "type": "integer",
           "description": "Bytes read from one delegated Directory or OAuth response; larger responses refuse."
         },
+        "knowledge_crawl_identity_capture_timeout_s": {
+          "default": 30.0,
+          "exclusiveMinimum": 0,
+          "type": "number",
+          "description": "Whole pre-delete Directory identity capture across a person's existing crawl sources."
+        },
         "knowledge_crawl_lease_ttl_s": {
           "default": 60.0,
           "exclusiveMinimum": 0,

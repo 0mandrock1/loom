@@ -57,6 +57,7 @@ class _World(_AuthorityWorld):
         self.after_native: Any = lambda: None
         monkeypatch.setattr(google, "get_client", lambda: http)
         monkeypatch.setattr(gdrive, "get_client", lambda: http)
+        monkeypatch.setattr(crawl_authority, "get_client", lambda: self)
         monkeypatch.setattr(scim, "deactivated", _NATIVE_SCIM_READ)
         monkeypatch.setattr(scim, "get_client", lambda: self)
         service = account[0]

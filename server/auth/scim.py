@@ -376,8 +376,12 @@ async def _capture_person_erasure(row: dict[str, Any]) -> dict[str, Any]:
         return row
     encoded = str(row.get("crawl_erasure_enc", ""))
     if encoded:
-        person_erasure.load(row["id"], encoded)
-        return row
+        if person_erasure.load(row["id"], encoded).prepared:
+            return row
+        if row["deleted"]:
+            # A reused provider email must not complete a failed historical capture.
+            raise person_erasure.unavailable()
+        return await _prepare_person_erasure(row)
     if row["deleted"]:
         # A historical tombstone cannot be joined to a newly reused email on retry.
         raise person_erasure.unavailable()
@@ -385,6 +389,15 @@ async def _capture_person_erasure(row: dict[str, Any]) -> dict[str, Any]:
     # Keep this local full row even when an acknowledged write loses its reply.
     # The unconditional deactivation must not overwrite the captured proof with defaults.
     row.update(crawl_erasure_enc=encoded, crawl_erasure_required=True, crawl_erasure_done=False)
+    await _write(row)
+    return await _prepare_person_erasure(row)
+
+
+async def _prepare_person_erasure(row: dict[str, Any]) -> dict[str, Any]:
+    from server.auth import person_erasure
+
+    encoded = await person_erasure.prepare(row["id"], row["crawl_erasure_enc"])
+    row["crawl_erasure_enc"] = encoded
     await _write(row)
     return row
 

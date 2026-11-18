@@ -2902,6 +2902,10 @@ settings:
   # Seconds a crawl control change waits for an existing org exclusion lease. [restart]
   # knowledge_crawl_lease_wait_s: 5.0
 
+  # Whole pre-delete Directory identity capture across a person's existing crawl
+  # sources. [restart]
+  # knowledge_crawl_identity_capture_timeout_s: 30.0
+
   # Seconds one connected-account OAuth request may take, including its response. The
   # caller's remaining deadline can shorten this bound. [restart]
   # knowledge_connected_oauth_timeout_s: 30.0

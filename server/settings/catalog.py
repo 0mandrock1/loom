@@ -2374,6 +2374,8 @@ class KnowledgeSettings(BaseModel):
     knowledge_crawl_lease_ttl_s: float = Field(default=60.0, gt=0)
     # Seconds a crawl control change waits for an existing org exclusion lease.
     knowledge_crawl_lease_wait_s: float = Field(default=5.0, ge=0)
+    # Whole pre-delete Directory identity capture across a person's existing crawl sources.
+    knowledge_crawl_identity_capture_timeout_s: float = Field(default=30.0, gt=0)
     # Seconds one connected-account OAuth request may take, including its response.
     # The caller's remaining deadline can shorten this bound.
     knowledge_connected_oauth_timeout_s: float = Field(default=30.0, gt=0)

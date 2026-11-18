@@ -53,11 +53,13 @@ async def test_malformed_sealed_metadata_never_turns_into_cleanup_authority(
     world, change: Any
 ) -> None:
     value = {
-        "format": 1,
+        "format": 2,
         "id": "scim-person-id",
         "people": [
             {"org": "team", "subject": "person", "emails": ["person@example.com"]},
         ],
+        "workspaces": [],
+        "prepared": False,
     } | change
     encoded = seal(erasure.PURPOSE, json.dumps(value))
     with pytest.raises(BackendUnavailableError):
