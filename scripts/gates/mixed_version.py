@@ -49,6 +49,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,15 @@ from bench.retrieval_determinism import (  # noqa: E402
     assert_rankings_equal,
     capture_rankings,
     ranking_timings,
+)
+from bench.scale_load import (  # noqa: E402
+    _error_code,
+    _summary,
+    assert_latency_current,
+    assert_latency_visible,
+    assert_latency_worker,
+    committed_latency_rows,
+    latency_observations,
 )
 from server.core.sql_literal import sql_string  # noqa: E402
 from server.insights.domain import analysis as boundary  # noqa: E402
@@ -215,8 +225,17 @@ class Server:
     """One Loom process of one build; `restart` keeps its port."""
 
     def __init__(
-        self, name: str, tree: Path, ch_port: int, logs: Path, *, ranking_neutral: bool = False
+        self,
+        name: str,
+        tree: Path,
+        ch_port: int,
+        logs: Path,
+        *,
+        ranking_neutral: bool = False,
+        web_workers: int = 1,
     ) -> None:
+        assert web_workers in (1, 2)
+        self.web_workers = web_workers
         self.name, self.tree, self.ch_port = name, tree, ch_port
         self.port = _free_port()
         self.url = f"http://127.0.0.1:{self.port}"
@@ -248,6 +267,9 @@ class Server:
             LOOM_OTEL_ENABLED="false",
             LOOM_INSTANCE_LABEL=f"ci:mixed-version-{self.name}",
         )
+        if self.web_workers != 1:
+            env["LOOM_WEB_WORKERS"] = str(self.web_workers)
+            env["LOOM_RUNTIME_DIR"] = str(self.log.parent / (self.name + ".runtime"))
         if self.ranking_neutral:
             env.update(
                 LOOM_MEMORY_ASK_RECENCY_WEIGHT="0", LOOM_MEMORY_SEARCH_RECENCY_POOL_WEIGHT="0"
@@ -257,10 +279,13 @@ class Server:
         return env
 
     def start(self) -> None:
+        if self.web_workers != 1:
+            (self.log.parent / (self.name + ".runtime")).mkdir(mode=0o700, exist_ok=True)
         out = self.log.open("ab")
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "server.main:app"]
-            + ["--host", "127.0.0.1", "--port", str(self.port)],
+            + ["--host", "127.0.0.1", "--port", str(self.port)]
+            + (["--workers", str(self.web_workers)] if self.web_workers != 1 else []),
             cwd=self.tree,
             env=self.env(),
             stdout=out,
@@ -310,13 +335,34 @@ class Server:
     def tail(self, n: int = 6000) -> str:
         return self.log.read_text(errors="replace")[-n:] if self.log.exists() else ""
 
-    def call(self, token: str, op: str, body: dict[str, Any]) -> dict[str, Any]:
-        r = httpx.post(
-            f"{self.url}/v1/{op}",
-            json=body,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=60,
-        )
+    def call(
+        self,
+        token: str,
+        op: str,
+        body: dict[str, Any],
+        *,
+        observation: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        started = time.perf_counter() if observation is not None else 0.0
+        try:
+            r = httpx.post(
+                f"{self.url}/v1/{op}",
+                json=body,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=60,
+            )
+        except httpx.HTTPError as exc:
+            if observation is not None:
+                observation.update(
+                    elapsed_ms=(time.perf_counter() - started) * 1000, error=type(exc).__name__
+                )
+            raise
+        if observation is not None:
+            observation.update(
+                elapsed_ms=(time.perf_counter() - started) * 1000,
+                status=r.status_code,
+                error="" if r.status_code == 200 else f"{r.status_code}:{_error_code(r)}",
+            )
         if r.status_code != 200:
             raise AssertionError(f"{self.name} {op}: {r.status_code} {r.text[:400]}")
         return dict(r.json())
@@ -355,7 +401,17 @@ def mint(org: str, ns: str) -> str:
 class Scenario:
     """The checks, each run in both directions between the two builds."""
 
-    def __init__(self, old: Server, new: Server, nxt: Server, ch_port: int) -> None:
+    def __init__(
+        self,
+        old: Server,
+        new: Server,
+        nxt: Server,
+        ch_port: int,
+        *,
+        owned_servers: list[Server] | None = None,
+        owned_logs: Path | None = None,
+    ) -> None:
+        self.owned_servers, self.owned_logs = owned_servers, owned_logs
         self.builds = {"N-1": old, "N": new}
         self.new = new
         self.next = nxt
@@ -381,6 +437,7 @@ class Scenario:
         self.all_ready()
         if ranking_sources is not None:
             self.ranking_neutrality(*ranking_sources)
+            self.latency_acceptance(*ranking_sources)
         ids = self.memories_read_across()
         self.absence_precondition_across()
         for a, b in (("N", "N-1"), ("N-1", "N")):
@@ -393,6 +450,337 @@ class Scenario:
         self.dashboard_loads_across()
         self.one_leader()
         return self.failures
+
+    def latency_acceptance(self, base: str, head: str) -> None:
+        """Small CI timings, two two-worker groups per arm; no production latency claim."""
+        from bench.scale_load import _outcomes
+
+        assert self.owned_servers is not None and self.owned_logs is not None
+        policies = {}
+
+        def value(key: str) -> str:
+            # Alphabetic codewords avoid token/card/contact shapes without policy overrides.
+            digest = hashlib.sha256(("latency-fixture/" + key).encode()).hexdigest()
+            letters = digest.translate(str.maketrans("0123456789abcdef", "abcdefghijklmnop"))
+            return " ".join(letters[i : i + 16] for i in range(0, 64, 16))
+
+        corpus = {f"seed/{i:04}": value(f"seed/{i:04}") for i in range(2048)}
+        light = {f"light/{i:02}": value(f"light/{i:02}") for i in range(16)}
+        for label, source in (("base", base), ("head", head)):
+            tree = self.builds["N-1" if label == "base" else "N"].tree
+            arm = [
+                Server(
+                    f"latency-{label}-{i}",
+                    tree,
+                    self.ch_port,
+                    self.owned_logs,
+                    ranking_neutral=True,
+                    web_workers=2,
+                )
+                for i in range(2)
+            ]
+            # Registration precedes every start, including a partially failed start.
+            self.owned_servers.extend(arm)
+            samples: list[dict[str, Any]] = []
+            visibility: dict[str, list[float]] = {
+                f"{role}/{op}": []
+                for role in ("main", "light")
+                for op in ("memory.set", "memory.bulk_set")
+            }
+            proofs = []
+            proofs_after = []
+            fixtures = []
+            complete = False
+            try:
+                for srv in arm:
+                    srv.start()
+                    assert srv.ready()[0]
+                    proofs.append(self.latency_workers(srv))
+                assert len({w["pid"] for p in proofs for w in p["workers"]}) == 4
+                for role, contents in (("main", corpus), ("light", light)):
+                    org = f"{self.org}-{label}-{role}"
+                    ident = {
+                        "org": org,
+                        "namespace": "latency",
+                        "agent": "gate",
+                        "user_id": "-",
+                        "session_id": "-",
+                    }
+                    token = mint(org, "latency")
+                    expected = {}
+                    entries = [
+                        {"memory_key": k, "value": v, "memory_type": "semantic"}
+                        for k, v in contents.items()
+                    ]
+                    for offset in range(0, len(entries), 8):
+                        seed_started = time.monotonic()
+                        batch = entries[offset : offset + 8]
+                        result = arm[0].call(token, "memory.bulk_set", {**ident, "entries": batch})
+                        expected.update(committed_latency_rows("memory.bulk_set", result, batch))
+                        # Four requests/sec is below the ordinary namespace write rate.
+                        time.sleep(max(0, 0.25 - (time.monotonic() - seed_started)))
+                    fixture = (role, ident, token, expected)
+                    fixtures.append(fixture)
+                    for srv in arm:
+                        self.latency_census(srv, ident, token, expected)
+
+                def exercise(
+                    fixture: tuple[Any, ...],
+                    *,
+                    owned_arm: list[Server] = arm,
+                    arm_samples: list[dict[str, Any]] = samples,
+                    arm_visibility: dict[str, list[float]] = visibility,
+                ) -> None:
+                    role, ident, token, expected = fixture
+                    writer, reader = owned_arm
+
+                    def call(
+                        target: Server, op: str, body: dict[str, Any], phase: str, check: Any = None
+                    ) -> dict[str, Any]:
+                        sample: dict[str, Any] = {
+                            "role": role,
+                            "op": op,
+                            "phase": phase,
+                            "server": target.name,
+                        }
+                        sample["request_sha256"] = hashlib.sha256(
+                            json.dumps(body, sort_keys=True).encode()
+                        ).hexdigest()
+                        arm_samples.append(sample)
+                        try:
+                            result = target.call(token, op, {**ident, **body}, observation=sample)
+                            if op in ("memory.set", "memory.bulk_set"):
+                                sample["outcomes"] = _outcomes(op, result)
+                                committed_latency_rows(
+                                    op, result, [body] if op == "memory.set" else body["entries"]
+                                )
+                            if check is not None:
+                                check(result)
+                            return result
+                        except (AssertionError, httpx.HTTPError, ValueError, TypeError) as exc:
+                            sample["error"] = sample.get("error") or type(exc).__name__
+                            raise
+
+                    def search(key: str, row: dict[str, Any], phase: str) -> None:
+                        call(
+                            reader,
+                            "memory.search",
+                            {
+                                "query": row["value"],
+                                "top_k": 5,
+                                "namespace_scope": "this",
+                                "search_mode": "semantic",
+                                "auto_touch": False,
+                                "personalization": "none",
+                                "reinforcement_weight": 0,
+                                "recency_pool_weight": 0,
+                            },
+                            phase,
+                            lambda found: assert_latency_visible(found, key, row),
+                        )
+
+                    for i in range(8 if role == "main" else 4):
+                        key = next(iter(expected))
+                        call(
+                            reader,
+                            "memory.get",
+                            {"memory_key": key},
+                            "measured",
+                            lambda current, row=expected[key]: assert_latency_current(current, row),
+                        )
+                        for op, count in (("memory.set", 1), ("memory.bulk_set", 2)):
+                            entries = [
+                                {
+                                    "memory_key": f"{op}/{i}/{j}",
+                                    "value": value(f"{role}/{op}/{i}/{j}"),
+                                    "memory_type": "semantic",
+                                }
+                                for j in range(count)
+                            ]
+                            body = entries[0] if count == 1 else {"entries": entries}
+                            result = call(writer, op, body, "measured")
+                            ack = time.perf_counter()
+                            committed = committed_latency_rows(op, result, entries)
+                            expected.update(committed)
+                            # No settle loop: the FIRST post-ack search must be current.
+                            for new_key, row in committed.items():
+                                search(new_key, row, "first_after_ack")
+                            arm_visibility[f"{role}/{op}"].append(
+                                (time.perf_counter() - ack) * 1000
+                            )
+                            for new_key, row in committed.items():
+                                call(
+                                    reader,
+                                    "memory.get",
+                                    {"memory_key": new_key},
+                                    "first_point_after_ack",
+                                    lambda current, row=row: assert_latency_current(current, row),
+                                )
+                        search(key, expected[key], "measured")
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    futures = [pool.submit(exercise, fixture) for fixture in fixtures]
+                    for future in futures:
+                        future.result()
+                for _role, ident, token, expected in fixtures:
+                    for srv in arm:
+                        self.latency_census(srv, ident, token, expected)
+                proofs_after = [self.latency_workers(srv) for srv in arm]
+                assert {(w["pid"], w["start_ticks"]) for p in proofs for w in p["workers"]} == {
+                    (w["pid"], w["start_ticks"]) for p in proofs_after for w in p["workers"]
+                }, "web worker restarted during measurement"
+                policies[label] = [w["ratelimit"] for p in proofs_after for w in p["workers"]]
+                assert all(p == policies[label][0] for p in policies[label]), (
+                    "unequal worker policy"
+                )
+                if label == "head":
+                    assert policies["base"] == policies["head"], "different arm rate/process shares"
+                complete = True
+            finally:
+                # Cleanup precedes formatting; even a malformed receipt cannot strand an arm.
+                try:
+                    arm[0].stop()
+                finally:
+                    arm[1].stop()
+                print(
+                    "latency-acceptance "
+                    + json.dumps(
+                        {
+                            "source": source,
+                            "arm": label,
+                            "authority": "clickhouse",
+                            "complete": complete,
+                            "providers": "fake-ngram-1024/fake",
+                            "process_groups": proofs,
+                            "process_groups_after": proofs_after,
+                            "main_seed_rows": len(corpus),
+                            "light_seed_rows": len(light),
+                            "fixtures": [
+                                {"role": role, "identity": ident, "committed_head_count": len(rows)}
+                                for role, ident, _token, rows in fixtures
+                            ],
+                            "corpus_sha256": hashlib.sha256(
+                                json.dumps(
+                                    {"main": corpus, "light": light}, sort_keys=True
+                                ).encode()
+                            ).hexdigest(),
+                            "summary": {
+                                role: {
+                                    op: latency_observations(selected)
+                                    for op in (
+                                        "memory.get",
+                                        "memory.set",
+                                        "memory.bulk_set",
+                                        "memory.search",
+                                    )
+                                    if (
+                                        selected := [
+                                            s
+                                            for s in samples
+                                            if s["role"] == role
+                                            and s["op"] == op
+                                            and s["phase"] == "measured"
+                                        ]
+                                    )
+                                }
+                                for role in ("main", "light")
+                            },
+                            "attempts": samples,
+                            "normal_load_errors": {
+                                "attempted": len(samples),
+                                "errors": {
+                                    error: sum(s.get("error") == error for s in samples)
+                                    for error in sorted(
+                                        {s["error"] for s in samples if s.get("error")}
+                                    )
+                                },
+                                "lag_errors": {
+                                    code: sum(s.get("error") == "503:" + code for s in samples)
+                                    for code in ("PROJECTION_BEHIND", "PUBLICATION_PENDING")
+                                },
+                                "lag_error_rate": (
+                                    sum(
+                                        s.get("error")
+                                        in ("503:PROJECTION_BEHIND", "503:PUBLICATION_PENDING")
+                                        for s in samples
+                                    )
+                                    / len(samples)
+                                    if samples
+                                    else None
+                                ),
+                            },
+                            "ack_to_first_search_ms": {
+                                op: _summary(ms, {}) for op, ms in visibility.items()
+                            },
+                            "visibility_definition": (
+                                "ack to all first serial searches; bulk=two rows; no retry"
+                            ),
+                            "small_n_only": True,
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+
+    def latency_workers(self, srv: Server) -> dict[str, Any]:
+        assert srv.proc is not None and srv.web_workers == 2 and srv.workers == "off"
+        seen = {}
+        deadline = time.monotonic() + SETTLE_S
+        while len(seen) < 2 and time.monotonic() < deadline:
+            response = httpx.get(
+                f"{srv.url}/v1/health", headers={"Connection": "close"}, timeout=10
+            )
+            assert response.status_code == 200
+            health = response.json()
+            assert health.get("fake_embedding") is True and health.get("fake_llm") is True
+            assert health.get("storage_authority") == "clickhouse"
+            assert health.get("instance_label") == f"ci:mixed-version-{srv.name}"
+            pid = int(health["instance"].rsplit(":", 1)[1])
+            stat = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            assert_latency_worker(pid, srv.proc.pid, int(stat[1]), os.getpgid(pid))
+            assert health.get("participant_id")
+            policy = health["ratelimit"]
+            assert policy.get("web_workers") == 2 and not policy.get("error")
+            seen[pid] = {
+                "pid": pid,
+                "start_ticks": stat[19],
+                "participant_id": health["participant_id"],
+                "instance": health["instance"],
+                "ratelimit": {
+                    k: policy[k]
+                    for k in (
+                        "backend",
+                        "divisor",
+                        "replica_count",
+                        "replica_count_floor",
+                        "web_workers",
+                        "class_fractions",
+                    )
+                },
+            }
+            if len(seen) < 2:
+                time.sleep(0.01)
+        assert len(seen) == 2, "did not observe two actual owned web workers"
+        return {
+            "parent_pid": srv.proc.pid,
+            "server": srv.name,
+            "workers": list(seen.values()),
+            "tree": str(srv.tree),
+            "command": srv.proc.args,
+        }
+
+    def latency_census(
+        self, srv: Server, ident: dict[str, Any], token: str, expected: dict[str, Any]
+    ) -> None:
+        count = srv.call(token, "memory.list", {**ident, "count_only": True})
+        assert count.get("total") == len(expected), "fixture has extra/missing heads"
+        keys = list(expected)
+        for offset in range(0, len(keys), 64):
+            batch = keys[offset : offset + 64]
+            got = srv.call(token, "memory.bulk_get", {**ident, "memory_keys": batch})
+            assert not got.get("missing") and set(got.get("results", {})) == set(batch)
+            for key, row in got["results"].items():
+                assert_latency_current(row, expected[key])
 
     def ranking_neutrality(self, base: str, head: str) -> None:
         """Compare the real base and head readers over one immutable fake-vector corpus."""
@@ -1160,7 +1548,8 @@ def main(argv: list[str] | None = None) -> int:
             print("base restarts on head's schema")
             old.restart()
             nxt.start()
-            failures = Scenario(old, new, nxt, ch_port).run_all(ranking_sources=ranking_sources)
+            scenario = Scenario(old, new, nxt, ch_port, owned_servers=servers, owned_logs=work)
+            failures = scenario.run_all(ranking_sources=ranking_sources)
     except Exception:
         for s in servers:
             print(f"--- {s.name} log tail ---\n{s.tail()}")
