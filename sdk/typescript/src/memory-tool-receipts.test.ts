@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Agent } from "./agent.js";
 import { LoomClient } from "./client.js";
+import type { MemorySearchOutput } from "./generated/ops.js";
 import { Transport } from "./transport.js";
 
 function tools(reply: unknown, maxResultChars = 8000) {
@@ -15,6 +16,43 @@ function tools(reply: unknown, maxResultChars = 8000) {
 }
 
 describe("memory tool evidence", () => {
+  it.each([true, false])("separates governed authority from ordinary risk: %s", async (withGoverned) => {
+    const ordinary = {
+      memory_key: "ordinary",
+      memory_type: "semantic" as const,
+      content_excerpt: "Weak ordinary evidence",
+      distance: 0.8,
+      similarity: 0.2,
+      below_threshold: true,
+    };
+    const definition = {
+      memory_key: "definition/retry",
+      memory_type: "semantic" as const,
+      content_excerpt: "Retries require an idempotency key.",
+      distance: 0.9,
+      similarity: 0.1,
+      governed: true,
+    };
+    const reply = {
+      results: withGoverned ? [definition, ordinary] : [ordinary],
+      embedding_model: "fixture",
+      term_leg: "complete",
+      abstain: !withGoverned,
+      retrieval_risk: "abstain",
+      retrieval_confidence: 0.0,
+    } satisfies MemorySearchOutput;
+    const out = JSON.parse(await tools(reply).execute("loom_recall", { query: "retry policy" }));
+    expect(out).toMatchObject({
+      term_leg: "complete",
+      abstain: !withGoverned,
+      retrieval_risk: "abstain",
+      retrieval_confidence: 0.0,
+    });
+    if (withGoverned) expect(out.memories[0]).toMatchObject({ governed: true, similarity: 0.1 });
+    expect(out.memories.at(-1).governed ?? false).toBe(false);
+    expect(out.memories.at(-1).below_threshold).toBe(true);
+  });
+
   it.each([
     [{ memory_id: "new", content_sha256: "abc", status: "active" }, true],
     [

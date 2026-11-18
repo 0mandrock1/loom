@@ -140,6 +140,52 @@ async def test_recall_preserves_abstention_even_when_a_weak_hit_is_served() -> N
         await agent.close()
 
 
+@pytest.mark.parametrize("with_governed", [True, False])
+async def test_recall_distinguishes_governed_authority_from_ordinary_risk(
+    with_governed: bool,
+) -> None:
+    ordinary = _MemorySearchHit(
+        memory_key="ordinary",
+        memory_type="semantic",
+        content_excerpt="Weak ordinary evidence",
+        distance=0.8,
+        similarity=0.2,
+        below_threshold=True,
+    )
+    definition = _MemorySearchHit(
+        memory_key="definition/retry",
+        memory_type="semantic",
+        content_excerpt="Retries require an idempotency key.",
+        distance=0.9,
+        similarity=0.1,
+        governed=True,
+    )
+    reply = MemorySearchOutput(
+        results=[definition, ordinary] if with_governed else [ordinary],
+        embedding_model="fixture",
+        term_leg="complete",
+        abstain=not with_governed,
+        retrieval_risk="abstain",
+        retrieval_confidence=0.0,
+    ).model_dump()
+    agent, _ = _agent(reply)
+    try:
+        out = json.loads(await agent.tools().execute("loom_recall", {"query": "retry policy"}))
+        assert (
+            out["term_leg"],
+            out["abstain"],
+            out["retrieval_risk"],
+            out["retrieval_confidence"],
+        ) == ("complete", not with_governed, "abstain", 0.0)
+        if with_governed:
+            assert out["memories"][0]["governed"] is True
+            assert out["memories"][0]["similarity"] == 0.1
+        assert out["memories"][-1].get("governed", False) is False
+        assert out["memories"][-1]["below_threshold"] is True
+    finally:
+        await agent.close()
+
+
 async def test_recall_budget_never_slices_json_or_detaches_trust_metadata() -> None:
     reply = {
         "abstain": False,

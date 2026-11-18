@@ -155,7 +155,9 @@ async with agent.session("thread-42", user_id="u1") as s:
 `loom_remember` returns the server's receipt: `stored` confirms a persisted row, while
 `noop` and `merged_into_key` distinguish reuse of an existing fact. Conflicts retain their
 peers and next action. `loom_recall` preserves abstention, code freshness, row status,
-provenance and verification fields when the server supplies them. A missing attestation
+provenance and verification fields when the server supplies them. `retrieval_risk` and
+`retrieval_confidence` score non-governed hits; `governed` identifies authoritative
+definitions and `term_leg` reports the definition lookup status. A missing attestation
 is not verification. Memory results remain valid JSON: whole memories that do not fit are
 counted in `omitted`; metadata that cannot fit returns `insufficient` and
 `metadata_omitted`. A budget too small for that marker is rejected before the call.

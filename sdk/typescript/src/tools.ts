@@ -33,6 +33,7 @@ const RECALL_FIELDS = [
   "degraded",
   "retrieval_confidence",
   "retrieval_risk",
+  "term_leg",
   "fallback_budget_exhausted",
   "namespaces_searched",
   "namespaces_skipped",
@@ -52,6 +53,7 @@ const RECALL_HIT_FIELDS = [
   "valid_at",
   "created_at",
   "below_threshold",
+  "governed",
   "superseded_by",
   "superseded_at",
   "resolved_from",
@@ -129,7 +131,7 @@ const SPECS = [
   {
     name: "loom_recall",
     description:
-      "Search stored memories by meaning. Returns the closest facts with a similarity score; call before answering anything the user may have told you earlier. A result too long to return leaves out its lowest-ranked memories and counts them in omitted. Respect abstention, below_threshold, code_state and provenance; verified requires attestation.",
+      "Search stored memories by meaning. Returns the closest facts with a similarity score; call before answering anything the user may have told you earlier. A result too long to return leaves out its lowest-ranked memories and counts them in omitted. Respect abstention, below_threshold, code_state and provenance; verified requires attestation. retrieval_risk and retrieval_confidence apply only to non-governed hits.",
     parameters: {
       type: "object",
       properties: {

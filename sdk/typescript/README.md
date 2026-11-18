@@ -403,7 +403,9 @@ for (const call of completion.choices[0].message.tool_calls ?? []) {
 can correct. `loom_remember` preserves the server receipt, including no-op merges,
 canonical keys and conflict peers; `stored` confirms a persisted row. `loom_recall`
 preserves abstention, code freshness, row status, provenance and verification metadata
-when supplied. Memory results remain valid JSON under `maxResultChars`: whole omitted
+when supplied. `retrieval_risk` and `retrieval_confidence` score non-governed hits;
+`governed` identifies authoritative definitions and `term_leg` reports the definition
+lookup status. Memory results remain valid JSON under `maxResultChars`: whole omitted
 memories are counted in `omitted`, and metadata that cannot fit returns `insufficient`
 and `metadata_omitted`. A budget too small for that marker is rejected before the call.
 Other tools truncate oversized text.
