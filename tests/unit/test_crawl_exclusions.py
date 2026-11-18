@@ -332,3 +332,17 @@ async def test_lost_refusal_write_cannot_release_the_completed_cleanup_fence(
     assert next(iter(world.keeper.values())).startswith("blocked:")
     with pytest.raises(VendorError):
         await exclusions.Index.open("org", ch=world)
+
+
+@pytest.mark.parametrize("generation", ["active", "blocked", "initializing"])
+async def test_missing_registry_cannot_replace_a_surviving_keeper_generation(
+    monkeypatch: pytest.MonkeyPatch, generation: str
+) -> None:
+    world = _World(monkeypatch)
+    fence = exclusions._fence("org")
+    world.keeper[fence] = generation + ":retained-key:retained-generation"
+    before = copy.deepcopy((world.keys, world.rows, world.keeper, world.version))
+    with pytest.raises(VendorError, match="key unavailable"):
+        await world.start()
+    assert (world.keys, world.rows, world.keeper, world.version) == before
+    assert not world.cleaned and not world.held

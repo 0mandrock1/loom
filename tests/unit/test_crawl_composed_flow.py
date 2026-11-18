@@ -63,6 +63,7 @@ class _World(_CrawlWorld, _PublicationWorld):
         monkeypatch.setattr(reads.mirrors_repo, "mirrors_of", self.mirror_rows)
         monkeypatch.setattr(reads.pg, "enabled", lambda: False)
         monkeypatch.setattr(source_store, "every_copy", self.every_copy)
+        monkeypatch.setattr(source_store, "read_states", self.read_states)
         monkeypatch.setattr(documents, "publications_owed", self.publications_owed)
         monkeypatch.setattr(private_sync, "write_private_cost_event_for", self.cost_event)
 
@@ -88,6 +89,20 @@ class _World(_CrawlWorld, _PublicationWorld):
         assert self.source is not None
         assert (org, mirror, tag) == ("team", _MIRROR, "source-id:" + self.source.source_id)
         return []
+
+    async def read_states(self, org: str, namespace: str, names: list[str]):
+        assert self.source is not None and org == "team"
+        assert (namespace, names) in (
+            (_MIRROR, [self.source.source_id]),
+            (self.source.namespace, [self.source.name]),
+        )
+        found = {}
+        for row in self.states:
+            if row["namespace"] == namespace:
+                for name in names:
+                    if row["state_key"] == source_store.state_key(name):
+                        found[name] = {"state_value": row["state_value"], "detail": row["detail"]}
+        return found
 
     async def publications_owed(self, org: str, mirror: str, suffix: str) -> bool:
         assert self.source is not None
