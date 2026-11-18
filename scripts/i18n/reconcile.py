@@ -150,9 +150,13 @@ def _matches(old_text, unit, current, boundaries):
     ]
 
 
-def _new_gap(source, start, end):
+def _new_gap(source, start, end, bounded_new_request_bytes):
     scope = SourceContext(source.path, source.english, start, end)
-    pieces = chunks.split(source.english[start:end], source_context=scope)
+    pieces = chunks.split(
+        source.english[start:end],
+        source_context=scope,
+        bounded_new_request_bytes=bounded_new_request_bytes,
+    )
     planned = []
     for piece in pieces:
         planned.append(
@@ -172,6 +176,7 @@ def reconcile_completed_units(
     unit_manifest_sha256: str,
     faults: tuple[UnitFault, ...] = (),
     pair_refused: bool = False,
+    bounded_new_request_bytes: int = chunks.MAX_BYTES,
 ) -> Reconciliation:
     """Keep unique monotone whole units; bound only genuine new gaps and replacements.
 
@@ -181,6 +186,7 @@ def reconcile_completed_units(
     Incomplete gaps use the bounded planner outside retained completed ranges.
     Changed input carries fault IDs but must never replay an old-input assistant.
     """
+    chunks.validate_request_bound(bounded_new_request_bytes)
     if pair_refused:
         return _failure(current, "refusal", "locale/source pair is refused across source versions")
     if problem := _history_problem(historical, current, units, faults, unit_manifest_sha256):
@@ -226,10 +232,21 @@ def reconcile_completed_units(
         return _failure(
             current, "whole_page_replacement", "a completed whole page cannot be replaced", units
         )
-    return _plan(historical, current, units, anchors, cuts, fault_ids, unit_manifest_sha256)
+    return _plan(
+        historical,
+        current,
+        units,
+        anchors,
+        cuts,
+        fault_ids,
+        unit_manifest_sha256,
+        bounded_new_request_bytes,
+    )
 
 
-def _plan(historical, current, units, anchors, cuts, fault_ids, manifest_sha256):
+def _plan(
+    historical, current, units, anchors, cuts, fault_ids, manifest_sha256, bounded_new_request_bytes
+):
     planned, removed = [], []
     left_index, left_end = -1, 0
     for index, start, end in [*anchors, (len(units), len(current.english), 0)]:
@@ -269,7 +286,7 @@ def _plan(historical, current, units, anchors, cuts, fault_ids, manifest_sha256)
             scope = SourceContext(current.path, current.english, gap_start, gap_end)
             if completed:
                 original = completed[0]
-                if len(current.english[gap_start:gap_end].encode()) > chunks.MAX_BYTES:
+                if len(current.english[gap_start:gap_end].encode()) > bounded_new_request_bytes:
                     return _failure(
                         current,
                         "boundary",
@@ -281,7 +298,7 @@ def _plan(historical, current, units, anchors, cuts, fault_ids, manifest_sha256)
                 )
             else:
                 try:
-                    planned.extend(_new_gap(current, gap_start, gap_end))
+                    planned.extend(_new_gap(current, gap_start, gap_end, bounded_new_request_bytes))
                 except ValueError as error:
                     return _failure(current, "boundary", str(error))
         else:
@@ -289,7 +306,7 @@ def _plan(historical, current, units, anchors, cuts, fault_ids, manifest_sha256)
         if index < len(units):
             original = units[index]
             ids = fault_ids[original.reply_ref]
-            if ids and len(current.english[start:end].encode()) > chunks.MAX_BYTES:
+            if ids and len(current.english[start:end].encode()) > bounded_new_request_bytes:
                 return _failure(
                     current,
                     "boundary",
