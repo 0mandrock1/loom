@@ -25,7 +25,7 @@ SID = "11111111-1111-4111-8111-111111111111"
 @pytest.fixture
 def world(monkeypatch):
     now = datetime(2025, 1, 1, tzinfo=UTC)
-    state = SimpleNamespace(allowed=True, marked=True)
+    state = SimpleNamespace(allowed=True, marked=True, denied=set())
     plan = ReadPlan(
         "acme", marked=True, sources={(NS, SID): "team"}, listing_starts={(NS, SID): now}
     )
@@ -64,7 +64,15 @@ def world(monkeypatch):
     }
 
     async def check(candidates):
-        return [items[r["source_uri"]] for r in candidates] if state.allowed else []
+        return (
+            [
+                items[r["source_uri"]]
+                for r in candidates
+                if r["source_uri"].split("#", 1)[0] not in state.denied
+            ]
+            if state.allowed
+            else []
+        )
 
     async def prepare(org, namespaces):
         assert org == "acme" and namespaces == ["team"]
@@ -179,3 +187,44 @@ async def test_execution_refuses_another_orgs_plan_before_any_document_read(worl
         await app.run_checked_list(recipe, ReadPlan("another-org"))
     documents.list_with_chunk_counts.assert_not_awaited()
     source_listing.collect.assert_not_awaited()
+
+
+async def test_unused_mirror_beyond_merged_page_and_lookahead_cannot_invalidate_page(world):
+    state, _plan, ordinary = world
+    ordinary[0]["ingested_at"] += timedelta(seconds=19, milliseconds=500)
+    checked = await app.checked_knowledge_list(
+        KnowledgeListInput(org="acme", namespace="team", limit=1)
+    )
+    assert checked.output.rows[0].source_uri == "gdrive:0" and checked.output.next_cursor
+    state.denied.add("gdrive:1")
+    assert await checked.current() is checked.output
+    assert checked.output.rows[0].source_uri == "gdrive:0" and not checked.lost
+
+
+async def test_private_cursor_lookahead_is_still_a_dependency(world):
+    state, _plan, _ordinary = world
+    checked = await app.checked_knowledge_list(
+        KnowledgeListInput(org="acme", namespace="team", limit=1)
+    )
+    assert checked.output.rows[0].source_uri == "gdrive:0" and checked.output.next_cursor
+    state.denied.add("gdrive:1")
+    output = await checked.current()
+    assert checked.lost and output.rows[0].source_uri == "ordinary:0"
+
+
+@pytest.mark.parametrize("shadow", [False, True])
+async def test_wholly_ordinary_page_and_cursor_retain_no_displaced_mirror(world, shadow):
+    state, plan, ordinary = world
+    if shadow:
+        ordinary[0]["source_uri"] = "gdrive:0"
+    for row in ordinary:
+        row["ingested_at"] += timedelta(seconds=100)
+    checked = await app.checked_knowledge_list(request())
+    assert checked.proofs is None
+    assert [row.source_uri for row in checked.output.rows] == [
+        row["source_uri"] for row in ordinary[:2]
+    ]
+    state.allowed = False
+    count = plan.check.await_count
+    assert await checked.current() is checked.output and not checked.lost
+    assert plan.check.await_count == count

@@ -322,14 +322,20 @@ async def _dispatch_batch(
             # the published identity on every span: drop the previous entry's
             # before this entry's span opens. Each entry publishes its own.
             genai.set_identity()
-            with traced("mcp.batch.entry", rpc_method=method, batch_index=i):
-                resp = await dispatch(req)
-            if request_work.mirror_marked():
-                if resp is not None and len(payload) > 1:
-                    resp = _err(resp.get("id"), INVALID_REQUEST, "Send this request individually")
-                await request_tail.drain_required()
-            if resp is not None:
-                responses.append(resp)
+            with request_tail.publication_group() as publication:
+                with traced("mcp.batch.entry", rpc_method=method, batch_index=i):
+                    resp = await dispatch(req)
+                marked = request_work.mirror_marked()
+                if marked:
+                    if resp is not None and len(payload) > 1:
+                        resp = _err(
+                            resp.get("id"), INVALID_REQUEST, "Send this request individually"
+                        )
+                    await request_tail.drain_required()
+                if resp is not None:
+                    if not marked or len(payload) == 1:
+                        publication.commit()
+                    responses.append(resp)
     return responses
 
 
@@ -451,8 +457,11 @@ def attach(app: FastAPI) -> None:
             responses = await _dispatch_batch(payload, _dispatch)
             return responses if responses else _accepted(response)
 
-        resp = await _dispatch(payload)
-        return resp if resp is not None else _accepted(response)
+        with request_tail.publication_group() as publication:
+            resp = await _dispatch(payload)
+            if resp is not None:
+                publication.commit()
+            return resp if resp is not None else _accepted(response)
 
     @router.delete("/mcp", summary="MCP session end: close the session's run")
     async def mcp_session_end(request: Request, response: Response) -> Any:

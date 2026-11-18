@@ -58,7 +58,8 @@ def world(monkeypatch):
 
     session = SimpleNamespace(
         finish=finish,
-        proofs=SimpleNamespace(check=AsyncMock(), mirrored=True),
+        proofs=SimpleNamespace(check=AsyncMock(), fresh=lambda: True, mirrored=True),
+        restrict_proofs=lambda selected: collected.append(selected),
         ordinary=lambda: [[hit("private")], [hit("public")]],
     )
 
@@ -112,7 +113,7 @@ async def test_source_participation_is_prepared_before_query_embedding_and_provi
     out = await app.handle_knowledge_search(request)
     assert phases.index("namespaces") < phases.index("prepare") < phases.index("embed")
     assert phases.index("finish") < phases.index("rerank")
-    assert counts == [["private"], ["public"]] and collected == [session]
+    assert counts == [["private"], ["public"]] and collected == [session, _final]
     assert {item.content for item in out.results} == {"private", "public"}
     assert out.stale_dropped == 9
 

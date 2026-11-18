@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
-from contextvars import ContextVar
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import Context, ContextVar, copy_context
 from typing import Any
 
 import anyio
@@ -22,6 +23,12 @@ class RequiredTailError(RuntimeError):
         super().__init__("Required request work was not confirmed")
 
 
+_Publication = tuple[object, Context, Callable[[], Awaitable[Any]], Callable[[], bool]]
+_publication_group: ContextVar[dict[int, _Publication] | None] = ContextVar(
+    "loom_publication_group", default=None
+)
+
+
 class _Tail:
     __slots__ = (
         "closed",
@@ -30,6 +37,7 @@ class _Tail:
         "keys",
         "lock",
         "required_failed",
+        "publications",
         "steps",
     )
 
@@ -41,6 +49,7 @@ class _Tail:
         self.has_required = False
         self.required_failed = False
         self.lock = asyncio.Lock()
+        self.publications: dict[int, _Publication] = {}
 
 
 _tail: ContextVar[_Tail | None] = ContextVar("loom_request_tail", default=None)
@@ -100,6 +109,108 @@ def defer_required(step: Callable[[], Awaitable[Any]]) -> bool:
     tail.has_required = True
     tail.steps.append((current_query_tag(), step, True))
     return True
+
+
+class _PublicationGroup:
+    def __init__(self, tail: _Tail | None, parent: dict[int, _Publication] | None) -> None:
+        self.tail, self.parent = tail, parent
+        self.entries: dict[int, _Publication] = {}
+
+    def commit(self) -> None:
+        """Keep a branch's selected frame; abandoned branches retain no guards."""
+        if self.tail is None:
+            return
+        if self.tail.closed or self.parent is None:
+            raise RequiredTailError()
+        self.parent.update(self.entries)
+
+
+@contextmanager
+def publication_group() -> Iterator[_PublicationGroup]:
+    tail = _tail.get()
+    parent = _publication_group.get()
+    if parent is None and tail is not None:
+        parent = tail.publications
+    group = _PublicationGroup(tail, parent)
+    token = _publication_group.set(group.entries)
+    try:
+        yield group
+    finally:
+        _publication_group.reset(token)
+
+
+def retain_publication(
+    owner: object, check: Callable[[], Awaitable[Any]], fresh: Callable[[], bool]
+) -> bool:
+    """Retain strict final-response evidence in its original authorization context."""
+    tail = _tail.get()
+    if tail is None:
+        return False
+    if tail.closed:
+        raise RequiredTailError()
+    target = _publication_group.get()
+    if target is None:
+        target = tail.publications
+    target[id(owner)] = (owner, copy_context(), check, fresh)
+    return True
+
+
+def discard_publication(owner: object) -> None:
+    """Forget evidence when its whole private contribution was discarded."""
+    tail = _tail.get()
+    if tail is not None and not tail.closed:
+        target = _publication_group.get()
+        if target is None:
+            target = tail.publications
+        target.pop(id(owner), None)
+
+
+async def _publication_check(context: Context, check: Callable[[], Awaitable[Any]]) -> None:
+    async def renew() -> None:
+        deadline = min(
+            REQUIRED_STEP_TIMEOUT_S,
+            class_timeout_s("read") or REQUIRED_STEP_TIMEOUT_S,
+        )
+        with query_tag("knowledge.mirror.publication"), statement_timeout(deadline):
+            async with asyncio.timeout(REQUIRED_STEP_TIMEOUT_S):
+                await check()
+
+    # The handler's auth context has unwound by ASGI publication time.
+    task = asyncio.eager_task_factory(
+        asyncio.get_running_loop(),
+        renew(),
+        context=context.copy(),
+        name="request.publication-proof",
+    )
+    caller = asyncio.current_task()
+    cancellations = caller.cancelling() if caller is not None else 0
+    try:
+        await task
+    except asyncio.CancelledError:
+        if caller is not None and caller.cancelling() > cancellations:
+            raise
+        raise RequiredTailError() from None
+    except Exception:  # noqa: BLE001 — strict renewal exposes no private backend detail
+        raise RequiredTailError() from None
+
+
+async def _publication_barrier(tail: _Tail) -> None:
+    """Renew retained inputs after accounting and after each awaited send boundary."""
+    if not tail.publications:
+        return
+    checks = tuple(tail.publications.values())
+    try:
+        for _owner, context, check, _fresh in checks:
+            await _publication_check(context, check)
+        # A later renewal can outlive an earlier proof's deadline.
+        if not all(context.run(fresh) for _owner, context, _check, fresh in checks):
+            raise RequiredTailError()
+    except Exception:  # noqa: BLE001 — publication failures expose only a constant refusal
+        tail.required_failed = True
+        raise RequiredTailError() from None
+    except BaseException:
+        tail.required_failed = True
+        raise
 
 
 async def _required_step(tail: _Tail, tag: str, step: Callable[[], Awaitable[Any]]) -> None:
@@ -260,6 +371,9 @@ class RequestTailMiddleware:
         async def _send(message: dict[str, Any]) -> None:
             if message.get("type") == "http.response.start":
                 await settle(tail)
+                await _publication_barrier(tail)
+            elif message.get("type") == "http.response.body":
+                await _publication_barrier(tail)
             await send(message)
 
         try:
@@ -285,6 +399,9 @@ __all__ = [
     "defer",
     "defer_once",
     "defer_required",
+    "publication_group",
+    "retain_publication",
+    "discard_publication",
     "deferred",
     "drain_required",
     "required_active",

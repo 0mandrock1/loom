@@ -18,12 +18,13 @@ from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Literal
 
+from server.core import request_tail
 from server.core.ch import set_query_tag
 from server.core.diagnostics import private_work
 from server.core.errors import LoomServerError, caller_text
 from server.identity.app.request_scope import request_scope
 from server.identity.domain.read_scope import ReadFilters
-from server.knowledge.app import repo_docs
+from server.knowledge.app import repo_docs, source_publication
 from server.knowledge.app.source_access import ReadPlan, prepare
 from server.memory.api.models_search import MemorySearchInput, _MemorySearchHit
 from server.memory.app.agent_rules import request_rule_agent, served_hits
@@ -279,6 +280,8 @@ async def _knowledge_section(
     initial = await _filtered_knowledge(first.output, expanded, agent, top_k)
     if wider is None and widening_error is None:
         if first.fresh():
+            for proof in first.publication_proofs:
+                source_publication.retain(proof)
             return initial
         return await _ordinary_knowledge(first, None, agent)
     await first.current()
@@ -299,7 +302,20 @@ async def _knowledge_section(
     final = await _filtered_knowledge(first.output, cached, agent, top_k)
     if not first.fresh() or (used_wider and wider is not None and not wider.fresh()):
         return await _ordinary_knowledge(first, wider, agent)
+    for result in (first, wider) if used_wider and wider is not None else (first,):
+        for proof in result.publication_proofs:
+            source_publication.retain(proof)
     return final
+
+
+async def _published_knowledge(
+    first: repo_docs.RepoSearch, plan: ReadPlan, agent: str
+) -> dict[str, Any]:
+    with request_tail.publication_group() as publication:
+        section = await _knowledge_section(first, plan, agent)
+        # answer_first retains section metadata and counts withheld hits.
+        publication.commit()
+        return section
 
 
 async def search_sections(
@@ -421,7 +437,7 @@ async def search_sections(
             payload["memory"] = drop_flagged_hits(memory)
         if not isinstance(know_result, Exception):
             try:
-                payload["knowledge"] = await _knowledge_section(know_result, plan, agent)
+                payload["knowledge"] = await _published_knowledge(know_result, plan, agent)
             except Exception as error:  # noqa: BLE001 — a failed knowledge renewal leaves other sections available
                 know_result = error
         if isinstance(know_result, Exception):

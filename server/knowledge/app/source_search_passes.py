@@ -61,6 +61,14 @@ class SearchPasses:
     def ordinary(self) -> list[list[RankedHit]]:
         return [[RankedHit(hit) for hit in selected.fallback] for selected in self._passes]
 
+    def restrict_proofs(self, selected: list[list[RankedHit]]) -> None:
+        """Discard a prepared route that contributes neither ranking nor provider input."""
+        self.proofs = SearchProofs(
+            self.plan,
+            self._model,
+            tuple(item.admitted for pool in selected for item in pool if item.admitted is not None),
+        )
+
     async def collect(
         self,
         query: HybridSearchQuery,

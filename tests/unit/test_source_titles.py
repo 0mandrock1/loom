@@ -1,4 +1,4 @@
-"""Inspection title legs expose admitted scalars and never run document diagnostics."""
+"""Inspection titles retain private evidence without reading document diagnostics."""
 
 from __future__ import annotations
 
@@ -68,6 +68,7 @@ async def test_title_leg_exposes_only_public_scalar_identity(world):
     assert titles[0].title == "Title 0" and titles[0].format == "markdown"
     assert titles[0].source_scheme == "(none)" and titles[0].source_revision == "r1"
     assert (titles[0].version, titles[0].revision, titles[0].ingested_at) == (11, 0, NOW)
+    assert titles[0].proof.plan is world[0]
     assert set(vars(titles[0])) == {
         "source_uri",
         "title",
@@ -77,6 +78,7 @@ async def test_title_leg_exposes_only_public_scalar_identity(world):
         "version",
         "revision",
         "ingested_at",
+        "proof",
     }
     store.list_projection.assert_not_awaited()
     store.list_chunk_count.assert_not_awaited()

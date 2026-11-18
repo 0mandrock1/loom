@@ -688,10 +688,18 @@ def test_a_dropped_policy_reads_nothing_and_is_written_again(
     statement = _policy(ch_client, table)
     ch_client.command(f"DROP ROW POLICY `{boundary.POLICY_NAME}` ON loom.{table}")
     try:
-        r = _query(control_plane_url, seed, "SELECT DISTINCT org FROM loom.analysis_agent_events")
+        sql = (
+            "SELECT memory_key, org, namespace FROM loom.memory"
+            if table == "memory"
+            else "SELECT DISTINCT org FROM loom.analysis_agent_events"
+        )
+        r = _query(control_plane_url, seed, sql)
         assert r.status_code in {200, 503}, r.text
         if r.status_code == 200 and hidden:
-            assert r.json()["rows"] in ([], [[seed.org_a]]), r.text
+            if table == "memory":
+                _assert_contained(r, seed)
+            else:
+                assert r.json()["rows"] in ([], [[seed.org_a]]), r.text
         _probed_until(
             control_plane_url,
             seed,

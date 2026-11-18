@@ -55,10 +55,10 @@ def world(monkeypatch):
 
 
 async def test_private_titles_are_never_shared_with_a_second_reader_by_the_namespace_cache(world):
-    _ns, first = await repo_docs.list_repo_docs("acme", "code-kj")
+    first = (await repo_docs.list_repo_docs("acme", "code-kj")).docs
     assert first[0]["title"] == "Current private title"
     world.allowed = False
-    _ns, second = await repo_docs.list_repo_docs("acme", "code-kj")
+    second = (await repo_docs.list_repo_docs("acme", "code-kj")).docs
     assert second == []
     assert repo_docs._LIST_CACHE == {}
     assert world.phases == ["resolve", "prepare", "list"] * 2
@@ -70,7 +70,7 @@ async def test_private_titles_are_never_shared_with_a_second_reader_by_the_names
 async def test_marked_listing_reads_neither_a_positive_nor_a_negative_cached_page(world, cached):
     key = ("acme", "code-kj", repo_docs.DOCS_SECTION_MAX_DOCS)
     repo_docs._LIST_CACHE[key] = (float("inf"), cached)
-    _ns, docs = await repo_docs.list_repo_docs("acme", "code-kj")
+    docs = (await repo_docs.list_repo_docs("acme", "code-kj")).docs
     assert docs == [
         {
             "source_uri": "gdrive:file",
@@ -89,7 +89,7 @@ async def test_unread_mirror_preparation_never_falls_back_to_cached_private_titl
         [{"source_uri": "old", "title": "Old private title", "description": ""}],
     )
     world.unread = True
-    assert await repo_docs.list_repo_docs("acme", "code-kj") == ("code-kj", [])
+    assert await repo_docs.list_repo_docs("acme", "code-kj") == repo_docs.RepoListing("code-kj", [])
     assert world.phases == ["resolve", "prepare", "list"]
 
 
@@ -97,7 +97,7 @@ async def test_ordinary_cache_still_prepares_the_current_caller_before_each_cach
     world.marked = False
     first = await repo_docs.list_repo_docs("acme", "code-kj")
     assert first == await repo_docs.list_repo_docs("acme", "code-kj")
-    assert first[1][0]["title"] == "Ordinary title"
+    assert first.docs[0]["title"] == "Ordinary title"
     assert world.phases == ["resolve", "prepare", "list", "resolve", "prepare"]
 
 
@@ -106,7 +106,9 @@ async def test_preparation_is_inside_the_additive_listing_timeout(world, monkeyp
         await asyncio.Future()
 
     monkeypatch.setattr(source_access, "prepare", AsyncMock(side_effect=wait))
-    assert await repo_docs.list_repo_docs("acme", "code-kj", timeout_s=0.01) == ("code-kj", [])
+    assert await repo_docs.list_repo_docs(
+        "acme", "code-kj", timeout_s=0.01
+    ) == repo_docs.RepoListing("code-kj", [])
     assert repo_docs._LIST_CACHE == {}
 
 
@@ -119,7 +121,9 @@ async def test_private_failure_details_do_not_escape_the_additive_logger(
         AsyncMock(side_effect=ValueError("PRIVATE-SOURCE-CONTENT")),
     )
     with caplog.at_level("INFO", logger="loom.repo_docs"):
-        assert await repo_docs.list_repo_docs("acme", "code-kj") == ("code-kj", [])
+        assert await repo_docs.list_repo_docs("acme", "code-kj") == repo_docs.RepoListing(
+            "code-kj", []
+        )
     assert "PRIVATE-SOURCE-CONTENT" not in caplog.text
     assert repo_docs._LIST_CACHE == {}
 
@@ -186,7 +190,7 @@ async def test_permission_expiry_during_timeout_cleanup_returns_the_complete_ord
     monkeypatch.setattr(document_reads, "run_checked_list", run)
     monkeypatch.setattr(source_documents, "ordinary_families", AsyncMock(return_value=set()))
     monkeypatch.setattr(repo_docs.asyncio, "timeout", timeout)
-    assert await repo_docs.list_repo_docs("acme", "code-kj", limit=1) == (
+    assert await repo_docs.list_repo_docs("acme", "code-kj", limit=1) == repo_docs.RepoListing(
         "code-kj",
         [
             {

@@ -269,3 +269,89 @@ async def test_cancelled_entry_drain_joins_its_commit_before_propagating(bag):
             pending.cancel()
         await asyncio.gather(pending, return_exceptions=True)
         await request_tail.settle(bag.tail)
+
+
+@pytest.mark.parametrize("shape", ["one", "multi", "notification"])
+async def test_only_a_retained_single_frame_renews_its_publication_dependencies(bag, shape):
+    checks, commits = [], []
+
+    async def check():
+        checks.append("private")
+
+    async def commit():
+        commits.append("event")
+
+    async def dispatch(entry):
+        if entry.get("id") == 2:
+            return frame(2, {"ordinary": True})
+        assert request_work.mark_mirrored()
+        assert request_tail.defer_required(commit)
+        request_tail.retain_publication(object(), check, lambda: True)
+        return None if "id" not in entry else frame(1, {"private": True})
+
+    entries = [request(1)]
+    if shape == "multi":
+        entries.append(request(2))
+    elif shape == "notification":
+        entries[0].pop("id")
+    result = await mcp._dispatch_batch(entries, dispatch)
+    assert commits == ["event"]
+    await request_tail.settle(bag.tail)
+    await request_tail._publication_barrier(bag.tail)
+    assert checks == (["private"] if shape == "one" else [])
+    assert ("private" in json.dumps(result)) is (shape == "one")
+
+
+@pytest.mark.parametrize("notification", [False, True])
+async def test_single_endpoint_keeps_response_proofs_and_discards_notification_proofs(
+    monkeypatch, notification
+):
+    from fastapi import Request, Response
+
+    routers = []
+    mcp.attach(SimpleNamespace(include_router=routers.append))
+    endpoint = next(route.endpoint for route in routers[0].routes if route.path == "/mcp")
+    live, captured, sent = [True], [], []
+
+    async def check():
+        if not live[0]:
+            raise ValueError("private-access-changed")
+
+    async def commit():
+        captured.append("event")
+        live[0] = False
+
+    async def dispatch(req, *_args, **_kwargs):
+        request_work.begin()
+        assert request_work.mark_mirrored()
+        request_tail.retain_publication(object(), check, lambda: live[0])
+        assert request_tail.defer_required(commit)
+        return None if "id" not in req else frame(1, {"private": True})
+
+    monkeypatch.setattr(mcp, "_effective_auth_mode", lambda: "open")
+    monkeypatch.setattr(mcp, "_verify_bearer", lambda _request: None)
+    monkeypatch.setattr(mcp, "_handle_request", dispatch)
+    payload = request(1, "ping")
+    if notification:
+        payload.pop("id")
+
+    async def receive():
+        return {"type": "http.request", "body": json.dumps(payload).encode()}
+
+    async def app(scope, _receive, send):
+        await endpoint(Request(scope, receive), Response())
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"constant"})
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "method": "POST", "path": "/mcp", "headers": [], "query_string": b""}
+    if notification:
+        await request_tail.RequestTailMiddleware(app)(scope, None, send)
+        assert len(sent) == 2
+    else:
+        with pytest.raises(request_tail.RequiredTailError):
+            await request_tail.RequestTailMiddleware(app)(scope, None, send)
+        assert sent == []
+    assert captured == ["event"]

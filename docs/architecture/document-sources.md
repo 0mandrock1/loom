@@ -579,14 +579,17 @@ keep their existing read-availability policy.
 A checked answer retains its access proofs through required policy witnesses and
 other work that must finish before publication. All provider work for its complete
 ordinary alternative finishes before cost and event snapshots. After required tail
-work, publication renews access and constructs the whole selected answer again without
-a provider call. A lost proof discards the whole affected selection or generation;
-removing a citation from private prose is insufficient. After awaiting the response
-headers, publication renews access again before sending the body and reconstructs the
-whole frame without a provider call if the selected answer changes. A checked-proof
-or publication failure after headers aborts with the constant checked-stream failure
-and sends no unchecked body. Cancellation and disconnects still propagate through
-owned cleanup. These checks end at the server's response-send boundary.
+work, publication renews the exact private dependencies of the already selected frame
+and checks every retained deadline after the last renewal await. This boundary does
+not render, rerank, call a provider or choose an ordinary alternative. A lost proof
+refuses the whole frame; removing a citation from private prose is insufficient.
+After awaiting the response headers, publication renews access again before sending
+the body. A checked-proof or publication failure after headers aborts with a constant
+failure and sends no unchecked body. Discarded candidate widths and optional sections
+retain no publication guard; returned metadata, counts and cursor lookahead retain
+their contributing proofs. A raw download owns the same required marked accounting
+attempt as a registered operation. Cancellation and disconnects still propagate
+through owned cleanup. These checks end at the server's response-send boundary.
 
 A multi-entry MCP batch refuses every response-bearing marked entry with the same
 instruction to send it individually, including denied and empty entries. Notifications

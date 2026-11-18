@@ -372,6 +372,11 @@ async def _answer_with_knowledge(
             result = await owned_attempt(generate(block, hits, knowledge))
             if not knowledge.fresh():
                 raise LostCorpus()
+            from server.knowledge.app import source_publication
+
+            if knowledge.passages is not None:
+                for proof in knowledge.passages.publication_proofs():
+                    source_publication.retain(proof)
             return result
         except LostCorpus:
             block, hits = await knowledge.ordinary()

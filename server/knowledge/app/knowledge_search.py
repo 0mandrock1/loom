@@ -23,6 +23,7 @@ from server.knowledge.api.models_knowledge import (
     _SearchHit,
 )
 from server.knowledge.app import gaps as gaps_app
+from server.knowledge.app import source_publication
 from server.knowledge.app.readable import readable_namespaces
 from server.knowledge.app.source_access import ReadPlan
 from server.knowledge.app.source_corpus import LostCorpus
@@ -130,6 +131,7 @@ class CheckedSearch:
         if self._failed:
             raise LostCorpus()
         if self.proofs is not None:
+            source_publication.discard(self.proofs)
             self.proofs, self.lost = None, True
             try:
                 self.output = await self._renderer.render(self._ordinary, self._ordinary_dropped)
@@ -165,7 +167,9 @@ class SearchRequest:
 
 
 async def handle_knowledge_search(input: KnowledgeSearchInput) -> KnowledgeSearchOutput:
-    return (await checked_knowledge_search(input)).output
+    checked = await checked_knowledge_search(input)
+    source_publication.retain(checked.proofs)
+    return checked.output
 
 
 async def resolve_search(input: KnowledgeSearchInput) -> SearchRequest:
@@ -476,7 +480,9 @@ async def _search_marked(
         await search(names)
         counts.append(dropped.count - before)
 
-    def selected(passes: list[list[RankedHit]]) -> tuple[list[tuple[str, list[ChunkHit]]], int]:
+    def selected(
+        passes: list[list[RankedHit]],
+    ) -> tuple[list[tuple[str, list[ChunkHit]]], int, int]:
         if len(passes) > 1:
             first = [(item.chunk.namespace, [item.chunk]) for item in passes[0]]
             if best_similarity(first, not_noise()) >= PRIVATE_HIT_THRESHOLD:
@@ -485,10 +491,12 @@ async def _search_marked(
         for pool in passes:
             for item in pool:
                 by_ns.setdefault(item.chunk.namespace, []).append(item.chunk)
-        return list(by_ns.items()), sum(counts[: len(passes)])
+        return list(by_ns.items()), sum(counts[: len(passes)]), len(passes)
 
-    final, dropped.count = selected(await checked.finish())
-    ordinary, ordinary_dropped = selected(checked.ordinary())
+    finished = await checked.finish()
+    final, dropped.count, used = selected(finished)
+    checked.restrict_proofs(finished[:used])
+    ordinary, ordinary_dropped, _ = selected(checked.ordinary())
     return final, ordinary, ordinary_dropped
 
 

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from server.auth.reader_identity import ReaderIdentity
+from server.core import request_tail
 from server.knowledge.api.models_knowledge import KnowledgeSearchOutput, _SearchHit
-from server.knowledge.app import source_access
+from server.knowledge.app import source_access, source_publication
 from server.knowledge.app.knowledge_search import CheckedSearch
 from server.knowledge.app.search import ChunkHit
 from server.knowledge.app.source_passages import CheckedPassages
@@ -225,8 +227,8 @@ async def test_cpu_render_deadline_crossing_discards_the_whole_mixed_pack(world,
     render = context_pack._render_checked_pack
     calls = []
 
-    def expire(prefix, stack_output, hits):
-        output = render(prefix, stack_output, hits)
+    def expire(prefix, stack_output, hits, **kwargs):
+        output = render(prefix, stack_output, hits, **kwargs)
         calls.append(output.rendered)
         if len(calls) == 1:
             world.clock.at += timedelta(seconds=6)
@@ -268,3 +270,66 @@ async def test_optional_renderer_failure_discards_its_partial_mutation(world, mo
     assert actual.sections["profile"] == "ordinary profile"
     assert actual.section_meta["profile"]["source_count"] == 1
     assert actual.section_count == 2
+
+    async def app(scope, receive, send):
+        for proof in checked.publication_proofs():
+            source_publication.retain(proof)
+        world.state.revoked.add("stack" if section == "memory_stack" else "direct")
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": actual.model_dump_json().encode()})
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    await request_tail.RequestTailMiddleware(app)({"type": "http"}, None, send)
+    assert "partial private section" not in sent[-1]["body"].decode()
+
+
+@pytest.mark.parametrize("pool", ["direct", "stack"])
+@pytest.mark.parametrize("change", ["access", "version", "chunk"])
+async def test_accounting_wait_cannot_publish_a_mixed_pack_after_either_pool_changes(
+    world, monkeypatch, pool, change
+):
+    sent = []
+    namespace = "acl-" + ("1" if pool == "direct" else "2") * 24
+
+    async def revoke():
+        if change == "access":
+            world.state.revoked.add(pool)
+        elif change == "version":
+            original = world.plan.check
+
+            async def updated(candidates, **kwargs):
+                return [
+                    replace(item, document={**item.document, "version": 11})
+                    if item.candidate["namespace"] == namespace
+                    else item
+                    for item in await original(candidates, **kwargs)
+                ]
+
+            monkeypatch.setattr(world.plan, "check", updated)
+        else:
+
+            async def gone(org, model, wanted):
+                return [key for key in wanted if key[0] != namespace]
+
+            monkeypatch.setattr(source_candidates, "chunk_keys", gone)
+
+    async def app(scope, receive, send):
+        checked = world.build()
+        output = await checked.current()
+        assert "private-direct" in output.rendered and "private-stack" in output.rendered
+        for proof in checked.publication_proofs():
+            source_publication.retain(proof)
+        assert request_tail.defer_required(revoke)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": output.model_dump_json().encode()})
+
+    async def send(message):
+        sent.append(message)
+
+    with pytest.raises(request_tail.RequiredTailError):
+        await request_tail.RequestTailMiddleware(app)({"type": "http"}, None, send)
+    assert sent == [] and world.state.renders == []

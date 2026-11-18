@@ -402,6 +402,18 @@ def _grounding_for(res: MemoryAskResult, retrieval_query: str, input: MemoryAskI
 async def _maybe_route_to_synthesize(
     input: MemoryAskInput, prepared: PreparedKnowledge
 ) -> MemoryAskOutput | None:
+    from server.core import request_tail
+
+    with request_tail.publication_group() as publication:
+        result = await _route_to_synthesize(input, prepared)
+        if result is not None:
+            publication.commit()
+        return result
+
+
+async def _route_to_synthesize(
+    input: MemoryAskInput, prepared: PreparedKnowledge
+) -> MemoryAskOutput | None:
     """None = not routed (the caller asked for memories only or for an as-of
     replay, not a corpus task, no document concentrates, or the whole-document pass
     abstained); otherwise the whole-document answer as an ask result whose `route_reason`
@@ -438,6 +450,9 @@ async def _maybe_route_to_synthesize(
             )
             found = await run_checked_search(request, prepared.plan)
             output = await found.current()
+            from server.knowledge.app import source_publication
+
+            source_publication.retain(found.proofs)
             return list(output.results)
 
         top_k = 20  # not a setting: the hit pool pick_documents narrows to a few documents
