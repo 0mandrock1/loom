@@ -29,6 +29,7 @@ from typing import Any, Literal, NamedTuple
 from server.core.datetimes import naive_utc_now_seconds
 from server.core.repo_base import _CHClient, _default_client
 from server.knowledge.domain.live_chunks import has_live_chunks_sql
+from server.knowledge.domain.source_crawl import Options
 from server.knowledge.domain.sources import (
     NAMESPACE_ACCESS,
     SYNC_WORKER_ACTOR,
@@ -53,6 +54,7 @@ REVISIONS_PAGE = 10_000  # not a setting: a bound on one statement
 _COLUMNS = (
     "org, namespace, name, source_id, kind, source_kind, config_json, items_json, "
     "credential_enc, secret_enc, access, credential_mode, owner_subject, connection_id, "
+    "options_json, registrant_subject, approval_enc, crawl_generation, "
     "created_by, active, pending_delete, created_at, "
     "updated_at"
 )
@@ -72,6 +74,11 @@ def _source(row: dict[str, Any]) -> KnowledgeSource:
     updated = row.get("updated_at")
     kind = str(row.get("source_kind") or row.get("kind") or "")
     config = json_object(str(row.get("config_json") or ""))
+    crawl = (
+        Options.parse(json.loads(str(row.get("options_json") or "{}")))
+        if row.get("credential_mode") == "crawl"
+        else None
+    )
     return KnowledgeSource(
         org=str(row.get("org") or ""),
         namespace=str(row.get("namespace") or ""),
@@ -87,6 +94,10 @@ def _source(row: dict[str, Any]) -> KnowledgeSource:
         credential_mode=str(row.get("credential_mode") or "shared"),
         owner_subject=str(row.get("owner_subject") or ""),
         connection_id=str(row.get("connection_id") or ""),
+        crawl_options=json.loads(crawl.stored()) if crawl is not None else {},
+        registrant_subject=str(row.get("registrant_subject") or ""),
+        approval_enc=str(row.get("approval_enc") or ""),
+        crawl_generation=str(row.get("crawl_generation") or ""),
         created_by=str(row.get("created_by") or ""),
         active=bool(row.get("active")),
         pending_delete=bool(row.get("pending_delete")),
@@ -275,6 +286,7 @@ async def insert_source(src: KnowledgeSource, *, ch: _CHClient | None = None) ->
     writing replica's: the lease-serialized writes stay ordered while those clocks
     differ by less than the lease's handoff between writes."""
     now = naive_utc_now_seconds()
+    options = Options.parse(src.crawl_options).stored() if src.credential_mode == "crawl" else "{}"
     row = {
         "org": src.org,
         "namespace": src.namespace,
@@ -290,6 +302,10 @@ async def insert_source(src: KnowledgeSource, *, ch: _CHClient | None = None) ->
         "credential_mode": src.credential_mode,
         "owner_subject": src.owner_subject,
         "connection_id": src.connection_id,
+        "options_json": options,
+        "registrant_subject": src.registrant_subject,
+        "approval_enc": src.approval_enc,
+        "crawl_generation": src.crawl_generation,
         "created_by": src.created_by,
         "active": src.active,
         "pending_delete": src.pending_delete,

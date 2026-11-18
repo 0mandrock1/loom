@@ -12,6 +12,7 @@ import json
 import math
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, SupportsIndex, cast
 from urllib.parse import quote
@@ -313,7 +314,12 @@ def _member(value: Any) -> DirectoryMember:
 
 
 async def group_members(
-    token: DelegatedToken, key: str, *, max_bytes: int, max_pages: int
+    token: DelegatedToken,
+    key: str,
+    *,
+    max_bytes: int,
+    max_pages: int,
+    before_page: Callable[[], Awaitable[None]] | None = None,
 ) -> tuple[DirectoryMember, ...]:
     """Complete bounded pages of metadata; USER/status is no proof of an active employee.
 
@@ -330,6 +336,8 @@ async def group_members(
         if cursor:
             async with asyncio.timeout_at(token.deadline):
                 await _pace(gdrive.PAGE_PACE_S)
+        if before_page is not None:
+            await before_page()
         value = await _request(
             "GET",
             url,
