@@ -151,6 +151,7 @@ Start with [the docs map](docs/index.md). To install Loom, a coding agent reads 
 - [Dify tools adapter](docs/architecture/dify-adapter.md): The Dify plugin calls Loom through the Python SDK and stores no content locally.
 - [Document extraction](docs/architecture/document-extraction.md): An uploaded original is parsed into one shape, the extraction artifact, by an extractor service: a separate process with its own dependencies, never the Loom server.
 - [Document sources](docs/architecture/document-sources.md): A document source pulls files from a document store (a shared-folder store, a page store, a project tracker, a meeting store) into a namespace's documents and keeps them in step, on any shared namespace or collection.
+- [Documentation translation requests](docs/architecture/documentation-translation.md): The translation generator splits prepared English text into bounded requests, then checks the assembled translation before writing it.
 - [Failure and recovery](docs/architecture/failure-and-recovery.md): The primary write and every access decision fail closed.
 - [Google ADK memory service](docs/architecture/google-adk-adapter.md): The Google ADK adapter implements the framework's memory service through Loom's Python and TypeScript SDKs.
 - [Haystack document store and retriever](docs/architecture/haystack-adapter.md): The optional Haystack 3.5 adapter implements its document-store protocol and a native retrieval component through the synchronous Loom SDK.

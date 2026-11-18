@@ -2162,6 +2162,16 @@ ORDER BY (org, namespace, ingestion_id)
 TTL toDateTime(updated_at) + toIntervalDay(30)
 SETTINGS non_replicated_deduplication_window = 1000, index_granularity = 1024;
 
+-- loom.knowledge_mirror_latch
+CREATE TABLE IF NOT EXISTS loom.knowledge_mirror_latch
+(
+    `id` UInt8,
+    `set_at` DateTime64(3),
+    CONSTRAINT one_deployment CHECK id = 0
+)
+ENGINE = KeeperMap('/loom/knowledge_mirror_latch')
+PRIMARY KEY id;
+
 -- loom.knowledge_mirrors
 CREATE TABLE IF NOT EXISTS loom.knowledge_mirrors
 (

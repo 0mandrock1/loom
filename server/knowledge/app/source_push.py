@@ -38,7 +38,7 @@ from server.memory.app.provenance import writer_actor
 from server.settings import settings
 
 log = logging.getLogger(__name__)
-PUSH_MIGRATION = 108
+PUSH_MIGRATION = 109
 
 
 def _require_enabled() -> None:

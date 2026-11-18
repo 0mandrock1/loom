@@ -972,6 +972,7 @@ jobs:
           tests/integration/test_source_access_store.py
           tests/integration/test_source_document_store.py
           tests/integration/test_mirror_reader_evidence.py
+          tests/integration/test_mirror_session_latch_native.py
           tests/integration/test_mirror_search_chunk_keys.py
           tests/integration/test_mirror_title_projection.py
           tests/integration/test_mirror_ask_http.py
