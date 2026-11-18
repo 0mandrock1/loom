@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 from scripts.codegen.page_summary import page_summary  # noqa: E402
 from scripts.docs_site.hooks import _TOKEN, BLOB, _with_source  # noqa: E402
 from scripts.docs_site.messages import COPY, SECTION_TITLES  # noqa: E402
-from scripts.docs_site.paths import page_path  # noqa: E402
+from scripts.docs_site.paths import landing_sources, page_path  # noqa: E402
 from scripts.docs_site.video_labels import translated_video_labels  # noqa: E402
 
 LANGUAGES = {
@@ -130,16 +130,12 @@ def language_landings(pages: dict, site_url: str) -> list[dict[str, str]]:
 
 
 def landing_uri(language: str, pages: dict) -> str | None:
-    available = [
-        uri
+    available = landing_sources(
+        uri.removeprefix(language + "/")
         for uri, entry in pages.items()
         if entry["language"] == language and not entry["obsolete"]
-    ]
-    for source in ("index.md", "use-cases/index.md", "getting-started/quickstart.md"):
-        uri = localized_uri(language, source)
-        if uri in available:
-            return uri
-    return min(available) if available else None
+    )
+    return localized_uri(language, available[0]) if available else None
 
 
 def language_choices(source: str, pages: dict, site_url: str) -> list[dict]:

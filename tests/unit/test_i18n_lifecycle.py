@@ -118,6 +118,23 @@ def test_subset_retires_its_landing_and_preserves_other_readme_navigation(
     assert t.check(skip_stale=True) == 0
 
 
+def test_retiring_the_last_native_landing_removes_the_readme_site_link(repo: pathlib.Path) -> None:
+    from scripts.docs_site import indexnow
+
+    put(repo, "README.md", "# Loom\n\n<!-- languages -->\n<!-- /languages -->\n")
+    put(repo, "docs/index.md", "# Alpha\n")
+    git(repo, "add", "README.md", "docs/index.md")
+    for source in ("README.md", "docs/index.md"):
+        publish(repo, source)
+    t.write_language_lines()
+    assert indexnow.SITE in t.language_line("i18n/ja/README.md")
+    (repo / "docs/index.md").unlink()
+    assert lc.retire_obsolete(["ja"]) == (1, 0)
+    assert indexnow.SITE not in (repo / "i18n/ja/README.md").read_text()
+    assert not t.language_lines_differ()
+    assert t.check(skip_stale=True) == 0
+
+
 def test_inventory_tracks_nested_generated_additions_but_not_untracked_or_deleted(
     repo: pathlib.Path,
 ) -> None:

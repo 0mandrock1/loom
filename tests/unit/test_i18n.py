@@ -510,6 +510,33 @@ def test_generated_readme_uses_the_same_site_base_as_mkdocs() -> None:
     assert site_url == indexnow.SITE
 
 
+@pytest.mark.parametrize(
+    "sources,expected",
+    [
+        (("getting-started/quickstart.md",), "getting-started/quickstart.md"),
+        (("zeta.md", "guide.md"), "guide.md"),
+    ],
+)
+def test_readme_keeps_a_native_site_link_without_a_translated_index(
+    tmp_path, monkeypatch, sources, expected
+) -> None:
+    from scripts.docs_site import indexnow, locales
+    from scripts.docs_site.paths import page_path
+
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    language = next(lang for lang in t.LANGUAGES if lang.code == "ja")
+    for source in ("README.md", *("docs/" + source for source in sources)):
+        english = tmp_path / source
+        english.parent.mkdir(parents=True, exist_ok=True)
+        english.write_text("# Loom\n")
+        target = tmp_path / t.target_path(language.code, source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(t.header(source, language, t.DEFAULT_MODEL, t.blob(source)) + "# Loom\n")
+    uri = locales.landing_uri(language.code, locales.translations(tmp_path))
+    assert uri == language.code + "/" + expected
+    assert indexnow.SITE + page_path("docs/" + uri) in t.language_line("i18n/ja/README.md")
+
+
 def _translations() -> list[tuple[str, t.Language]]:
     return [
         (s, lang)

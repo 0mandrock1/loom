@@ -328,17 +328,22 @@ def readme_documentation(current: str) -> str:
     """Link a translated README to an existing documentation landing in its language."""
     from scripts.docs_site import indexnow
     from scripts.docs_site.messages import COPY
+    from scripts.docs_site.paths import landing_sources
 
     language = next((lg for lg in LANGUAGES if current == target_path(lg.code, "README.md")), None)
     if language is None:
         return ""
-    for source in ("docs/index.md", "docs/use-cases/index.md"):
-        target = target_path(language.code, source)
-        if lifecycle.regular(target):
-            text = (ROOT / target).read_text()
-            if lifecycle.owner(target, text) is not None:
-                url = indexnow.SITE + language.code + "/" + indexnow.page_path(source)
-                return f'\n  <br>\n  <a href="{url}">{COPY[language.code]["documentation"]}</a>'
+    prefix = f"{OUT_DIR}/{language.code}/docs/"
+    available = {
+        path.removeprefix(prefix): path
+        for path in lifecycle.output_files()
+        if path.startswith(prefix) and path.endswith(".md") and lifecycle.regular(path)
+    }
+    for source in landing_sources(available):
+        target = available[source]
+        if lifecycle.owner(target, (ROOT / target).read_text()) is not None:
+            url = indexnow.SITE + language.code + "/" + indexnow.page_path("docs/" + source)
+            return f'\n  <br>\n  <a href="{url}">{COPY[language.code]["documentation"]}</a>'
     return ""
 
 
