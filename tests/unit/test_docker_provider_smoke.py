@@ -460,7 +460,7 @@ async def test_crash_observation_distinguishes_unproved_predicates(monkeypatch, 
         {"ids": [row["participant_id"]]} for row in rows
     ]
     assert all(
-        "SELECT toString(participant_id) AS participant_id" in call.args[0] for call in reads[:2]
+        "SELECT participant_id, state, version, host_proof" in call.args[0] for call in reads[:2]
     )
     if fault == "missing_rows":
         assert '"reference_count": 1' in str(failure.value)
@@ -516,3 +516,27 @@ async def test_crash_refuses_unreadable_captured_worker_before_signalling(monkey
     assert [call.args[1] for call in client.query_all.await_args_list] == (
         [{"ids": [rows[0]["participant_id"]]}] if fault == "missing-second" else []
     ) + [{"ids": [rows[int(fault == "missing-second")]["participant_id"]]}] * 2
+
+
+@pytest.mark.asyncio
+async def test_retirement_reader_preserves_string_identity_from_native_uuid():
+    from unittest.mock import AsyncMock
+    from uuid import UUID
+
+    participant_id = UUID("00112233-4455-6677-8899-aabbccddeeff")
+    row = {
+        "participant_id": participant_id,
+        "state": "retired",
+        "version": 6,
+        "host_proof": "proof",
+    }
+    client = AsyncMock()
+    client.query_all.return_value = [row]
+    captured = [{**row, "participant_id": str(participant_id)}]
+    assert await data._retirement_rows(client, captured) == captured
+    assert row["participant_id"] is participant_id
+    assert client.query_all.await_args.args == (
+        "SELECT participant_id, state, version, host_proof "
+        "FROM loom._provider_participants FINAL WHERE participant_id IN {ids:Array(UUID)}",
+        {"ids": [str(participant_id)]},
+    )

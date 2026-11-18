@@ -161,11 +161,12 @@ def _kill_worker(worker: dict, parent: dict) -> None:
 
 
 async def _retirement_rows(client, captured: list[dict]) -> list[dict]:
-    return await client.query_all(
-        "SELECT toString(participant_id) AS participant_id, state, version, host_proof "
+    rows = await client.query_all(
+        "SELECT participant_id, state, version, host_proof "
         "FROM loom._provider_participants FINAL WHERE participant_id IN {ids:Array(UUID)}",
         {"ids": [row["participant_id"] for row in captured]},
     )
+    return [{**row, "participant_id": str(row["participant_id"])} for row in rows]
 
 
 async def _native_retirement_observation(client, captured: list[dict]) -> dict:
