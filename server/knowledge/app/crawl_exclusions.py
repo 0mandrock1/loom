@@ -65,7 +65,7 @@ async def initialize(
         row = await store.key(org, ch=ch)
         current = await claims.get(ch, _fence(org))
         if row is None:
-            if await store.any_refusal(org, ch=ch):
+            if current is not None or await store.any_refusal(org, ch=ch):
                 raise VendorError("crawl exclusion key unavailable")
             key = secrets.token_hex(32)
             key_id = hashlib.sha256(bytes.fromhex(key)).hexdigest()

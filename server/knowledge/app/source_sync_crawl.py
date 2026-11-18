@@ -29,7 +29,12 @@ from server.settings import settings
 
 
 async def observe(
-    authority: crawl_authority.Authority, run: sync.Pass, *, maximum_files: int
+    authority: crawl_authority.Authority,
+    run: sync.Pass,
+    *,
+    maximum_files: int,
+    observations: dict[str, items.Listing] | None = None,
+    result: sync.TurnResult | None = None,
 ) -> tuple[Expansion, tuple[File, ...]]:
     """No partial person's listing, membership or ACL reaches persistent storage."""
     source = authority.source
@@ -48,6 +53,14 @@ async def observe(
             limit=maximum_files,
         )
         await token.check()
+        visibility = result if result is not None else sync.TurnResult()
+        if (
+            not await sync._items_visible(token, source.items, visibility, run.budget.exhausted)
+            or not visibility.complete
+        ):
+            raise VendorError("crawl selected items unavailable")
+        if observations is not None:
+            observations[person.id] = listing
         for file in listing.files:
             if "permissions" not in file:
                 file["permissions"] = await gdrive.file_permissions(token, str(file["id"]))
@@ -87,11 +100,17 @@ async def turn(
         # A group can be reached by configured alias, primary address and provider id.
         membership_bound = 3 * bounds.directory.groups + len(source.crawl_options["subjects"])
     authority = await crawl_authority.resolve(source, deadline=run.budget.stop_after, bounds=bounds)
-    result = sync.TurnResult(full=True)
-    sync.start_waits(result, json_object(state.get("detail", "")))
+    asked = json_object(state.get("detail", ""))
+    known = await mirrors.live_mirror(source.org, source.namespace)
+    detail = await mirror_sync._own_state(source, known, asked)
+    result = sync.TurnResult(full=bool(detail.get("full")) or sync.full_due(detail))
+    sync.start_waits(result, detail)
+    observations: dict[str, items.Listing] = {}
     started = datetime.now(UTC)
     try:
-        expansion, files = await observe(authority, run, maximum_files=maximum_files)
+        expansion, files = await observe(
+            authority, run, maximum_files=maximum_files, observations=observations, result=result
+        )
     except (VendorError, ValueError, TimeoutError):
         result.fail("failed", "crawl observation incomplete")
         return result
@@ -101,11 +120,23 @@ async def turn(
             source.namespace,
             still_current=functools.partial(sync.require_current, source),
         )
+        if mirror != known:
+            detail = await mirror_sync._own_state(source, "", asked)
+            result.full = bool(detail.get("full")) or sync.full_due(detail)
+            sync.start_waits(result, detail)
         source = dataclasses.replace(source, mirror=mirror)
         result.mirror = mirror
         async with private_sync.mirror_costs(source.org, mirror, sync.WORKER):
             await _publish(
-                source, authority, expansion, files, started, run, result, membership_bound
+                source,
+                authority,
+                expansion,
+                files,
+                observations,
+                started,
+                run,
+                result,
+                membership_bound,
             )
     return result
 
@@ -122,6 +153,7 @@ async def _publish(
     authority: crawl_authority.Authority,
     expansion: Expansion,
     files: tuple[File, ...],
+    observations: dict[str, items.Listing],
     started: datetime,
     run: sync.Pass,
     result: sync.TurnResult,
@@ -172,12 +204,17 @@ async def _publish(
         source.org, source.mirror, mirror_uri_suffix(source.source_id)
     ):
         return
-    # Only complete union absence is positive evidence. A single person's loss is not.
     for copy in copies:
-        if copy["source_uri"] not in listed:
-            if run.budget.exhausted():
-                result.mark(sync.TurnMark.PASS_BOUND)
-                return
+        if copy["source_uri"] in listed:
+            continue
+        if run.spent():
+            result.mark(sync.TurnMark.PASS_BOUND)
+            return
+        run.left -= 1
+        gone = await _gone(authority, expansion, observations, copy["file_id"], result)
+        if gone is None:
+            return
+        if gone:
             async with sync.publication_guard(source):
                 if await sync.retire(source, copy["source_uri"]):
                     result.removed += 1
@@ -192,3 +229,22 @@ async def _publish(
             crawl_exclusion_generation=await authority.exclusions.version(),
             crawl_generation=source.crawl_generation,
         )
+
+
+async def _gone(
+    authority: crawl_authority.Authority,
+    expansion: Expansion,
+    observations: dict[str, items.Listing],
+    file_id: str,
+    result: sync.TurnResult,
+) -> bool | None:
+    # Page movement can omit a reached file. Every eligible presenter must confirm absence.
+    if not expansion.people:
+        return False
+    for person in expansion.people:
+        token = await authority.drive(person)
+        gone = await sync.file_gone(token, file_id, observations[person.id], result)
+        await token.check()
+        if not gone:
+            return gone
+    return True

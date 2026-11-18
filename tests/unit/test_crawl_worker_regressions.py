@@ -8,10 +8,13 @@ import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import parse_qs
 
 import httpx
+import jwt
 import pytest
 
+from server.clients import gdrive
 from server.knowledge.app import crawl_authority, private_sync, source_sync_crawl
 from server.knowledge.app import source_sync as sync
 from server.knowledge.domain.sources import SYNC_WORKER_ACTOR, mirror_uri
@@ -226,3 +229,75 @@ async def test_whole_enumeration_does_not_regrant_a_settled_revision_before_full
         assert result.waits_reset_for == "explicit-request" and result.changed == 1
     else:
         assert result.waits == detail["file_waits"] and result.changed == 0
+
+
+async def test_one_presenters_absence_cannot_retire_another_presenters_reached_file(
+    world: _World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _register(world)
+    assert world.source is not None
+    world.source = dataclasses.replace(
+        world.source,
+        crawl_options={
+            **world.source.crawl_options,
+            "subjects": [
+                {"type": "person", "email": "one@example.com"},
+                {"type": "person", "email": "two@example.com"},
+            ],
+        },
+    )
+    await world.setup()
+    checked = _copies(world, monkeypatch, 1)
+    original = world.handle
+    lookups: list[str] = []
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "admin.googleapis.com" and request.url.path.rsplit("/", 1)[1] in {
+            "two@example.com",
+            "provider-two",
+        }:
+            return httpx.Response(
+                200,
+                json={
+                    "id": "provider-two",
+                    "primaryEmail": "two@example.com",
+                    "aliases": [],
+                    "customerId": "workspace",
+                    "suspended": False,
+                    "archived": False,
+                },
+            )
+        if request.url.host == "oauth2.googleapis.com":
+            form = parse_qs(request.content.decode())
+            claims = jwt.decode(
+                form["assertion"][0],
+                world.account[1],
+                algorithms=["RS256"],
+                audience="https://oauth2.googleapis.com/token",
+            )
+            if claims["sub"] == "two@example.com":
+                assert claims["scope"] == gdrive.ReadScope.DRIVE.value
+                return httpx.Response(
+                    200,
+                    json={
+                        "access_token": "second-person-access",
+                        "token_type": "Bearer",
+                        "expires_in": 60,
+                    },
+                )
+        if request.url.host == "www.googleapis.com":
+            if request.url.path == "/drive/v3/files":
+                return httpx.Response(200, json={"files": []})
+            if request.url.path == "/drive/v3/files/missing-0":
+                bearer = request.headers["authorization"]
+                lookups.append(bearer)
+                if bearer == "Bearer private-person-access":
+                    return httpx.Response(404, json={"error": "notFound"})
+                assert bearer == "Bearer second-person-access"
+                return httpx.Response(200, json=_file("missing-0"))
+        return await original(request)
+
+    world.handle = provider
+    result, _ = await _work(world)
+    assert lookups == ["Bearer private-person-access", "Bearer second-person-access"]
+    assert result.complete and not result.removed and not checked
