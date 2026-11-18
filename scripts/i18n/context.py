@@ -120,6 +120,22 @@ _MODEL_DEFAULTS = {
         "LOOM_CONFLICT_RESOLVER_MODEL",
     ): "gpt-6.1-sol",
 }
+# These field groups document REQUIRED in server/tracker/domain/contract.py.
+_TYPE_FAMILIES = {
+    ("docs/features/tracker/record-contract.md", ("labels", "assignees")): "Array(String)",
+    (
+        "docs/features/tracker/record-contract.md",
+        ("affected_versions", "fix_versions"),
+    ): "Array(String)",
+    (
+        "docs/features/tracker/record-contract.md",
+        ("triage_reproduces_on", "triage_clean_on"),
+    ): "Array(String)",
+    (
+        "docs/features/tracker/record-contract.md",
+        ("test_types", "reviewers", "src_components"),
+    ): "Array(String)",
+}
 _QUOTED = r'"[A-Za-z_][A-Za-z0-9_.-]*"'
 _ALTERNATIVES = re.compile(rf"{_QUOTED}(?:\s*/\s*{_QUOTED})+")
 
@@ -135,6 +151,7 @@ class Label:
     start: int = 0
     end: int = 0
     default_for: str = ""
+    family_for: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -185,6 +202,9 @@ def protected(
     default = _MODEL_DEFAULTS.get((source_path, label.default_for))
     if default and pattern((default,)).search(label.text):
         atoms.append(default)
+    family = _TYPE_FAMILIES.get((source_path, label.family_for))
+    if family and pattern((family,)).search(label.text):
+        atoms.append(family)
     if (
         source_path.startswith("docs/reference/operations/")
         and label.string_field

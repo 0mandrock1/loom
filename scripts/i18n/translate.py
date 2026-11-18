@@ -430,6 +430,7 @@ def _label_differences(
                 expected != got
                 or node.field != translated.field
                 or node.default_for != translated.default_for
+                or node.family_for != translated.family_for
             ):
                 problems.append(f"protected source strings {key}: expected {expected}, got {got}")
     for key, node in actual.items():

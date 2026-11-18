@@ -408,6 +408,7 @@ def table_labels(text: str) -> dict[tuple[str, int, int], Label]:
     labels = {}
     for index, row in enumerate(rows):
         field = row[0].code[0] if row and not row[0].text and len(row[0].code) == 1 else ""
+        fields = row[0].code if row and not row[0].text.strip(", ") else ()
         kind = row[1].code if len(row) > 1 else ()
         for column, cell in enumerate(row):
             labels[("cell", index, column)] = replace(
@@ -415,5 +416,6 @@ def table_labels(text: str) -> dict[tuple[str, int, int], Label]:
                 field=field if column == len(row) - 1 else "",
                 string_field=bool(field and column == 2 and kind == ("str",)),
                 default_for=field if column == 1 and len(row) == 3 else "",
+                family_for=fields if column == 1 and len(row) == 3 else (),
             )
     return labels
