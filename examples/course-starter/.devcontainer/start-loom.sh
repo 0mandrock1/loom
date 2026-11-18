@@ -43,7 +43,9 @@ fi
 # is connected below, so the installer connects no agent.
 LOOM_CONNECT=none sh "$installer"
 
-npm install --global --silent @anthropic-ai/claude-code
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+npm ci --prefix "$script_dir/agent-cli" --no-fund --no-audit
+npm install --global --offline --ignore-scripts --silent "$script_dir/agent-cli/node_modules/@anthropic-ai/claude-code"
 claude plugin marketplace list 2>/dev/null | grep -Eq '[[:space:]]loom$' \
   || claude plugin marketplace add ClickHouse/loom
 claude plugin install loom@loom

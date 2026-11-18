@@ -131,6 +131,6 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/npm" && cd "$RUNNER_TEMP/npm"
           npm init -y >/dev/null
-          npm install --no-audit --no-fund "@clickhouse/loom@$VERSION"
-          node -e 'const { SDK_VERSION } = require("@clickhouse/loom"); if (SDK_VERSION !== process.argv[1]) { throw new Error(SDK_VERSION) }' "$VERSION"
+          npm install --ignore-scripts --no-audit --no-fund "@clickhouse/loom@$VERSION"
           npm audit signatures
+          node -e 'const { SDK_VERSION } = require("@clickhouse/loom"); if (SDK_VERSION !== process.argv[1]) { throw new Error(SDK_VERSION) }' "$VERSION"
