@@ -2844,6 +2844,10 @@ settings:
   # it for decisions. [restart]
   # knowledge_source_sync_enabled: false
 
+  # Mirrored reads require a complete listing and group observation within this many
+  # seconds; missing or older evidence admits nobody. [restart]
+  # knowledge_source_acl_stale_seconds: 3600
+
   # Enable optional source push setup, callbacks and Drive renewal; false keeps polling
   # only. [restart]
   # knowledge_source_push_enabled: false

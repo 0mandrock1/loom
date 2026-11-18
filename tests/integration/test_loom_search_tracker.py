@@ -162,7 +162,11 @@ def _reader(record: dict[str, str]) -> None:
 
 
 async def test_general_tracker_search_cites_public_issues_and_prs_only(
-    tracker_record: dict[str, str], ch_client: Any, mint_test_token: Any, record_property: Any
+    tracker_record: dict[str, str],
+    ch_client: Any,
+    mint_test_token: Any,
+    record_property: Any,
+    control_plane_url: str,
 ) -> None:
     from server.memory.app.loom_search.tracker_leg import (
         prepare_tracker_search,
@@ -237,7 +241,7 @@ async def test_general_tracker_search_cites_public_issues_and_prs_only(
     )
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://localhost"
+            transport=httpx.ASGITransport(app=app), base_url=control_plane_url
         ) as client:
             response = await client.post(
                 "/v1/search.query",

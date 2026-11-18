@@ -41,6 +41,7 @@ from server.auth.sharing import is_collection
 from server.core import ch, leases
 from server.core.ch import sequential_reads
 from server.core.datetimes import as_aware_utc
+from server.core.diagnostics import private_work
 from server.core.errors import (
     BadConfigError,
     ErasureRunningError,
@@ -75,7 +76,7 @@ from server.knowledge.api.models_sources import (
     KnowledgeSourceUpdateInput,
     KnowledgeSourceUpdateOutput,
 )
-from server.knowledge.app import source_probes
+from server.knowledge.app import source_access, source_probes, source_titles
 from server.knowledge.domain import sources as domain
 from server.knowledge.domain.source_links import parse_links
 from server.knowledge.domain.sources import KnowledgeSource
@@ -409,28 +410,45 @@ async def handle_knowledge_source_list(
 async def handle_knowledge_source_inspect(
     input: KnowledgeSourceInspectInput,
 ) -> KnowledgeSourceInspectOutput:
-    src = await _source_or_404(input.org, input.namespace, input.name)
-    states = await store.read_states(src.org, src.namespace, [src.name])
-    docs = await store.source_documents(src.org, src.namespace, domain.source_tag(src.name))
-    return KnowledgeSourceInspectOutput(
-        name=src.name,
-        kind=src.kind,
-        items=src.items,
-        include=_answered_include(src),
-        config=domain.id_list_config(src) or {},
-        created_by=src.created_by,
-        created_at=_iso(src.created_at),
-        sync=_sync(src, states.get(src.name)),
-        documents=[
-            KnowledgeSourceDocument(
-                source_uri=str(d.get("source_uri") or ""),
-                title=str(d.get("title") or ""),
-                source_revision=str(d.get("source_revision") or ""),
-                ingested_at=_iso(d.get("ingested_at")),
+    plan = await source_access.prepare(input.org, [input.namespace])
+    with private_work() if plan.marked else contextlib.nullcontext():
+        src = await _source_or_404(input.org, input.namespace, input.name)
+        states = await store.read_states(src.org, src.namespace, [src.name])
+        output = KnowledgeSourceInspectOutput(
+            name=src.name,
+            kind=src.kind,
+            items=src.items,
+            include=_answered_include(src),
+            config=domain.id_list_config(src) or {},
+            created_by=src.created_by,
+            created_at=_iso(src.created_at),
+            sync=_sync(src, states.get(src.name)),
+        )
+        if src.access == domain.MIRRORED_ACCESS:
+            titles = await source_titles.collect(
+                plan, src.namespace, limit=200, source_id=src.source_id
             )
-            for d in docs
-        ],
-    )
+            output.documents = [
+                KnowledgeSourceDocument(
+                    source_uri=title.source_uri,
+                    title=title.title,
+                    source_revision=title.source_revision,
+                    ingested_at=_iso(title.ingested_at),
+                )
+                for title in titles
+            ]
+        elif domain.served(src):
+            docs = await store.source_documents(src.org, src.namespace, domain.source_tag(src.name))
+            output.documents = [
+                KnowledgeSourceDocument(
+                    source_uri=str(d.get("source_uri") or ""),
+                    title=str(d.get("title") or ""),
+                    source_revision=str(d.get("source_revision") or ""),
+                    ingested_at=_iso(d.get("ingested_at")),
+                )
+                for d in docs
+            ]
+        return output
 
 
 async def handle_knowledge_source_add(input: KnowledgeSourceAddInput) -> KnowledgeSourceAddOutput:

@@ -104,7 +104,7 @@ concurrent calls can overshoot, and the logical user is the request's cost attri
 not the authenticated account or a billing identity.
 
 Activate user caps and budget warnings only after every serving build supports
-migration 103. Keep the global and namespace user caps at zero and alert inboxes empty
+migration 106. Keep the global and namespace user caps at zero and alert inboxes empty
 while any build is older or unknown. Before rollback, follow the [maintenance and
 warning cleanup procedure](../../architecture/cost-budgets.md#activation-and-rollback);
 older builds cannot enforce user caps or protect stored private warnings. Save the
