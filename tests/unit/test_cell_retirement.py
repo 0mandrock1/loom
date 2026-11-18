@@ -420,7 +420,7 @@ def test_retirement_writers_and_accepting_command_roots_are_an_explicit_census()
                 commands.add(relative)
             if name == "participant_command":
                 plain.add(relative)
-            if name == "stopped":
+            if name == "stopped" and isinstance(func, ast.Attribute):
                 stopped.add(relative)
     assert constructors == {"core/retirement.py"}
     assert writers == {"insights/app/provider_barrier.py"}
