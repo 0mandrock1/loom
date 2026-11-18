@@ -17,7 +17,7 @@ router = APIRouter()
 CALLBACK_TIMEOUT_S = 4.0  # not a setting: acknowledge inside the provider's five-second limit
 
 
-@router.post("/hooks/knowledge/{org}/{namespace}/{source_id}/{generation}")
+@router.post("/hooks/knowledge/{namespace}/{source_id}/{generation}")
 async def notification(
     request: Request, org: str, namespace: str, source_id: UUID, generation: UUID
 ) -> Response:

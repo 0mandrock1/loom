@@ -382,7 +382,7 @@ async def test_linear_prepares_stable_address_then_requires_exact_confirmation(
     )
     assert pending.status == "pending"
     assert pending.callback_url == (
-        f"https://loom.example/hooks/knowledge/org/docs/source-id/{pending.generation}"
+        f"https://loom.example/hooks/knowledge/docs/source-id/{pending.generation}?org=org"
     )
     generation = pending.generation
     raw = json.dumps(
