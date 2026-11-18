@@ -7,7 +7,7 @@ import hashlib
 import math
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any, Literal, SupportsIndex
 from urllib.parse import urlsplit
 
 
@@ -41,7 +41,7 @@ class CheckedAccess:
     def __str__(self) -> str:
         raise TypeError("a connected checkout is not a shared credential")
 
-    def __reduce_ex__(self, protocol: int) -> Any:
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
         raise TypeError("a connected checkout cannot be copied or serialized")
 
     def pacing_key(self) -> str:
@@ -52,6 +52,8 @@ class CheckedAccess:
             raise TimeoutError("connected checkout expired")
         async with asyncio.timeout_at(self.deadline):
             await self._validate()
+        if time.monotonic() >= self.deadline:
+            raise TimeoutError("connected checkout expired")
 
     async def authorization(self, url: str) -> str:
         target = urlsplit(url)
@@ -70,7 +72,15 @@ class CheckedAccess:
             and target.netloc == "api.linear.app"
             and target.path == "/graphql"
         )
-        if target.scheme != "https" or target.fragment or not allowed:
+        if (
+            target.scheme != "https"
+            or target.fragment
+            or target.query
+            or "%" in target.path
+            or "\\" in target.path
+            or any(part in (".", "..") for part in target.path.split("/"))
+            or not allowed
+        ):
             raise ValueError("connected checkout destination refused")
         await self.check()
         return "Bearer " + self._token

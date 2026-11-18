@@ -15,7 +15,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Any, TypeVar, cast
+from typing import Any, SupportsIndex, TypeVar, cast
 
 from server.auth import aliases, authz, claims, revocation, scim
 from server.auth.context import current_auth
@@ -25,7 +25,7 @@ from server.auth.reader_identity import reader_subject, resolve_reader
 from server.clients._checked_access import CheckedAccess
 from server.clients.connected_oauth import Kind, OAuthClient, OAuthError, Tokens
 from server.core import leases, shielded
-from server.core.ch import get_client, own_write_reads
+from server.core.ch import get_client, own_write_reads, set_query_tag
 from server.core.errors import AuthInsufficientError, ValidationError
 from server.core.secrets_at_rest import seal, unseal
 from server.knowledge.domain.connected_accounts import (
@@ -57,6 +57,13 @@ def unavailable() -> ValidationError:
     return ValidationError("the connected account is unavailable", code="CONNECTION_UNAVAILABLE")
 
 
+class OwnerUnavailable(ValidationError):
+    """Confirmed standing loss; config and unverifiable backend errors never use this."""
+
+    def __init__(self) -> None:
+        super().__init__("the connected account is unavailable", code="CONNECTION_UNAVAILABLE")
+
+
 def _next_connection(previous: str = "", *, inactive: bool = False) -> str:
     key = previous.partition("/")[0] if previous else secrets.token_hex(16)
     # The generation's first nibble distinguishes a durable stop from a live checkout.
@@ -78,6 +85,17 @@ async def _fence_current(account: ConnectedAccount, *, ch: Any = None) -> bool:
         await claims.get(ch or get_client(), _fence_key(account.connection_id))
         == account.connection_id
     )
+
+
+async def _require_source_fence(account: ConnectedAccount) -> None:
+    value = await claims.get(get_client(), _fence_key(account.connection_id))
+    if value == account.connection_id:
+        return
+    if value is None:
+        raise unavailable()  # No verified generation proves only uncertainty.
+    if _fence_key(value) != _fence_key(account.connection_id):
+        raise unavailable()
+    raise OwnerUnavailable()
 
 
 async def _move_fence(previous: str | None, current: str, *, ch: Any = None) -> None:
@@ -126,16 +144,16 @@ async def _standing(org: str, subject: str, since: int, keys: tuple[str, ...] = 
         raise unavailable()
     identity = await resolve_reader(org, subject)
     if identity is None or identity.subject != subject:
-        raise unavailable()
+        raise OwnerUnavailable()
     spellings = await aliases.verified_spellings(org, subject)
     if not await store.account_active(org, spellings):
-        raise unavailable()
+        raise OwnerUnavailable()
     for email in identity.emails:
         if await scim.deactivated(email):
-            raise unavailable()
+            raise OwnerUnavailable()
     for at in (await revocation.cutoffs([*spellings, *keys])).values():
         if revocation.kills(at, since):
-            raise unavailable()
+            raise OwnerUnavailable()
 
 
 def _primary(auth: AuthInfo | None) -> AuthInfo:
@@ -160,7 +178,14 @@ def _primary(auth: AuthInfo | None) -> AuthInfo:
 
 async def own_subject(auth: AuthInfo | None) -> tuple[str, str]:
     subject = reader_subject(auth)
-    if auth is None or not subject or auth.org in ("", "*") or auth.issued_at is None:
+    if (
+        auth is None
+        or not subject
+        or auth.org in ("", "*")
+        or auth.issued_at is None
+        or auth.is_service_account
+        or auth.reads_as_creator
+    ):
         raise AuthInsufficientError("a personal signed-in identity is required")
     if auth.expires_at is not None and auth.expires_at <= time.time():
         raise unavailable()
@@ -265,6 +290,7 @@ async def _callback(
         raise unavailable()
     grant = await provider.exchange(code, verifier=verifier or None, deadline=deadline)
     old: ConnectedAccount | None = None
+    old_credential = ""
     async with account_lease(org, subject, kind):
         await _pending_standing(pending)
         current = await store.get(org, subject, kind)
@@ -276,6 +302,7 @@ async def _callback(
             raise unavailable()
         # First fence the old registration, then all of its source ids, before replacing it.
         old = current
+        old_credential = unseal(CREDENTIAL_PURPOSE, current.credential_enc, warn=False) or ""
         ended = await _stop_locked(current, strict=True)
         account = ConnectedAccount(
             org,
@@ -298,7 +325,7 @@ async def _callback(
         account.account_id,
         account.workspace_id,
     ):
-        await _revoke(old, deadline=deadline)
+        await _revoke(old, credential=old_credential, deadline=deadline)
     await audit.emit(
         "connection.connected",
         org=org,
@@ -312,6 +339,7 @@ async def _stop_locked(account: ConnectedAccount, *, strict: bool = False) -> Co
     from server.knowledge.app import source_push
     from server.knowledge.app import sources as source_ops
 
+    set_query_tag("knowledge.connected_accounts.stop")
     ended = stopped(
         account,
         connection_id=_next_connection(account.connection_id, inactive=True),
@@ -319,7 +347,7 @@ async def _stop_locked(account: ConnectedAccount, *, strict: bool = False) -> Co
     )
     key = _fence_key(account.connection_id)
     previous = await claims.get(get_client(), key)
-    if previous != account.connection_id:
+    if previous != account.connection_id and previous is not None:
         if strict or not isinstance(previous, str):
             raise unavailable()
         if _fence_key(previous) != key or not previous.partition("/")[2].startswith("0"):
@@ -327,6 +355,8 @@ async def _stop_locked(account: ConnectedAccount, *, strict: bool = False) -> Co
         # Only a durable stop can repair its lost row write. A newer live checkout
         # belongs to another connection and must never be overwritten or revoked.
         ended = dataclasses.replace(ended, connection_id=previous)
+    elif strict and previous != account.connection_id:
+        raise unavailable()
     landed = await claims.swap(get_client(), key, previous, ended.connection_id, _FENCE_EXPIRY)
     if landed != ended.connection_id:
         raise unavailable()
@@ -355,11 +385,48 @@ async def _stop_locked(account: ConnectedAccount, *, strict: bool = False) -> Co
                     pending_delete=pending or current.pending_delete,
                 )
             )
+    # Disconnect retains only a canonical-owner marker. Historical provider identity
+    # and secrets are physically removed, with a census independent of user_id scopes.
+    ended = dataclasses.replace(ended, connected_at=None)
+    await _erase_locked(ended, keep_marker=True)
     return ended
 
 
-async def _revoke(account: ConnectedAccount, *, deadline: float | None = None) -> None:
-    credential = unseal(CREDENTIAL_PURPOSE, account.credential_enc, warn=False)
+async def _erase_locked(account: ConnectedAccount, *, keep_marker: bool) -> None:
+    from server.erasure.app.connected_accounts import require_erased, require_sources_erased
+    from server.knowledge.app import sources as source_ops
+
+    if (
+        account.active
+        or account.credential_enc
+        or account.account_email_enc
+        or await claims.get(get_client(), _fence_key(account.connection_id))
+        != account.connection_id
+    ):
+        raise unavailable()
+    if not keep_marker:
+        for namespace in await source_store.connected_owner_namespaces(
+            account.org, account.subject, account.kind
+        ):
+            async with source_ops.sources_lease(account.org, namespace):
+                await source_store.erase_connected_owner(
+                    account.org, namespace, account.subject, account.kind
+                )
+                await require_sources_erased(account.org, namespace, account.subject, account.kind)
+    await store.erase(account.org, [account.subject], kind=account.kind)
+    if keep_marker:
+        await store.put(account)
+    await require_erased(
+        account.org,
+        account.subject,
+        account.kind,
+        keep_connection=account.connection_id if keep_marker else None,
+    )
+
+
+async def _revoke(
+    account: ConnectedAccount, *, credential: str, deadline: float | None = None
+) -> None:
     if not credential:
         return
     try:
@@ -383,13 +450,16 @@ async def _revoke(account: ConnectedAccount, *, deadline: float | None = None) -
 async def disconnect(org: str, subject: str, kind: str) -> None:
     if kind not in KINDS:
         raise unavailable()
-    async with account_lease(org, subject, kind):
-        account = await store.get(org, subject, kind)
-        if account is None:
-            account = ConnectedAccount(org, subject, kind, _next_connection())
-            await _move_fence(None, account.connection_id)
-        await _stop_locked(account)
-    await _revoke(account)
+    set_query_tag("knowledge.connected_accounts.disconnect")
+    async with asyncio.timeout(settings.knowledge_connected_stop_timeout_s):
+        async with account_lease(org, subject, kind):
+            account = await store.get(org, subject, kind)
+            if account is None:
+                account = ConnectedAccount(org, subject, kind, _next_connection())
+                await _move_fence(None, account.connection_id)
+            credential = unseal(CREDENTIAL_PURPOSE, account.credential_enc, warn=False) or ""
+            await _stop_locked(account)
+    await _revoke(account, credential=credential)
     await audit.emit(
         "connection.disconnected",
         org=org,
@@ -399,24 +469,68 @@ async def disconnect(org: str, subject: str, kind: str) -> None:
     )
 
 
-async def stop_subjects(subjects: list[str], *, org: str | None = None) -> None:
+async def stop_subjects(
+    subjects: list[str],
+    *,
+    org: str | None = None,
+    revoke: bool = True,
+    erase_owner: bool = False,
+    respect_cutoff: bool = False,
+) -> None:
     """Revocation callers pass every spelling they covered, including repeat/error tails."""
+    set_query_tag("knowledge.connected_accounts.stop_subjects")
     ended = []
-    for account in await store.owned(subjects, org=org):
-        async with account_lease(account.org, account.subject, account.kind):
-            current = await store.get(account.org, account.subject, account.kind)
-            if current is not None:
-                await _stop_locked(current)
-                ended.append(current)
+    async with asyncio.timeout(settings.knowledge_connected_stop_timeout_s):
+        found = await store.owned(subjects, org=org)
+        if respect_cutoff:
+            wanted = set(subjects)
+            known = {(account.org, account.subject) for account in found}
+            for owner_org, owner in await store.owner_identities(org=org):
+                if (owner_org, owner) in known:
+                    continue
+                spellings = await aliases.verified_spellings(owner_org, owner)
+                if wanted.intersection(spellings):
+                    # Verified ties are org-specific. Never canonicalize in one org
+                    # and then use that identity to stop rows in another org.
+                    found.extend(await store.owned([owner], org=owner_org))
+        for account in found:
+            async with account_lease(account.org, account.subject, account.kind):
+                current = await store.get(account.org, account.subject, account.kind)
+                if current is not None:
+                    if respect_cutoff:
+                        spellings = await aliases.verified_spellings(current.org, current.subject)
+                        cutoffs = await revocation.cutoffs(spellings)
+                        since = int(current.connected_at.timestamp()) if current.connected_at else 0
+                        if not any(revocation.kills(row, since) for row in cutoffs.values()):
+                            continue
+                    credential = (
+                        unseal(CREDENTIAL_PURPOSE, current.credential_enc, warn=False) or ""
+                        if revoke
+                        else ""
+                    )
+                    stopped_account = await _stop_locked(current)
+                    if erase_owner:
+                        await _erase_locked(stopped_account, keep_marker=False)
+                    ended.append((current, credential))
+    if not revoke:
+        return
     # All local owners and sources are fenced before the first slow provider call.
     deadline = time.monotonic() + settings.knowledge_connected_revoke_timeout_s
-    for account in ended:
-        await _revoke(account, deadline=deadline)
+    for account, credential in ended:
+        await _revoke(account, credential=credential, deadline=deadline)
 
 
 async def _source_standing(source: KnowledgeSource, account: ConnectedAccount) -> None:
     from server.knowledge.app import sources as source_ops
 
+    if (
+        account.org != source.org
+        or account.subject != source.owner_subject
+        or account.kind != source.kind
+    ):
+        raise unavailable()
+    if not account.active or account.connection_id != source.connection_id:
+        raise OwnerUnavailable()
     if (
         source.credential_mode != "connected"
         or source.access != MIRRORED_ACCESS
@@ -433,8 +547,7 @@ async def _source_standing(source: KnowledgeSource, account: ConnectedAccount) -
         )
     ):
         raise unavailable()
-    if not await _fence_current(account):
-        raise unavailable()
+    await _require_source_fence(account)
     since = int(account.connected_at.timestamp()) if account.connected_at else 0
     await _standing(source.org, source.owner_subject, since)
     # Invalidate the alias cache after an uncached verified tie read; the existing grant
@@ -444,10 +557,10 @@ async def _source_standing(source: KnowledgeSource, account: ConnectedAccount) -
     with own_write_reads():
         role = await authz.grant_role_for(source.org, source.namespace, source.owner_subject)
         current = await source_store.latest_source(source.org, source.namespace, source.name)
+    if role is None or role < Role.WRITER:
+        raise OwnerUnavailable()
     if (
-        role is None
-        or role < Role.WRITER
-        or current is None
+        current is None
         or not current.active
         or current.source_id != source.source_id
         or current.connection_id != source.connection_id
@@ -455,35 +568,114 @@ async def _source_standing(source: KnowledgeSource, account: ConnectedAccount) -
         or current.kind != source.kind
         or current.credential_mode != "connected"
         or current.access != MIRRORED_ACCESS
+        or current.items != source.items
+        or current.config != source.config
     ):
         raise unavailable()
     await source_ops._require_source_namespace(source.org, source.namespace)
-    if not await _fence_current(account):
+    await source_ops._require_no_erasure(source.org, source.namespace)
+    await _require_source_fence(account)
+
+
+@asynccontextmanager
+async def publication_guard(source: KnowledgeSource) -> AsyncIterator[None]:
+    """Fence a durable publication against disconnect and source replacement.
+
+    Provider and model waits precede this guard; only the bounded store commit holds
+    both leases, in the same account-before-namespace order as local retirement.
+    """
+    from server.knowledge.app import sources as source_ops
+
+    async with account_lease(source.org, source.owner_subject, source.kind):
+        async with source_ops.sources_lease(source.org, source.namespace):
+            account = await store.get(source.org, source.owner_subject, source.kind)
+            if account is None:
+                raise unavailable()
+            await _source_standing(source, account)
+            yield
+
+
+async def _draft_standing(source: KnowledgeSource, account: ConnectedAccount) -> None:
+    """A probe may use its owner's connection before the new source row exists."""
+    from server.knowledge.app import sources as source_ops
+
+    auth = current_auth()
+    org, subject = await own_subject(auth)
+    if (
+        org != source.org
+        or subject != source.owner_subject
+        or source.credential_mode != "connected"
+        or source.access != MIRRORED_ACCESS
+        or not source.active
+        or not settings.knowledge_mirrored_sources_enabled
+        or not source_matches(
+            account,
+            org=org,
+            owner=subject,
+            kind=source.kind,
+            connection_id=source.connection_id,
+        )
+        or not await _fence_current(account)
+        or not await authz.row_in_scope(org, source.namespace, Role.WRITER)
+    ):
+        raise unavailable()
+    await aliases.verified_spellings(org, subject)
+    aliases.invalidate(org, [subject])
+    with own_write_reads():
+        role = await authz.grant_role_for(org, source.namespace, subject)
+    if role is None or role < Role.WRITER:
+        raise unavailable()
+    await source_ops._require_source_namespace(org, source.namespace)
+    await source_ops._require_no_erasure(org, source.namespace)
+    if current_auth() is not auth or not await _fence_current(account):
         raise unavailable()
 
 
-async def token_for(source: KnowledgeSource, *, deadline: float) -> tuple[Tokens, ConnectedAccount]:
+async def token_for(
+    source: KnowledgeSource,
+    *,
+    deadline: float,
+    pending: bool = False,
+    request_guard: Callable[[], Awaitable[None]] | None = None,
+) -> tuple[Tokens, ConnectedAccount]:
+    """A source-bound, serialized rotation. Access material remains in memory only."""
     if not math.isfinite(deadline) or deadline <= time.monotonic():
         raise unavailable()
-    """A source-bound, serialized rotation. Access material remains in memory only."""
+    standing = _draft_standing if pending else _source_standing
     provider = client(source.kind)
-    async with account_lease(source.org, source.owner_subject, source.kind):
-        account = await store.get(source.org, source.owner_subject, source.kind)
-        if account is None or account.refresh_id:
-            raise unavailable()
-        await _source_standing(source, account)
-        credential = unseal(CREDENTIAL_PURPOSE, account.credential_enc, warn=False)
-        if not credential:
-            raise unavailable()
-        reservation = secrets.token_hex(16)
-        await store.put(refreshing(account, refresh_id=reservation))
+    account: ConnectedAccount | None = None
+    reservation = ""
+    dispatched = False
     try:
+        async with account_lease(source.org, source.owner_subject, source.kind):
+            account = await store.get(source.org, source.owner_subject, source.kind)
+            if account is None or account.refresh_id:
+                raise unavailable()
+            await standing(source, account)
+            if request_guard is not None:
+                await request_guard()
+            credential = unseal(CREDENTIAL_PURPOSE, account.credential_enc, warn=False)
+            if not credential:
+                raise unavailable()
+            reservation = secrets.token_hex(16)
+            await store.put(refreshing(account, refresh_id=reservation))
+        if request_guard is not None:
+            await request_guard()
+        dispatched = True
         tokens = await provider.refresh(credential, scopes=account.scopes, deadline=deadline)
         async with account_lease(account.org, account.subject, account.kind):
             current = await store.get(account.org, account.subject, account.kind)
-            if current is None:
+            if current is None or (current.org, current.subject, current.kind) != (
+                account.org,
+                account.subject,
+                account.kind,
+            ):
                 raise unavailable()
-            await _source_standing(source, current)
+            # A returned rotation belongs to the owner, independently of the
+            # presenter's namespace role or the continued existence of this source.
+            since = int(current.connected_at.timestamp()) if current.connected_at else 0
+            await _standing(current.org, current.subject, since)
+            await _require_source_fence(current)
             try:
                 updated = rotated(
                     current,
@@ -494,18 +686,48 @@ async def token_for(source: KnowledgeSource, *, deadline: float) -> tuple[Tokens
             except ValueError:
                 raise unavailable() from None
             await store.put(updated)
-        return tokens, account
     except BaseException:  # A lost rotating response cannot leave a reusable old secret.
-        try:
-            await shielded.shielded(
-                _abort_refresh(account, reservation), name="connected refresh stop"
-            )
-        except Exception:  # noqa: BLE001 — keep the original failure; its reservation refuses reuse
-            pass
+        if account is not None and reservation:
+            try:
+                await shielded.shielded(
+                    _abort_refresh(account, reservation, dispatched=dispatched),
+                    name="connected refresh cleanup",
+                )
+            except Exception:  # noqa: BLE001 — keep the original failure; its reservation refuses reuse
+                pass
         raise
+    # Credential maintenance is complete. Delivery can still be refused without
+    # discarding the owner's valid rotation or stopping unrelated sources.
+    await standing(source, updated)
+    if request_guard is not None:
+        await request_guard()
+    return tokens, updated
 
 
-async def _abort_refresh(account: ConnectedAccount, reservation: str) -> None:
+async def checked_for(
+    source: KnowledgeSource, *, deadline: float, pending: bool = False
+) -> CheckedAccess:
+    """Worker and registration probes retain the exact owner/source generation."""
+    tokens, account = await token_for(source, deadline=deadline, pending=pending)
+    auth = current_auth() if pending else None
+
+    async def validate() -> None:
+        if pending and current_auth() is not auth:
+            raise unavailable()
+        current = await store.get(account.org, account.subject, account.kind)
+        if current is None or current.connection_id != account.connection_id:
+            raise unavailable()
+        if pending:
+            await _draft_standing(source, current)
+        else:
+            await _source_standing(source, current)
+
+    return CheckedAccess(
+        tokens.access_token, kind=cast(Kind, source.kind), deadline=deadline, validate=validate
+    )
+
+
+async def _abort_refresh(account: ConnectedAccount, reservation: str, *, dispatched: bool) -> None:
     async with asyncio.timeout(settings.knowledge_connected_stop_timeout_s):
         async with account_lease(account.org, account.subject, account.kind):
             current = await store.get(account.org, account.subject, account.kind)
@@ -514,13 +736,17 @@ async def _abort_refresh(account: ConnectedAccount, reservation: str) -> None:
                 and current.connection_id == account.connection_id
                 and current.refresh_id == reservation
             ):
-                await _stop_locked(current)
+                if dispatched:
+                    await _stop_locked(current)
+                else:
+                    # No provider request could have consumed the old refresh token.
+                    await store.put(dataclasses.replace(current, refresh_id=""))
 
 
 class SourceAuthority:
     """An internal credential checkout bound to the selected source and requester."""
 
-    __slots__ = ("source", "requester", "_account", "_access", "_auth", "_deadline")
+    __slots__ = ("source", "requester", "_account", "_access", "_auth", "_deadline", "_role")
 
     def __init__(
         self,
@@ -530,10 +756,13 @@ class SourceAuthority:
         tokens: Tokens,
         auth: AuthInfo,
         deadline: float,
+        *,
+        required_role: Role = Role.VIEWER,
     ) -> None:
         self.source, self.requester = source, requester
         self._account, self._auth = account, auth
         self._deadline = deadline
+        self._role = required_role
         self._access = CheckedAccess(
             tokens.access_token,
             kind=cast(Kind, source.kind),
@@ -553,16 +782,15 @@ class SourceAuthority:
         org, subject = await own_subject(auth)
         if org != self.source.org or subject != self.requester:
             raise unavailable()
-        if not await authz.row_in_scope(org, self.source.namespace, Role.VIEWER):
+        if not await authz.row_in_scope(org, self.source.namespace, self._role):
             raise unavailable()
         current = await store.get(self._account.org, self._account.subject, self._account.kind)
         if current is None or current.connection_id != self._account.connection_id:
             raise unavailable()
         await _source_standing(self.source, current)
-        if current_auth() is not self._auth:
-            raise unavailable()
+        await _requester_standing(self._auth, self.source, self.requester, self._role)
 
-    def __reduce_ex__(self, protocol: int) -> Any:
+    def __reduce_ex__(self, protocol: SupportsIndex) -> Any:
         raise TypeError("a connected authority cannot be serialized")
 
     async def run(self, call: Callable[[CheckedAccess], Awaitable[_T]]) -> _T:
@@ -573,7 +801,14 @@ class SourceAuthority:
             return result
 
 
-async def resolve(org: str, namespace: str, name: str, *, deadline: float) -> SourceAuthority:
+async def resolve(
+    org: str,
+    namespace: str,
+    name: str,
+    *,
+    deadline: float,
+    expected_source_id: str = "",
+) -> SourceAuthority:
     if not math.isfinite(deadline) or deadline <= time.monotonic():
         raise unavailable()
     auth = current_auth()
@@ -581,12 +816,84 @@ async def resolve(org: str, namespace: str, name: str, *, deadline: float) -> So
     if actual_org != org or not await authz.row_in_scope(org, namespace, Role.VIEWER):
         raise unavailable()
     source = await source_store.get_source(org, namespace, name)
-    if source is None or source.owner_subject != subject:
+    if (
+        source is None
+        or source.owner_subject != subject
+        or (expected_source_id and source.source_id != expected_source_id)
+    ):
         raise unavailable()
-    tokens, account = await token_for(source, deadline=deadline)
     if auth is None:
         raise unavailable()
+
+    async def requester_standing() -> None:
+        await _requester_standing(auth, source, subject, Role.VIEWER)
+
+    async with asyncio.timeout_at(deadline):
+        tokens, account = await token_for(
+            source, deadline=deadline, request_guard=requester_standing
+        )
     return SourceAuthority(source, subject, account, tokens, auth, deadline)
+
+
+async def _requester_standing(
+    auth: AuthInfo, source: KnowledgeSource, requester: str, role: Role
+) -> None:
+    if current_auth() is not auth:
+        raise unavailable()
+    org, subject = await own_subject(auth)
+    if (
+        org != source.org
+        or subject != requester
+        or not await authz.row_in_scope(org, source.namespace, role)
+        or current_auth() is not auth
+    ):
+        raise unavailable()
+
+
+async def resolve_probe(source: KnowledgeSource, *, deadline: float) -> SourceAuthority:
+    """An explicit administrative probe retains its caller's admin standing.
+
+    This narrow control-plane exception never participates in live document checkout.
+    """
+    if not math.isfinite(deadline) or deadline <= time.monotonic():
+        raise unavailable()
+    auth = current_auth()
+    org, subject = await own_subject(auth)
+    if auth is None or org != source.org:
+        raise unavailable()
+    role = Role.WRITER if subject == source.owner_subject else Role.ADMIN
+
+    async def requester_standing() -> None:
+        await _requester_standing(auth, source, subject, role)
+
+    async with asyncio.timeout_at(deadline):
+        await requester_standing()
+        tokens, account = await token_for(
+            source, deadline=deadline, request_guard=requester_standing
+        )
+        await requester_standing()
+    return SourceAuthority(source, subject, account, tokens, auth, deadline, required_role=role)
+
+
+async def validate_indexed(source: KnowledgeSource, auth: AuthInfo | None) -> None:
+    """Indexed content needs current owner authority, without minting an access token."""
+    if auth is None or current_auth() is not auth:
+        raise unavailable()
+    # The source owner's standing is independent of which admitted reader matches
+    # its stored ACL. Live provider checkout remains restricted by resolve().
+    if auth.org != source.org:
+        raise unavailable()
+    if not await authz.row_in_scope(source.org, source.namespace, Role.VIEWER):
+        raise unavailable()
+    client(source.kind)
+    account = await store.get(source.org, source.owner_subject, source.kind)
+    if account is None or account.refresh_id:
+        raise unavailable()
+    await _source_standing(source, account)
+    if not unseal(CREDENTIAL_PURPOSE, account.credential_enc, warn=False):
+        raise unavailable()
+    if current_auth() is not auth:
+        raise unavailable()
 
 
 async def available(account: ConnectedAccount) -> bool:
@@ -595,6 +902,8 @@ async def available(account: ConnectedAccount) -> bool:
         return False
     try:
         client(account.kind)
+        since = int(account.connected_at.timestamp()) if account.connected_at else 0
+        await _standing(account.org, account.subject, since)
         return bool(
             unseal(CREDENTIAL_PURPOSE, account.credential_enc, warn=False)
         ) and await _fence_current(account)
@@ -637,5 +946,10 @@ async def reseal_registry(
                 elif (new := resealed(purpose, raw)) is not None:
                     count += 1
                     if not dry_run:
-                        await store.put(dataclasses.replace(current, **{column: new}), ch=ch)
+                        updated = (
+                            dataclasses.replace(current, credential_enc=new)
+                            if column == "credential_enc"
+                            else dataclasses.replace(current, account_email_enc=new)
+                        )
+                        await store.put(updated, ch=ch)
     return count, missing

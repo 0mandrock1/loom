@@ -221,13 +221,52 @@ async def latest_source(
     return _source(row) if row else None
 
 
-async def active_count(org: str, namespace: str, *, ch: _CHClient | None = None) -> int:
+async def active_count(
+    org: str,
+    namespace: str,
+    *,
+    connected: bool = False,
+    owner_subject: str = "",
+    ch: _CHClient | None = None,
+) -> int:
     row = await (ch or _default_client()).query_one(
         f"SELECT count() AS n FROM {TABLE} FINAL "
-        "WHERE org = {org:String} AND namespace = {ns:String} AND active",
-        params={"org": org, "ns": namespace},
+        "WHERE org = {org:String} AND namespace = {ns:String} AND active "
+        "AND (credential_mode = 'connected') = {connected:Bool} "
+        "AND ({owner:String} = '' OR owner_subject = {owner:String})",
+        params={"org": org, "ns": namespace, "connected": connected, "owner": owner_subject},
     )
     return int((row or {}).get("n") or 0)
+
+
+async def connected_owner_namespaces(
+    org: str, subject: str, kind: str, *, ch: _CHClient | None = None
+) -> list[str]:
+    """Include historical bindings hidden by a newer source of a different owner."""
+    maximum = settings.knowledge_connected_registry_scan_limit
+    rows = await (ch or _default_client()).query_all(
+        f"SELECT DISTINCT namespace FROM {TABLE} "
+        "WHERE org = {org:String} AND owner_subject = {owner:String} "
+        "AND credential_mode = 'connected' AND source_kind = {kind:String} "
+        "ORDER BY namespace LIMIT {limit:UInt64}",
+        params={"org": org, "owner": subject, "kind": kind, "limit": maximum + 1},
+    )
+    if len(rows) > maximum:
+        raise RuntimeError("connected_source_owner_bound")
+    return [str(row["namespace"]) for row in rows]
+
+
+async def erase_connected_owner(
+    org: str, namespace: str, subject: str, kind: str, *, ch: _CHClient | None = None
+) -> None:
+    """The caller holds the stopped account and this namespace's source lease."""
+    await (ch or _default_client()).execute(
+        f"DELETE FROM {TABLE} WHERE org = {{org:String}} AND namespace = {{ns:String}} "
+        "AND owner_subject = {owner:String} AND credential_mode = 'connected' "
+        "AND source_kind = {kind:String}",
+        params={"org": org, "ns": namespace, "owner": subject, "kind": kind},
+        settings={"lightweight_deletes_sync": 2},
+    )
 
 
 async def insert_source(src: KnowledgeSource, *, ch: _CHClient | None = None) -> None:

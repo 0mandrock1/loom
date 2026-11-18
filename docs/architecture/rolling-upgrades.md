@@ -1012,3 +1012,21 @@ relation. Builds with the earlier probe order can refuse `insights.query` after 
 cutover because they probe the retired relation before checking the entity version.
 Statements naming a removed relation still fail its grant check; trusting the newer
 catalog does not restore a retired grant.
+
+### Connected-account registrations
+
+The account registry is additive and is read only by builds that understand connected
+sources. Such a source stores an empty legacy `kind` and credential, with its provider
+kind in `source_kind`; an older worker cannot interpret it as a shared credential. Its
+`owner_subject` and `connection_id` bind every credential checkout and publication to
+the canonical person's current account generation. The source id also distinguishes
+its mirror copies from another registration using the same item address.
+
+Keep connected and mirrored creation disabled until the fleet's mirror read and session
+protections are complete. A rollback or restore must settle source writers and perform
+the mirror cleanup described in [document sources](document-sources.md#rolling-upgrades)
+before an older build serves. Account rows restored without their matching Keeper
+fence refuse credential checkout. That refusal does not prove physical erasure: restored
+provider identities, sealed credentials and source history still need canonical-owner
+cleanup and its census. Namespace or end-user erasure cannot substitute for that exact
+owner key. The connection backend does not supply an automatic restore-cleanup command.

@@ -44,6 +44,7 @@ from server.settings._live import LIVE
 
 # ===== Assistant =======================================================
 
+
 class AssistantSettings(BaseModel):
     """The assistant: LibreChat run headless beside Loom, and the agent Loom seeds in it."""
 
@@ -72,6 +73,7 @@ class AssistantSettings(BaseModel):
 
 
 # ===== Auth ============================================================
+
 
 @functools.lru_cache(maxsize=4)
 def _end_user_issuers(raw: str) -> dict[str, EndUserIssuer]:
@@ -856,6 +858,7 @@ class ClickHouseSettings(BaseModel):
 
 
 # ===== Code ============================================================
+
 
 class CodeSettings(BaseModel):
     """The code plane: ingest, indexes, search, ask, review."""
@@ -1904,6 +1907,7 @@ class CodeSettings(BaseModel):
 
 # ===== Context =========================================================
 
+
 class ContextSettings(BaseModel):
     """context.pack, context offload, session briefs and the mentor's hints."""
 
@@ -1933,6 +1937,7 @@ class ContextSettings(BaseModel):
 
 
 # ===== Erasure =========================================================
+
 
 class ErasureSettings(BaseModel):
     """Erasure: saga recovery, reclaim, purge and the external backends it cascades to."""
@@ -1984,6 +1989,7 @@ class ErasureSettings(BaseModel):
 
 
 # ===== Extraction ======================================================
+
 
 class ExtractionSettings(BaseModel):
     """Fact extraction from messages and observed events."""
@@ -2149,6 +2155,7 @@ class ExtractionSettings(BaseModel):
 
 
 # ===== Knowledge =======================================================
+
 
 class KnowledgeSettings(BaseModel):
     """Knowledge documents and conversations: chunking, search floor, thread titles."""
@@ -2322,13 +2329,17 @@ class KnowledgeSettings(BaseModel):
     document_extractor_max_artifact_bytes: int = Field(default=64 * 1024 * 1024, ge=1024)
 
     # ---- document sources ----
-    # OAuth client registrations for personal document connections. Empty disables
-    # the corresponding provider; credentials are never taken from a source row.
+    # OAuth client id for personal Drive connections; empty disables the provider.
     connect_gdrive_client_id: str = ""
+    # Secret of that Drive OAuth registration; kept outside source rows.
     connect_gdrive_client_secret: str = ""
+    # Public-integration client id for personal page-store connections; empty disables it.
     connect_notion_client_id: str = ""
+    # Secret of that page-store registration; kept outside source rows.
     connect_notion_client_secret: str = ""
+    # OAuth client id for personal project-tracker connections; empty disables it.
     connect_linear_client_id: str = ""
+    # Secret of that project-tracker registration; kept outside source rows.
     connect_linear_client_secret: str = ""
     # The operator has restricted the public integration to read-content capability.
     # Its token response cannot prove this registration setting; false disables it.
@@ -2337,9 +2348,10 @@ class KnowledgeSettings(BaseModel):
     knowledge_connected_stop_timeout_s: float = Field(default=20.0, gt=0)
     # Seconds for best-effort provider revocation after every local stop has committed.
     knowledge_connected_revoke_timeout_s: float = Field(default=5.0, gt=0)
-    # The account-generation lease's lifetime and maximum admission wait in seconds.
-    # Provider exchanges and refreshes run outside this lease.
+    # Seconds the renewed account-generation lease lives. Source leases follow it;
+    # provider requests hold neither.
     knowledge_connected_lease_ttl_s: float = Field(default=60.0, gt=0)
+    # Seconds a connection change waits for another holder's account-generation lease.
     knowledge_connected_lease_wait_s: float = Field(default=5.0, ge=0)
     # Maximum complete owner scan; exceeding it refuses instead of stopping a subset.
     knowledge_connected_registry_scan_limit: int = Field(default=4096, ge=1)
@@ -2354,6 +2366,10 @@ class KnowledgeSettings(BaseModel):
     # Active document sources (knowledge.source.add) one namespace may register; an
     # add past it is refused with SOURCE_QUOTA.
     knowledge_sources_max_per_namespace: Annotated[int, LIVE] = Field(default=8, ge=1)
+    # Active connected sources per namespace, separate from the shared/crawl quota.
+    knowledge_connected_sources_max_per_namespace: Annotated[int, LIVE] = Field(default=64, ge=1)
+    # Active connected sources one canonical person may register in one namespace.
+    knowledge_connected_sources_max_per_person: Annotated[int, LIVE] = Field(default=8, ge=1)
     # Seconds a document source's probe (add, update, check, rotate) or tracker short-id
     # lookup may take in all; past it add, update and rotate answer SOURCE_UNREACHABLE
     # and check answers reachable: false.
@@ -2369,6 +2385,9 @@ class KnowledgeSettings(BaseModel):
     # Mirrored reads require a complete listing and group observation within this
     # many seconds; missing or older evidence admits nobody.
     knowledge_source_acl_stale_seconds: int = Field(default=3600, ge=1)
+    # Maximum team and member rows read for one project's complete permission list.
+    # A larger list refuses publication rather than granting from a partial page.
+    knowledge_source_acl_max_entries: int = Field(default=10000, ge=1)
     # Enable optional source push setup, callbacks and Drive renewal; false keeps polling only.
     knowledge_source_push_enabled: bool = False
     # Seconds between bounded channel-renewal pages; channels renew a day before expiry.
@@ -2505,6 +2524,7 @@ class KnowledgeSettings(BaseModel):
 
 # ===== Mcp =============================================================
 
+
 class McpSettings(BaseModel):
     """The MCP transport: tool listing, lean results, session runs."""
 
@@ -2593,6 +2613,7 @@ class McpSettings(BaseModel):
 
 
 # ===== Memory ==========================================================
+
 
 class MemorySettings(BaseModel):
     """The memory plane outside search/ask/extraction: writes, conflicts, lifecycle, workers."""
@@ -3528,6 +3549,7 @@ class MemoryAskSettings(BaseModel):
 
 # ===== MemorySearch ====================================================
 
+
 class MemorySearchSettings(BaseModel):
     """memory.search: legs, fusion, ranking and gates."""
 
@@ -3841,6 +3863,7 @@ class MemorySearchSettings(BaseModel):
 
 # ===== MemoryWebhook ===================================================
 
+
 def parse_backoff_steps(raw: str) -> tuple[float, ...]:
     """`memory_webhook_backoff_steps_seconds` as seconds, in order; ValueError when a
     step is not a number over 0 or there is no step."""
@@ -4067,6 +4090,7 @@ class ModelSettings(BaseModel):
 
 # ===== Namespace =======================================================
 
+
 class NamespaceSettings(BaseModel):
     """Namespace registration, write marks and bench-namespace GC."""
 
@@ -4126,6 +4150,7 @@ class NamespaceSettings(BaseModel):
 
 
 # ===== Observability ===================================================
+
 
 def parse_latency_budgets(raw: str) -> dict[str, int | float]:
     """`latency_budget_overrides` as {op: ms | factor}; ValueError names the op whose
@@ -4265,7 +4290,7 @@ class ObservabilitySettings(BaseModel):
     otel_environment: str = "dev"
     # Comma-separated path regexes the FastAPI instrumentation opens no span
     # for (health polls). "" = instrument every path but the sign-in routes
-    # (/oauth/), which are always left out: their URLs carry codes.
+    # (/oauth/ and /v1/connect/), which are always left out: their URLs carry codes.
     otel_excluded_urls: str = "/v1/health"
 
     # Scales every op's p99 budget (OP_BUDGETS_P99_MS in server/settings/catalog.py,
@@ -4348,6 +4373,7 @@ class ObservabilitySettings(BaseModel):
 
 
 # ===== Provider ========================================================
+
 
 def ascii_host(host: str) -> str:
     """`host` as a host list names it: lower-case, no trailing dot, a non-ASCII name as
@@ -5136,6 +5162,7 @@ class ProviderSettings(ModelSettings):
 
 # ===== RateLimit =======================================================
 
+
 class RateLimitSettings(BaseModel):
     """Rate limits: per-actor and per-traffic-class buckets, shared across web workers."""
 
@@ -5167,6 +5194,7 @@ class RateLimitSettings(BaseModel):
 
 
 # ===== Runtime =========================================================
+
 
 class RuntimeSettings(BaseModel):
     """Process shape, deployment, event stream and cost budgets."""
@@ -5338,6 +5366,7 @@ class RuntimeSettings(BaseModel):
 
 
 # ===== Storage =========================================================
+
 
 class StorageSettings(BaseModel):
     """Storage: document originals, per-table retention and warm-tier moves."""
@@ -5587,6 +5616,7 @@ class StorageSettings(BaseModel):
 
 # ===== Task ============================================================
 
+
 class TaskSettings(BaseModel):
     """The task inbox workers and what run.complete does to a run's rows."""
 
@@ -5627,6 +5657,7 @@ class TaskSettings(BaseModel):
 
 
 # ===== Tracker =========================================================
+
 
 class TrackerSettings(BaseModel):
     """The tracker plane: records, duplicate checks, bisect."""
@@ -5976,6 +6007,10 @@ class TrackerSettings(BaseModel):
 # the handler time a budget measures.
 
 OP_BUDGETS_P99_MS: dict[str, int] = {
+    # Own connection listing rechecks current identity and provider registration;
+    # disconnect includes bounded local retirement followed by best-effort revocation.
+    "connection.list": 1000,
+    "connection.disconnect": 30000,
     "admin.users": 300,
     "agents.connected": 120,
     # One agent answer: a model turn per tool call (measured p95 10.7 s, at most 15 s

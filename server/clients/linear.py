@@ -31,6 +31,7 @@ import httpx
 from server.clients._checked_access import CheckedAccess, Credential
 from server.clients._http import get_client
 from server.clients._vendor import read_capped
+from server.settings import settings
 
 _GRAPHQL_URL = "https://api.linear.app/graphql"
 # Nodes per page (documents, or projects by short id): the API's own default page size.
@@ -75,6 +76,28 @@ query Document($id: String!) {
 _DOCUMENT_STATE = """
 query DocumentState($id: String!) {
   document(id: $id) { id trashed archivedAt project { id } }
+}
+"""
+
+_PROJECT_TEAMS = """
+query ProjectTeams($id: String!, $first: Int!, $after: String) {
+  project(id: $id) {
+    teams(first: $first, after: $after) {
+      nodes { id }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}
+"""
+
+_TEAM_MEMBERS = """
+query TeamMembers($id: String!, $first: Int!, $after: String) {
+  team(id: $id) {
+    members(first: $first, after: $after, includeDisabled: true) {
+      nodes { id email active }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
 }
 """
 
@@ -186,14 +209,16 @@ async def _query(
     try:
         async with asyncio.timeout_at(checked.deadline if checked is not None else None):
             authorization = (
-                await checked.authorization(_GRAPHQL_URL) if checked is not None else api_key
+                await api_key.authorization(_GRAPHQL_URL)
+                if isinstance(api_key, CheckedAccess)
+                else api_key
             )
             async with get_client().stream(
                 "POST",
                 _GRAPHQL_URL,
                 headers={"Authorization": authorization, "Content-Type": "application/json"},
                 json={"query": query, "variables": variables},
-                **({"follow_redirects": False} if checked is not None else {}),
+                follow_redirects=False if checked is not None else httpx.USE_CLIENT_DEFAULT,
             ) as resp:
                 raw = await read_capped(resp, max_bytes)
             if checked is not None:
@@ -243,6 +268,71 @@ async def documents_page(
         # A next page with no cursor to reach it: the listing cannot be completed.
         raise LinearError(what, "no_cursor")
     return nodes, cursor
+
+
+async def _acl_nodes(
+    api_key: Credential,
+    query: str,
+    root: str,
+    field: str,
+    ident: str,
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Read a complete bounded ACL connection; no partial page grants a reader."""
+    cursor = ""
+    seen: set[str] = set()
+    found: list[dict[str, Any]] = []
+    while True:
+        data = await _query(
+            api_key,
+            query,
+            {"id": ident, "first": PAGE_SIZE, "after": cursor or None},
+            "permissions",
+            max_bytes=_PAGE_MAX_BYTES,
+        )
+        parent = data.get(root)
+        connection = parent.get(field) if isinstance(parent, dict) else None
+        nodes = connection.get("nodes") if isinstance(connection, dict) else None
+        info = connection.get("pageInfo") if isinstance(connection, dict) else None
+        if (
+            not isinstance(nodes, list)
+            or any(
+                not isinstance(node, dict) or not valid_id(str(node.get("id"))) for node in nodes
+            )
+            or not isinstance(info, dict)
+            or not isinstance(info.get("hasNextPage"), bool)
+        ):
+            raise LinearError("permissions", "invalid_connection")
+        if len(found) + len(nodes) > limit or len(seen) >= limit:
+            raise TooLarge("permissions", "too_many_entries")
+        found.extend(nodes)
+        if not info["hasNextPage"]:
+            return found
+        next_cursor = info.get("endCursor")
+        if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen:
+            raise LinearError("permissions", "invalid_cursor")
+        seen.add(next_cursor)
+        cursor = next_cursor
+        await _sleep(PAGE_PACE_S)
+
+
+async def project_member_emails(api_key: Credential, project_id: str) -> tuple[str, ...]:
+    """Only explicitly active members of the project's visible teams may match an ACL."""
+    maximum = settings.knowledge_source_acl_max_entries
+    teams = await _acl_nodes(api_key, _PROJECT_TEAMS, "project", "teams", project_id, limit=maximum)
+    remaining = maximum - len(teams)
+    emails: set[str] = set()
+    for team in teams:
+        members = await _acl_nodes(
+            api_key, _TEAM_MEMBERS, "team", "members", team["id"], limit=remaining
+        )
+        remaining -= len(members)
+        for member in members:
+            email = member.get("email")
+            if member.get("active") is True and isinstance(email, str) and email.strip():
+                emails.add(email.strip().lower())
+    return tuple(sorted(emails))
 
 
 async def organization_id(api_key: Credential) -> str:

@@ -21,25 +21,20 @@ _COLUMNS = (
 
 def _account(row: dict[str, Any]) -> ConnectedAccount:
     return ConnectedAccount(
-        **{
-            name: row.get(name)
-            for name in (
-                "org",
-                "subject",
-                "kind",
-                "connection_id",
-                "account_id",
-                "workspace_id",
-                "account_email_enc",
-                "credential_enc",
-                "active",
-                "refresh_id",
-                "connected_at",
-                "disconnected_at",
-                "version",
-            )
-        },
+        org=row["org"],
+        subject=row["subject"],
+        kind=row["kind"],
+        connection_id=row["connection_id"],
+        account_id=row.get("account_id", ""),
+        workspace_id=row.get("workspace_id", ""),
+        account_email_enc=row.get("account_email_enc", ""),
+        credential_enc=row.get("credential_enc", ""),
         scopes=tuple(row.get("scopes") or ()),
+        active=row.get("active", False),
+        refresh_id=row.get("refresh_id", ""),
+        connected_at=row.get("connected_at"),
+        disconnected_at=row.get("disconnected_at"),
+        version=row.get("version", 0),
     )
 
 
@@ -94,13 +89,37 @@ async def put(account: ConnectedAccount, *, ch: _CHClient | None = None) -> None
     await client.insert(TABLE, [row])
 
 
-async def erase(org: str, subjects: list[str], *, ch: _CHClient | None = None) -> None:
+async def owner_identities(
+    *, org: str | None = None, ch: _CHClient | None = None
+) -> list[tuple[str, str]]:
+    """Lifecycle revocation discovers verified aliases without reading sealed payloads."""
+    where = "WHERE org = {org:String} " if org is not None else ""
+    maximum = settings.knowledge_connected_registry_scan_limit
+    with own_write_reads():
+        rows = await (ch or _default_client()).query_all(
+            f"SELECT DISTINCT org, subject FROM {TABLE} FINAL {where}"
+            "ORDER BY org, subject LIMIT {limit:UInt64}",
+            params={"org": org or "", "limit": maximum + 1},
+        )
+    if len(rows) > maximum:
+        raise RuntimeError("connected_account_owner_bound")
+    return [(str(row["org"]), str(row["subject"])) for row in rows]
+
+
+async def erase(
+    org: str,
+    subjects: list[str],
+    *,
+    kind: str,
+    ch: _CHClient | None = None,
+) -> None:
     """Delete every historical secret/identity version after writers have been fenced."""
     if subjects:
         await (ch or _default_client()).execute(
             f"DELETE FROM {TABLE} WHERE org = {{org:String}} "
-            "AND subject IN {subjects:Array(String)}",
-            params={"org": org, "subjects": subjects},
+            "AND subject IN {subjects:Array(String)} AND kind = {kind:String}",
+            params={"org": org, "subjects": subjects, "kind": kind},
+            settings={"lightweight_deletes_sync": 2},
         )
 
 

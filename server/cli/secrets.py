@@ -150,9 +150,9 @@ async def reseal_all(
     lost: dict[str, list[str]] = {}
     for table, column, path, purpose, where in SEALED:
         if table == "loom.connected_accounts":
-            from server.knowledge.app.connected_accounts import reseal_registry
+            from server.knowledge.app.connected_accounts import reseal_registry as reseal_accounts
 
-            n, missing = await reseal_registry(column, purpose, dry_run=dry_run, ch=ch)
+            n, missing = await reseal_accounts(column, purpose, dry_run=dry_run, ch=ch)
             counts[f"{table}.{column}"] = n
             if missing:
                 lost[f"{table}.{column}"] = missing

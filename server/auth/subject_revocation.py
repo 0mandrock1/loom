@@ -143,7 +143,7 @@ async def finish(subject: str, row: dict[str, Any], kept: bool, *, by: str, org:
     outright, in_force, sessions, tokens = False, None, 0, 0
     try:
         revoked = await revocation.cutoffs([subject])  # its own row, the cutoff's, SCIM's
-        await stop_subjects([subject])
+        await stop_subjects([subject], respect_cutoff=True)
         if subject in revoked:
             at = revoked[subject]
             outright = at is None

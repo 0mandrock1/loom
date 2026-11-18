@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from server.erasure.store import census
 from server.knowledge.app import connected_accounts as connections
 from server.knowledge.app import source_push, sources
 from server.knowledge.domain.connected_accounts import ConnectedAccount
@@ -26,7 +27,7 @@ class _World:
                 "team",
                 "person",
                 kind,
-                str(i + 1) * 32 + "/" + "a" * 32,
+                str(i + 1) * 32 + "/1" + "a" * 31,
                 credential_enc="sealed-refresh",
                 active=True,
                 connected_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -52,6 +53,8 @@ class _World:
         monkeypatch.setattr(connections.store, "get", self.get)
         monkeypatch.setattr(connections.store, "put", self.put)
         monkeypatch.setattr(connections.store, "owned", self.owned)
+        monkeypatch.setattr(connections.store, "erase", self.erase)
+        monkeypatch.setattr(census, "_default_client", lambda: self)
         monkeypatch.setattr(connections.source_store, "connected_sources", self.connected_sources)
         monkeypatch.setattr(connections.source_store, "latest_source", self.latest_source)
         monkeypatch.setattr(connections.source_store, "insert_source", self.insert_source)
@@ -95,6 +98,38 @@ class _World:
             for account in self.accounts.values()
             if account.subject in subjects and (org is None or account.org == org)
         ]
+
+    async def erase(self, org: str, subjects: list[str], *, kind: str, **_kw: Any):
+        for key in list(self.accounts):
+            if key[0] == org and key[1] in subjects and key[2] == kind:
+                del self.accounts[key]
+        self.events.append(("erase", kind))
+
+    async def query_one(self, query: str, params: dict[str, Any]):
+        assert "SELECT count() AS n FROM loom.connected_accounts WHERE" in query
+        assert "FINAL" not in query
+        rows = [
+            account
+            for key, account in self.accounts.items()
+            if key == (params["org"], params["subject"], params["kind"])
+        ]
+        keep = params.get("keep")
+        return {
+            "n": sum(
+                not (
+                    account.connection_id == keep
+                    and not account.active
+                    and not account.account_id
+                    and not account.workspace_id
+                    and not account.account_email_enc
+                    and not account.credential_enc
+                    and not account.scopes
+                    and not account.refresh_id
+                    and account.connected_at is None
+                )
+                for account in rows
+            )
+        }
 
     async def connected_sources(self, _org: str, _subject: str):
         return self.stale_sources if self.stale_sources is not None else list(self.sources.values())
@@ -169,3 +204,20 @@ async def test_disconnect_retry_repairs_cleanup_after_generation_fence_outlives_
     assert not world.accounts["team", "person", "gdrive"].active
     assert not world.sources["gdrive"].active and world.sources["gdrive"].pending_delete
     assert world.events[-1] == ("provider", "gdrive")
+
+
+@pytest.mark.asyncio
+async def test_stale_account_row_cannot_stop_a_newer_live_connection(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    world = _World(monkeypatch)
+    account = world.accounts["team", "person", "gdrive"]
+    key = connections._fence_key(account.connection_id)
+    replacement = account.connection_id.partition("/")[0] + "/1" + "b" * 31
+    world.fences[key] = replacement
+    with pytest.raises(connections.ValidationError):
+        await connections.disconnect("team", "person", "gdrive")
+    assert world.fences[key] == replacement
+    assert world.accounts["team", "person", "gdrive"] is account
+    assert world.sources["gdrive"].active
+    assert world.events == []

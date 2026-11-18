@@ -575,8 +575,11 @@ def served(src: KnowledgeSource) -> bool:
 
 def mirror_synced(src: KnowledgeSource) -> bool:
     """Whether the sync worker writes `src` into its namespace's mirror: a mirrored
-    folder-store source. Its ops still refuse one (`served`)."""
-    return src.access == MIRRORED_ACCESS and src.kind == "gdrive"
+    folder-store source or a person's connected page/project source."""
+    return src.access == MIRRORED_ACCESS and (
+        src.kind == "gdrive"
+        or (src.credential_mode == "connected" and src.kind in {"notion", "linear"})
+    )
 
 
 def id_list_config(src: KnowledgeSource) -> dict[str, Any] | None:
