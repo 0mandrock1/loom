@@ -4622,6 +4622,25 @@ FROM
             ingested_at,
             mirror_marked
         FROM loom.agent_events
+        WHERE (((org, namespace) IN (
+            SELECT
+                org,
+                namespace
+            FROM scope
+        )) OR (org IN (
+            SELECT org
+            FROM scope
+            WHERE namespace = '*'
+        )) OR ((
+            SELECT count()
+            FROM scope
+            WHERE org = '*'
+        ) > 0)) AND ((org, namespace) NOT IN (
+            SELECT
+                org,
+                namespace
+            FROM restricted
+        )) AND (NOT match(namespace, '^acl-[0-9a-f]{24}$')) AND (ts >= (toStartOfDay(now(), 'UTC') - toIntervalDay(31)))
         UNION ALL
         SELECT
             ts,
@@ -4662,6 +4681,25 @@ FROM
             ingested_at,
             mirror_marked
         FROM loom.agent_events_private
+        WHERE (((org, namespace) IN (
+            SELECT
+                org,
+                namespace
+            FROM scope
+        )) OR (org IN (
+            SELECT org
+            FROM scope
+            WHERE namespace = '*'
+        )) OR ((
+            SELECT count()
+            FROM scope
+            WHERE org = '*'
+        ) > 0)) AND ((org, namespace) NOT IN (
+            SELECT
+                org,
+                namespace
+            FROM restricted
+        )) AND (NOT match(namespace, '^acl-[0-9a-f]{24}$')) AND (ts >= (toStartOfDay(now(), 'UTC') - toIntervalDay(31)))
     ) AS raw
     WHERE NOT match(raw.namespace, '^acl-[0-9a-f]{24}$')
 )
@@ -5104,6 +5142,25 @@ FROM
             ingested_at,
             mirror_marked
         FROM loom.agent_events
+        WHERE (((org, namespace) IN (
+            SELECT
+                org,
+                namespace
+            FROM scope
+        )) OR (org IN (
+            SELECT org
+            FROM scope
+            WHERE namespace = '*'
+        )) OR ((
+            SELECT count()
+            FROM scope
+            WHERE org = '*'
+        ) > 0)) AND ((org, namespace) NOT IN (
+            SELECT
+                org,
+                namespace
+            FROM restricted
+        )) AND (NOT match(namespace, '^acl-[0-9a-f]{24}$')) AND (ts >= (toStartOfDay(now(), 'UTC') - toIntervalDay(31)))
         UNION ALL
         SELECT
             ts,
@@ -5144,6 +5201,25 @@ FROM
             ingested_at,
             mirror_marked
         FROM loom.agent_events_private
+        WHERE (((org, namespace) IN (
+            SELECT
+                org,
+                namespace
+            FROM scope
+        )) OR (org IN (
+            SELECT org
+            FROM scope
+            WHERE namespace = '*'
+        )) OR ((
+            SELECT count()
+            FROM scope
+            WHERE org = '*'
+        ) > 0)) AND ((org, namespace) NOT IN (
+            SELECT
+                org,
+                namespace
+            FROM restricted
+        )) AND (NOT match(namespace, '^acl-[0-9a-f]{24}$')) AND (ts >= (toStartOfDay(now(), 'UTC') - toIntervalDay(31)))
     ) AS raw
     WHERE (((org, namespace) IN (
         SELECT
