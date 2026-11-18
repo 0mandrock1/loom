@@ -112,6 +112,12 @@ class _World(_AuthorityWorld):
         return await super().query_one(query, params, **kwargs)
 
     async def query_all(self, query: str, params: dict[str, Any], **kwargs: Any):
+        if query.startswith("SELECT digest, excluded FROM loom.knowledge_crawl_exclusions FINAL"):
+            return [
+                {"digest": d, "excluded": self.exclusion_rows[params["org"], d]}
+                for d in params["digests"]
+                if (params["org"], d) in self.exclusion_rows
+            ]
         if f"FROM {exclusion_store.REFUSALS} FINAL" in query:
             return [
                 {"digest": d}

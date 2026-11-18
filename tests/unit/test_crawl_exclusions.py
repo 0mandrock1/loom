@@ -76,6 +76,13 @@ class _World:
 
     async def query_all(self, sql: str, *, params: dict[str, Any]):
         self.queries += 1
+        if sql.startswith("SELECT digest, excluded FROM loom.knowledge_crawl_exclusions FINAL"):
+            assert params["limit"] == len(set(params["digests"]))
+            return [
+                {"digest": d, "excluded": self.rows[params["org"], d]}
+                for d in params["digests"]
+                if (params["org"], d) in self.rows
+            ]
         assert f"FROM {store.REFUSALS} FINAL" in sql and "AND excluded = 1" in sql
         assert params["limit"] == len(params["digests"])
         return [{"digest": d} for d in params["digests"] if self.rows.get((params["org"], d))]
@@ -302,3 +309,26 @@ async def test_late_old_manifest_cannot_overwrite_a_newer_explicit_readmission(
     assert (world.rows, world.keeper) == before and world.cleaned == 2
     with pytest.raises(VendorError):
         await current.version()
+
+
+async def test_lost_refusal_write_cannot_release_the_completed_cleanup_fence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.core.errors import BackendUnavailableError
+
+    world = _World(monkeypatch)
+    index = await world.start()
+
+    async def cleanup() -> None:
+        await world.cleanup()
+        # The external store lost the just-written refusal while cleanup completed.
+        world.rows.clear()
+
+    with pytest.raises(BackendUnavailableError):
+        await index.change(
+            (_PERSON,), exclude=True, ttl_s=60, wait_s=0, authority=world, cleanup=cleanup
+        )
+    assert world.cleaned == 1 and world.keys["org"]["pending_id"]
+    assert next(iter(world.keeper.values())).startswith("blocked:")
+    with pytest.raises(VendorError):
+        await exclusions.Index.open("org", ch=world)

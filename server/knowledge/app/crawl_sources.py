@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import hmac
 import json
 import time
 import uuid
@@ -12,9 +13,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
-from server.auth import machines, person_erasure, source_registration
+from server.auth import machines, person_erasure, scim, source_registration
 from server.auth.context import current_auth
 from server.clients import gdrive
+from server.clients import google_workspace as google
 from server.clients._vendor import VendorError
 from server.core import request_work
 from server.core.ch import get_client, own_write_reads, set_query_tag
@@ -25,6 +27,7 @@ from server.knowledge.api.models_sources import (
     KnowledgeSourceAddInput,
     KnowledgeSourceAddOutput,
     KnowledgeSourceCheckOutput,
+    KnowledgeSourceCrawlProof,
     KnowledgeSourceProbe,
     KnowledgeSourceRotateOutput,
     KnowledgeSourceUpdateInput,
@@ -38,7 +41,7 @@ from server.knowledge.app import (
 )
 from server.knowledge.app import sources as ops
 from server.knowledge.domain import sources as domain
-from server.knowledge.domain.source_crawl import Options
+from server.knowledge.domain.source_crawl import Options, Person, email
 from server.knowledge.domain.sources import KnowledgeSource
 from server.knowledge.store import sources as store
 from server.settings import settings
@@ -74,6 +77,7 @@ class _Draft:
     expected: KnowledgeSource | None
     deadline: float
     exclusion_version: str = ""
+    members: int = 0
 
     async def validate(self) -> None:
         source = self.source
@@ -117,6 +121,7 @@ async def _approve(
     *,
     expected: KnowledgeSource | None,
     dry_run: bool = False,
+    readmit: list[str] | None = None,
 ) -> tuple[KnowledgeSource, _Draft]:
     draft = await _draft(source, expected)
     async with asyncio.timeout_at(draft.deadline):
@@ -148,6 +153,17 @@ async def _approve(
             deadline=draft.deadline,
             max_bytes=bounds.directory.body_bytes,
         )
+        if readmit:
+            index = await _readmit(index, draft, account, readmit, customer=expansion.customer)
+            expansion = await crawl_expansion.expand(
+                Options.parse(source.crawl_options),
+                account,
+                standing=draft,
+                exclusions=index,
+                limits=bounds.directory,
+                deadline=draft.deadline,
+            )
+        draft.members = len(expansion.people)
         draft.exclusion_version = expansion.exclusion_version
         await draft.validate()
         source = dataclasses.replace(source, crawl_customer_id=expansion.customer)
@@ -183,6 +199,8 @@ async def _commit(source: KnowledgeSource, draft: _Draft) -> None:
                 source.org, source.namespace, source.name, state_value="", detail={}
             )
             await store.insert_source(source)
+            await draft.permit.validate(source.org)
+            await crawl_authority.validate_indexed(source)
 
 
 def _options(value: Any) -> dict[str, Any]:
@@ -238,6 +256,7 @@ async def add(
             include=ops._answered_include(source),
             probe=KnowledgeSourceProbe(),
             dry_run=input.dry_run,
+            crawl_proof=_proof(source, draft),
         )
 
 
@@ -268,7 +287,9 @@ async def rotate(source: KnowledgeSource, credential: str) -> KnowledgeSourceRot
         await require_operator(source)
         changed, draft = await _approve(_renew(source, credential), credential, expected=source)
         await _commit(changed, draft)
-        return KnowledgeSourceRotateOutput(name=source.name, rotated_at=ops._now_iso())
+        return KnowledgeSourceRotateOutput(
+            name=source.name, rotated_at=ops._now_iso(), crawl_proof=_proof(changed, draft)
+        )
 
 
 async def update(
@@ -300,7 +321,9 @@ async def update(
             or hashlib.sha256(credential.encode()).hexdigest() != source.crawl_credential_hash
         ):
             raise unavailable()
-        changed, draft = await _approve(_renew(candidate, credential), credential, expected=source)
+        changed, draft = await _approve(
+            _renew(candidate, credential), credential, expected=source, readmit=input.crawl_readmit
+        )
         await _commit(changed, draft)
         return KnowledgeSourceUpdateOutput(
             name=source.name,
@@ -308,4 +331,76 @@ async def update(
             include=ops._answered_include(changed),
             added=change.added,
             removed=change.removed,
+            crawl_proof=_proof(changed, draft),
         )
+
+
+def _proof(source: KnowledgeSource, draft: _Draft) -> KnowledgeSourceCrawlProof:
+    key = hmac.digest(settings.jwt_secret.encode(), b"crawl-audit-subjects", "sha256")
+    options = Options.parse(source.crawl_options)
+    return KnowledgeSourceCrawlProof(
+        subject_hashes=[
+            hmac.digest(key, (s.kind + ":" + s.email).encode(), "sha256").hex()
+            for s in options.subjects
+        ],
+        read_scopes=[scope.value for scope in gdrive.ReadScope],
+        write_denials=[scope.value for scope in gdrive.WriteScope],
+        members=draft.members,
+    )
+
+
+async def _readmit(
+    index: crawl_exclusions.Index,
+    draft: _Draft,
+    account: gdrive.ServiceAccount,
+    requested: list[str],
+    *,
+    customer: str,
+) -> crawl_exclusions.Index:
+    addresses = [email(value) for value in requested]
+    if len(addresses) != len(set(addresses)):
+        raise unavailable()
+    await draft.validate()
+    maximum = settings.knowledge_crawl_directory_max_response_bytes
+    token = await google.delegated_token(
+        account,
+        subject=Options.parse(draft.source.crawl_options).directory_subject,
+        scope=gdrive.ReadScope.DIRECTORY_USERS,
+        deadline=draft.deadline,
+        max_bytes=maximum,
+    )
+    await draft.validate()
+    principal = await google.directory_identity(token, max_bytes=maximum)
+    await draft.validate()
+    if principal.customer_id != customer:
+        raise unavailable()
+    people = []
+    for address in addresses:
+        found = await google.user(
+            token, address, customer_id=principal.customer_id, max_bytes=maximum
+        )
+        await draft.validate()
+        person = Person(found.customer_id, found.id, found.email, tuple(sorted(found.aliases)))
+        for contact in person.addresses:
+            if await scim.deactivated(contact):
+                raise unavailable()
+        await draft.validate()
+        people.append(person)
+
+    async def cleanup() -> None:
+        await draft.validate()
+        for person in people:
+            for contact in person.addresses:
+                if await scim.deactivated(contact):
+                    raise unavailable()
+        await draft.validate()
+
+    bounds = crawl_authority.configured_bounds()
+    return await index.change(
+        tuple(people),
+        exclude=False,
+        ttl_s=bounds.lease_ttl_s,
+        wait_s=bounds.lease_wait_s,
+        authority=draft.permit,
+        cleanup=cleanup,
+    )

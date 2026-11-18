@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Any
 
-from server.auth.source_registration import PURPOSE
+from server.auth.source_registration import PURPOSE, names_person
 from server.clients._vendor import VendorError
 from server.core.ch import get_client, set_query_tag
 from server.core.secrets_at_rest import resealed, unseal
@@ -78,17 +77,49 @@ async def approvals(*, dry_run: bool, ch: Any) -> tuple[int, list[str]]:
         if scanned > settings.knowledge_crawl_registry_scan_limit:
             raise RuntimeError("crawl_reseal_scan_bound")
         for org, ns, name in page:
-            async with source_ops.sources_lease(org, ns):
-                current = await source_store.latest_source(org, ns, name, ch=ch)
-                if current is None or not current.approval_enc:
-                    continue
-                if not unseal(PURPOSE, current.approval_enc, warn=False):
-                    lost.append("/".join((org, ns, name)))
-                    continue
-                new = resealed(PURPOSE, current.approval_enc)
-                if new is not None:
-                    count += 1
-                    if not dry_run:
-                        await source_store.insert_source(replace(current, approval_enc=new), ch=ch)
+            n, unreadable = await _approvals(org, ns, name, dry_run=dry_run, ch=ch)
+            count += n
+            if unreadable:
+                lost.append("/".join((org, ns, name)))
         after = page[-1]
     return count, lost
+
+
+async def _approvals(
+    org: str,
+    namespace: str,
+    name: str,
+    *,
+    dry_run: bool,
+    ch: Any,
+) -> tuple[int, bool]:
+    count = 0
+    async with source_ops.sources_lease(org, namespace):
+        rows = await source_store.crawl_approval_values(
+            org,
+            namespace,
+            name,
+            maximum=settings.knowledge_crawl_registry_scan_limit,
+            ch=ch,
+        )
+        for row in rows:
+            encoded = str(row["approval_enc"])
+            if not unseal(PURPOSE, encoded, warn=False):
+                return count, True
+            # Validate source-bound historical metadata without requiring a live grant.
+            names_person(
+                encoded, org=org, namespace=namespace, source_id=row["source_id"], spellings=()
+            )
+            new = resealed(PURPOSE, encoded)
+            if new is not None:
+                count += 1
+                if not dry_run:
+                    await source_store.reseal_crawl_approval(
+                        org,
+                        namespace,
+                        row["source_id"],
+                        encoded,
+                        new,
+                        ch=ch,
+                    )
+    return count, False

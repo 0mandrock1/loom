@@ -108,3 +108,23 @@ async def page(after: str, maximum: int, *, ch: _CHClient | None = None) -> list
     if len(orgs) > maximum or orgs != sorted(set(orgs)) or any(org <= after for org in orgs):
         raise RuntimeError("crawl_registry_page_unverified")
     return orgs
+
+
+async def restore_orgs(*, maximum: int, ch: _CHClient) -> list[str]:
+    with own_write_reads():
+        rows = await ch.query_all(
+            "SELECT DISTINCT org FROM (SELECT org FROM loom.knowledge_sources "
+            "WHERE credential_mode = 'crawl' UNION ALL "
+            "SELECT org FROM loom.knowledge_crawl_exclusion_keys) "
+            "ORDER BY org LIMIT {limit:UInt32}",
+            params={"limit": maximum + 1},
+        )
+    orgs = [row["org"] for row in rows]
+    if (
+        maximum <= 0
+        or len(orgs) > maximum
+        or orgs != sorted(set(orgs))
+        or any(not isinstance(org, str) or not org or "\0" in org for org in orgs)
+    ):
+        raise RuntimeError("crawl_restore_inventory_unverified")
+    return orgs

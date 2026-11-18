@@ -97,3 +97,21 @@ async def finalize(pending: person_erasure.Pending) -> None:
             raise CredentialRefused("historical crawl person capture requires verified repair")
     await pending.validate()
     await crawl_controls.capsules(pending.captured.id)
+
+
+async def require_refusals(
+    org: str,
+    digests: list[str],
+    *,
+    excluded: bool,
+    ch: Any,
+) -> None:
+    from server.erasure.store.census import crawl_refusal_residue
+
+    if await crawl_refusal_residue(org, digests, excluded=excluded, ch=ch):
+        raise person_erasure.unavailable()
+
+
+async def invalidate_restored_approvals(org: str, *, ch: Any) -> None:
+    """Called under the org fence after every historical source has retirement work."""
+    await crawl_controls.invalidate_restored_approvals(org, ch=ch)

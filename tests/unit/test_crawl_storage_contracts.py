@@ -120,3 +120,19 @@ async def test_complete_group_replacement_clears_removed_members_without_losing_
             ],
         )
     ]
+
+
+def test_canonical_person_axis_is_explicit_and_disjoint_from_namespace_memory() -> None:
+    from server.erasure.store import census
+
+    assert census.CANONICAL_PERSON_TABLES == {
+        "loom.scim_users": "crawl_person.finalize",
+        "loom.knowledge_crawl_exclusion_keys": "crawl_person.exclude",
+        "loom.knowledge_crawl_exclusions": "crawl_person.exclude",
+    }
+    for table in census.CANONICAL_PERSON_TABLES:
+        assert table not in census.NO_MEMORY_CONTENT
+        assert table not in census.CANONICAL_OWNER_TABLES
+        assert not any(substrate.table == table for substrate in census._CENSUS)
+        assert not any(table in tables for tables in census.STEP_ONLY_TABLES.values())
+        assert census.classified_tables()[table] == "canonical_person"

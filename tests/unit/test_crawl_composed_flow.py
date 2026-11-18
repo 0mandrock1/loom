@@ -324,3 +324,63 @@ async def test_reapproved_generation_cannot_reuse_an_older_completed_listing(wor
         assert world.source.crawl_generation != before
         plan = await reads.prepare("team", ["shared-space"])
         assert plan.sources == {} and await plan.check([candidate]) == []
+
+
+async def test_reactivation_does_not_readmit_until_an_explicit_verified_update(
+    world: _World,
+) -> None:
+    from server.knowledge.domain.source_crawl import Person
+
+    await _register(world)
+    index = await crawl_exclusions.Index.open("team", ch=world)
+    person = Person("workspace", "provider-one", "one@example.com", ())
+    for digest in index.person_digests(person):
+        world.exclusion_rows["team", digest] = True
+    assert await index.contains(person)
+    before = await index.version()
+    with acting_as(verify_token(_token())):
+        ordinary = await ops.handle_knowledge_source_update(
+            KnowledgeSourceUpdateInput(
+                org="team",
+                namespace="shared-space",
+                name="documents",
+                include=["docs", "pdf"],
+            )
+        )
+        assert ordinary.crawl_proof is not None and ordinary.crawl_proof.members == 0
+        assert await index.contains(
+            person
+        )  # Editing the selectors or signing in is no readmission.
+        explicit = await ops.handle_knowledge_source_update(
+            KnowledgeSourceUpdateInput(
+                org="team",
+                namespace="shared-space",
+                name="documents",
+                crawl_readmit=["one@example.com"],
+            )
+        )
+    current = await crawl_exclusions.Index.open("team", ch=world)
+    assert await current.version() != before and not await current.contains(person)
+    assert explicit.crawl_proof is not None and explicit.crawl_proof.members == 1
+    assert not world.listings and not world.document_writes  # No old content was republished.
+    assert "one@example.com" not in explicit.crawl_proof.model_dump_json()
+    assert set(explicit.crawl_proof.read_scopes) == {scope.value for scope in gdrive.ReadScope}
+
+
+async def test_still_deactivated_person_cannot_be_explicitly_readmitted(world: _World) -> None:
+    await _register(world)
+    before = world.source
+    index = await crawl_exclusions.Index.open("team", ch=world)
+    epoch = await index.version()
+    world.ended_people.add("one@example.com")
+    with acting_as(verify_token(_token())), pytest.raises(ValidationError):
+        await ops.handle_knowledge_source_update(
+            KnowledgeSourceUpdateInput(
+                org="team",
+                namespace="shared-space",
+                name="documents",
+                crawl_readmit=["one@example.com"],
+            )
+        )
+    assert world.source == before and await index.version() == epoch
+    assert not world.native_requests and not world.document_writes and not world.listings

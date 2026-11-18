@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from server.knowledge.domain.source_crawl import MAX_PEOPLE
 from server.knowledge.domain.sources import (
     MAX_DEPTH,
     MAX_ITEMS,
@@ -110,6 +111,8 @@ class KnowledgeSourceEntry(BaseModel):
     credential_mode: str = "shared"
     # Namespace-wide or checked mirrored document access.
     access: str = "namespace"
+    # Crawl selectors, only for a current org and namespace administrator.
+    crawl_options: dict[str, Any] = Field(default_factory=dict)
     # Canonical connected owner, only in the owner's permitted detail projection.
     owner_subject: str = ""
     # The things the source reads (folders, files, shared drives, filters, pages,
@@ -187,9 +190,18 @@ class KnowledgeSourceCrawlOptions(BaseModel):
     subjects: list[KnowledgeSourceCrawlSubject] = Field(
         ...,
         min_length=1,
-        max_length=2000,
+        max_length=MAX_PEOPLE,
         description="The people and groups to expand, at most 2000 people in total.",
     )
+
+
+class KnowledgeSourceCrawlProof(BaseModel):
+    """The read-only delegation proof, without person addresses or credentials."""
+
+    subject_hashes: list[str]
+    read_scopes: list[str]
+    write_denials: list[str]
+    members: int
 
 
 class KnowledgeSourceAddInput(BaseModel):
@@ -262,6 +274,8 @@ class KnowledgeSourceAddInput(BaseModel):
 
 
 class KnowledgeSourceAddOutput(BaseModel):
+    # Crawl only: checked scope and keyed-subject proof; None for another credential mode.
+    crawl_proof: KnowledgeSourceCrawlProof | None = None
     # The registered source's name, normalised.
     name: str
     # The source kind, normalised.
@@ -285,7 +299,9 @@ class KnowledgeSourceUpdateInput(BaseModel):
     source's file kinds. A namespace admin may. The added items are probed with the
     stored credential (every one, or the 20 given last) before anything is stored, and
     a changed `include` probes the file items the source keeps; a probe that fails
-    stores nothing. Removing every item is refused: remove the source instead."""
+    stores nothing. Removing every item is refused: remove the source instead. A
+    crawl update requires org and namespace administration and reapproves its
+    exact selectors, items and credential for a fresh generation."""
 
     org: str = Field(..., description="The org.")
     namespace: str = Field(..., description="The namespace the source's documents live in.")
@@ -324,6 +340,14 @@ class KnowledgeSourceUpdateInput(BaseModel):
             "the same id the source holds."
         ),
     )
+    crawl_readmit: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_PEOPLE,
+        description=(
+            "Crawl only: readmit these Directory-verified people after SCIM reactivation; "
+            "default none."
+        ),
+    )
     crawl_options: KnowledgeSourceCrawlOptions | None = Field(
         None,
         description="Crawl only: replace the explicit delegation selectors; default unchanged.",
@@ -336,6 +360,8 @@ class KnowledgeSourceUpdateInput(BaseModel):
 
 
 class KnowledgeSourceUpdateOutput(BaseModel):
+    # Crawl only: checked scope and keyed-subject proof; None for another credential mode.
+    crawl_proof: KnowledgeSourceCrawlProof | None = None
     # The source updated.
     name: str
     # The source's items as now stored.
@@ -412,6 +438,8 @@ class KnowledgeSourceInspectOutput(BaseModel):
     credential_mode: str = "shared"
     # Namespace-wide or checked mirrored document access.
     access: str = "namespace"
+    # Crawl selectors, only for a current org and namespace administrator.
+    crawl_options: dict[str, Any] = Field(default_factory=dict)
     # Canonical connected owner, only in the owner's permitted detail projection.
     owner_subject: str = ""
     # The things the source reads; [] for a recording source.
@@ -435,7 +463,9 @@ class KnowledgeSourceCheckInput(BaseModel):
     """Probe a registered document source with its stored credential now (a check of
     every item, or of the 20 added last, and a listing), nothing written. A namespace
     admin may; a connected owner may also check their own source. An administrator
-    checking another person's connection receives source-level standing only."""
+    checking another person's connection receives source-level standing only. A
+    crawl check requires org and namespace administration and proves delegated
+    scope standing without returning item titles or counts."""
 
     org: str = Field(..., description="The org.")
     namespace: str = Field(..., description="The namespace the source's documents live in.")
@@ -469,7 +499,9 @@ class KnowledgeSourceCheckOutput(BaseModel):
 
 class KnowledgeSourceRotateInput(BaseModel):
     """Replace a registered document source's credential. A namespace admin may;
-    the new credential is probed first, and a probe that fails stores nothing."""
+    the new credential is probed first, and a probe that fails stores nothing. A
+    crawl credential requires current org and namespace administration and a
+    fresh exact-source delegation approval."""
 
     org: str = Field(..., description="The org.")
     namespace: str = Field(..., description="The namespace the source's documents live in.")
@@ -482,6 +514,8 @@ class KnowledgeSourceRotateInput(BaseModel):
 
 
 class KnowledgeSourceRotateOutput(BaseModel):
+    # Crawl only: checked scope and keyed-subject proof; None for another credential mode.
+    crawl_proof: KnowledgeSourceCrawlProof | None = None
     # The source whose credential was replaced.
     name: str
     # What the probe with the new credential found.

@@ -29,6 +29,7 @@ SEALED: tuple[tuple[str, str, tuple[str, ...], str, str], ...] = (
     ("loom.knowledge_sources", "approval_enc", (), "knowledge_crawl.approval", ""),
     ("loom.knowledge_crawl_exclusion_keys", "key_enc", (), "knowledge_crawl.exclusion_key", ""),
     ("loom.knowledge_source_push", "secret_enc", (), "knowledge_source_push.secret", ""),
+    ("loom.scim_users", "crawl_erasure_enc", (), "auth.crawl_person_erasure", ""),
     ("loom.connected_accounts", "credential_enc", (), "connected_accounts.credential", ""),
     ("loom.connected_accounts", "account_email_enc", (), "connected_accounts.email", ""),
     ("loom.provider_configuration", "envelope", (), "model-provider-configuration", ""),
@@ -61,6 +62,7 @@ _KEYS = {
     "loom.knowledge_source_push": ("org", "namespace", "source_id"),
     "loom.connected_accounts": ("org", "subject", "kind"),
     "loom.knowledge_crawl_exclusion_keys": ("org",),
+    "loom.scim_users": ("id",),
     "loom.provider_configuration": ("config_id",),
     "loom.oauth_state": ("record_type", "id"),
     "loom.analysis_secrets": ("id",),
@@ -159,6 +161,14 @@ async def reseal_all(
 
             reseal = crawl_reseal.keys if column == "key_enc" else crawl_reseal.approvals
             n, missing = await reseal(dry_run=dry_run, ch=ch)
+            counts[f"{table}.{column}"] = n
+            if missing:
+                lost[f"{table}.{column}"] = missing
+            continue
+        if table == "loom.scim_users" and column == "crawl_erasure_enc":
+            from server.auth.person_erasure import reseal_registry as reseal_people
+
+            n, missing = await reseal_people(dry_run=dry_run, ch=ch)
             counts[f"{table}.{column}"] = n
             if missing:
                 lost[f"{table}.{column}"] = missing

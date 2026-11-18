@@ -15,6 +15,7 @@ from server.auth.reader_identity import resolve_reader
 from server.core.ch import get_client, own_write_reads, set_query_tag
 from server.core.errors import BackendUnavailableError
 from server.core.secrets_at_rest import seal, unseal
+from server.settings import settings
 
 PURPOSE = "auth.crawl_person_erasure"
 
@@ -297,3 +298,77 @@ async def require_settled(*, ch: Any = None) -> None:
         )
     if row is not None:
         raise unavailable()
+
+
+async def _reseal_user(uid: str, *, dry_run: bool, ch: Any) -> tuple[int, bool]:
+    from server.auth import scim
+    from server.core.secrets_at_rest import resealed
+
+    changed = 0
+    async with scim._held(scim._user_lease(uid)):
+        rows = await ch.query_all(
+            "SELECT DISTINCT crawl_erasure_enc FROM loom.scim_users "
+            "WHERE id = {id:String} AND crawl_erasure_enc != '' LIMIT {limit:UInt32}",
+            params={"id": uid, "limit": settings.knowledge_crawl_registry_scan_limit + 1},
+        )
+        if len(rows) > settings.knowledge_crawl_registry_scan_limit:
+            raise unavailable()
+        for row in rows:
+            encoded = str(row["crawl_erasure_enc"])
+            if not unseal(PURPOSE, encoded, warn=False):
+                return changed, True
+            captured = load(uid, encoded)
+            replacement = resealed(PURPOSE, encoded)
+            if replacement is None:
+                continue
+            if load(uid, replacement) != captured:
+                raise unavailable()
+            changed += 1
+            if not dry_run:
+                await ch.execute(
+                    "ALTER TABLE loom.scim_users UPDATE crawl_erasure_enc = {new:String} "
+                    "WHERE id = {id:String} AND crawl_erasure_enc = {old:String}",
+                    params={"id": uid, "new": replacement, "old": encoded},
+                    settings={"mutations_sync": 2},
+                )
+                residue = await ch.query_one(
+                    "SELECT count() AS n FROM loom.scim_users WHERE id = {id:String} "
+                    "AND crawl_erasure_enc = {old:String}",
+                    params={"id": uid, "old": encoded},
+                )
+                if residue is None or residue["n"] != 0:
+                    raise unavailable()
+    return changed, False
+
+
+async def reseal_registry(*, dry_run: bool, ch: Any) -> tuple[int, list[str]]:
+    """Reseal every historical capsule under the same identity lease as deletion.
+
+    Completion inspects raw capsule history, so resealing only FINAL would leave
+    that proof unreadable when the preceding root is removed.
+    """
+    if ch is not get_client():
+        raise RuntimeError("crawl_person_reseal_target_mismatch")
+    set_query_tag("auth.person_erasure.reseal")
+    after, scanned, changed, lost = "", 0, 0, []
+    while page := await ch.query_all(
+        "SELECT DISTINCT id FROM loom.scim_users "
+        "WHERE id > {after:String} AND crawl_erasure_enc != '' "
+        "ORDER BY id LIMIT {limit:UInt32}",
+        params={"after": after, "limit": settings.knowledge_crawl_registry_page_size},
+    ):
+        identifiers = [str(row["id"]) for row in page]
+        scanned += len(identifiers)
+        if (
+            scanned > settings.knowledge_crawl_registry_scan_limit
+            or identifiers != sorted(set(identifiers))
+            or any(uid <= after for uid in identifiers)
+        ):
+            raise unavailable()
+        for uid in identifiers:
+            count, unreadable = await _reseal_user(uid, dry_run=dry_run, ch=ch)
+            changed += count
+            if unreadable:
+                lost.append(uid)
+        after = identifiers[-1]
+    return changed, lost

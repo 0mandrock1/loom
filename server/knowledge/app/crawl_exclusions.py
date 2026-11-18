@@ -149,6 +149,9 @@ async def _finish(
     await store.put(org, digests, exclude=bool(row["pending_exclude"]), ch=ch)
     await cleanup()
     await authority.validate(org)
+    from server.erasure.app.crawl_person import require_refusals
+
+    await require_refusals(org, digests, excluded=bool(row["pending_exclude"]), ch=ch)
     await _move(ch, org, blocked, active)
     # Until this full row lands, new readers still refuse the unfinished manifest.
     await store.key_put(org, key_id, str(row["key_enc"]), generation=active, ch=ch)

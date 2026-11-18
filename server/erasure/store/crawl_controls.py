@@ -286,3 +286,24 @@ async def capsule_history(uid: str, *, ch: _CHClient | None = None) -> list[str]
     if len(rows) > maximum or any(not isinstance(r["crawl_erasure_enc"], str) for r in rows):
         raise RuntimeError("crawl_capture_history_unverified")
     return [r["crawl_erasure_enc"] for r in rows]
+
+
+async def invalidate_restored_approvals(org: str, *, ch: _CHClient) -> None:
+    """A restore never reactivates historical delegated source authority."""
+    where = "org = {org:String} AND credential_mode = 'crawl'"
+    await count_then_mutate(
+        _SOURCES,
+        count_where=where + " AND (active OR approval_enc != '' OR crawl_generation != '')",
+        mutation="UPDATE active = 0, approval_enc = '', crawl_generation = ''",
+        mutation_where=where,
+        params={"org": org},
+        final=False,
+        ch=ch,
+    )
+    residue = await ch.query_one(
+        f"SELECT count() AS n FROM {_SOURCES} WHERE {where} "
+        "AND (active OR approval_enc != '' OR crawl_generation != '')",
+        params={"org": org},
+    )
+    if residue is None or residue["n"]:
+        raise RuntimeError("crawl_restore_approval_residue")

@@ -148,8 +148,10 @@ async def reconcile(
             )
     if not apply:
         from server.knowledge.app.connected_restore import restore_all
+        from server.knowledge.app.crawl_restore import restore_all as restore_crawls
 
         await restore_all(apply=False, ch=ch)
+        await restore_crawls(apply=False, ch=ch)
         return 0
     from server.code.app.index import repo_registry
 
@@ -174,11 +176,13 @@ async def reconcile(
         for line in _rechunk_lines(await knowledge_reconcile.held_sources()):
             print(line)
     from server.knowledge.app.connected_restore import restore_all
+    from server.knowledge.app.crawl_restore import restore_all as restore_crawls
 
     # Connection cleanup is fail-fast: no restored document may publish with
     # retained provider authority, even when an unrelated erasure replay can retry.
     try:
         await restore_all(apply=True, ch=ch)
+        await restore_crawls(apply=True, ch=ch)
     except Exception:  # noqa: BLE001 — local cleanup must finish before any publication
         print(
             "loom reconcile: connected-account cleanup failed; publication remains held",

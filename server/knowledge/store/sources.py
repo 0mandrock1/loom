@@ -69,7 +69,7 @@ async def crawl_approval_page(
         raise ValueError("crawl approval page bound refused")
     with own_write_reads():
         rows = await (ch or _default_client()).query_all(
-            f"SELECT org, namespace, name FROM {TABLE} FINAL "
+            f"SELECT DISTINCT org, namespace, name FROM {TABLE} "
             "WHERE (org, namespace, name) > {after:Tuple(String, String, String)} "
             "AND approval_enc != '' ORDER BY org, namespace, name LIMIT {limit:UInt32}",
             params={"after": after, "limit": maximum},
@@ -78,6 +78,49 @@ async def crawl_approval_page(
     if len(keys) > maximum or keys != sorted(set(keys)) or any(key <= after for key in keys):
         raise RuntimeError("crawl_approval_page_unverified")
     return keys
+
+
+async def crawl_approval_values(
+    org: str,
+    namespace: str,
+    name: str,
+    *,
+    maximum: int,
+    ch: _CHClient,
+) -> list[dict[str, Any]]:
+    rows = await ch.query_all(
+        f"SELECT DISTINCT toString(source_id) AS source_id, approval_enc FROM {TABLE} "
+        "WHERE org = {org:String} AND namespace = {ns:String} AND name = {name:String} "
+        "AND credential_mode = 'crawl' AND approval_enc != '' LIMIT {limit:UInt32}",
+        params={"org": org, "ns": namespace, "name": name, "limit": maximum + 1},
+    )
+    if len(rows) > maximum:
+        raise RuntimeError("crawl_approval_history_bound")
+    return rows
+
+
+async def reseal_crawl_approval(
+    org: str,
+    namespace: str,
+    source_id: str,
+    before: str,
+    after: str,
+    *,
+    ch: _CHClient,
+) -> None:
+    where = (
+        "org = {org:String} AND namespace = {ns:String} AND source_id = {id:String} "
+        "AND credential_mode = 'crawl' AND approval_enc = {old:String}"
+    )
+    params = {"org": org, "ns": namespace, "id": source_id, "old": before, "new": after}
+    await ch.execute(
+        f"ALTER TABLE {TABLE} UPDATE approval_enc = {{new:String}} WHERE {where}",
+        params=params,
+        settings={"mutations_sync": 2},
+    )
+    residue = await ch.query_one(f"SELECT count() AS n FROM {TABLE} WHERE {where}", params=params)
+    if residue is None or residue["n"]:
+        raise RuntimeError("crawl_approval_reseal_residue")
 
 
 async def crawl_history(

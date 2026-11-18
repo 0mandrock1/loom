@@ -404,6 +404,15 @@ def _sync(src: KnowledgeSource, state: dict[str, str] | None) -> KnowledgeSource
 async def _details_allowed(src: KnowledgeSource) -> bool:
     if src.credential_mode == "shared":
         return True
+    if src.credential_mode == "crawl":
+        from server.knowledge.app.crawl_sources import require_operator
+
+        with private_work():
+            try:
+                await require_operator(src)
+                return True
+            except Exception:  # noqa: BLE001 — unverifiable crawl selectors remain private
+                return False
     if src.credential_mode != "connected" or not request_work.mark_mirrored():
         return False
     from server.knowledge.app import connected_accounts as accounts
@@ -439,6 +448,7 @@ async def handle_knowledge_source_list(
                 credential_mode=s.credential_mode,
                 access=s.access,
                 owner_subject=s.owner_subject if details else "",
+                crawl_options=s.crawl_options if details and s.credential_mode == "crawl" else {},
                 items=s.items if details else [],
                 include=_answered_include(s) if details else [],
                 config=(domain.id_list_config(s) or {}) if details else {},
@@ -468,6 +478,7 @@ async def handle_knowledge_source_inspect(
             credential_mode=src.credential_mode,
             access=src.access,
             owner_subject=src.owner_subject if details else "",
+            crawl_options=src.crawl_options if details and src.credential_mode == "crawl" else {},
             items=src.items if details else [],
             include=_answered_include(src) if details else [],
             config=(domain.id_list_config(src) or {}) if details else {},
@@ -516,9 +527,9 @@ async def handle_knowledge_source_add(input: KnowledgeSourceAddInput) -> Knowled
     sent = [f for f in ("items", "links") if getattr(input, f) is not None]
     config, items = _registration(input, kind, sent)
     if input.credential_mode == "crawl":
-        from server.knowledge.app.crawl_sources import add
+        from server.knowledge.app.crawl_sources import add as add_crawl
 
-        return await add(input, name=name, kind=kind, config=config, items=items)
+        return await add_crawl(input, name=name, kind=kind, config=config, items=items)
     if input.crawl_options is not None:
         raise BadConfigError("crawl_options requires crawl credential mode")
     if input.credential_mode == "connected":
@@ -768,8 +779,8 @@ async def handle_knowledge_source_update(
         from server.knowledge.app.crawl_sources import update
 
         return await update(src, input)
-    if input.crawl_options is not None:
-        raise BadConfigError("crawl_options requires crawl credential mode")
+    if input.crawl_options is not None or input.crawl_readmit:
+        raise BadConfigError("crawl_options and crawl_readmit require crawl credential mode")
     if src.credential_mode == "connected":
         from server.knowledge.app.connected_sources import update
 
@@ -1234,7 +1245,17 @@ async def _wait_until_free(lease_name: str, deadline: float, busy: str) -> None:
 def source_add_audit_subject(input: KnowledgeSourceAddInput, response: Any) -> dict[str, Any]:
     """What an add's audit row records: the source as stored, never the
     credential. `loom.audit_log` outlives the source and must hold no secret."""
-    if input.credential_mode in {"connected", "crawl"}:
+    if input.credential_mode == "crawl":
+        return {
+            "org": input.org,
+            "namespace": input.namespace,
+            "name": response["name"],
+            "kind": response["kind"],
+            "credential_mode": "crawl",
+            "dry_run": input.dry_run,
+            "delegation": response["crawl_proof"],
+        }
+    if input.credential_mode == "connected":
         return {
             "org": input.org,
             "namespace": input.namespace,
@@ -1257,6 +1278,13 @@ def source_add_audit_subject(input: KnowledgeSourceAddInput, response: Any) -> d
 
 def source_update_audit_subject(input: KnowledgeSourceUpdateInput, response: Any) -> dict[str, Any]:
     """Which source changed and the items added and removed, never the credential."""
+    if response.get("crawl_proof") is not None:
+        return {
+            "org": input.org,
+            "namespace": input.namespace,
+            "name": response["name"],
+            "delegation": response["crawl_proof"],
+        }
     if request_work.mirror_marked():
         return {"org": input.org, "namespace": input.namespace, "name": response["name"]}
     return {
@@ -1271,7 +1299,10 @@ def source_update_audit_subject(input: KnowledgeSourceUpdateInput, response: Any
 
 def source_rotate_audit_subject(input: KnowledgeSourceRotateInput, response: Any) -> dict[str, Any]:
     """Which source's credential was replaced, never the credential."""
-    return {"org": input.org, "namespace": input.namespace, "name": response["name"]}
+    subject = {"org": input.org, "namespace": input.namespace, "name": response["name"]}
+    if response.get("crawl_proof") is not None:
+        subject["delegation"] = response["crawl_proof"]
+    return subject
 
 
 __all__ = [
