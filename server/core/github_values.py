@@ -3,7 +3,7 @@
 import re
 from datetime import datetime, timedelta
 
-PAGE_SIZE = 100
+PAGE_SIZE = 100  # not a setting: the provider's per_page ceiling defines a full page
 
 
 class FeedInputError(ValueError):

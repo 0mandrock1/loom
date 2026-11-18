@@ -8,6 +8,11 @@ put issue bodies, comments or pull requests in Loom's deployment tables.
 ## Ownership and credentials
 
 An operator runs the feed as a bounded CLI job, scheduled by the team's job runner.
+Before reading the registered endpoint or opening the record, the CLI checks its
+actual deployment's storage authority and whether its cell holds the feed organization.
+The external connection repeats that deployment gate; it never treats the record's
+metadata as deployment authority. The job closes both clients and the deployment's
+Postgres pool on exit.
 Initialization creates feed tables and contract views in an empty, dedicated database;
 it refuses existing objects. The operator then registers that database as a tracker
 source with a separate read-only credential. Configuration and sync require that

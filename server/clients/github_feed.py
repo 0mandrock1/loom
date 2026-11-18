@@ -16,8 +16,8 @@ from server.clients.github import _headers
 from server.core.github_values import PAGE_SIZE, positive_id, repository, since_parameter
 
 API = "https://api.github.com"
-PAGE_MAX_BYTES = 4 * 1024 * 1024
-SCAN_MAX_BYTES = 24 * 1024 * 1024
+PAGE_MAX_BYTES = 4 * 1024 * 1024  # not a setting: fixed memory ceiling for one CLI response
+SCAN_MAX_BYTES = 24 * 1024 * 1024  # not a setting: fixed memory ceiling for one CLI scan
 STREAMS = {"items": "issues", "comments": "issues/comments", "review_comments": "pulls/comments"}
 
 
@@ -33,6 +33,7 @@ class Batch:
 
 async def _get(path: str, token: str, params: dict[str, Any] | None = None) -> tuple[Any, int]:
     try:
+        # not a setting: fixed per-request ceiling inside the operator CLI turn
         async with asyncio.timeout(15):
             async with get_client().stream(
                 "GET", API + path, headers=_headers(token), params=params, follow_redirects=False

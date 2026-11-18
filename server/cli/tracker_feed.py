@@ -46,7 +46,8 @@ async def _registered(args: argparse.Namespace) -> tuple[Any, set[str], str]:
     return endpoint, repos, reader
 
 
-async def _connection(args: argparse.Namespace, endpoint: Any) -> Any:
+async def _connection(args: argparse.Namespace, endpoint: Any, deployment: Any) -> Any:
+    from server.cli._ch import connect_external
     from server.core.ch import ExternalCHClient
     from server.core.hosts import vet_host
     from server.settings import settings
@@ -75,7 +76,7 @@ async def _connection(args: argparse.Namespace, endpoint: Any) -> Any:
         password=_environment(args.writer_password_env),
     )
     try:
-        await client.connect()
+        await connect_external(client, deployment=deployment, orgs=(args.org,))
         await _validate_writer(client, endpoint.database)
     except BaseException:
         await client.disconnect()
@@ -100,6 +101,7 @@ async def _validate_writer(client: Any, database: str) -> None:
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
     from types import SimpleNamespace
 
+    from server.cli._ch import connect_checked, disconnect
     from server.core.ch import get_client, set_query_tag
     from server.settings import settings
     from server.tracker.app import github_feed as feed
@@ -111,7 +113,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
     deployment = get_client()
     record = None
     try:
-        await deployment.connect()
+        await connect_checked(deployment, orgs=(args.org,))
         owner = await store.database_uuid(deployment)
         allowed: set[str] = set()
         if args.feed_command == "init":
@@ -123,7 +125,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             )
         else:
             endpoint, allowed, _reader = await _registered(args)
-        record = await _connection(args, endpoint)
+        record = await _connection(args, endpoint, deployment)
         if args.feed_command == "init":
             await feed.initialize(record, args.org, owner)
             return {"initialized": True}
@@ -152,7 +154,7 @@ async def _run(args: argparse.Namespace) -> dict[str, Any]:
             if record is not None:
                 await record.disconnect()
         finally:
-            await deployment.disconnect()
+            await disconnect(deployment)
 
 
 def _command(args: argparse.Namespace) -> int:

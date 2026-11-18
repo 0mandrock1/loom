@@ -18,8 +18,8 @@ from server.memory.app.provenance import writer_actor
 from server.tracker.domain import github_feed as domain
 from server.tracker.store import github_feed as store
 
-VISIBILITY_TTL_S = 900
-TURN_TIMEOUT_S = 120
+VISIBILITY_TTL_S = 900  # not a setting: fixed freshness ceiling for stored access observations
+TURN_TIMEOUT_S = 120  # not a setting: execution ceiling for one operator CLI turn
 
 
 @dataclass(frozen=True)
