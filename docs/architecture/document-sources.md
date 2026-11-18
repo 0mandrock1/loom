@@ -723,6 +723,9 @@ session name on two backends; the name alone does not pin execution. Query cache
 disabled within this protocol. Any missing metadata, changed identity, uncertain write,
 expired nonce or cleanup failure refuses the negative decision. Only its exact own
 lease is disposable; a cleanup fault leaves an expiring row and never admits a request.
+A positive repair computes its fixed row key in the INSERT from a check of the writing
+server's UUID against the validated backend. A differently routed write refuses; an
+acknowledged strict insert or duplicate is followed by a fresh validated positive read.
 No negative result is cached. The named-session transport alone is not a Keeper proof.
 
 Mirrored sources are off for a deployment until an operator turns them on, after every

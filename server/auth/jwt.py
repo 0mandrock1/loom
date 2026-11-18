@@ -350,9 +350,7 @@ def mint_token(
         payload["creator"] = creator
     if reads_as_creator:
         payload["reads_as_creator"] = True
-    if not isinstance(session_protection, bool):
-        raise TokenError("session_protection must be a boolean")
-    if session_protection:
+    if _bool_claim({"session_protection": session_protection}, "session_protection"):
         payload["session_protection"] = True
     if saves_to:
         payload["saves_to"] = saves_to

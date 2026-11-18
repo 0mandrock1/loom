@@ -6,7 +6,7 @@ import asyncio
 import uuid
 from typing import Any
 
-from server.core.ch import CHClient, get_client, set_query_tag
+from server.core.ch import CHClient, get_client, query_tag
 from server.core.ch_names import database, qualify
 from server.core.leases import LOCK_INSERT, LOCK_RELEASE, key_exists
 
@@ -16,7 +16,9 @@ _LATCH = (
 )
 _SET = (
     "INSERT INTO loom.knowledge_mirror_latch (id, set_at) "
-    "SETTINGS keeper_map_strict_mode = 1, async_insert = 0 VALUES (0, now64(3))"
+    "SETTINGS keeper_map_strict_mode = 1, async_insert = 0 "
+    "SELECT throwIf(toString(serverUUID()) != {backend:String}, "
+    "'Session protection writer changed'), now64(3)"
 )
 _ENGINES = (
     "SELECT toString(serverUUID()) AS server_id, groupArray((name, engine_full)) AS engines "
@@ -109,55 +111,55 @@ async def enabled(*, ch: CHClient | None = None) -> bool:
         "ttl": 30,
     }
     sent = False
-    set_query_tag("knowledge.mirror.latch")
-    try:
-        # not a setting: the privacy proof must end within its fixed security deadline.
-        async with asyncio.timeout(5), ch.coordination_session():
-            backend = await _engines(ch)
-            if await _latched(ch, backend):
-                return True
-            before = await _keeper(ch, backend)
-            # The writer attests itself; a replayed bootstrap may exist on two backends.
-            sent = True
-            await ch.execute(_BARRIER, params)
-            latched = await _latched(ch, backend)
-            if await _keeper(ch, backend) != before:
-                raise LatchUnavailable()
-            await _confirm(ch, backend, params)
-            await _clear(ch, backend, params)
-            if await _keeper(ch, backend) != before:
-                raise LatchUnavailable()
-            sent = False
-            return latched
-    except Exception:  # noqa: BLE001 — uncertain privacy state refuses without backend diagnostics
-        raise LatchUnavailable() from None
-    finally:
-        if sent:
-            try:
-                # A failed proof never admits; only its own expiring nonce is disposable.
-                # not a setting: refused requests spend at most one second on own-key cleanup.
-                async with asyncio.timeout(1):
-                    await ch.execute(LOCK_RELEASE, params)
-            except Exception:  # noqa: BLE001 — the refused attempt leaves only its expiring own key
-                pass
+    with query_tag("knowledge.mirror.latch"):
+        try:
+            # not a setting: the privacy proof must end within its fixed security deadline.
+            async with asyncio.timeout(5), ch.coordination_session():
+                backend = await _engines(ch)
+                if await _latched(ch, backend):
+                    return True
+                before = await _keeper(ch, backend)
+                # The writer attests itself; a replayed bootstrap may exist on two backends.
+                sent = True
+                await ch.execute(_BARRIER, params)
+                latched = await _latched(ch, backend)
+                if await _keeper(ch, backend) != before:
+                    raise LatchUnavailable()
+                await _confirm(ch, backend, params)
+                await _clear(ch, backend, params)
+                if await _keeper(ch, backend) != before:
+                    raise LatchUnavailable()
+                sent = False
+                return latched
+        except Exception:  # noqa: BLE001 — uncertain privacy state refuses without backend diagnostics
+            raise LatchUnavailable() from None
+        finally:
+            if sent:
+                try:
+                    # A failed proof never admits; only its own expiring nonce is disposable.
+                    # not a setting: refused requests spend at most one second on own-key cleanup.
+                    async with asyncio.timeout(1):
+                        await ch.execute(LOCK_RELEASE, params)
+                except Exception:  # noqa: BLE001 — the refused attempt leaves only its expiring own key
+                    pass
 
 
 async def ensure(*, ch: CHClient | None = None) -> None:
     """Set the real positive state; a racing identical insert is confirmed afresh."""
     ch = ch or get_client()
-    set_query_tag("knowledge.mirror.latch_set")
-    try:
-        # not a setting: positive confirmation shares the fixed privacy-proof deadline.
-        async with asyncio.timeout(5):
-            async with ch.coordination_session():
-                await _engines(ch)
-            try:
-                await ch.execute(_SET)
-            except Exception as error:
-                if not key_exists(error):
-                    raise
-            async with ch.coordination_session():
-                if not await _latched(ch, await _engines(ch)):
-                    raise LatchUnavailable()
-    except Exception:  # noqa: BLE001 — uncertain privacy state refuses without backend diagnostics
-        raise LatchUnavailable() from None
+    with query_tag("knowledge.mirror.latch_set"):
+        try:
+            # not a setting: positive confirmation shares the fixed privacy-proof deadline.
+            async with asyncio.timeout(5):
+                async with ch.coordination_session():
+                    backend = await _engines(ch)
+                try:
+                    await ch.execute(_SET, {"backend": str(backend)})
+                except Exception as error:
+                    if not key_exists(error):
+                        raise
+                async with ch.coordination_session():
+                    if not await _latched(ch, await _engines(ch)):
+                        raise LatchUnavailable()
+        except Exception:  # noqa: BLE001 — uncertain privacy state refuses without backend diagnostics
+            raise LatchUnavailable() from None

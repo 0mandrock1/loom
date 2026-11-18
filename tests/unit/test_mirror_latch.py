@@ -6,6 +6,8 @@ import asyncio
 
 import pytest
 
+from server.core import request_work
+from server.core.ch import current_query_tag, query_tag, statement_settings
 from server.knowledge.store import mirror_latch as store
 from tests.unit.mirror_latch_fake import A, B, KeeperWorld
 
@@ -115,3 +117,37 @@ async def test_enablement_after_an_erasure_does_not_trust_a_followers_stale_posi
     world = KeeperWorld(enabled=False, visible=True)
     await store.ensure(ch=world)
     assert world.enabled and world.counts["set"] == 1
+
+
+@pytest.mark.parametrize("operation", [store.enabled, store.ensure])
+@pytest.mark.parametrize("outcome", ["success", "refusal", "cancelled"])
+async def test_admission_restores_the_callers_query_tag_after_every_exit(operation, outcome):
+    class CancelledWorld(KeeperWorld):
+        async def query_one(self, sql, params=None):
+            raise asyncio.CancelledError()
+
+    world = CancelledWorld() if outcome == "cancelled" else KeeperWorld()
+    if outcome == "refusal":
+        world.fault = "wrong_engine"
+    with request_work.http_owner({}), query_tag("memory.search caller-request-id"):
+        request_work.begin()
+        if outcome == "success":
+            await operation(ch=world)
+        else:
+            error = asyncio.CancelledError if outcome == "cancelled" else store.LatchUnavailable
+            with pytest.raises(error):
+                await operation(ch=world)
+        assert current_query_tag() == "memory.search caller-request-id"
+        following = statement_settings("SELECT 42")
+        assert following["log_comment"] == "memory.search caller-request-id"
+        assert following["query_id"].startswith("caller-request-id:")
+
+
+async def test_positive_repair_refuses_a_write_routed_away_from_the_validated_store():
+    world = KeeperWorld(enabled=False, visible=True)
+    # Both metadata reads and the stale positive stay on A; only SET reaches drifted B.
+    world.routes["set", 1] = B
+    world.detached_stores.add(B)
+    with pytest.raises(store.LatchUnavailable):
+        await store.ensure(ch=world)
+    assert not world.enabled

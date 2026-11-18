@@ -21,6 +21,7 @@ class KeeperWorld:
         self.routes = {}
         self.fault = ""
         self.sessions = 0
+        self.detached_stores = set()
 
     @asynccontextmanager
     async def coordination_session(self):
@@ -110,6 +111,12 @@ class KeeperWorld:
             return
         if sql.startswith("INSERT INTO loom.knowledge_mirror_latch"):
             backend = self.route("set")
+            if "throwIf(toString(serverUUID()) != {backend:String}" in sql:
+                if backend != params["backend"]:
+                    raise RuntimeError("Session protection writer changed")
+            if backend in self.detached_stores:
+                self.visible[backend] = True
+                return
             existed = self.enabled
             self.enabled = self.visible[backend] = True
             if existed or self.fault == "racing_set":

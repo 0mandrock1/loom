@@ -9,6 +9,7 @@ import sys
 import uuid
 
 import pytest
+from clickhouse_connect.driver.exceptions import DatabaseError
 
 from server.core.ch import CHClient, caller_shaped
 from server.core.ch_target import ch_secure
@@ -65,6 +66,9 @@ async def _proof(client):
                 "getSetting('use_query_condition_cache') AS condition_cache"
             )
     assert row == {"principal": settings.ch_user, "cache": 0, "condition_cache": 0}
+    with pytest.raises(DatabaseError, match="Session protection writer changed"):
+        await client.execute(mirror_latch._SET, {"backend": str(uuid.UUID(int=0))})
+    assert not await mirror_latch.enabled(ch=client)
     await mirror_latch.ensure(ch=client)
     assert await mirror_latch.enabled(ch=client)
     await mirror_latch.ensure(ch=client)

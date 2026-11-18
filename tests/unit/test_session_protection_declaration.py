@@ -151,6 +151,10 @@ def test_the_signed_promise_survives_token_verification(declared: bool) -> None:
 
 @pytest.mark.parametrize("claim", ["false", "true", 0, 1, None, [], {}])
 def test_a_signed_non_boolean_promise_is_refused(claim: Any) -> None:
+    with pytest.raises(TokenError, match="must be a boolean"):
+        mint_token(
+            "reader", "example", ["notes"], ["viewer"], secret=_SECRET, session_protection=claim
+        )
     token = mint_token("reader", "example", ["notes"], ["viewer"], secret=_SECRET)
     payload = jwt.decode(token, options={"verify_signature": False})
     payload["session_protection"] = claim
