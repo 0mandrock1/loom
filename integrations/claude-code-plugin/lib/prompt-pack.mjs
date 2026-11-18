@@ -26,8 +26,16 @@ const SELF_CONTAINED_RE =
 const LOCAL_QUERY_RE =
   /^i (?:just )?(?:created|edited) (?:an? |the )?(?:untracked|uncommitted|unindexed)\b|^(?:review|inspect|read|use) (?:my|this|the) (?:uncommitted|untracked|unindexed|working[- ]tree)\b/i;
 const CHAT_RE = /^(?:thanks(?:,? that(?:'s| is) all)?|thank you|hello|hi|good morning)[.!\s]*$/i;
-const MEMORY_QUERY_RE =
-  /\b(?:did|have) (?:we|i) (?:decide|choose|say|save)\b|\bcite (?:the )?saved (?:decision|memory|preference)\b|^(?:remember|recall (?:our|my)|save (?:this|that) (?:fact|decision))\b/i;
+const MEMORY_QUERY_RES = [
+  /\b(?:did|have) (?:we|i) (?:decide|choose|say|save)\b|\bcite (?:the )?saved (?:decision|memory|preference)\b|^(?:remember|recall (?:our|my)|save (?:this|that) (?:fact|decision))\b/i,
+  /^(?:recall|retrieve|find|show(?: me)?) (?:(?:the|my|our) )?(?:saved|recorded) (?:decisions?|memor(?:y|ies)|preferences?|conventions?|lessons?)\b/i,
+  /^what (?:is|are) (?:my|our) (?:(?:saved|recorded) )?(?:decisions?|memor(?:y|ies)|preferences?|conventions?|lessons?)\b/i,
+];
+
+export function memoryRequested(prompt) {
+  const query = searchQuery(prompt);
+  return MEMORY_QUERY_RES.some((pattern) => pattern.test(query));
+}
 const NAME = "`?([A-Za-z_]\\w*(?:(?:::|\\.)[A-Za-z_]\\w*)*)`?";
 const END_NAME = "(?=\\s|[?,;]|:(?!:)|\\.(?:\\s|$)|$)";
 const DEFINITION_RES = [
@@ -50,8 +58,7 @@ const IMPACT_RES = [
 export function codeLookup(prompt, token) {
   if (!shouldAsk(prompt)) return null;
   const query = searchQuery(prompt).slice(0, 2000);
-  if (MEMORY_QUERY_RE.test(query) || /^what would (?:this change|these changes|it) (?:affect|impact)\b/i.test(query))
-    return null;
+  if (/^what would (?:this change|these changes|it) (?:affect|impact)\b/i.test(query)) return null;
   for (const [op, patterns] of [
     ["code.symbol", DEFINITION_RES],
     ["code.callers", CALLERS_RES],
@@ -71,6 +78,7 @@ export function codeLookup(prompt, token) {
       return { op, name };
     }
   }
+  if (memoryRequested(query)) return null;
   return { op: "code.search", prompt };
 }
 

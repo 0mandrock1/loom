@@ -131,6 +131,7 @@ for (const memory of [
   "Include our conventions.",
   "Include our lessons.",
   "Recall our rationale.",
+  "What did we decide about record prefixes?",
 ]) {
   test(`default recall keeps a mixed code question with ${memory}`, async (t) => {
     const { requests, run } = await fixture(t, PACK);

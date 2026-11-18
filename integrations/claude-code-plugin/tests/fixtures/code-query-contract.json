@@ -71,5 +71,44 @@
     "name": "unknown target",
     "prompt": "What would this change affect?",
     "operation": null
+  },
+  {
+    "name": "saved decision request",
+    "prompt": "Recall the saved decision about record prefixes.",
+    "operation": null,
+    "memory": true
+  },
+  {
+    "name": "saved preferences request",
+    "prompt": "What are my saved preferences for code reviews?",
+    "operation": null,
+    "memory": true
+  },
+  {
+    "name": "mixed definition and saved decision",
+    "prompt": "Where is Parser.parse_record defined? Cite the saved decision about record prefixes.",
+    "operation": "code.symbol",
+    "target": "Parser.parse_record",
+    "context": "src/parser.py:10-14"
+  },
+  {
+    "name": "mixed callers and saved decision",
+    "prompt": "Which callers of Parser.parse_record can you establish? Cite the saved decision about record prefixes.",
+    "operation": "code.callers",
+    "target": "Parser.parse_record",
+    "context": "Loader.load",
+    "floor": true
+  },
+  {
+    "name": "concept mentioning a saved decision",
+    "prompt": "How does the parser attach a saved decision to a record?",
+    "operation": "code.search",
+    "context": "src/parser.py:10-14"
+  },
+  {
+    "name": "concept mentioning saved preferences",
+    "prompt": "What code applies saved preferences when a record is parsed?",
+    "operation": "code.search",
+    "context": "src/parser.py:10-14"
   }
 ]

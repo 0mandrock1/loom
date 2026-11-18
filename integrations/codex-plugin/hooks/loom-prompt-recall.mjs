@@ -24,7 +24,7 @@ import {
   runHookMain,
   scheduleExit,
 } from "../lib/loom-client.mjs";
-import { codeLookup, searchQuery, shouldAsk } from "../lib/prompt-pack.mjs";
+import { codeLookup, memoryRequested, searchQuery, shouldAsk } from "../lib/prompt-pack.mjs";
 import { acceptPack, recallBody, recallPayload, renderRecall } from "../lib/prompt-recall.mjs";
 import { readJsonFile, sessionStatePath, writeCursor, writeJsonFile } from "../lib/tmp-state.mjs";
 
@@ -61,6 +61,7 @@ async function main() {
   const prompt = String(payload.prompt || "");
   const lookup = MODE === "first" ? codeLookup(prompt, token) : null;
   const asksMemory =
+    memoryRequested(prompt) ||
     /\b(?:remember|recall|memory|memories|decisions?|conventions?|lessons?|preferences?|constraints?)\b/i.test(
       searchQuery(prompt),
     );
