@@ -28,6 +28,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from server.core.diagnostics import codes_only
+
 _MAX_SKIPPED = 16
 
 
@@ -93,13 +95,13 @@ def begin() -> RequestWork:
 
 
 def current() -> RequestWork | None:
-    return _current.get()
+    return None if codes_only() else _current.get()
 
 
 def mark_stage(name: str) -> None:
     """Charge the wall since the previous mark (or the bag's start) to
     `name`. No bag bound: nothing happens."""
-    bag = _current.get()
+    bag = current()
     if bag is None:
         return
     try:
@@ -115,6 +117,8 @@ def note_ch_summary(summary: Any) -> dict[str, Any]:
     `query_id`) for the caller's span, or {} when the summary is empty or
     unreadable — a Cloud response without the header is a null reading, not
     an error. Never raises."""
+    if codes_only():
+        return {}
     try:
         if not isinstance(summary, dict) or not summary:
             return {}
@@ -131,7 +135,7 @@ def note_ch_summary(summary: Any) -> dict[str, Any]:
         }
         if qid:
             parsed["query_id"] = qid
-        bag = _current.get()
+        bag = current()
         if bag is not None:
             bag.ch_statements += 1
             bag.ch_read_rows += parsed["read_rows"]
@@ -145,7 +149,7 @@ def note_ch_summary(summary: Any) -> dict[str, Any]:
 def next_query_seq() -> tuple[int, str] | None:
     """The request's next statement number and its nonce, or None when no bag is
     bound (a worker pass keeps the driver's own query ids)."""
-    bag = _current.get()
+    bag = current()
     if bag is None:
         return None
     bag.ch_seq += 1
@@ -153,7 +157,7 @@ def next_query_seq() -> tuple[int, str] | None:
 
 
 def note_injected(*, facts: int = 0, chunks: int = 0) -> None:
-    bag = _current.get()
+    bag = current()
     if bag is None:
         return
     bag.injected_facts += max(0, int(facts))
@@ -161,7 +165,7 @@ def note_injected(*, facts: int = 0, chunks: int = 0) -> None:
 
 
 def note_schema_skipped(table: str) -> None:
-    bag = _current.get()
+    bag = current()
     if bag is None or not table:
         return
     name = str(table)

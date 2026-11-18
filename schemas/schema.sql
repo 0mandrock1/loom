@@ -16,13 +16,13 @@
 -- Do NOT hand-edit. Edit schemas/migrations/*.sql and re-dump.
 -- CI verifies this file matches what migrations would produce.
 --
--- Counts: 190 tables + 5 views + 19 materialized views.
+-- Counts: 191 tables + 5 views + 19 materialized views.
 
 CREATE DATABASE IF NOT EXISTS `loom`;
 CREATE DATABASE IF NOT EXISTS `loom_telemetry`;
 
 -- ======================================================================
--- Tables (190)
+-- Tables (191)
 -- ======================================================================
 
 -- loom.acl_versions
@@ -1898,7 +1898,8 @@ CREATE TABLE IF NOT EXISTS loom.erasure_requests
     `verified_at` Nullable(DateTime) DEFAULT NULL,
     `purge` Bool DEFAULT false,
     `actor` String DEFAULT '',
-    `census` String DEFAULT ''
+    `census` String DEFAULT '',
+    `mirror_marked` Bool DEFAULT false
 )
 ENGINE = ReplacingMergeTree(version)
 ORDER BY id
@@ -2235,7 +2236,8 @@ CREATE TABLE IF NOT EXISTS loom.learnings_queue
     `source_kind` LowCardinality(String) DEFAULT 'memory_supporters',
     `seeded_from_msg_id` Nullable(String) DEFAULT NULL,
     `seeded_from_thread_id` Nullable(String) DEFAULT NULL,
-    `agent` LowCardinality(String) DEFAULT ''
+    `agent` LowCardinality(String) DEFAULT '',
+    `source_resource_id` String DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(version)
 PARTITION BY toYYYYMM(proposed_at)
@@ -3718,6 +3720,33 @@ CREATE TABLE IF NOT EXISTS loom.qa_test_daily
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (org, qa_namespace, test_name, day)
 SETTINGS index_granularity = 1024, non_replicated_deduplication_window = 1000;
+
+-- loom.query_history_sources
+CREATE TABLE IF NOT EXISTS loom.query_history_sources
+(
+    `org` LowCardinality(String),
+    `namespace` LowCardinality(String),
+    `agent` LowCardinality(String) DEFAULT '-',
+    `user_id` String DEFAULT '-',
+    `session_id` String DEFAULT '-',
+    `name` String,
+    `source_id` UUID,
+    `host` String,
+    `port` UInt16,
+    `secure` Bool,
+    `user` String,
+    `password_enc` String,
+    `cluster` String DEFAULT '',
+    `databases` Array(String),
+    `actor` String,
+    `source_class` LowCardinality(String),
+    `created_at` DateTime,
+    `tombstoned_at` Nullable(DateTime) DEFAULT NULL,
+    `version` UInt64 DEFAULT toUInt64(toUnixTimestamp64Nano(now64(9)))
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY (org, namespace, name)
+SETTINGS non_replicated_deduplication_window = 1000, index_granularity = 8192;
 
 -- loom.query_nodes
 CREATE TABLE IF NOT EXISTS loom.query_nodes

@@ -605,6 +605,9 @@ async def _probe() -> tuple[str, bool, str]:
         )
     if not await _canary_reads(_loaded):
         return "the analyst's policies do not accept this replica's key", True, ""
+    if await store.own_version(_names(), password=_password(), extra={}) > boundary.ENTITY_VERSION:
+        # The key canary stays mandatory; the newer build owns its changed catalog and grants.
+        return "", False, ""
 
     def reserved() -> dict[str, Any]:
         # One query id per statement: a statement still running past its
@@ -656,9 +659,6 @@ async def _probe() -> tuple[str, bool, str]:
                 error_line(e),
             )
         return f"{boundary.ANALYST_USER} may read {shown}: its grants are too wide", True, ""
-    if await store.own_version(_names(), password=_password(), extra={}) > boundary.ENTITY_VERSION:
-        # A newer build's entities: the allowlist checks below are its to make.
-        return "", False, ""
     for table in [*(t.name for t in boundary.TABLES), boundary.CANARY_TABLE]:
         if not await _signed_only(table):
             problem = f"{boundary.ANALYST_USER} reads {table} unsigned: it has no scope policy"

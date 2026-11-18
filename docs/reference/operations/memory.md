@@ -1443,7 +1443,7 @@ WHAT: Save a standing fact and protect it.
 | `valid_to` | `datetime \| None` | `None` | Closing bound of the fact's stated validity ("until 2024"); NULL = open interval. |
 | `pinned` | `bool` | `False` | True when written via memory.pin (explicit-save) |
 | `classify` | `bool` | `False` | Call the namespace's classify_endpoint to derive memory_type from `value`. |
-| `if_match_sha256` | `str` | `''` | Optimistic-concurrency precondition: 409 PRECONDITION_FAILED if the live row's SHA-256 doesn't match. |
+| `if_match_sha256` | `str` | `''` | Require the live row's SHA-256, or 'absent' for no unexpired row under this exact identity (concrete agent required); mismatch is 409, empty skips checking. |
 | `char_limit` | `int \| None` | `None` | Server-enforced char cap on the stringified value (422 on exceed). |
 | `sensitivity` | `Literal['', 'low', 'medium', 'high']` | `''` | Sensitivity tier. 'high' = never embedded, searched or in a recency pack; read by key only, audited. '' = detect from the value: credentials, card numbers, SSNs, PINs high; email, phone, IBAN medium. |
 | `dry_run` | `bool` | `False` | Run the conflict check and return its verdict, peers and `next` WITHOUT writing — no loom.memory row, no embedding row, no audit hash, no usage event, no supersession. |
@@ -1952,6 +1952,7 @@ Semantic search over the agent's own memory.
 | `score_explanation` | `str` | Terse scoring posture: mode, recipe, hyde, rerank and tag filter, then the retrieval plan (`mode=rrf, hyde=on; plan=...`). |
 | `retrieval_confidence` | `float` | Calibrated confidence in the hit set, 0 to 1, from top similarity, top-two margin, route agreement and result count; 0 on no hits. |
 | `retrieval_risk` | `Literal['low', 'medium', 'high', 'abstain']` | Risk label from `retrieval_confidence`: "low" (>= 0.75), "medium" (>= 0.55), "high" (below), "abstain" (below the abstain thresholds). |
+| `term_leg` | `Literal['complete', 'empty', 'capped', 'timed_out', 'failed', 'off']` | What the term leg did: "complete"; "empty" (the namespace holds no definition); "capped" or "timed_out" past its bounds; "failed" (a read failed, so no definition was served); "off" (a page handle or a field asking for other rows turned it… |
 | `route_agreement` | `float` | Share of the retrieval routes that ran (semantic, graph, triples, evidence, extra legs) that also found support, 0 to 1. |
 | `calibration_explanation` | `str` | The inputs behind `retrieval_confidence`: top_similarity, margin, route_agreement, evidence_support (and constrained=true when set). |
 | `fallback_rounds_used` | `int` | Recursive-fallback cascade accounting (iterative-judge). rounds_used = rounds spent (capped at LOOM_MEMORY_SEARCH_FALLBACK_MAX_ROUNDS); budget_exhausted = a leg was denied by the round/wall-clock cap; elapsed_ms = wall-clock in the cascade. |
@@ -2108,7 +2109,7 @@ Save a fact to Loom — shared across every AI tool the user runs; native memory
 | `valid_to` | `datetime \| None` | `None` | Closing bound of the fact's stated validity ("until 2024"); NULL = open interval. |
 | `pinned` | `bool` | `False` | True when written via memory.pin (explicit-save) |
 | `classify` | `bool` | `False` | Call the namespace's classify_endpoint to derive memory_type from `value`. |
-| `if_match_sha256` | `str` | `''` | Optimistic-concurrency precondition: 409 PRECONDITION_FAILED if the live row's SHA-256 doesn't match. |
+| `if_match_sha256` | `str` | `''` | Require the live row's SHA-256, or 'absent' for no unexpired row under this exact identity (concrete agent required); mismatch is 409, empty skips checking. |
 | `char_limit` | `int \| None` | `None` | Server-enforced char cap on the stringified value (422 on exceed). |
 | `sensitivity` | `Literal['', 'low', 'medium', 'high']` | `''` | Sensitivity tier. 'high' = never embedded, searched or in a recency pack; read by key only, audited. '' = detect from the value: credentials, card numbers, SSNs, PINs high; email, phone, IBAN medium. |
 | `dry_run` | `bool` | `False` | Run the conflict check and return its verdict, peers and `next` WITHOUT writing — no loom.memory row, no embedding row, no audit hash, no usage event, no supersession. |

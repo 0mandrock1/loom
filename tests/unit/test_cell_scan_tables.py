@@ -155,6 +155,7 @@ _DATA_TABLES = frozenset(
         "loom.qa_sources",
         "loom.qa_test_daily",
         "loom.query_nodes",
+        "loom.query_history_sources",
         "loom.search_misses",
         "loom.search_trace_log",
         "loom.service_accounts",

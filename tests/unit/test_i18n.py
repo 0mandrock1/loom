@@ -168,6 +168,48 @@ def test_alt_texts_html_link_texts_and_table_cells_are_checked() -> None:
     assert "Recall" not in kept[0]
 
 
+@pytest.mark.parametrize("comparison", ["< 3", "<3", "<= 3"])
+def test_html_link_labels_keep_literal_comparisons(comparison: str) -> None:
+    source = f'<a href="#limits">Fewer {comparison} values<b>are ready</b></a>'
+    assert t.labels(source) == Counter({f"Fewer {comparison} values are ready": 1})
+
+
+@pytest.mark.parametrize(
+    "table",
+    ["| values | < 3 |\n| next | 200 |", "| values | < 3      |\n| next | 200     |"],
+)
+def test_html_tokens_do_not_start_at_markdown_comparisons(table: str) -> None:
+    anchor = '<a id="erasure"></a>'
+    assert t.HTML_TAG.findall(f"{table}\n\n{anchor}") == ['<a id="erasure">', "</a>"]
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<span data-limit="1 > 0">',
+        "<span data-limit='1 > 0'>",
+        "</span>",
+        "<!-- preserve > inside a comment -->",
+        "<!DOCTYPE html>",
+        '<?xml version="1.0"?>',
+        "<![CDATA[values > limits]]>",
+    ],
+)
+def test_html_tokens_preserve_complete_markup(markup: str) -> None:
+    assert t.HTML_TAG.findall(f"Before {markup} after") == [markup]
+
+
+@pytest.mark.parametrize("name", ["memory_view-panel", "memory.view-panel", "memory-α"])
+def test_custom_element_labels_and_attributes_remain_checked(name: str) -> None:
+    opening, closing = f'<{name} data-state="ready">', f"</{name}>"
+    changed = opening.replace('"ready"', '"waiting"')
+    assert t.labels(f'<a href="#x">{opening}Get started{closing}</a>') == Counter(
+        {"Get started": 1}
+    )
+    assert t.HTML_TAG.findall(opening + closing) == [opening, closing]
+    assert t.HTML_TAG.findall(changed + closing) != t.HTML_TAG.findall(opening + closing)
+
+
 def test_a_translation_may_write_a_spelled_number_as_digits() -> None:
     assert t.differences("two steps", "2 Schritte") == []
 
