@@ -6880,7 +6880,7 @@ export interface MemorySearchInput {
   exclude_keys?: string[];
   quality_filter?: boolean;
   read_scope?: "namespace" | "own_user" | "own_session";
-  /** If non-empty, OR-match against extracted entities — rows whose `entities` array intersects this list are boosted alongside cosine matches. */
+  /** Up to 64 names; if non-empty, OR-match against extracted entities — rows whose `entities` array intersects this list are boosted alongside cosine matches. */
   entity_filter?: string[];
   /** If set, restrict the search to memories assigned to this category (one registered in the namespace). Hard filter by default — only members of the category are r */
   category?: string;
@@ -7008,7 +7008,7 @@ export interface MemorySearchTraceInput {
   exclude_keys?: string[];
   quality_filter?: boolean;
   read_scope?: "namespace" | "own_user" | "own_session";
-  /** If non-empty, OR-match against extracted entities — rows whose `entities` array intersects this list are boosted alongside cosine matches. */
+  /** Up to 64 names; if non-empty, OR-match against extracted entities — rows whose `entities` array intersects this list are boosted alongside cosine matches. */
   entity_filter?: string[];
   /** If set, restrict the search to memories assigned to this category (one registered in the namespace). Hard filter by default — only members of the category are r */
   category?: string;
