@@ -161,6 +161,7 @@ async def repair(
     wait_s: float,
     authority: OrgAuthority,
     cleanup: Callable[[], Awaitable[None]],
+    expected_digests: tuple[str, ...] | None = None,
     ch: Any = None,
 ) -> Index:
     """Finish the persisted mutation after a crash; never guess a readmission."""
@@ -173,6 +174,8 @@ async def repair(
         if row is None:
             raise VendorError("crawl exclusion repair unavailable")
         _open_key(row)
+        if expected_digests is not None and row["pending_digests"] != list(expected_digests):
+            raise VendorError("another crawl exclusion cleanup is pending")
         await _finish(org, row, authority=authority, cleanup=cleanup, ch=ch)
     return await Index.open(org, ch=ch)
 
@@ -232,6 +235,9 @@ class Index:
             ),
         ]
 
+    def contact_digests(self, contacts: tuple[str, ...]) -> list[str]:
+        return sorted({self._digest("verified-email", [email(v)]) for v in contacts})
+
     async def contains(self, person: Person) -> bool:
         await self.version()
         found = await store.excluded(self.org, self.person_digests(person), ch=self._ch)
@@ -257,17 +263,21 @@ class Index:
         wait_s: float,
         authority: OrgAuthority,
         cleanup: Callable[[], Awaitable[None]],
+        contacts: tuple[str, ...] = (),
     ) -> Index:
         """A checked mutation stays fenced until every local rewrite and census succeeds."""
         set_query_tag("knowledge.crawl.exclusions.change")
-        if type(exclude) is not bool or not people:
+        if type(exclude) is not bool or not people and not contacts:
             raise ValueError("explicit provider-person exclusion or readmission required")
         await authority.validate(self.org)
         async with org_lease(self.org, ttl_s=ttl_s, wait_s=wait_s, ch=self._ch):
             await authority.validate(self.org)
             await self.version()
             digests = sorted(
-                {digest for person in people for digest in self.person_digests(person)}
+                {
+                    *(digest for person in people for digest in self.person_digests(person)),
+                    *self.contact_digests(contacts),
+                }
             )
             row = await store.key(self.org, ch=self._ch)
             if row is None:

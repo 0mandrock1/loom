@@ -184,5 +184,10 @@ async def _publish(
     async with sync.publication_guard(source):
         await crawl_publication.groups(source, expansion, started, maximum=membership_bound)
         await mirror_store.record_listing(
-            source.org, source.mirror, source.source_id, source.name, started
+            source.org,
+            source.mirror,
+            source.source_id,
+            source.name,
+            started,
+            crawl_exclusion_generation=await authority.exclusions.version(),
         )

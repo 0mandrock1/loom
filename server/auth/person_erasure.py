@@ -129,8 +129,6 @@ def load(uid: str, encoded: str) -> Capture:
         if keys != sorted(set(keys)):
             raise unavailable()
         workspaces = _workspaces(value["workspaces"], people)
-        if not value["prepared"] and workspaces:
-            raise unavailable()
         return Capture(uid, people, workspaces, value["prepared"])
     except (ValueError, TypeError, KeyError, RecursionError):
         raise unavailable() from None
@@ -209,11 +207,24 @@ class Cleanup(Protocol):
 
 _cleanup: Cleanup | None = None
 _preparer: Preparer | None = None
+_finalizer: Cleanup | None = None
 
 
-def bind(preparer: Preparer, cleanup: Cleanup) -> None:
-    global _cleanup, _preparer
-    _cleanup, _preparer = cleanup, preparer
+def bind(preparer: Preparer, cleanup: Cleanup, finalizer: Cleanup) -> None:
+    global _cleanup, _preparer, _finalizer
+    _cleanup, _preparer, _finalizer = cleanup, preparer, finalizer
+
+
+def interrupted(uid: str, encoded: str, observed: str) -> str:
+    """Retain both verified intents when reactivation changed the canonical person."""
+    previous, current = load(uid, encoded), load(uid, observed)
+    merged: dict[tuple[str, str], set[str]] = {}
+    for person in (*previous.people, *current.people):
+        merged.setdefault((person.org, person.subject), set()).update(person.emails)
+    people = tuple(
+        Person(org, subject, tuple(sorted(merged[org, subject]))) for org, subject in sorted(merged)
+    )
+    return _seal(Capture(uid, people, previous.workspaces, False))
 
 
 async def prepare(uid: str, encoded: str) -> str:
@@ -239,6 +250,18 @@ async def finish(uid: str, encoded: str) -> None:
     await pending.validate()
     await _cleanup(pending)
     await pending.validate()
+
+
+async def finalize(uid: str, encoded: str) -> None:
+    """SCIM holds its user lease after cleanup, so no newer capture can be overwritten."""
+    if _finalizer is None:
+        raise unavailable()
+    captured = load(uid, encoded)
+    if not captured.prepared:
+        raise unavailable()
+    pending = Pending(captured, encoded)
+    await pending.validate()
+    await _finalizer(pending)
 
 
 async def require_settled(*, ch: Any = None) -> None:

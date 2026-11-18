@@ -156,3 +156,54 @@ async def residue(
             for value in await _pg_values(conn, list(params.values())):
                 total += without_people(value, addresses) != value
     return total
+
+
+async def namespaces(org: str, source_id: str, *, ch: _CHClient | None = None) -> list[str]:
+    """Discover raw retained copies, including older mirrors and pending PG deliveries."""
+    if any(not isinstance(v, str) or not v or "\0" in v for v in (org, source_id)):
+        raise ValueError("crawl copy scope refused")
+    client = ch or _default_client()
+    maximum = settings.knowledge_crawl_registry_scan_limit
+    params = {
+        "org": org,
+        "id": source_id,
+        "actor": SYNC_WORKER_ACTOR,
+        "tag": "source-id:" + source_id,
+        "limit": maximum + 1,
+    }
+    with own_write_reads():
+        rows = await client.query_all(
+            "SELECT DISTINCT namespace FROM ("
+            "SELECT namespace FROM loom.documents WHERE org = {org:String} "
+            "AND actor = {actor:String} AND has(tags, {tag:String}) UNION ALL "
+            "SELECT namespace FROM loom.knowledge_group_members WHERE org = {org:String} "
+            "AND source_id = {id:String} UNION ALL "
+            "SELECT namespace FROM loom.knowledge_source_listings WHERE org = {org:String} "
+            "AND source_id = {id:String}) ORDER BY namespace LIMIT {limit:UInt32}",
+            params=params,
+        )
+    if pg.enabled():
+        async with pg.transaction() as conn:
+            rows.extend(
+                await conn.fetch(
+                    "SELECT DISTINCT namespace FROM ("
+                    "SELECT namespace FROM loom.knowledge_heads WHERE org = $1 "
+                    "AND row->>'actor' = $2 AND row->'tags' ? $3::text UNION ALL "
+                    "SELECT namespace FROM loom.knowledge_deliveries WHERE org = $1 "
+                    "AND row->>'actor' = $2 AND row->'tags' ? $3::text) AS copies "
+                    "ORDER BY namespace LIMIT $4",
+                    org,
+                    SYNC_WORKER_ACTOR,
+                    params["tag"],
+                    maximum + 1,
+                )
+            )
+    if len(rows) > 2 * maximum or any(
+        not isinstance(r["namespace"], str) or not r["namespace"] or "\0" in r["namespace"]
+        for r in rows
+    ):
+        raise RuntimeError("crawl_copy_scope_unverified")
+    result = sorted({r["namespace"] for r in rows})
+    if len(result) > maximum:
+        raise RuntimeError("crawl_copy_scope_unverified")
+    return result

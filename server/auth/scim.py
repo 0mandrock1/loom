@@ -376,7 +376,20 @@ async def _capture_person_erasure(row: dict[str, Any]) -> dict[str, Any]:
         return row
     encoded = str(row.get("crawl_erasure_enc", ""))
     if encoded:
-        if person_erasure.load(row["id"], encoded).prepared:
+        captured = person_erasure.load(row["id"], encoded)
+        if captured.prepared:
+            if not row["deleted"]:
+                observed = await person_erasure.capture(
+                    row["id"], row["email"], await _subjects(row["email"])
+                )
+                if person_erasure.load(row["id"], observed).people != captured.people:
+                    # Preserve both intents instead of finishing an old deletion as
+                    # though it proved a newly assigned email's canonical identity.
+                    row["crawl_erasure_enc"] = person_erasure.interrupted(
+                        row["id"], encoded, observed
+                    )
+                    await _write(row)
+                    raise person_erasure.unavailable()
             return row
         if row["deleted"]:
             # A reused provider email must not complete a failed historical capture.
@@ -417,14 +430,17 @@ async def _finish_person_erasure(row: dict[str, Any]) -> None:
             return
         if current.get("crawl_erasure_enc") != encoded:
             raise person_erasure.unavailable()
-        await _write(
-            {
-                **current,
-                "crawl_erasure_enc": "",
-                "crawl_erasure_done": True,
-                "crawl_erasure_required": True,
-            }
-        )
+        # Clearing only a new FINAL row would retain the encrypted person's metadata
+        # in old parts. The required erasure port redacts raw history and marks done
+        # in the same awaited mutation, so a lost reply is safe to retry.
+        await person_erasure.finalize(row["id"], encoded)
+        current = await _row(row["id"])
+        if (
+            current is None
+            or not current.get("crawl_erasure_done")
+            or current.get("crawl_erasure_enc")
+        ):
+            raise person_erasure.unavailable()
 
 
 async def _repair_failed_connections(row: dict[str, Any], *, erase_owner: bool) -> None:

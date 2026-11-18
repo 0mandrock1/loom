@@ -166,3 +166,71 @@ async def memberships(
         )
     if row is None or type(row.get("n")) is not int or row["n"] != 0:
         raise RuntimeError("crawl_membership_history_remains")
+
+
+async def invalidate_listing(
+    org: str,
+    mirror: str,
+    source_id: str,
+    *,
+    ch: _CHClient | None = None,
+) -> None:
+    client, params = ch or _default_client(), _params(org, mirror, source_id)
+    table = "loom.knowledge_source_listings"
+    await count_then_mutate(
+        table,
+        count_where=_SCOPE,
+        mutation="DELETE",
+        mutation_where=_SCOPE,
+        params=params,
+        final=False,
+        ch=client,
+    )
+    with own_write_reads():
+        row = await client.query_one(
+            f"SELECT count() AS n FROM {table} WHERE {_SCOPE}", params=params
+        )
+    if row is None or type(row.get("n")) is not int or row["n"] != 0:
+        raise RuntimeError("crawl_listing_history_remains")
+
+
+async def capsules(uid: str, *, ch: _CHClient | None = None) -> None:
+    """Under the exact SCIM user lease, remove every completed capture's encrypted PII."""
+    if not isinstance(uid, str) or not uid or "\0" in uid:
+        raise ValueError("SCIM capture scope refused")
+    client, params = ch or _default_client(), {"id": uid}
+    where = "id = {id:String} AND (crawl_erasure_enc != '' OR NOT crawl_erasure_done)"
+    await count_then_mutate(
+        "loom.scim_users",
+        count_where=where,
+        mutation_where=where,
+        final=False,
+        mutation=(
+            "UPDATE crawl_erasure_enc = '', crawl_erasure_done = true, "
+            "crawl_erasure_required = true"
+        ),
+        params=params,
+        ch=client,
+    )
+    with own_write_reads():
+        row = await client.query_one(
+            f"SELECT count() AS n FROM loom.scim_users WHERE {where}", params=params
+        )
+    if row is None or type(row.get("n")) is not int or row["n"] != 0:
+        raise RuntimeError("crawl_capture_history_remains")
+
+
+async def capsule_history(uid: str, *, ch: _CHClient | None = None) -> list[str]:
+    if not isinstance(uid, str) or not uid or "\0" in uid:
+        raise ValueError("SCIM capture scope refused")
+    maximum = settings.knowledge_crawl_registry_scan_limit
+    with own_write_reads():
+        rows = await (ch or _default_client()).query_all(
+            "SELECT DISTINCT crawl_erasure_enc FROM loom.scim_users "
+            "WHERE id = {id:String} AND crawl_erasure_enc != '' "
+            "ORDER BY crawl_erasure_enc LIMIT {limit:UInt32}",
+            params={"id": uid, "limit": maximum + 1},
+        )
+    if len(rows) > maximum or any(not isinstance(r["crawl_erasure_enc"], str) for r in rows):
+        raise RuntimeError("crawl_capture_history_unverified")
+    return [r["crawl_erasure_enc"] for r in rows]
