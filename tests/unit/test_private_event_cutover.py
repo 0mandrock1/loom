@@ -49,9 +49,7 @@ class WriterWorld:
         self.sent = []
         self.catalog = [(), ()]
         self.observation_cache = {}
-
-    def policy_observer_origins(self):
-        return ("http://writer-1:8123/", "http://writer-2:8123/")
+        self.observer_servers = list(self.servers)
 
     @asynccontextmanager
     async def policy_observers(self):
@@ -60,7 +58,7 @@ class WriterWorld:
         class Observer:
             def __init__(self, index):
                 self.index = index
-                self.server_uuid = world.servers[index]
+                self.server_uuid = world.observer_servers[index]
 
             user = "service"
             roles = ()
@@ -86,7 +84,7 @@ class WriterWorld:
                     ]
                 )
 
-        yield tuple(Observer(index) for index in range(len(self.policy_observer_origins())))
+        yield tuple(Observer(index) for index in range(len(self.observer_servers)))
 
     async def query_all(self, sql, params=None):
         if "FROM system.clusters" in sql:
@@ -224,3 +222,37 @@ async def test_filtered_empty_results_with_valid_writer_uuids_cannot_authorize_g
         )
     assert world.process_reads == world.census_reads == 0
     assert not world.sent
+
+
+@pytest.mark.parametrize("defect", ["missing", "duplicate", "extra", "unexpected"])
+async def test_direct_observer_routes_must_cover_each_actual_writer_exactly_once(world, defect):
+    if defect == "missing":
+        world.observer_servers.pop()
+    elif defect == "duplicate":
+        world.observer_servers[1] = world.observer_servers[0]
+    elif defect == "extra":
+        world.observer_servers.append(str(UUID(int=3)))
+    else:
+        world.observer_servers[1] = str(UUID(int=3))
+    with pytest.raises(event_cutover.EventCutoverUnavailable):
+        await event_cutover.confirm_ordinary_events(ch=world)
+    assert world.process_reads == world.census_reads == 0 and not world.sent
+
+
+async def test_policy_drift_during_the_old_insert_drain_cannot_reuse_clean_visibility(
+    world, monkeypatch
+):
+    original = world.query_all
+
+    async def change_catalog(sql, params=None):
+        rows = await original(sql, params)
+        if "FROM system.processes" in sql:
+            world.catalog[1] = (
+                "CREATE ROW POLICY hidden ON system.processes AS RESTRICTIVE FOR SELECT USING 0 TO ALL",
+            )
+        return rows
+
+    monkeypatch.setattr(world, "query_all", change_catalog)
+    with pytest.raises(event_cutover.EventCutoverUnavailable):
+        await event_cutover.confirm_ordinary_events(ch=world)
+    assert world.census_reads == 0 and not world.sent

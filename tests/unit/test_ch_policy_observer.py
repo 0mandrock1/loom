@@ -295,3 +295,12 @@ async def test_core_refuses_changed_owner_configuration_before_any_send(owner, m
         with pytest.raises(ObservationUnavailable):
             await observers[0].guarded("SELECT 1", send)
     assert not sent and all(item.closed for item in channels)
+
+
+async def test_an_analyst_override_cannot_bootstrap_an_administrative_observer(owner):
+    client, config, channels, channel = owner
+    with ch_module.as_analyst("loom_analyst", "password", {}):
+        with pytest.raises(ObservationUnavailable):
+            async with client.policy_observers():
+                pytest.fail("Analyst context cannot acquire observation authority")
+    assert not channels
