@@ -28,6 +28,7 @@ from server.knowledge.domain.source_crawl import Person
 from server.knowledge.domain.sources import KnowledgeSource
 from server.knowledge.store import crawl_exclusions as exclusion_store
 from server.operations.base import Role
+from server.settings import settings
 from tests.unit.principals import acting_as
 from tests.unit.test_connected_source_authority import _World as _AuthorityWorld
 from tests.unit.test_crawl_registration import _token
@@ -371,3 +372,34 @@ async def test_retained_native_checkout_stops_when_target_person_is_deactivated(
     with pytest.raises(CredentialRefused, match="person unavailable"):
         await gdrive.file_meta(access, "file")
     assert len(crawl_world.provider_calls) == before and not crawl_world.native_requests
+
+
+async def test_configured_crawl_lease_ttl_reaches_the_real_publication_guard(
+    crawl_world: _World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import asynccontextmanager
+
+    from server.core import leases
+
+    monkeypatch.setattr(settings, "knowledge_crawl_lease_ttl_s", 17)
+    original = leases.cluster_lease
+    acquired = []
+
+    @asynccontextmanager
+    async def record(key: str, **kwargs: Any):
+        acquired.append((key, kwargs["ttl_s"]))
+        async with original(key, **kwargs):
+            yield
+
+    monkeypatch.setattr(leases, "cluster_lease", record)
+    assert crawl_world.source is not None
+    authority = await crawl_authority.resolve(
+        crawl_world.source,
+        deadline=time.monotonic() + 10,
+        bounds=crawl_authority.configured_bounds(),
+    )
+    async with authority.publication_guard():
+        assert crawl_world.holders.get(asyncio.current_task(), 0) == 2
+    assert (crawl_exclusions._fence("team"), 17) in acquired
+    assert not crawl_world.holders.get(asyncio.current_task(), 0)

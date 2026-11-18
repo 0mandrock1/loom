@@ -15,7 +15,7 @@ from server.knowledge.domain.access_list import (
     to_json,
 )
 
-# The crawl's documented total-person and configured-selector wire ceiling.
+# not a setting: the selector wire protocol caps the total people at 2000.
 MAX_PEOPLE = 2000
 _EMAIL = re.compile(r"[A-Za-z0-9._+\-]+@[A-Za-z0-9.\-]+")
 type SubjectKind = Literal["person", "group"]

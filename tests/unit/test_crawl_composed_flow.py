@@ -40,7 +40,7 @@ from tests.unit.test_crawl_signing_authority import key_view as key_view
 from tests.unit.test_crawl_worker_observation import _file
 from tests.unit.test_google_workspace import account as account
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.claim_cap]
 
 
 class _World(_CrawlWorld, _PublicationWorld):
@@ -266,6 +266,7 @@ async def test_registration_native_publication_and_indexed_reader_share_exact_ge
     assert world.source is not None
     assert world.listings[0]["crawl_generation"] == world.source.crawl_generation
     candidate = {key: document[key] for key in ("namespace", "source_uri", "revision")}
+    candidate["doc_version"] = document["version"]
     before = len(world.provider_calls), len(world.native_requests)
     with acting_as(verify_token(_token())):
         plan = await reads.prepare("team", ["shared-space"])
@@ -306,6 +307,7 @@ async def test_indexed_evidence_is_removed_after_person_or_registration_fence_ch
     assert (await _turn(world)).status == "ok"
     [document] = world.document_writes
     candidate = {key: document[key] for key in ("namespace", "source_uri", "revision")}
+    candidate["doc_version"] = document["version"]
     with acting_as(verify_token(_token())):
         plan = await reads.prepare("team", ["shared-space"])
         [admitted] = await plan.check([candidate])
@@ -325,6 +327,7 @@ async def test_reapproved_generation_cannot_reuse_an_older_completed_listing(wor
     assert (await _turn(world)).status == "ok"
     [document] = world.document_writes
     candidate = {key: document[key] for key in ("namespace", "source_uri", "revision")}
+    candidate["doc_version"] = document["version"]
     assert world.source is not None
     before = world.source.crawl_generation
     with acting_as(verify_token(_token())):

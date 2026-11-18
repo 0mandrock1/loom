@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
 from typing import Any
 
@@ -14,6 +16,8 @@ from server.core.errors import BackendUnavailableError
 from server.core.secrets_at_rest import seal
 from server.erasure.app import crawl_person
 from server.erasure.store import crawl_controls
+from server.knowledge.app import crawl_person_erasure
+from server.settings import settings
 from tests.unit.test_crawl_authority import crawl_world as crawl_world
 from tests.unit.test_crawl_person_workspace import captured_world as captured_world
 from tests.unit.test_crawl_signing_authority import key_view as key_view
@@ -167,3 +171,36 @@ async def test_missing_raw_current_capture_refuses_before_erasure_receipt(finali
     with pytest.raises(CredentialRefused, match="history unavailable"):
         await erasure.finalize("scim-person-id", prepared)
     assert world.capsule_mutations == 0 and not world.pending["crawl_erasure_done"]
+
+
+async def test_configured_cleanup_deadline_cancels_external_io_without_completing_capsule(
+    finalizing,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    world, _canonical, prepared = finalizing
+    monkeypatch.setattr(settings, "knowledge_crawl_person_cleanup_timeout_s", 0.001)
+    monkeypatch.setattr(erasure, "_cleanup", crawl_person_erasure.finish)
+    monkeypatch.setattr(crawl_person_erasure, "get_client", lambda: world)
+    original = world.query_one
+    before = copy.deepcopy(world.exclusion_keys), world.source
+    entered = False
+    cancelled = False
+
+    async def blocked(sql: str, params: dict[str, Any] | None = None, **kwargs: Any):
+        nonlocal entered, cancelled
+        if "FROM loom.knowledge_crawl_exclusion_keys FINAL" in sql:
+            assert params == {"org": "team"}
+            entered = True
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled = True
+        return await original(sql, params, **kwargs)
+
+    monkeypatch.setattr(world, "query_one", blocked)
+    with pytest.raises(TimeoutError):
+        await erasure.finish("scim-person-id", prepared)
+    assert entered and cancelled
+    assert (world.exclusion_keys, world.source) == before
+    assert world.pending["crawl_erasure_enc"] == prepared
+    assert not world.pending["crawl_erasure_done"] and not world.capsule_mutations

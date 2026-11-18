@@ -20,6 +20,7 @@ from server.knowledge.app import source_sync as sync
 from server.knowledge.domain.sources import SYNC_WORKER_ACTOR, mirror_uri
 from server.knowledge.store import documents
 from server.memory.domain.provenance import pipeline_actor
+from server.settings import settings
 from tests.unit.principals import acting_as
 from tests.unit.test_connected_source_publication import _MIRROR
 from tests.unit.test_crawl_authority import _BOUNDS
@@ -301,3 +302,31 @@ async def test_one_presenters_absence_cannot_retire_another_presenters_reached_f
     result, _ = await _work(world)
     assert lookups == ["Bearer private-person-access", "Bearer second-person-access"]
     assert result.complete and not result.removed and not checked
+
+
+async def test_configured_file_bound_refuses_the_whole_native_turn_before_publication(
+    world: _World,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await _register(world)
+    monkeypatch.setattr(settings, "knowledge_crawl_max_files", 1)
+    original = world.handle
+    listed = []
+
+    async def provider(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "www.googleapis.com" and request.url.path == "/drive/v3/files":
+            listed.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "files": [_file("first"), _file("second")],
+                    "incompleteSearch": False,
+                },
+            )
+        return await original(request)
+
+    world.handle = provider
+    result, _ = await _work(world)
+    assert listed and result.status != "ok" and not result.complete
+    assert not world.document_writes and not world.chunk_writes and not world.listings
+    assert not world.embedded

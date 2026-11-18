@@ -196,7 +196,7 @@ class Pending:
             or not row["crawl_erasure_required"]
             or row["crawl_erasure_done"]
             or before_delete
-            and (not row["active"] or row["deleted"])
+            and row["deleted"]
         ):
             raise unavailable()
         if before_delete:

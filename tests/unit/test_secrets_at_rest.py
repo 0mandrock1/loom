@@ -49,6 +49,20 @@ def _no_analysis_lease(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(service, "lease", lambda ch=None: contextlib.nullcontext())
 
 
+@pytest.fixture(autouse=True)
+def _no_crawl_registries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These sealed-registry fakes contain no crawl approvals, keys or person capsules."""
+    from server.auth import person_erasure
+    from server.knowledge.app import crawl_reseal
+
+    async def empty(*, dry_run: bool, ch: object) -> tuple[int, list[str]]:
+        return 0, []
+
+    monkeypatch.setattr(crawl_reseal, "approvals", empty)
+    monkeypatch.setattr(crawl_reseal, "keys", empty)
+    monkeypatch.setattr(person_erasure, "reseal_registry", empty)
+
+
 def test_purposes_do_not_open_each_other_and_empty_stays_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

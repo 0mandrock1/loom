@@ -33,9 +33,9 @@ _now = time.monotonic
 _pace = asyncio.sleep
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 _DIRECTORY = "https://admin.googleapis.com/admin/directory/v1"
-# Directory members.list's documented page maximum, not an operator tuning control.
+# not a setting: Directory members.list has a fixed documented page maximum.
 _PAGE_SIZE = 200
-# A page reader cannot by itself exceed the crawl's total people bound.
+# not a setting: the selector wire protocol caps the total people at 2000.
 MAX_PEOPLE = 2000
 type MemberKind = Literal["USER", "GROUP", "CUSTOMER"]
 
@@ -209,7 +209,8 @@ async def delegated_token(
         and (not isinstance(value["scope"], str) or value["scope"].split() != [scope.value])
     ):
         raise CredentialRefused("delegated token response refused")
-    expires_at = _now() + min(expires, _remaining(deadline))
+    remaining = _remaining(deadline)
+    expires_at = _now() + min(expires, remaining)
     return DelegatedToken(token, subject, scope, min(deadline, expires_at))
 
 

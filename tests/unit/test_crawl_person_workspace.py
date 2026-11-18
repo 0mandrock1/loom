@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import time
 from typing import Any
 
 import httpx
@@ -10,10 +11,12 @@ import pytest
 
 from server.auth import person_erasure as erasure
 from server.clients import gdrive
+from server.clients import google_workspace as google
 from server.clients._vendor import CredentialRefused
 from server.core.errors import BackendUnavailableError
 from server.knowledge.app import crawl_capture
 from server.knowledge.store import sources
+from server.settings import settings
 from tests.unit.test_crawl_authority import crawl_world as crawl_world
 from tests.unit.test_crawl_signing_authority import key_view as key_view
 from tests.unit.test_google_workspace import account as account
@@ -179,3 +182,49 @@ async def test_canonical_contact_rebinding_during_directory_response_refuses_old
         await erasure.prepare("scim-person-id", encoded)
     assert world.pending["crawl_erasure_enc"] == encoded
     assert not erasure.load("scim-person-id", encoded).prepared and not world.native_requests
+
+
+@pytest.mark.parametrize("budget", [0.25, 1.0])
+async def test_configured_capture_deadline_rechecks_the_actual_directory_response(
+    captured_world,
+    monkeypatch: pytest.MonkeyPatch,
+    budget: float,
+) -> None:
+    world, encoded = captured_world
+    clock = time.monotonic()
+    monkeypatch.setattr(settings, "knowledge_crawl_identity_capture_timeout_s", budget)
+    monkeypatch.setattr(crawl_capture, "_now", lambda: clock)
+    monkeypatch.setattr(google, "_now", lambda: clock)
+
+    def spent() -> None:
+        nonlocal clock
+        clock += 0.5
+
+    world.after_person = spent
+    if budget < 0.5:
+        with pytest.raises(TimeoutError):
+            await erasure.prepare("scim-person-id", encoded)
+    else:
+        prepared = await erasure.prepare("scim-person-id", encoded)
+        captured = erasure.load("scim-person-id", prepared)
+        assert captured.prepared and captured.workspaces[0].user == "stable-google-user"
+    assert world.pending["crawl_erasure_enc"] == encoded
+    assert not world.native_requests and not world.writes
+
+
+async def test_inactive_person_can_prepare_but_deleted_or_replaced_capsule_cannot(
+    captured_world,
+) -> None:
+    world, encoded = captured_world
+    world.pending["active"] = False
+    prepared = await erasure.prepare("scim-person-id", encoded)
+    assert erasure.load("scim-person-id", prepared).prepared
+    assert world.pending["crawl_erasure_enc"] == encoded
+    before = len(world.provider_calls)
+    world.pending["deleted"] = True
+    with pytest.raises(BackendUnavailableError):
+        await erasure.prepare("scim-person-id", encoded)
+    world.pending.update(deleted=False, crawl_erasure_enc="replacement")
+    with pytest.raises(BackendUnavailableError):
+        await erasure.prepare("scim-person-id", encoded)
+    assert len(world.provider_calls) == before and not world.native_requests

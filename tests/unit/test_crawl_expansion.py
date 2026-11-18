@@ -12,8 +12,10 @@ import pytest
 
 from server.auth import scim
 from server.clients._vendor import CredentialRefused, TooLarge, VendorError
+from server.knowledge.app import crawl_authority
 from server.knowledge.app.crawl_expansion import Limits, expand
 from server.knowledge.domain.source_crawl import Options, Person
+from server.settings import settings
 from tests.unit.test_google_workspace import _http
 from tests.unit.test_google_workspace import account as account
 
@@ -202,7 +204,10 @@ async def test_unproven_or_incomplete_expansion_never_returns_partial_readers(
     failure: str,
 ) -> None:
     directory = _Directory()
-    limits = Limits(body_bytes=16384, member_pages=10, groups=1 if failure == "group-bound" else 10)
+    monkeypatch.setattr(
+        settings, "knowledge_crawl_max_groups", 1 if failure == "group-bound" else 10
+    )
+    limits = crawl_authority.configured_bounds().directory
     if failure == "cycle":
         directory.members["nested"] = [{"type": "GROUP", "id": "team", "email": "team@example.com"}]
     elif failure == "customer":
@@ -248,6 +253,7 @@ async def test_directory_page_budget_is_global_across_selected_groups(
     directory = _Directory()
     directory.members["team@example.com"] = []
     directory.members["other@example.com"] = []
+    monkeypatch.setattr(settings, "knowledge_crawl_directory_max_pages", 1)
     async with _http(monkeypatch, directory.answer) as calls:
         with pytest.raises(TooLarge, match="page bound"):
             await _run(
@@ -255,7 +261,7 @@ async def test_directory_page_budget_is_global_across_selected_groups(
                 account,
                 _Standing(),
                 _Exclusions(),
-                limits=Limits(body_bytes=16384, member_pages=1, groups=10),
+                limits=crawl_authority.configured_bounds().directory,
             )
     assert sum("/groups/" in r.url.path for r in calls) == 1
 

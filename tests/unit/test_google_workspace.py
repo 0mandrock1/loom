@@ -19,6 +19,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from server.clients import gdrive
 from server.clients import google_workspace as google
 from server.clients._vendor import CredentialRefused, RateLimited, TooLarge, VendorError
+from server.knowledge.app import crawl_authority
+from server.settings import settings
 
 pytestmark = pytest.mark.asyncio
 
@@ -138,7 +140,15 @@ async def test_grant_signs_exact_delegated_subject_scope_and_fixed_endpoint(
             },
         )
 
-    deadline = time.monotonic() + 30
+    clock = time.monotonic()
+
+    def advancing() -> float:
+        nonlocal clock
+        clock += 0.001
+        return clock
+
+    monkeypatch.setattr(google, "_now", advancing)
+    deadline = clock + 30
     async with _http(monkeypatch, answer) as calls:
         token = await google.delegated_token(
             service, subject=_SUBJECT, scope=scope, deadline=deadline, max_bytes=4096
@@ -480,17 +490,23 @@ async def test_membership_over_the_crawl_bound_is_not_truncated(
     assert len(calls) == 11
 
 
+@pytest.mark.parametrize("configured", [False, True])
 async def test_response_cap_stops_reading_and_closes_stream(
     monkeypatch: pytest.MonkeyPatch,
+    configured: bool,
 ) -> None:
-    body = _Body(b"x" * 8, b"x" * 9, b"must-not-be-read")
+    cap = 16
+    if configured:
+        monkeypatch.setattr(settings, "knowledge_crawl_directory_max_response_bytes", 1024)
+        cap = crawl_authority.configured_bounds().directory.body_bytes
+    body = _Body(b"x" * (cap // 2), b"x" * (cap // 2 + 1), b"must-not-be-read")
     async with _http(monkeypatch, lambda request: httpx.Response(200, stream=body)) as calls:
         with pytest.raises(TooLarge):
             await google.user(
                 _token(gdrive.ReadScope.DIRECTORY_USERS),
                 "123456",
                 customer_id="customer-one",
-                max_bytes=16,
+                max_bytes=cap,
             )
     assert len(calls) == 1 and body.reads == 2 and body.closed
 
