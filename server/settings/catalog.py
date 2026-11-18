@@ -2658,7 +2658,8 @@ class McpSettings(BaseModel):
     #                 naming another toolset gets it, and the token is the boundary.
     #   "all"       — the stable ops plus the experimental ops the core or atomic
     #                 roster lists; the other experimental ops stay callable by name,
-    #                 and _MCP_HIDDEN_OPS are never listed.
+    #                 and _MCP_HIDDEN_OPS are never listed, the two upload ops under
+    #                 mcp_code_upload_tools aside.
     # An unknown value is "core".
     mcp_toolset: str = "core"
     # tools/list schema profile: "standard" (curated prose + inputSchema),
@@ -2686,6 +2687,10 @@ class McpSettings(BaseModel):
     # List code.* tools on the MCP surface (core toolset union). Off = code
     # ops are HTTP/SDK-only.
     mcp_code_tools: bool = False
+    # Serve the compiler-tier upload ops (code.scip_ingest, code.scip_status) over MCP, which
+    # hides both when off. On, an upload is accepted, on every transport, only for a
+    # namespace that has a repository entry.
+    mcp_code_upload_tools: bool = False
 
 
 # ===== Memory =================================================================

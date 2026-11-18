@@ -100,7 +100,9 @@ outcome (refusal, 4xx `rejected`, or `error`) and to attach value-shape advisori
 8. **Non-embedded rows stop here.** A type in `NON_SEARCHABLE_TYPES` (`episodic`,
    `profile`) or a `high`-sensitivity row gets one insert and no embedding row
    (`server/memory/domain/memory_types.py`, `is_embedded`). No embedding row means no search leg sees
-   it.
+   it. A confirmed ClickHouse insert attempts the same hash-only audit receipt as an
+   embedded write; audit failures do not fail the write. Under Postgres, the commit
+   already includes the audit row.
 9. **Embed** (`_set_embed`) the value and, when the key carries words, the key, in one
    batched call where the embedder supports it.
 10. **Conflict verdict** (`_set_conflict_verdict`, `memory/app/conflicts.py`
@@ -1298,6 +1300,14 @@ Table-level retention and tiering are operator TTLs, off by default
 | `namespace.snapshot` | Live `memory` rows, type configs, curated rows                                                                                                                                        | A portable payload with `version`, `content_sha256` and the attestation columns, plus a `loom.namespace_snapshots` audit row.                                                                                                                                                                                                               |
 | `namespace.restore`  | A snapshot payload                                                                                                                                                                    | Rows into a target namespace (created if missing; the caller becomes admin). Idempotent per `snapshot_id`. Never strips `verified_by`.                                                                                                                                                                                                      |
 | `namespace.rollback` | `memory` heads and `memory_versions` at `as_of`                                                                                                                                       | Each changed key's older version as a new head; keys absent at `as_of` tombstoned; embedding stubs for the worker. Dry run by default.                                                                                                                                                                                                      |
+
+Restores, rollback reinstatements and consolidated summaries run the current target
+blacklist before writing. A namespace restore checks its payload before creating the
+target or its grants, then rechecks the values after its own grant writes. A rollback
+checks all planned live reinstatements in bounded slices before its first batch, then
+reads each batch's heads afresh. Under Postgres each commit holds the
+policy generations captured before the guard; a changed policy refuses the commit.
+An Undo checks before recording its acceptance. Tombstone-only copies remain allowed.
 
 Rollback restores heads, not exact state. `version` is a wall-clock stamp, so the head
 at T is the largest version at or before T. Triples, records, summaries and aggregates
