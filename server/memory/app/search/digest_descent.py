@@ -100,7 +100,12 @@ async def _run_digest_descent(ctx: SearchContext) -> None:
                 log.warning("digest descent failed for %s/%s (non-fatal): %s", ns, sid, e)
                 return ns, sid, []
 
-        results = await each(lambda target: _rows(*target))(targets)
+        async def _rows_for_target(
+            target: tuple[str, str],
+        ) -> tuple[str, str, list[dict[str, Any]]]:
+            return await _rows(*target)
+
+        results = await each(_rows_for_target)(targets)
         added = 0
         for ns, sid, rows in results:
             for row in rows:
