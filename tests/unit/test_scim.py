@@ -946,8 +946,9 @@ async def test_a_token_the_person_revoked_still_takes_its_children(world) -> Non
     assert world.table.live_tokens() == []
 
 
+@pytest.mark.parametrize("recreate", [False, True])
 async def test_delete_retry_without_durable_identity_proof_stays_inactive_and_pending(
-    world, monkeypatch
+    world, monkeypatch, recreate: bool
 ) -> None:
     world.person("lee@example.com", "lee")
     uid = await _create("lee@example.com")
@@ -973,6 +974,67 @@ async def test_delete_retry_without_durable_identity_proof_stays_inactive_and_pe
     assert world.table.newest(uid) == row
     assert await world.keeps_out("lee")
     assert not world.person_cleanup.finalized
+    if recreate:
+        with pytest.raises(BackendUnavailableError):
+            await scim.create("lee@example.com", "lee@example.com", active=False, emails=[])
+        current = world.table.newest(uid)
+        assert current is not None and not current["deleted"] and not current["active"]
+        assert current["crawl_erasure_required"] and not current["crawl_erasure_done"]
+        assert not current["crawl_erasure_enc"] and not world.person_cleanup.finalized
+        assert await world.keeps_out("lee")
+
+
+async def test_an_older_cleanup_attempt_refuses_after_another_request_finishes_raw_erasure(
+    world, monkeypatch
+) -> None:
+    email = _PEOPLE["a"]
+    world.person(email, *_REACHES["a"])
+    world.person(_PEOPLE["b"], *_REACHES["b"])
+    uid = await _create(email)
+    run = _Run(world)
+    run.together = True
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = world.person_cleanup.cleanup
+    first = True
+
+    async def cleanup(pending: person_erasure.Pending) -> None:
+        nonlocal first
+        if first:
+            first = False
+            entered.set()
+            await release.wait()
+        await original(pending)
+
+    monkeypatch.setattr(person_erasure, "_cleanup", cleanup)
+    task = asyncio.create_task(run.step(("delete", "a", True), ()))
+    signal = asyncio.create_task(entered.wait())
+    try:
+        done, _ = await asyncio.wait({task, signal}, return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            await task
+            pytest.fail("the DELETE did not reach its external cleanup boundary")
+        assert entered.is_set()
+        await scim.create(email, email, active=False, emails=[])
+        release.set()
+        assert await task is True  # A stale proof refuses; the request is not a clean success.
+        assert not run.pending_identity and "a" in run.dirty
+        row = world.table.newest(uid)
+        assert row is not None and not row["active"] and not row["deleted"]
+        assert row["crawl_erasure_done"] and not row["crawl_erasure_enc"]
+        assert any(c.id == uid for c in world.person_cleanup.finalized)
+        assert all(
+            not r["crawl_erasure_enc"] and r["crawl_erasure_done"]
+            for r in world.table.rows
+            if r["id"] == uid
+        )
+        assert await world.keeps_out(_REACHES["a"][0])
+        await run.check()
+    finally:
+        release.set()
+        signal.cancel()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(signal, task, return_exceptions=True)
 
 
 async def test_many_tokens_are_revoked_in_one_request_a_few_names_held_at_once(world) -> None:
@@ -3113,14 +3175,27 @@ class _Run:
         try:
             settled = await self._send(*op)
         except BackendUnavailableError:
-            # A failure before durable canonical/provider capture cannot be repaired
-            # by looking up a possibly reused email on a later DELETE.
             row = self.world.table.newest(scim.user_id(_PEOPLE[op[1]]))
-            assert row is not None and row["deleted"] and not row["active"]
-            assert row["crawl_erasure_required"] and not row["crawl_erasure_done"]
+            assert row is not None and row["crawl_erasure_required"]
             encoded = row["crawl_erasure_enc"]
-            assert not encoded or not person_erasure.load(row["id"], encoded).prepared
-            self.pending_identity = True
+            if row["crawl_erasure_done"]:
+                # Another request may finish the exact raw cleanup while this
+                # request's retained Pending proof correctly becomes unusable.
+                assert self.together and not encoded
+                assert any(c.id == row["id"] for c in self.world.person_cleanup.finalized)
+                assert all(
+                    not old["crawl_erasure_enc"] and old["crawl_erasure_done"]
+                    for old in self.world.table.rows
+                    if old["id"] == row["id"]
+                )
+            else:
+                # A permitted recreate resets deleted, but cannot repair absent
+                # historical identity. Deactivation still keeps the person out.
+                assert not row["active"] and not row["crawl_erasure_done"]
+                if not self.together and op[0] == "delete":
+                    assert row["deleted"]
+                assert not encoded or not person_erasure.load(row["id"], encoded).prepared
+                self.pending_identity = True
             self.dirty[op[1]] = self.now()
             return True
         except (RuntimeError, scim.Busy, login.SignInUnavailable):

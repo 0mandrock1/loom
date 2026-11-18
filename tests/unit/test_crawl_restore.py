@@ -53,9 +53,10 @@ class _HistoryWorld(_ExclusionWorld):
 
     @asynccontextmanager
     async def source_lease(
-        self, name: str, *, ttl_s: float, wait_s: float, ch: Any = None
+        self, name: str, *, ttl_s: float, wait_s: float, ch: Any = None, settle_writes: bool
     ) -> AsyncIterator[bool]:
         assert ch is None or ch is self
+        assert settle_writes is True
         prefix, org, namespace = name.split(":")
         assert prefix == "knowledge-source" and org == "org" and namespace == "namespace"
         assert self.scope is None and ttl_s == 60.0 and wait_s == 5.0

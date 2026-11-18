@@ -26,8 +26,9 @@ class _Rows:
         monkeypatch.setattr(scim.leases, "holding", self.holding)
 
     @asynccontextmanager
-    async def holding(self, key: str, *, ttl_s: float, wait_s: float):
+    async def holding(self, key: str, *, ttl_s: float, wait_s: float, settle_writes: bool):
         assert key == "scim-user:managed-person" and ttl_s > wait_s >= 0
+        assert settle_writes is True
         assert not self.held
         self.held = True
         try:

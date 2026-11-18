@@ -247,8 +247,9 @@ async def test_reseal_push_registry_uses_the_supplied_client(
         pytest.fail("reseal must use the supplied ClickHouse client")
 
     @asynccontextmanager
-    async def source_lease(name: str, *, ttl_s: float, wait_s: float, ch=None):
+    async def source_lease(name: str, *, ttl_s: float, wait_s: float, ch=None, settle_writes: bool):
         assert ch is client and name == "knowledge-source:o:docs"
+        assert settle_writes is True
         assert ttl_s == 60.0 and wait_s == 5.0
         calls.append("lease")
         yield True
