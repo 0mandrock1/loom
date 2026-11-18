@@ -433,6 +433,37 @@ def _answers_at_commit(w: _SetWrite) -> bool:
     )
 
 
+async def _audit_set_receipt(
+    input: MemorySetInput,
+    *,
+    memory_id: str,
+    content_sha256: str,
+    source_class: str,
+    verdict: str,
+    actor: str,
+) -> None:
+    """A committed point write's hash-only receipt, never its value."""
+    from server.observability import audit as _audit_mod
+
+    try:
+        await _audit_mod.emit(
+            event_type="memory.set",
+            org=input.org,
+            namespace=input.namespace,
+            actor=actor,
+            subject={
+                "memory_key": input.memory_key,
+                "memory_id": memory_id,
+                "content_sha256": content_sha256,
+                "source_class": source_class,
+                "verdict": verdict,
+                "pinned": bool(input.pinned),
+            },
+        )
+    except Exception as e:  # noqa: BLE001 — the audit row never fails the write
+        log.warning("memory.set: audit emit failed (non-fatal): %s", e)
+
+
 async def _land_plain_row(w: _SetWrite, ch: Any, *, high: bool) -> int:
     """Write the plain row and announce it, and fence a 'high' one whenever it may be in:
     under Postgres committed and handed to the publication batch, on ClickHouse inserted
@@ -1111,37 +1142,6 @@ def _same_key_batch(input: MemorySetInput, memory_id: str) -> list[dict[str, Any
     the row stores)."""
     stored = json.dumps(input.value, default=str) if input.value is not None else ""
     return [{"memory_id": memory_id, "memory_key": input.memory_key, "value": stored}]
-
-
-async def _audit_set_receipt(
-    input: MemorySetInput,
-    *,
-    memory_id: str,
-    content_sha256: str,
-    source_class: str,
-    verdict: str,
-    actor: str,
-) -> None:
-    """A committed point write's hash-only receipt, never its value."""
-    from server.observability import audit as _audit_mod
-
-    try:
-        await _audit_mod.emit(
-            event_type="memory.set",
-            org=input.org,
-            namespace=input.namespace,
-            actor=actor,
-            subject={
-                "memory_key": input.memory_key,
-                "memory_id": memory_id,
-                "content_sha256": content_sha256,
-                "source_class": source_class,
-                "verdict": verdict,
-                "pinned": bool(input.pinned),
-            },
-        )
-    except Exception as e:  # noqa: BLE001 — the audit row never fails the write
-        log.warning("memory.set: audit emit failed (non-fatal): %s", e)
 
 
 async def _set_post_insert(

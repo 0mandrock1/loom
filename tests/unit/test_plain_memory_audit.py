@@ -52,6 +52,7 @@ def _write(*, kind: str = "episodic", high: bool = False, dry_run: bool = False)
         agent="writer",
         memory_key="decision",
         memory_type=kind,
+        sensitivity="high" if high else "low",
         value=_SECRET,
         pinned=True,
         dry_run=dry_run,
@@ -72,7 +73,7 @@ def _write(*, kind: str = "episodic", high: bool = False, dry_run: bool = False)
         "memory_key": input.memory_key,
         "memory_id": w.memory_id,
         "version": 7,
-        "sensitivity": "high" if high else "normal",
+        "sensitivity": "high" if high else "low",
     }
     return w
 
