@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 
@@ -317,13 +318,17 @@ async def test_offline_cli_cancellation_releases_its_actual_backend(stores, monk
 
         monkeypatch.setattr(pg, "close_owned", stalled_close)
     seconds = 2 if ending == "deadline" else 15
-    task = asyncio.create_task(
-        cell_restore.Restore(
-            argparse.Namespace(cell="first", wait=seconds), ROUTER, cell_restore.Budget(seconds)
-        ).run(OfflineClickHouse())
-    )
     observer = await asyncpg.connect(stores["first"])
+    stack = contextlib.AsyncExitStack()
+    stack.push_async_callback(observer.close, timeout=1)
     try:
+        task = asyncio.create_task(
+            cell_restore.Restore(
+                argparse.Namespace(cell="first", wait=seconds), ROUTER, cell_restore.Budget(seconds)
+            ).run(OfflineClickHouse())
+        )
+        stack.push_async_callback(asyncio.gather, task, return_exceptions=True)
+        stack.callback(lambda: task.cancel() if not task.done() else None)
         await asyncio.wait_for(started.wait(), 10)
         async with asyncio.timeout(2):
             for _ in range(400):
@@ -353,11 +358,12 @@ async def test_offline_cli_cancellation_releases_its_actual_backend(stores, monk
         assert not await observer.fetchval(
             "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1)", owned["pid"]
         )
-    finally:
-        if not task.done():
-            task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        await observer.close(timeout=1)
+    except BaseException:  # Owned cleanup must preserve the cancellation or query failure.
+        with contextlib.suppress(BaseException):
+            await stack.aclose()
+        raise
+    else:
+        await stack.aclose()
 
 
 async def test_full_restore_restarts_count_growth_without_losing_its_session(stores, monkeypatch):

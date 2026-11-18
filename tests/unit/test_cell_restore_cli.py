@@ -284,3 +284,50 @@ async def test_closed_restore_attempt_refuses_before_raw_acquisition(monkeypatch
     with pytest.raises(cell_control.Refused):
         await runner.run(object())
     connect.assert_not_awaited()
+
+
+@pytest.mark.parametrize("encoding", ["LATIN1", "SQL_ASCII", "UTF8"])
+async def test_restore_refuses_unsupported_encoding_before_control_writes(monkeypatch, encoding):
+    from server.cli import cell_attach_pg as apg
+    from server.cli import cell_restore_stores
+    from server.core import pg
+
+    conn = DriverConnection()
+    conn.fetchval = AsyncMock(return_value=encoding)
+    monkeypatch.setattr(pg, "_connect_dedicated", AsyncMock(return_value=conn))
+    monkeypatch.setattr(pg, "_check_deployment", AsyncMock())
+    monkeypatch.setattr(pg, "init_connection", AsyncMock())
+    monkeypatch.setattr(apg, "direct_refusals", AsyncMock(return_value=[]))
+    lock = AsyncMock(side_effect=ValueError("healthy encoding reached the lock boundary"))
+    monkeypatch.setattr(apg, "take_lock", lock)
+    later = []
+    for module, name in (
+        (cell_restore_stores, "identity"),
+        (cell_restore_stores, "stopped_and_schema"),
+        (cell_restore_stores, "nonces"),
+        (cell_restore, "_migrate"),
+    ):
+        callback = AsyncMock()
+        monkeypatch.setattr(module, name, callback)
+        later.append(callback)
+    runner = cell_restore.Restore(
+        argparse.Namespace(cell="first"), httpx.URL("http://127.0.0.1:7901"), cell_restore.Budget(5)
+    )
+    for name in ("control", "finish"):
+        callback = AsyncMock()
+        monkeypatch.setattr(runner, name, callback)
+        later.append(callback)
+    expected = "healthy encoding reached the lock boundary" if encoding == "UTF8" else "not UTF8"
+    with pytest.raises(ValueError, match=expected):
+        await runner.run(object())
+    if encoding == "UTF8":
+        lock.assert_awaited_once_with(conn, "restore")
+    else:
+        lock.assert_not_awaited()
+        conn.fetchval.assert_awaited_once_with(
+            "SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname = current_database()"
+        )
+    for callback in later:
+        callback.assert_not_awaited()
+    assert runner.budget.conn is conn
+    assert conn.is_closed() and conn.closed

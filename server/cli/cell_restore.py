@@ -235,6 +235,7 @@ class Restore:
         try:
             await self.budget.call(self.open())
             refusals = await self.budget.call(apg.direct_refusals(self.conn, "restore"))
+            refusals += await self.budget.call(apg.encoding_refusals(self.conn))
             if refusals:
                 raise ValueError("; ".join(r.reason for r in refusals))
             await self.budget.call(apg.take_lock(self.conn, "restore"))
