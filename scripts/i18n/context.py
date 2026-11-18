@@ -62,7 +62,6 @@ _FIELDS = {
         "fix_not_found",
         "no_fix",
         "no_branches",
-        "unknown",
         "deadline",
         "no_index",
         "no_branch_version",

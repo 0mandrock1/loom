@@ -555,10 +555,15 @@ def untranslated_pages() -> list[str]:
             if not path.is_file():
                 continue
             english = "\n".join(english_requests(prepare(source, lang)[0]))
+            text = path.read_text()
+            # Generated banner links must not shift the source body's node identities.
+            if (stamp := STAMP.match(text)) and stamp[1] == source:
+                prefix = header(source, lang, stamp[3], stamp[2])
+                if text.startswith(prefix):
+                    text = text[len(prefix) :]
             rel = path.relative_to(ROOT).as_posix()
             problems.extend(
-                f"{rel}: {problem}"
-                for problem in _label_differences(english, path.read_text(), source)
+                f"{rel}: {problem}" for problem in _label_differences(english, text, source)
             )
     return problems
 
