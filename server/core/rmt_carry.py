@@ -415,12 +415,12 @@ def send_deadline() -> float:
 
 async def measure_send_clock(ch: Any) -> tuple[float, float]:
     """A receiving client's clock, independent of the deployment's carry watcher."""
-    sent = time.monotonic()
     row = await ch.query_one("SELECT toUnixTimestamp64Milli(now64(3)) AS ms")
     back = time.monotonic()
     if row is None:
         raise BackendUnavailableError("leased write: the target's clock cannot be read; retry")
-    return int(row["ms"]) / 1000, (sent + back) / 2
+    # The sample precedes receipt; this anchor cannot overstate the receiver's clock.
+    return int(row["ms"]) / 1000, back
 
 
 def clock_send_deadline(anchor: tuple[float, float]) -> float:

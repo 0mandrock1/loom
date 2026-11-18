@@ -76,3 +76,35 @@ async def test_leased_insert_measures_its_own_target_clock(monkeypatch, deployme
     deadline = client._fenced_insert.call_args.args[-1]
     assert external + 14 <= deadline <= external + 16
     assert rmt_carry._server_anchor[0] == deployment
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_delay,response_delay,lease_left",
+    [(28.0, 0.0, -5.0), (0.0, 28.0, -5.0), (14.0, 14.0, -5.0), (28.0, 0.0, 0.25)],
+)
+async def test_receiving_clock_never_extends_a_lease_deadline(
+    monkeypatch, request_delay, response_delay, lease_left
+):
+    from server.core import rmt_carry
+    from tests.unit.clock_fake import ManualClock
+
+    clock = ManualClock(t=100.0)
+    monkeypatch.setattr(rmt_carry, "time", SimpleNamespace(monotonic=clock.monotonic))
+
+    async def query_one(sql):
+        clock.advance(request_delay)
+        sampled_server = 1000.0 + clock.t - 100.0
+        clock.advance(response_delay)
+        return {"ms": int(sampled_server * 1000)}
+
+    anchor = await rmt_carry.measure_send_clock(SimpleNamespace(query_one=query_one))
+    clock.advance(3.0)
+    actual_server = 1000.0 + clock.t - 100.0
+    lease_end = clock.t + lease_left
+    with rmt_carry.under_lease(lease_end):
+        deadline = rmt_carry.clock_send_deadline(anchor)
+    safe_deadline = actual_server + min(0.0, lease_left) + rmt_carry._TRANSIT_S
+    estimated_server = anchor[0] + clock.t - anchor[1]
+    assert estimated_server <= actual_server
+    assert deadline <= safe_deadline
