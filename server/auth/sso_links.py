@@ -173,15 +173,14 @@ async def forget_account(org: str, namespace: str, by: str, *, ch: Any = None) -
 
 
 async def reaching(email: str) -> list[tuple[str, str]]:
-    """The linked accounts an SSO sign-in with `email` would reach: active, and
-    still naming the email (a deactivated or released one reaches nothing)."""
+    """The active accounts SSO reaches: passwordless or linked, still naming the email."""
     rows = await get_client().query_all(
         f"""
         SELECT org, namespace FROM loom.namespaces FINAL
         WHERE contact_email = {{email:String}} AND active = 1
-          AND (org, namespace) IN (
+          AND (password_hash = '' OR (org, namespace) IN (
               SELECT org, namespace FROM {TABLE} FINAL WHERE email = {{email:String}} AND linked = 1
-          )
+          ))
         """,
         params={"email": email.strip().lower()},
     )
