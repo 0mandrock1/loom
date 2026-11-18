@@ -21,6 +21,7 @@ from server.memory.app.search.vector_legs import _leg_or_empty
 # shatters it into "00084"/"external"/"aggregation", none of which match the
 # whole-name summary entity, so the per-failure consolidation never surfaces.
 _SUMMARY_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_-]{2,}")
+# not a setting: the documented summary seed input contract accepts 256 distinct names.
 _MAX_ENTITY_SUMMARY_SEEDS = 256
 
 
