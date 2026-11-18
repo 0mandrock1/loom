@@ -440,12 +440,22 @@ async def test_signed_search_permissions_follow_current_heads(mode, mint_test_to
                     assert found.get("mirrored") is not True
                     assert document.get("mirrored") is not True
             await sources.insert_source(replace(registration, active=False))
-            assert await listing(owner) == ordinary_list
-            assert (await inspect(owner))["listed"] == ordinary_inspect["listed"]
-            assert await search(owner) == baseline
-            assert await get(owner) == missing_get
-            assert await synthesize(owner) == missing_synthesis
-            assert await outline(owner) == missing_outline
+            # Active registration baselines are marked even when no private row is visible.
+            for inactive, active in (
+                (await listing(owner), ordinary_list),
+                (await search(owner), baseline),
+                (await get(owner), missing_get),
+                (await synthesize(owner), missing_synthesis),
+                (await outline(owner), missing_outline),
+            ):
+                assert active["mirrored"] is True
+                assert "mirrored" not in inactive
+                assert inactive == {
+                    key: value for key, value in active.items() if key != "mirrored"
+                }
+            inactive_inspect = await inspect(owner)
+            assert "mirrored" not in inactive_inspect
+            assert inactive_inspect["listed"] == ordinary_inspect["listed"]
             assert await download(owner) == missing_download
             await sources.insert_source(registration)
             assert (await get(owner))["found"]
