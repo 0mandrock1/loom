@@ -14,6 +14,7 @@ from tests.unit.test_memory_search_service import _q
 
 ORG = unique_org("chunk-parent-status")
 _BASE = {"active", "conflicted", "session-only", "point-write"}
+_VECTOR = [1.0] + [0.0] * 3071
 
 
 def _parent(ch, ns, key, status, *, user="reader", session="session", invalid_at=None):
@@ -63,6 +64,9 @@ def _chunk(ch, ns, key, index, *, user="reader", session="session", content=None
         "content_sha256",
         "content",
         "parent_memory_key",
+        "embedding_model",
+        "embedding_dim",
+        "embedding",
     ]
     ch.insert(
         "loom.memory_chunks",
@@ -77,6 +81,9 @@ def _chunk(ch, ns, key, index, *, user="reader", session="session", content=None
                 hashlib.sha256(content.encode()).hexdigest(),
                 content,
                 key,
+                "fixture-model",
+                len(_VECTOR),
+                _VECTOR,
             ]
         ],
         column_names=columns,
@@ -121,6 +128,10 @@ def parents(ch_client):
                     "fixture-model",
                     status,
                     ["topic"],
+                    len(_VECTOR),
+                    _VECTOR,
+                    len(_VECTOR),
+                    _VECTOR,
                 ]
             ],
             column_names=[
@@ -136,6 +147,10 @@ def parents(ch_client):
                 "embedding_model",
                 "status",
                 "tags",
+                "embedding_dim",
+                "embedding",
+                "memory_key_embedding_dim",
+                "memory_key_embedding",
             ],
         )
     _chunk(ch_client, ns, "no-extracted-parent", 8, content="session-only")
