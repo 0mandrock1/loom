@@ -994,6 +994,14 @@ fallbacks. A search joins its cancelled local children before returning a refusa
 the repository decision pass also joins its sibling when either search fails.
 Local coroutine completion does not prove remote query retirement.
 
+Main namespace reads, entity-boost inputs, summary and observation namespace reads,
+anchor and key-match namespace reads, and digest-descent targets run in ordered
+windows of at most four child jobs per producer. A producer creates only the
+current window's awaitables and joins its children before returning a failure or
+cancellation. This bounds local fanout per producer, not the request's aggregate
+work. Supplemental query and set-expansion phrases retain their namespace fanout
+and shared duplicate selection by phrase completion.
+
 1. **Settle the request** (`request.py`): recipe and namespace `retrieval_defaults`, read
    scope, the `top_k` ceiling. A parked `page` handle is served directly.
 2. **Read-your-writes** (`consistency.py`): a namespace this process just wrote re-reads
