@@ -518,3 +518,36 @@ __all__ = [
     "sources_in",
     "write_state",
 ]
+
+
+async def connected_history(
+    *, owner: tuple[str, str, str] | None = None, ch: _CHClient | None = None
+) -> list[KnowledgeSource]:
+    """Metadata of every historical connected source id, including replaced names."""
+    where = "credential_mode = 'connected'"
+    if owner:
+        where += " AND (org, owner_subject, source_kind) = {owner:Tuple(String, String, String)}"
+    maximum = settings.knowledge_connected_registry_scan_limit
+    rows = await (ch or _default_client()).query_all(
+        "SELECT DISTINCT org, namespace, name, source_id, source_kind, owner_subject, "
+        f"connection_id FROM {TABLE} WHERE {where} "
+        "ORDER BY org, owner_subject, source_kind, namespace, name, source_id, connection_id "
+        "LIMIT {limit:UInt64}",
+        params={"owner": owner or ("", "", ""), "limit": maximum + 1},
+    )
+    if len(rows) > maximum:
+        raise RuntimeError("connected_restore_inventory_bound")
+    return [
+        KnowledgeSource(
+            org=row["org"],
+            namespace=row["namespace"],
+            name=row["name"],
+            kind=row["source_kind"],
+            source_id=row["source_id"],
+            owner_subject=row["owner_subject"],
+            connection_id=row["connection_id"],
+            credential_mode="connected",
+            access="mirrored",
+        )
+        for row in rows
+    ]

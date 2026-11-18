@@ -1132,6 +1132,14 @@ ClickHouse, additive migrations:
 | `loom.knowledge_group_members`     | `(org, namespace, source_id, group)`                          | `name`, `members`, `read_at`, `deleted`, `version`; `namespace` is the mirror                                                                                                                                     |
 | `loom.connected_accounts`          | `(org, subject, kind)`                                        | `account_id`, `account_email`, `scopes`, `credential_enc`, `active`, `connected_at`, `disconnected_at`, `version`                                                                                                 |
 
+This is an authentication control registry, keyed by canonical sign-in owner across
+namespaces, like the sign-in and revocation registries. It is not a memory-content row:
+`namespace`, `agent`, end-user `user_id` and `session_id` would falsely bind one provider
+connection to one requesting session or namespace. Source registrations retain their
+namespace and worker provenance; account changes use the authenticated actor in audit.
+The explicit owner erasure axis covers sealed identity and credential history rather
+than guessing a memory `user_id` from the sign-in subject.
+
 The account registry seals its optional display email in `account_email_enc`. Its
 `workspace_id` distinguishes provider workspaces, `connection_id` fences replacement
 and disconnection, and `refresh_id` reserves one rotating refresh. Source rows retain
@@ -1145,9 +1153,24 @@ plan. Worker publication checks owner and source standing again after extraction
 embedding, before committing documents or a complete listing.
 
 The browser routes and account operations implement the connection backend. The dashboard
-connection page, interactive CLI flow, crawl support and restore procedure require their
-own integration; the backend does not implement those surfaces. Connect routes are
-excluded from HTTP tracing before request attributes or headers can be captured.
+connection page, interactive CLI flow and crawl support require their own integration;
+the backend does not implement those surfaces. Connect routes are excluded from HTTP
+tracing before request attributes or headers can be captured.
+
+Account restore cleanup discovers raw account and connected-source history, including
+replaced registrations and source-only orphan owners. It stops every proven random
+Keeper key under its exact owner lease, queues every historical source id, clears only
+matching current registrations, and physically deletes account and source history with
+raw residue verification. Ordinary disconnect still refuses another live generation.
+The cleanup runs before publication in `loom reconcile` for either restored store. For a
+ClickHouse-only deployment, stop every serving process, restore its configured stores,
+then run `python dev/restore_connected_accounts.py` and repeat with `--apply`. The script
+accepts only the configured deployment and preserves its authority and cell checks;
+it does not attach cleanup to the generic loader's arbitrary database or scratch target.
+Recent worker activity refuses cleanup. Local completion precedes bounded best-effort
+provider revocation outside leases, and revocation failure cannot restore credentials.
+Complete the separate mirror-content restore cleanup before serving; account cleanup
+alone does not prove every mirror document, chunk, head and original was erased.
 
 A source N-1 can operate on (`shared`, `access: namespace`, with items today's config
 can express) keeps today's columns as they are: `kind`, its credential in

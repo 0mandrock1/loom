@@ -1029,4 +1029,10 @@ before an older build serves. Account rows restored without their matching Keepe
 fence refuse credential checkout. That refusal does not prove physical erasure: restored
 provider identities, sealed credentials and source history still need canonical-owner
 cleanup and its census. Namespace or end-user erasure cannot substitute for that exact
-owner key. The connection backend does not supply an automatic restore-cleanup command.
+owner key. `loom reconcile --apply` ends connection authority before publication for
+either restored store. On a ClickHouse-only deployment, stop all serving processes,
+restore the configured stores, then run `python dev/restore_connected_accounts.py` first
+without flags and then with `--apply`. It refuses recent worker activity and never
+remaps a scratch restore target into the deployment client. Both paths fence all
+historical connection keys and verify physical owner-history deletion. Complete the
+separate mirror-content cleanup before serving; this account procedure does not replace it.

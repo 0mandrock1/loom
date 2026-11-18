@@ -162,3 +162,30 @@ async def page(
         params={"after": after, "limit": settings.knowledge_connected_registry_page_size},
     )
     return [_account(dict(row)) for row in rows]
+
+
+async def restore_keys(
+    *, owner: tuple[str, str, str] | None = None, ch: _CHClient | None = None
+) -> list[tuple[str, str, str, str]]:
+    """Every historical registration key, without selecting any sealed payload."""
+    where = "WHERE (org, subject, kind) = {owner:Tuple(String, String, String)} " if owner else ""
+    maximum = settings.knowledge_connected_registry_scan_limit
+    rows = await (ch or _default_client()).query_all(
+        f"SELECT DISTINCT org, subject, kind, connection_id FROM {TABLE} {where}"
+        "ORDER BY org, subject, kind, connection_id LIMIT {limit:UInt64}",
+        params={"owner": owner or ("", "", ""), "limit": maximum + 1},
+    )
+    if len(rows) > maximum:
+        raise RuntimeError("connected_restore_inventory_bound")
+    return [(row["org"], row["subject"], row["kind"], row["connection_id"]) for row in rows]
+
+
+async def restore_workers_recent(*, ch: _CHClient | None = None) -> int:
+    row = await (ch or _default_client()).query_one(
+        "SELECT count() AS n FROM loom.worker_status "
+        "WHERE pass_finished > now64(3) - toIntervalSecond({s:UInt32})",
+        params={"s": 2 * settings.supervisor_lease_ttl_s},
+    )
+    if row is None or "n" not in row:
+        raise RuntimeError("connected_restore_offline_unavailable")
+    return int(row["n"])
