@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -206,11 +207,23 @@ async def test_online_ledger_retry_survives_physical_standby_promotion(
             == "t"
         )
     finally:
-        if paused:
-            await _docker("unpause", STANDBY)
+        first = sys.exception()
+        try:
+            if paused:
+                await _docker("unpause", STANDBY)
+        except BaseException as error:  # noqa: BLE001 — attempt all cleanup; keep first failure.
+            first = first or error
         for task in tasks:
             if not task.done():
                 task.cancel()
-        async with asyncio.timeout(5):
-            await asyncio.gather(*tasks, return_exceptions=True)
-        observer.terminate()
+        try:
+            async with asyncio.timeout(5):
+                await asyncio.gather(*tasks, return_exceptions=True)
+        except BaseException as error:  # noqa: BLE001 — observer cleanup survives join failure.
+            first = first or error
+        try:
+            observer.terminate()
+        except BaseException as error:  # noqa: BLE001 — preserve the original drill failure.
+            first = first or error
+        if first is not None:
+            raise first

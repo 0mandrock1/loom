@@ -429,6 +429,7 @@ def test_retirement_writers_and_accepting_command_roots_are_an_explicit_census()
         "cli/code_run.py",
         "cli/import_clickgap.py",
         "cli/import_recall.py",
+        "cli/tracker_feed.py",
     }
     assert plain == {
         "cli/sql_access.py",
