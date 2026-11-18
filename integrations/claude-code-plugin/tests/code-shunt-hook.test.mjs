@@ -90,7 +90,13 @@ function runHook(payload, { tmp, url = "http://127.0.0.1:9", env = {} }) {
         /* no decision logged */
       }
       const hso = out ? JSON.parse(out).hookSpecificOutput : {};
-      resolve({ deny: hso.permissionDecisionReason ?? null, updatedInput: hso.updatedInput ?? null, log, exitCode, signal });
+      resolve({
+        deny: hso.permissionDecisionReason ?? null,
+        updatedInput: hso.updatedInput ?? null,
+        log,
+        exitCode,
+        signal,
+      });
     });
     child.stdin.end(JSON.stringify(payload));
   });
