@@ -15,6 +15,8 @@ import logging
 import math
 from typing import Any
 
+from server.core.errors import VectorInputTooLargeError
+from server.core.shielded import to_its_end
 from server.memory.api.models_search import MemorySearchInput, MemorySearchOutput, _MemorySearchHit
 from server.memory.domain import code_change
 from server.settings import settings
@@ -73,6 +75,8 @@ async def search_repo_decisions(
         out = await asyncio.wait_for(
             handle_memory_search(decision_input), timeout=settings.memory_repo_decisions_timeout_s
         )
+    except VectorInputTooLargeError:
+        raise
     except Exception as e:  # noqa: BLE001 — an additive leg never fails the caller
         log.info(
             "repo decisions search on %s/%s did not answer: %s", mem_input.org, repo_namespace, e
@@ -151,10 +155,18 @@ async def memory_with_repo_decisions(
     if not repo_namespace:
         return await handle_memory_search(mem_input)
     extra = asyncio.create_task(search_repo_decisions(mem_input, repo_namespace))
+
+    async def stopped() -> None:
+        await asyncio.gather(extra, return_exceptions=True)
+
     try:
         base = await handle_memory_search(mem_input)
     except BaseException:
         extra.cancel()
+        try:
+            await to_its_end(stopped(), name="memory.search.repo.cleanup")
+        except asyncio.CancelledError:
+            pass  # Preserve the base read's first failure after its sibling stops.
         raise
     found = await extra
     if found is None:

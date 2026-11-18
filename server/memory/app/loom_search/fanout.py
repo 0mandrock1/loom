@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from server.core.ch import set_query_tag
 from server.core.diagnostics import private_work
-from server.core.errors import LoomServerError, caller_text
+from server.core.errors import LoomServerError, VectorInputTooLargeError, caller_text
 from server.identity.app.request_scope import request_scope
 from server.identity.domain.read_scope import ReadFilters
 from server.knowledge.app import repo_docs
@@ -388,7 +388,8 @@ async def search_sections(
             (
                 result
                 for result in (mem_result, know_result, profile_rows, conv_result, t_section)
-                if isinstance(result, BaseException) and not isinstance(result, Exception)
+                if isinstance(result, VectorInputTooLargeError)
+                or (isinstance(result, BaseException) and not isinstance(result, Exception))
             ),
             None,
         )

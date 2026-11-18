@@ -105,3 +105,78 @@ async def test_cancel_pending_leaves_finished_tasks_alone() -> None:
     await asyncio.sleep(0)
     assert done.result() == 1
     assert pending.cancelled()
+
+
+async def test_refusal_joins_scope_reads_before_escaping(
+    launched: list[scope._SearchRun], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.core.errors import VectorInputTooLargeError
+
+    started, finished = asyncio.Event(), asyncio.Event()
+    refusal = VectorInputTooLargeError("summary input exceeds 256 names")
+
+    async def calibration(*_args: Any, **_kwargs: Any) -> Any:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)
+            finished.set()
+
+    async def fail(*_args: Any, **_kwargs: Any) -> Any:
+        await started.wait()
+        raise refusal
+
+    monkeypatch.setattr("server.memory.app.embedder_calibration.resolve_calibration", calibration)
+    monkeypatch.setattr(search_handler, "_resolve_query_enrichment", fail)
+    try:
+        with pytest.raises(VectorInputTooLargeError) as raised:
+            await search_handler.handle_memory_search(_input())
+        assert raised.value is refusal
+        assert finished.is_set()
+        assert all(t.done() for t in _tasks(launched[0]))
+    finally:
+        for run in launched:
+            await asyncio.gather(*_tasks(run), return_exceptions=True)
+
+
+async def test_repeated_cancel_during_cleanup_preserves_the_first_typed_refusal(
+    launched: list[scope._SearchRun], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.core.errors import VectorInputTooLargeError
+
+    started, cleaning, release, finished = (asyncio.Event() for _ in range(4))
+    refusal = VectorInputTooLargeError("summary input exceeds 256 names")
+
+    async def calibration(*_args: Any, **_kwargs: Any) -> Any:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaning.set()
+            await release.wait()
+            finished.set()
+
+    async def fail(*_args: Any, **_kwargs: Any) -> Any:
+        await started.wait()
+        raise refusal
+
+    monkeypatch.setattr("server.memory.app.embedder_calibration.resolve_calibration", calibration)
+    monkeypatch.setattr(search_handler, "_resolve_query_enrichment", fail)
+    request = asyncio.create_task(search_handler.handle_memory_search(_input()))
+    try:
+        async with asyncio.timeout(2):
+            await cleaning.wait()
+            assert request.cancel()
+            await asyncio.sleep(0)
+            assert request.cancel()
+            release.set()
+            with pytest.raises(VectorInputTooLargeError) as raised:
+                await request
+        assert raised.value is refusal
+        assert finished.is_set() and all(t.done() for t in _tasks(launched[0]))
+    finally:
+        release.set()
+        await asyncio.gather(
+            request, *(_tasks(launched[0]) if launched else []), return_exceptions=True
+        )

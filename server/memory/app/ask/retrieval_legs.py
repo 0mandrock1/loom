@@ -8,6 +8,7 @@ import logging
 import re
 from typing import Any
 
+from server.core.errors import VectorInputTooLargeError
 from server.memory.app.ask.question_shapes import (
     looks_multihop,
 )
@@ -250,6 +251,8 @@ async def decomposed_retrieval(
             sub = await handle_memory_search(
                 _with(search_input, query=part, top_k=max(1, int(part_top_k)))
             )
+        except VectorInputTooLargeError:
+            raise
         except Exception as e:  # noqa: BLE001 — additive
             logger.warning("memory.ask decompose: part retrieval failed (fail-open): %s", e)
             if stats is not None:
