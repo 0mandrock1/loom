@@ -13,7 +13,8 @@
     "retry",
     "consumer",
     "mentor_brief",
-    "profile"
+    "profile",
+    "session_protection"
   ],
   "Agent.methods": {
     "call": [
@@ -98,7 +99,8 @@
     "retry",
     "consumer",
     "mentor_brief",
-    "profile"
+    "profile",
+    "session_protection"
   ],
   "SyncAgent.__init__": [
     "org",
@@ -115,7 +117,8 @@
     "retry",
     "consumer",
     "mentor_brief",
-    "profile"
+    "profile",
+    "session_protection"
   ],
   "clients": {
     "account": {
