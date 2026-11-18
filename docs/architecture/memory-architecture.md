@@ -1027,8 +1027,8 @@ and shared duplicate selection by phrase completion.
    Every chunk statement excludes a known parent that the read would not serve, using
    the canonical memory row's status and time predicates. The parent match includes
    agent, user, session and key within the org and namespace, so another writer's row
-   cannot hide a passage. Conversation projections keep explicitly empty user and
-   session spellings aligned with the parent. A session-only chunk without a matching memory parent stays
+   cannot hide a passage. Anonymous user and session spellings compare as the same
+   sentinel. Conversation chunks use that sentinel so their keys stay readable. A session-only chunk without a matching memory parent stays
    eligible. Hard tags also require a matching searchable parent.
 
    A pooled chunk of a long `memory.set` value folds onto the row whose current value cuts

@@ -299,7 +299,6 @@ async def write_memory_chunks(
     fact layer so cosine is comparable. Fail-open.
     """
     import hashlib
-    import uuid
 
     from server.core.ch import get_client
     from server.embedding import get_embedder
@@ -311,8 +310,7 @@ async def write_memory_chunks(
     # or user-bounded search can keep to its own passages. '-' is the
     # identity sentinel.
     run_id = str(getattr(input, "run_id", "") or "-")
-    # Keep explicit spellings aligned with the canonical parent identity.
-    user_id = str(getattr(input, "user_id", "-"))
+    user_id = str(getattr(input, "user_id", "") or "-")
 
     text = _conversation_text(msgs)
     chunks, ranges, truncated_chars = chunk_text_with_ranges(text)
@@ -324,11 +322,8 @@ async def write_memory_chunks(
     embedder = get_embedder()
     ch = get_client()
 
-    # Caller need not provide a session_id; generate a per-call UUID so chunks
-    # from one ingest are co-grouped.
-    session_id = getattr(input, "session_id", None)
-    if session_id is None:
-        session_id = uuid.uuid4().hex
+    # Empty and '-' both mean no session; keep a readable chunk key for that identity.
+    session_id = str(getattr(input, "session_id", "") or "-")
     parent_keys = list(dict.fromkeys(k for k in (parent_memory_keys or []) if k))
     parent_memory_key = next((k for k in parent_keys if k), "")
     source_resource_id = (

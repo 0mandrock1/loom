@@ -191,5 +191,5 @@ def test_explicit_blank_parent_identity_still_excludes_rejected_text(ch_client, 
     ns = "blank-parent-" + uuid.uuid4().hex
     for index, status in enumerate(["active", "rejected"]):
         _parent(ch_client, ns, status, status, user=user, session=session)
-        _chunk(ch_client, ns, status, index, user=user, session=session)
+        _chunk(ch_client, ns, status, index, user=user or "-", session=session or "-")
     assert _read(ch_client, ns) == {"active"}

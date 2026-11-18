@@ -18,8 +18,10 @@ from tests.unit.test_memory_search_service import StubCH, _q
 
 _PARENT_IN = "c.parent_memory_key IN (SELECT memory_key FROM loom.memory_embeddings FINAL"
 _PARENT_NOT_IN = (
-    "(c.agent, c.user_id, c.session_id, c.parent_memory_key) NOT IN "
-    "(SELECT agent, user_id, session_id, memory_key FROM loom.memory FINAL"
+    "(c.agent, if(c.user_id = '', '-', c.user_id), "
+    "if(c.session_id = '', '-', c.session_id), c.parent_memory_key) NOT IN "
+    "(SELECT agent, if(user_id = '', '-', user_id), "
+    "if(session_id = '', '-', session_id), memory_key FROM loom.memory FINAL"
 )
 
 

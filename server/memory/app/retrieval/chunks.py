@@ -98,8 +98,8 @@ def _chunk_parent_state(q: SearchQuery, params: dict[str, Any]) -> tuple[list[st
 def _chunk_parent_pred(q: SearchQuery, params: dict[str, Any]) -> str:
     """Exclude an unserved known parent on every read; retain session-only evidence.
 
-    The full parent identity prevents another writer or session of the same key
-    from hiding a passage. Canonical rows carry status even without a vector.
+    The parent identity keeps anonymous spellings equivalent and named writers
+    and sessions distinct. Canonical rows carry status even without a vector.
     Hard tags additionally require a matching searchable parent. Both stages
     and neighbour windows use this predicate. Long point-write chunks have a
     synthetic session; the pool checks those against their current value.
@@ -109,8 +109,10 @@ def _chunk_parent_pred(q: SearchQuery, params: dict[str, Any]) -> str:
 
     identity, state = _chunk_parent_state(q, params)
     parent = (
-        "AND (c.agent, c.user_id, c.session_id, c.parent_memory_key) NOT IN "
-        "(SELECT agent, user_id, session_id, memory_key FROM loom.memory FINAL WHERE "
+        "AND (c.agent, if(c.user_id = '', '-', c.user_id), "
+        "if(c.session_id = '', '-', c.session_id), c.parent_memory_key) NOT IN "
+        "(SELECT agent, if(user_id = '', '-', user_id), "
+        "if(session_id = '', '-', session_id), memory_key FROM loom.memory FINAL WHERE "
         + " AND ".join(identity)
         + " AND NOT ("
         + " AND ".join(state)
