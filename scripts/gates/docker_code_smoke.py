@@ -215,7 +215,11 @@ async def wait_for_link(
             status = await mcp(
                 client, "loom_code_index_status", {"namespace": entry["namespace"], "brief": True}
             )
-            assert status["git_head"] == entry["head"], status
+            # Status can return its cached head after the link has changed.
+            if status["git_head"] != entry["head"]:
+                assert time.monotonic() < deadline, status
+                await asyncio.sleep(SEED_POLL_S)
+                continue
             lessons = definitions[0].get("lessons", [])
             for lesson in lessons:
                 if lesson["memory_key"] == entry["memory_key"]:
