@@ -23,6 +23,7 @@ from server.knowledge.api.models_knowledge import (
     _SearchHit,
 )
 from server.knowledge.app import gaps as gaps_app
+from server.knowledge.app import source_publication
 from server.knowledge.app.readable import readable_namespaces
 from server.knowledge.app.source_access import ReadPlan
 from server.knowledge.app.source_corpus import LostCorpus
@@ -117,6 +118,7 @@ class CheckedSearch:
     _ordinary: list[tuple[str, list[ChunkHit]]]
     _ordinary_dropped: int
     lost: bool = False
+    ordinary_rerank_possible: bool = False
     _failed: bool = dataclasses.field(default=False, init=False)
     _checking: asyncio.Lock = dataclasses.field(
         default_factory=asyncio.Lock, init=False, repr=False
@@ -126,10 +128,20 @@ class CheckedSearch:
     def marked(self) -> bool:
         return self._renderer.marked
 
+    @property
+    def metadata_uses_mirrors(self) -> bool:
+        """Private routing can change retained metadata after all its hits are displaced."""
+        return self.proofs is not None and (
+            bool(self.output.reranked_by)
+            or self.ordinary_rerank_possible
+            or self.output.stale_dropped != self._ordinary_dropped
+        )
+
     async def _fallback(self) -> KnowledgeSearchOutput:
         if self._failed:
             raise LostCorpus()
         if self.proofs is not None:
+            source_publication.discard(self.proofs)
             self.proofs, self.lost = None, True
             try:
                 self.output = await self._renderer.render(self._ordinary, self._ordinary_dropped)
@@ -165,7 +177,9 @@ class SearchRequest:
 
 
 async def handle_knowledge_search(input: KnowledgeSearchInput) -> KnowledgeSearchOutput:
-    return (await checked_knowledge_search(input)).output
+    checked = await checked_knowledge_search(input)
+    source_publication.retain(checked.proofs)
+    return checked.output
 
 
 async def resolve_search(input: KnowledgeSearchInput) -> SearchRequest:
@@ -236,7 +250,15 @@ async def _run_search(request: SearchRequest, plan: ReadPlan) -> CheckedSearch:
     except LostCorpus:
         output = await renderer.render(ordinary, ordinary_dropped)
         proofs, lost = None, True
-    return CheckedSearch(output, proofs, renderer, ordinary, ordinary_dropped, lost=lost)
+    return CheckedSearch(
+        output,
+        proofs,
+        renderer,
+        ordinary,
+        ordinary_dropped,
+        lost=lost,
+        ordinary_rerank_possible=bool(endpoint) and sum(len(hits) for _, hits in ordinary) > 1,
+    )
 
 
 # The fields that narrow a knowledge.search to part of the namespace's documents.
@@ -476,7 +498,9 @@ async def _search_marked(
         await search(names)
         counts.append(dropped.count - before)
 
-    def selected(passes: list[list[RankedHit]]) -> tuple[list[tuple[str, list[ChunkHit]]], int]:
+    def selected(
+        passes: list[list[RankedHit]],
+    ) -> tuple[list[tuple[str, list[ChunkHit]]], int, int]:
         if len(passes) > 1:
             first = [(item.chunk.namespace, [item.chunk]) for item in passes[0]]
             if best_similarity(first, not_noise()) >= PRIVATE_HIT_THRESHOLD:
@@ -485,10 +509,12 @@ async def _search_marked(
         for pool in passes:
             for item in pool:
                 by_ns.setdefault(item.chunk.namespace, []).append(item.chunk)
-        return list(by_ns.items()), sum(counts[: len(passes)])
+        return list(by_ns.items()), sum(counts[: len(passes)]), len(passes)
 
-    final, dropped.count = selected(await checked.finish())
-    ordinary, ordinary_dropped = selected(checked.ordinary())
+    finished = await checked.finish()
+    final, dropped.count, used = selected(finished)
+    checked.restrict_proofs(finished[:used])
+    ordinary, ordinary_dropped, _ = selected(checked.ordinary())
     return final, ordinary, ordinary_dropped
 
 

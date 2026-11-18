@@ -102,7 +102,7 @@ def world(monkeypatch):
             for leg, entries in pools.items()
         }
 
-    async def keys(org, model, keys):
+    async def keys(org, model, keys, *, embedded_only=True):
         assert org == "acme" and model == "fake"
         return [] if state.chunk_gone else keys
 

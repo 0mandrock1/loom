@@ -16,7 +16,7 @@ import re
 import sys
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Set
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -1257,6 +1257,8 @@ class CHClient:
         table: str,
         rows: list[dict[str, Any]],
         settings: dict[str, Any] | None = None,
+        *,
+        required_columns: Set[str] = frozenset(),
     ) -> None:
         """Batch insert via the native typed insert path. `settings` forwards
         CH query settings. An `insert_deduplication_token` in `settings`
@@ -1267,27 +1269,33 @@ class CHClient:
         (table, column) per process — instead of failing the batch. A process
         running code newer than the service's schema (an isolated server, or
         the deployment between an image build and its boot migration) then
-        loses a column's values, not its rows."""
+        loses a column's values, not its rows.
+
+        `required_columns` must occur in every row and every INSERT attempt;
+        they are never projected away when cached or live schema is behind."""
         if not rows:
             return
+        required = frozenset(required_columns)
+        _validate_required_insert_columns(table, rows, required)
         # Before the DESCRIBE — that read is the first statement
         # to raise code 60 against a table the service does not have yet.
         await guard_pending_schema("insert", "", "write", insert_table=table)
         from server.core import rmt_carry
 
         if not rmt_carry.carries(table):
-            await self._insert_batch(table, rows, settings)
+            await self._insert_batch(table, rows, settings, required)
             return
         async with rmt_carry.writing():
             # A version row keeps the columns a newer build's migration added.
             for batch in await rmt_carry.carry_unknown_columns(self, table, rows):
-                await self._insert_batch(table, batch, settings)
+                await self._insert_batch(table, batch, settings, required)
 
     async def _insert_batch(
         self,
         table: str,
         rows: list[dict[str, Any]],
         settings: dict[str, Any] | None,
+        required_columns: frozenset[str] = frozenset(),
     ) -> None:
         # A coded vector column needs every row at full length.
         from server.core.vectors import codes_state, placeholders
@@ -1295,7 +1303,7 @@ class CHClient:
         await codes_state.refuse_other_widths(table, rows)  # skips the empty vectors
         padded = placeholders.pad_rows(table, rows)
         try:
-            await self._insert_rows(table, rows, settings)
+            await self._insert_rows(table, rows, settings, required_columns)
             return
         except Exception as e:
             if error_code(e) != WIDTH_MISMATCH_CODE:
@@ -1312,7 +1320,7 @@ class CHClient:
         # before it: a background probe may have published the new width mid-insert.
         if all(codes_state.stored_width(table, c) == n for c, n in sized.items()):
             raise refused  # the fresh reading does not explain it
-        await self._insert_rows(table, rows, settings)
+        await self._insert_rows(table, rows, settings, required_columns)
 
     async def _fenced_insert(
         self,
@@ -1348,11 +1356,13 @@ class CHClient:
         table: str,
         rows: list[dict[str, Any]],
         settings: dict[str, Any] | None,
+        required_columns: frozenset[str] = frozenset(),
     ) -> None:
+        _validate_required_insert_columns(table, rows, required_columns)
         columns = list(rows[0].keys())
         project_onto_table = table in PROJECTED_TABLES
         if project_onto_table:
-            columns = await self._project_columns(table, columns)
+            columns = await self._project_columns(table, columns, required_columns)
         # Rows must agree on their key set: the column list comes from row 0,
         # so a row missing a key would raise a bare KeyError deep in the
         # driver (and a row with an extra key would silently drop it). Name
@@ -1462,6 +1472,7 @@ class CHClient:
             # refused slot or a cut deadline.
             if isinstance(e, LoomServerError) or error_code(e) == WIDTH_MISMATCH_CODE:
                 raise
+            _validate_required_insert_columns(table, rows, required_columns)
             had_cache = type_names is not None or table in _COLUMN_TYPES
             _COLUMN_TYPES.pop(table, None)
             reprojected = columns
@@ -1469,7 +1480,9 @@ class CHClient:
                 # The cached column set may be stale (a migration ran, or the
                 # first describe failed): re-describe, re-project, and retry
                 # once with what the table has NOW.
-                reprojected = await self._project_columns(table, list(rows[0].keys()))
+                reprojected = await self._project_columns(
+                    table, list(rows[0].keys()), required_columns
+                )
             if reprojected != columns:
                 columns = reprojected
                 type_names = await self._column_type_names(table, columns)
@@ -1529,17 +1542,19 @@ class CHClient:
         except KeyError:
             return None
 
-    async def _project_columns(self, table: str, columns: list[str]) -> list[str]:
-        """`columns` minus those the live `table` lacks. One
+    async def _project_columns(
+        self, table: str, columns: list[str], required_columns: frozenset[str] = frozenset()
+    ) -> list[str]:
+        """Keep required columns and optional columns present on the live table. One
         WARNING per (table, column) per process — the same column is missing
         on every flush until the migration runs. Unchanged when the describe
         fails: the driver then reports the real error."""
         types = await self._live_column_types(table)
         if types is None:
             return columns
-        kept = [c for c in columns if c in types]
+        kept = [c for c in columns if c in types or c in required_columns]
         for c in columns:
-            if c in types or (table, c) in _PROJECTION_WARNED:
+            if c in types or c in required_columns or (table, c) in _PROJECTION_WARNED:
                 continue
             _PROJECTION_WARNED.add((table, c))
             log.warning(
@@ -1550,6 +1565,19 @@ class CHClient:
                 table,
             )
         return kept
+
+
+def _validate_required_insert_columns(
+    table: str, rows: list[dict[str, Any]], required_columns: frozenset[str]
+) -> None:
+    if not required_columns:
+        return
+    for index, row in enumerate(rows):
+        missing = required_columns - row.keys()
+        if missing:
+            raise ValueError(
+                f"insert {table}: row {index} lacks required columns {sorted(missing)}"
+            )
 
 
 # Per-process column types by table, for inserts. Bounded by

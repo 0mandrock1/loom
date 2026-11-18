@@ -15,7 +15,6 @@ from server.auth.authz import check_acted_for, check_authorized
 from server.auth.bearer import missing_bearer, verify_bearer_header
 from server.auth.context import set_current_auth
 from server.auth.gateway import effective_auth, personal_namespace
-from server.core import request_work
 from server.core.ch import sequential_reads
 from server.identity.app.restricted_access import note_restricted_access
 from server.knowledge.domain.documents import text_download_filename
@@ -72,9 +71,15 @@ async def knowledge_download(
         auth, op="knowledge.download", org=org, namespace=namespace, transport="http"
     )
 
+    from server.knowledge.app import source_downloads
+
+    with source_downloads.download_request(org, namespace):
+        return await _download(org, namespace, source_uri, inline=inline)
+
+
+async def _download(org: str, namespace: str, source_uri: str, *, inline: bool) -> Response:
     from server.knowledge.app import source_access, source_documents, source_downloads
 
-    request_work.begin()
     plan = await source_access.prepare(org, [namespace])
     doc = await documents_repo.get_one(org, namespace, source_uri)
     if doc is None and plan.marked:

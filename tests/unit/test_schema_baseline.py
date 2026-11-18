@@ -161,8 +161,9 @@ def test_the_journal_files() -> None:
         "103_sso_domain_evidence.sql",
         "104_knowledge_group_members.sql",
         "105_mirror_access_candidates.sql",
-        "106_user_cost_budgets.sql",
-        "107_knowledge_source_push.sql",
+        "106_marked_request_measures.sql",
+        "107_user_cost_budgets.sql",
+        "108_knowledge_source_push.sql",
     ]
 
 

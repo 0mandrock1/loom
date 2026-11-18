@@ -185,7 +185,7 @@ async def test_document_route_honors_the_named_users_cap(
                 results=[SimpleNamespace(source_uri="doc://report", tags=[]) for _ in range(2)]
             )
 
-        return SimpleNamespace(current=current)
+        return SimpleNamespace(current=current, proofs=None)
 
     class LLM:
         model = "fake"

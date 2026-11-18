@@ -37,11 +37,13 @@ async def chunks(
     )
 
 
-async def chunk_keys(org: str, model: str, keys: list[ChunkKey]) -> list[ChunkKey]:
-    """Probe exact live embedded keys without transferring content or context."""
+async def chunk_keys(
+    org: str, model: str, keys: list[ChunkKey], *, embedded_only: bool = True
+) -> list[ChunkKey]:
+    """Probe exact live keys without transferring content or context."""
     if keys:
         set_query_tag("knowledge.mirror.search_proof")
-    rows = await _read_chunks(org, model, keys, "")
+    rows = await _read_chunks(org, model, keys, "", embedded_only=embedded_only)
     return [
         (
             row["namespace"],

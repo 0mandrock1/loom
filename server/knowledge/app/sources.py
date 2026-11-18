@@ -76,7 +76,7 @@ from server.knowledge.api.models_sources import (
     KnowledgeSourceUpdateInput,
     KnowledgeSourceUpdateOutput,
 )
-from server.knowledge.app import source_access, source_probes, source_titles
+from server.knowledge.app import source_access, source_probes, source_publication, source_titles
 from server.knowledge.domain import sources as domain
 from server.knowledge.domain.source_links import parse_links
 from server.knowledge.domain.sources import KnowledgeSource
@@ -437,6 +437,8 @@ async def handle_knowledge_source_inspect(
                 )
                 for title in titles
             ]
+            for title in titles:
+                source_publication.retain(title.proof)
         elif domain.served(src):
             docs = await store.source_documents(src.org, src.namespace, domain.source_tag(src.name))
             output.documents = [

@@ -79,7 +79,7 @@ def install(monkeypatch, *, revoke=False, extra_error=False, base_error=False):
 
         result = search.CheckedSearch(
             mixed,
-            SimpleNamespace(check=check, fresh=lambda: not expired),
+            SimpleNamespace(check=check, fresh=lambda: not expired, mirrored=True),
             SimpleNamespace(marked=True, render=render),
             [],
             2,
