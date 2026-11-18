@@ -20,6 +20,19 @@ async def source_identities(
     return head, files
 
 
+def span_identities(
+    spans: dict[str, list[tuple[int, int]]] | None,
+    commits: dict[str, set[str]] | None,
+) -> dict[str, set[str]]:
+    """A commit without a usable line extent cannot identify a symbol span."""
+    extents = spans or {}
+    return {
+        path: identities
+        for path, identities in (commits or {}).items()
+        if extents.get(path) and all(a > 0 and b >= a for a, b in extents[path])
+    }
+
+
 def verified_source(
     path: str,
     commit: str,
@@ -98,7 +111,7 @@ async def measured_for(
     if not files:
         return {}
     head, indexed = await source_identities(repo, org, ns, src_paths)
-    identities = (span_commits or {}) if spans is not None else None
+    identities = span_identities(spans, span_commits) if spans is not None else None
     details: dict[str, dict[str, Any]] = {
         p: {
             "commit": str(f.get("commit_sha") or ""),

@@ -139,7 +139,7 @@ def test_subject_spans_from_symbol_rows() -> None:
         {"path": "src/a.h", "start_line": 7, "end_line": 0},
         {"path": "", "start_line": 1, "end_line": 2},
     ]
-    assert app_cov.subject_spans(rows) == {"src/a.cpp": [(480, 495)], "src/a.h": [(7, 7)]}
+    assert app_cov.subject_spans(rows) == {"src/a.cpp": [(480, 495)]}
 
 
 # ---------------------------------------------------------------- the import

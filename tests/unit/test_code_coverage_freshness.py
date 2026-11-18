@@ -50,11 +50,13 @@ class CoverageRepo:
         return []
 
 
-async def run_claim(monkeypatch, repo, span):
+async def run_claim(monkeypatch, repo, span, *, resolved_rows=None):
     async def control(*args):
         return True, "probe"
 
     async def resolve(*args):
+        if resolved_rows is not None:
+            return resolved_rows, ""
         return [
             {
                 "path": SRC,
@@ -260,3 +262,42 @@ async def test_measured_execution_without_a_specific_test_is_not_uncovered(monke
     out = await run_claim(monkeypatch, repo, (10, 12))
     assert out.measured["executed"] and out.measured["run_current"]
     assert out.verdict == cc.UNKNOWN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("extent", [(0, 0), (10, 0), (12, 10)])
+async def test_unknown_symbol_line_extent_cannot_become_whole_file_execution(monkeypatch, extent):
+    repo = CoverageRepo(indexed="current", measured="current")
+    out = await run_claim(monkeypatch, repo, extent)
+    assert out.verdict == cc.UNKNOWN
+    assert out.strongest_tier == cc.FILE_REFERENCE
+    assert not out.measured["measured"]
+
+
+@pytest.mark.asyncio
+async def test_symbol_commit_without_a_line_span_is_only_a_file_association():
+    repo = CoverageRepo(indexed="current", measured="current")
+    rows, _ = await app.claim_tests(
+        repo,
+        ORG,
+        NS,
+        "symbol",
+        "sample",
+        [SRC],
+        limit=5,
+        terms={},
+        span_commits={SRC: {"current"}},
+    )
+    assert rows[0]["tier"] == cc.FILE_REFERENCE
+
+
+@pytest.mark.asyncio
+async def test_one_unknown_definition_prevents_a_partial_symbol_extent_claim(monkeypatch):
+    repo = CoverageRepo(indexed="current", measured="current")
+    rows = [
+        {"path": SRC, "indexed_commit": "current", "start_line": 10, "end_line": 12},
+        {"path": SRC, "indexed_commit": "current", "start_line": 0, "end_line": 0},
+    ]
+    out = await run_claim(monkeypatch, repo, (10, 12), resolved_rows=rows)
+    assert out.verdict == cc.UNKNOWN
+    assert out.measured["freshness"] == "unverified"

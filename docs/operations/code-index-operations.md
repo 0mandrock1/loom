@@ -781,7 +781,9 @@ LOOM_CODE_COVERAGE_IMPORT_ENABLED=true                         # then daily, in 
 Line ranges describe the source measured by their run. A coverage row supports current
 execution claims only when its commit matches the source file's `indexed_commit` and the
 namespace has a `git_head` watermark. A symbol's selected spans must carry the same
-indexing commit; missing or lagging compiler metadata remains unverified. The measured
+indexing commit; missing or inverted line extents and lagging compiler metadata remain
+unverified.
+A missing symbol extent never expands to whole-file execution. The measured
 test must also remain live at the matching indexing commit before its pair counts as
 `executed`. An unchanged file keeps its indexing commit when the repository advances,
 so advancing the head alone does not invalidate positive evidence.

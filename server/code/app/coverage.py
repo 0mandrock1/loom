@@ -31,7 +31,11 @@ from server.code.app.common import (
     resolve_code_identity,
     schedule_code_trace,
 )
-from server.code.app.coverage_freshness import measured_for, partition_coverage_rows
+from server.code.app.coverage_freshness import (
+    measured_for,
+    partition_coverage_rows,
+    span_identities,
+)
 from server.code.app.files import attach_reference_siblings
 from server.code.app.spans import code_span, set_code_span_attributes, span_attrs
 from server.code.domain.index import coverage_claim as cc
@@ -366,17 +370,20 @@ def executed_rows(
 
 
 def subject_spans(rows: list[dict[str, Any]]) -> dict[str, list[tuple[int, int]]]:
-    """path -> the line spans of a resolved symbol's definitions."""
+    """Definition spans by path, omitting paths with an unknown line extent."""
     out: dict[str, list[tuple[int, int]]] = {}
+    unknown: set[str] = set()
     for r in rows:
         path, a, b = (
             str(r.get("path") or ""),
             int(r.get("start_line") or 0),
             int(r.get("end_line") or 0),
         )
-        if path and a > 0:
-            out.setdefault(path, []).append((a, max(a, b)))
-    return out
+        if path and (a <= 0 or b < a):
+            unknown.add(path)
+        elif path:
+            out.setdefault(path, []).append((a, b))
+    return {path: extents for path, extents in out.items() if path not in unknown}
 
 
 async def claim_tests(
@@ -416,7 +423,7 @@ async def claim_tests(
         org,
         ns,
         cov_rows,
-        span_commits=(span_commits or {}) if subject_kind == "symbol" else None,
+        span_commits=span_identities(spans, span_commits) if subject_kind == "symbol" else None,
     )
     map_rows = list(map_rows) + executed_rows(current, spans) + historical
     # The content references' evidence is registered vocabulary (the crossref
