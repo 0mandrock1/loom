@@ -5,7 +5,6 @@ sharing enclosing locals."""
 from __future__ import annotations
 
 import asyncio
-import sys
 from typing import Any
 
 from server.core.ch import sequential_reads
@@ -192,7 +191,7 @@ async def handle_memory_search(input: MemorySearchInput) -> MemorySearchOutput:
     actual_work, _clock = await _start_actual_work(input)
     run = _launch_scope_reads(input)
     # Every task this pass launches is joined on the way out.
-    try:
+    async with run:
         (
             obs_date,
             parsed_intent,
@@ -362,8 +361,6 @@ async def handle_memory_search(input: MemorySearchInput) -> MemorySearchOutput:
         )
         await _finish_search_output(ctx, _output, final_hits)
         return _output
-    finally:
-        await run.close(failure=sys.exception())
 
 
 async def _verdict(

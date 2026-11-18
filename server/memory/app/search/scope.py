@@ -9,6 +9,7 @@ import asyncio
 import logging
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from types import TracebackType
 from typing import Any
 
 from server.auth.fanout import Fanout, resolve_fanout
@@ -71,6 +72,17 @@ class _SearchRun:
     # Sequential reads, entered once the Postgres barrier waited (`pg_validation.admit`)
     # and left by `close`.
     sequential_scope: ExitStack = field(default_factory=ExitStack)
+
+    async def __aenter__(self) -> _SearchRun:
+        return self
+
+    async def __aexit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        failure: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
+        await self.close(failure=failure)
 
     def cancel_pending(self) -> list[asyncio.Task[Any]]:
         """Cancel every task this pass launched that is still running. The normal path has
