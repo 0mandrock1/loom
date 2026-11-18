@@ -1244,7 +1244,11 @@ end-to-end gate is established by these measurements.
 
 `bench/cell_trigger_gate.py` measures the acceptance workload on an independently owned,
 attached scratch fixture with explicit fake providers, enforced mode and an already held
-org. Each API run has 50 unmeasured warmups and 2,000 sequential measured requests with
+org. Its namespace uses `append_only` for independent writes: sibling values do not
+rewrite one another's heads. The fixture verifies the stored policy before every arm,
+and the row proof requires each exact returned version and active status. This measures
+trigger cost for independent writes, not semantic conflict resolution. Each API run has
+50 unmeasured warmups and 2,000 sequential measured requests with
 4,096-byte values, with five runs per arm in counterbalanced order. Each delivery block
 times five complete `pg_delivery.run_pass` calls at the unchanged configured batch size,
 with five blocks per arm. The latency gate is `median(p99_on) - median(p99_off) <= 10 ms`;

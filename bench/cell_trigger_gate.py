@@ -3,6 +3,7 @@
 Requires an independently owned, attached scratch fixture and its source/ownership
 manifest. The outer fixture owner stops its processes and drops its exact databases.
 This driver restores triggers but never deletes fixture rows or changes providers.
+The namespace uses append_only so independent writes keep their exact heads.
 """
 
 from __future__ import annotations
@@ -634,6 +635,12 @@ async def _proof(
         "SELECT authority, epoch, deployment_id FROM loom.storage_authority FINAL"
     )
     _require(len(records) == 1 and records[0] == dict(authority), "paired CH authority")
+    namespace = await ch.query_all(
+        "SELECT default_conflict_policy FROM loom.namespaces FINAL WHERE "
+        "org={org:String} AND namespace={ns:String} LIMIT 2",
+        {"org": args.org, "ns": args.namespace},
+    )
+    _require(namespace == [{"default_conflict_policy": "append_only"}], "independent write policy")
     for table in ("provider_configuration", "runtime_overrides"):
         rows = await ch.query_all(f"SELECT count() AS n FROM loom.{table}")
         _require(rows == [{"n": 0}], f"fresh {table}")

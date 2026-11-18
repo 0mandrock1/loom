@@ -627,6 +627,8 @@ class ProofCH:
                     "epoch": 1,
                 }
             ]
+        if "FROM loom.namespaces" in sql:
+            return [{"default_conflict_policy": "append_only"}]
         if "FROM loom.provider_configuration" in sql:
             return [{"n": int(self.fault == "saved_provider")}]
         if "FROM loom.runtime_overrides" in sql:
@@ -1253,6 +1255,7 @@ async def test_review_failed_request_keeps_raw_status_elapsed_and_classification
         "host",
         "instance",
         "uuid",
+        "namespace_policy",
     ],
 )
 async def test_review_composed_proof_matches_actual_server_fingerprints_and_health(
@@ -1276,6 +1279,15 @@ async def test_review_composed_proof_matches_actual_server_fingerprints_and_heal
 
     class CH(ProofCH):
         async def query_all(self, sql, params=None):
+            if "FROM loom.namespaces" in sql:
+                assert params == {"org": args().org, "ns": args().namespace}
+                return [
+                    {
+                        "default_conflict_policy": "auto_reinforce"
+                        if fault == "namespace_policy"
+                        else "append_only"
+                    }
+                ]
             if "FROM loom.instances" in sql:
                 return [
                     {

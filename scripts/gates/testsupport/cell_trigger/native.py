@@ -1211,12 +1211,13 @@ async def proof(
                 await rows(
                     ch,
                     (
-                        f"SELECT owner_email FROM `{db}`.namespaces FINAL WHERE "
+                        "SELECT owner_email,default_conflict_policy "
+                        f"FROM `{db}`.namespaces FINAL WHERE "
                         f"org={{org:String}} AND namespace={{ns:String}}"
                     ),
                     params,
                 )
-                == [{"owner_email": "benchmark"}],
+                == [{"owner_email": "benchmark", "default_conflict_policy": "append_only"}],
                 "native registered namespace",
             )
             need(
@@ -1731,7 +1732,12 @@ class Fixture:
         result = self.http(
             "/v1/namespace.register",
             token=self.token,
-            body={"org": self.org, "namespace": self.namespace, "owner_email": "benchmark"},
+            body={
+                "org": self.org,
+                "namespace": self.namespace,
+                "owner_email": "benchmark",
+                "default_conflict_policy": "append_only",
+            },
         )
         need(
             result.get("registered") is True and result.get("namespace") == self.namespace,

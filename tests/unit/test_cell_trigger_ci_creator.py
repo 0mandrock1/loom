@@ -544,3 +544,98 @@ def test_keeper_config_probe_follows_store_ownership_validation(keeper_config_ca
     with pytest.raises(native.Refused, match="current owned container"):
         instance.inspect_stores()
     assert [argv for argv, _ in calls] == [["docker", "inspect", "owned-ch"]]
+
+
+def test_native_setup_registers_independent_append_only_writes(keeper_config_case, monkeypatch):
+    native, instance, owner, _, _ = keeper_config_case
+    instance.s.update(
+        ports={"probe": 7790, "router": 7791, "tls": 7792, "api": 7793},
+        pg_admin_dsn="postgresql://u:p@127.0.0.1:15432/postgres",
+        databases={
+            "pg_cell": "bench_cell",
+            "pg_directory": "bench_directory",
+            "ch_schema": "bench_schema",
+            "ch_telemetry": "bench_telemetry",
+        },
+        ch={"port": 18123, "username": "fixture", "password": "test-only"},
+        head="a" * 40,
+        python="unused",
+    )
+    log = instance.w / "credentials.log"
+    log.write_text("credential: lcr_" + "1" * 128 + "\ncredential: lco_" + "2" * 128 + "\n")
+
+    def action(task, *, role="", **kwargs):
+        if task == "create":
+            native.write(instance.w / (role + "-created.json"), {"created": True})
+        return {}
+
+    class Registered(Exception):
+        pass
+
+    def register(path, *, token, body):
+        assert path == "/v1/namespace.register"
+        assert token == "fixture-token"
+        assert body == {
+            "org": instance.org,
+            "namespace": instance.namespace,
+            "owner_email": "benchmark",
+            "default_conflict_policy": "append_only",
+        }
+        raise Registered
+
+    monkeypatch.setattr(instance, "inspect_stores", lambda: None)
+    monkeypatch.setattr(instance, "action", action)
+    monkeypatch.setattr(instance, "cli", lambda *args, **kwargs: {"log": log})
+    monkeypatch.setattr(instance, "command_receipt", lambda *args, **kwargs: None)
+    monkeypatch.setattr(instance, "certificate", lambda: None)
+    monkeypatch.setattr(instance, "start_api", lambda *args: None)
+    monkeypatch.setattr(instance, "process_receipt", lambda *args: {})
+    monkeypatch.setattr(owner, "start", lambda *args, **kwargs: {}, raising=False)
+    monkeypatch.setattr(native, "mint_metadata", lambda *args: ({}, "fixture-token"))
+    monkeypatch.setattr(instance, "http", register)
+    with pytest.raises(Registered):
+        instance.setup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["auto_reinforce", "append_only"])
+async def test_native_bootstrap_checks_persisted_independent_write_policy(
+    keeper_config_case, monkeypatch, policy
+):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    native, instance, _, _, _ = keeper_config_case
+    authority = {"authority": "postgres", "deployment_id": "deployment", "epoch": 1}
+    conn = SimpleNamespace(
+        fetchrow=AsyncMock(return_value=authority), fetchval=AsyncMock(return_value=0)
+    )
+
+    @asynccontextmanager
+    async def connected(*args, **kwargs):
+        yield conn, object()
+
+    async def rows(ch, sql, params=None):
+        if ".storage_authority" in sql:
+            return [authority]
+        if ".namespaces " in sql:
+            assert params == {"org": instance.org, "ns": instance.namespace}
+            row = {"owner_email": "benchmark"}
+            if "default_conflict_policy" in sql:
+                row["default_conflict_policy"] = policy
+            return [row]
+        if ".namespace_grants " in sql:
+            return [{"subject": "benchmark", "role": "admin"}]
+        raise AssertionError(sql)
+
+    monkeypatch.setattr(native, "connections", connected)
+    monkeypatch.setattr(native, "rows", rows)
+    output = instance.w / "bootstrap.json"
+    if policy != "append_only":
+        with pytest.raises(native.Refused, match="native registered namespace"):
+            await native.proof(instance.s, output, bootstrap=True)
+        assert not output.exists()
+    else:
+        await native.proof(instance.s, output, bootstrap=True)
+        assert native.read(output)["namespace_registered"] is True
