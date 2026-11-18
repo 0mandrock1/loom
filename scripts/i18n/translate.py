@@ -342,7 +342,7 @@ def readme_documentation(current: str) -> str:
     for source in landing_sources(available):
         target = available[source]
         if lifecycle.owner(target, (ROOT / target).read_text()) is not None:
-            url = indexnow.SITE + language.code + "/" + indexnow.page_path("docs/" + source)
+            url = indexnow.SITE + language.code + "/" + quote(indexnow.page_path("docs/" + source))
             return f'\n  <br>\n  <a href="{url}">{COPY[language.code]["documentation"]}</a>'
     return ""
 

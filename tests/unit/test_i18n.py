@@ -511,17 +511,29 @@ def test_generated_readme_uses_the_same_site_base_as_mkdocs() -> None:
 
 
 @pytest.mark.parametrize(
-    "sources,expected",
+    "sources,expected,route",
     [
-        (("getting-started/quickstart.md",), "getting-started/quickstart.md"),
-        (("zeta.md", "guide.md"), "guide.md"),
+        (
+            ("getting-started/quickstart.md",),
+            "getting-started/quickstart.md",
+            "getting-started/quickstart/",
+        ),
+        (("zeta.md", "guide.md"), "guide.md", "guide/"),
+        (('guide "advanced".md',), 'guide "advanced".md', "guide%20%22advanced%22/"),
+        (("guía & casos.md",), "guía & casos.md", "gu%C3%ADa%20%26%20casos/"),
     ],
 )
 def test_readme_keeps_a_native_site_link_without_a_translated_index(
-    tmp_path, monkeypatch, sources, expected
+    tmp_path, monkeypatch, sources, expected, route
 ) -> None:
+    from html.parser import HTMLParser
+
     from scripts.docs_site import indexnow, locales
-    from scripts.docs_site.paths import page_path
+
+    class Links(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == "a" and dict(attrs).get("href", "").startswith(indexnow.SITE):
+                links.append(dict(attrs))
 
     monkeypatch.setattr(t, "ROOT", tmp_path)
     language = next(lang for lang in t.LANGUAGES if lang.code == "ja")
@@ -534,7 +546,9 @@ def test_readme_keeps_a_native_site_link_without_a_translated_index(
         target.write_text(t.header(source, language, t.DEFAULT_MODEL, t.blob(source)) + "# Loom\n")
     uri = locales.landing_uri(language.code, locales.translations(tmp_path))
     assert uri == language.code + "/" + expected
-    assert indexnow.SITE + page_path("docs/" + uri) in t.language_line("i18n/ja/README.md")
+    links = []
+    Links().feed(t.language_line("i18n/ja/README.md"))
+    assert links == [{"href": indexnow.SITE + "ja/" + route}]
 
 
 def _translations() -> list[tuple[str, t.Language]]:
