@@ -182,15 +182,13 @@ async def insert_version_rows(
     rows: Sequence[Mapping[str, Any]],
     *,
     ch: Any,
-    policy: Mapping[tuple[str, str], int] | None = None,
 ) -> bool:
     """Commit restored version rows; whether some are not yet published. Under Postgres
     they commit in batches of LOOM_PG_RESTORE_BATCH_ROWS; once one's publication is
     pending, the rest are only committed, and the delivery worker publishes them."""
     from server.memory.app import blacklist_guard
 
-    if policy is None:
-        policy = await blacklist_guard.enforce_rows(rows)
+    policy = await blacklist_guard.enforce_rows(rows)
     if not pg.enabled():
         await store.insert_memory_versions(rows, ch=ch)
         return False
