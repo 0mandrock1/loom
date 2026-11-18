@@ -187,6 +187,25 @@ test("a later prompt receives changed evidence even at the same indexed span", a
   assert.equal(seen.length, 2);
 });
 
+for (const kind of ["calls", "overrides", "inherits"]) {
+  test(`caller context preserves the ${kind} relationship and its target`, async (t) => {
+    const response = {
+      edges: [
+        { edge_kind: kind, from_symbol: "Derived.parse", to_symbol: "Base.parse", path: "src/derived.py", line: 14 },
+      ],
+      epistemic: "exact",
+      truncated: true,
+    };
+    const { ask } = await contractFixture(t, { "code.callers": response });
+    const { out } = await ask("Who calls Base.parse?");
+    const text = JSON.parse(out).hookSpecificOutput.additionalContext;
+    assert.match(text, /indexed relationships/);
+    assert.ok(text.includes(`Derived.parse --${kind}--> Base.parse`));
+    assert.match(text, /response truncated/);
+    assert.doesNotMatch(text, /call sites|exact for indexed static calls/);
+  });
+}
+
 for (const op of ["code.symbol", "code.callers", "code.impact"]) {
   test(`an unanswered ${op} request does not invent context or try another operation`, async (t) => {
     const fixture = CONTRACT.find((c) => c.operation === op);

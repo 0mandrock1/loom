@@ -62,13 +62,23 @@ function renderLookup(lookup, response, repo) {
   if (lookup.op === "code.impact") return renderBlast(lookup.name, response, { maxNames: TOP_K });
   const results = (response.edges || [])
     .filter((e) => e.path && e.line && e.from_symbol)
-    .map((e) => ({ path: e.path, start_line: e.line, symbol: e.from_symbol }));
+    .map((e) => ({
+      path: e.path,
+      start_line: e.line,
+      symbol: `${e.from_symbol} --${e.edge_kind || "unspecified"}--> ${e.to_symbol || "target not returned"}`,
+    }));
   const precision =
     response.epistemic === "exact"
-      ? "exact for indexed static calls"
+      ? "exact for returned indexed relationships"
       : `counts are floors (${(response.causes || []).join(", ") || "indexed code only"})`;
-  return renderPack({ results }, { cap: TOP_K, header: `Loom code.callers returned these call sites; ${precision}:` })
-    .text;
+  const bounded = response.truncated ? "; response truncated" : "";
+  return renderPack(
+    { results },
+    {
+      cap: TOP_K,
+      header: `Loom code.callers returned indexed relationships (showing at most ${TOP_K}); ${precision}${bounded}:`,
+    },
+  ).text;
 }
 
 async function main() {
