@@ -9,6 +9,7 @@ import dataclasses
 import importlib
 import json
 import sys
+import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,6 +21,7 @@ import pytest
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools.retriever import create_retriever_tool
 from loom import Agent
+from loom.integrations import _session_protection as callback_protection
 from loom.integrations.langchain import LoomKnowledgeRetriever, LoomMemoryRetriever
 from loom.knowledge import SearchHit
 from loom.memory import MemorySearchHit, MemorySearchResult
@@ -698,3 +700,73 @@ def test_clean_native_automatic_retrieval_preserves_payloads_and_documents(
             assert doc.id is None and doc.page_content == _MEMORY["content_excerpt"]
             assert doc.metadata["memory_key"] == "prefs/seat"
         assert not original.protected and not producer.protected
+
+
+def test_concurrent_native_callbacks_retain_both_entry_contributors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bound = SessionProtection.create(base=tmp_path / "bound")
+    first = SessionProtection.create(base=tmp_path / "first")
+    second = SessionProtection.create(base=tmp_path / "second")
+    producer = SessionProtection.create(base=tmp_path / "producer")
+    first_resolved = threading.Event()
+    release_first = threading.Event()
+    second_finished = threading.Event()
+    posts: list[dict[str, Any]] = []
+    documents: dict[str, list[Any]] = {}
+    errors: list[BaseException] = []
+    resolve = callback_protection.response_roots
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        posts.append(json.loads(request.content))
+        return _native_result(request)
+
+    def staged_roots(root: SessionProtection | None) -> tuple[SessionProtection, ...]:
+        roots = resolve(root)
+        if first in roots:
+            first_resolved.set()
+            assert release_first.wait(10), "first callback was not released"
+        return roots
+
+    with _native_agent("invoke", bound, respond) as agent:
+        retriever = _native_retriever(agent, "knowledge")
+        monkeypatch.setattr(callback_protection, "response_roots", staged_roots)
+
+        def invoke(family: SessionProtection, query: str) -> None:
+            try:
+                with observation_scope((family,)):
+                    documents[query] = retriever.invoke(query)
+            except BaseException as error:  # noqa: BLE001 — worker errors must reach the test thread
+                errors.append(error)
+            finally:
+                if family == second:
+                    second_finished.set()
+
+        workers = [
+            threading.Thread(target=invoke, args=(first, "first"), daemon=True),
+            threading.Thread(target=invoke, args=(second, "second"), daemon=True),
+        ]
+        workers[0].start()
+        try:
+            assert first_resolved.wait(10), "first callback did not reach root resolution"
+            workers[1].start()
+            assert second_finished.wait(10), "second callback did not finish"
+        finally:
+            release_first.set()
+            for worker in workers:
+                if worker.ident is not None:
+                    worker.join(timeout=10)
+        assert not any(worker.is_alive() for worker in workers)
+        assert errors == []
+        assert sorted(documents) == ["first", "second"]
+        assert all(
+            [doc.page_content for doc in result] == [_CHUNK["content"]]
+            for result in documents.values()
+        )
+        assert sorted(body["query"] for body in posts) == ["first", "second"]
+        assert not any(root.protected for root in (bound, first, second, producer))
+        second.mark()
+        with producer.automatic(), pytest.raises(AutomaticCaptureSuppressed):
+            retriever.invoke("later automatic query")
+        assert len(posts) == 2
+        assert not any(root.protected for root in (bound, first, producer))
