@@ -330,7 +330,7 @@ def _plan(
                 return _failure(
                     current,
                     "boundary",
-                    "faulty original unit exceeds the new-request bound",
+                    "original counterpart exceeds the new-request bound",
                     (original,),
                 )
             planned.append(
