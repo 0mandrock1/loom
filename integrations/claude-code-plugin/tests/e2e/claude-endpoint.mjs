@@ -67,11 +67,29 @@ try {
       mcp.some((call) => call.scope === `${repo.org}/${repo.namespace}` && call.auth === `Bearer ${tokens[i]}`),
       `no scoped bearer for ${repo.repo}: ${JSON.stringify(mcp)}`,
     );
+  const headerClass = (value, expected) => {
+    const index = expected.indexOf(value);
+    return index >= 0 ? `expected-${index + 1}` : value ? "other" : "missing";
+  };
+  const pairCounts = {};
+  for (const call of mcp) {
+    // Fixed category labels keep captured headers out of the failure message.
+    const auth = headerClass(
+      call.auth,
+      tokens.map((token) => `Bearer ${token}`),
+    );
+    const scope = headerClass(
+      call.scope,
+      repos.map((repo) => `${repo.org}/${repo.namespace}`),
+    );
+    const pair = `${auth}/${scope}`;
+    pairCounts[pair] = (pairCounts[pair] ?? 0) + 1;
+  }
   assert.ok(
     mcp.every((call) =>
       repos.some((repo, i) => call.scope === `${repo.org}/${repo.namespace}` && call.auth === `Bearer ${tokens[i]}`),
     ),
-    "checkout scope crossed client credentials",
+    `checkout scope crossed client credentials (auth/scope counts): ${JSON.stringify(pairCounts)}`,
   );
   assert.ok(
     mcp.every((call) => call.url === prefix + "/mcp?toolset=coding+tracker"),
