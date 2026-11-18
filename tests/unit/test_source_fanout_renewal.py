@@ -145,6 +145,7 @@ async def test_independently_cancelled_knowledge_child_is_propagated(monkeypatch
             page="",
             explain=False,
             repo_namespace="",
+            tracker_plan=None,
         )
 
 
