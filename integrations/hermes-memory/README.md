@@ -14,11 +14,11 @@ qualification. This provider is not listed in the Hermes plugin catalog.
 
 ## Tools
 
-| Tool | Loom operation | Use |
-| --- | --- | --- |
-| `loom_recall` | `memory.search` | Find prior facts, preferences and decisions. |
-| `loom_read` | `memory.get` | Read a point fact by its exact key, with its metadata. |
-| `loom_remember` | `memory.set` | Save an explicit durable fact and return the server's receipt. |
+| Tool            | Loom operation  | Use                                                            |
+| --------------- | --------------- | -------------------------------------------------------------- |
+| `loom_recall`   | `memory.search` | Find prior facts, preferences and decisions.                   |
+| `loom_read`     | `memory.get`    | Read a point fact by its exact key, with its metadata.         |
+| `loom_remember` | `memory.set`    | Save an explicit durable fact and return the server's receipt. |
 
 Search reads at most four private-scope results for the configured user in one
 namespace. It searches across writer agents and sessions, with `auto_touch=false`
@@ -56,14 +56,14 @@ through its profile-scoped secret configuration. The provider reads them only
 through `agent.secret_scope.get_secret`; it never opens credential files or
 reads process environment variables directly.
 
-| Field | Value |
-| --- | --- |
-| `HERMES_LOOM_BASE_URL` | Server origin, such as `https://loom.example.com`; omit `/mcp` and `/v1`. |
-| `HERMES_LOOM_API_KEY` | A token for that Loom server. |
-| `HERMES_LOOM_ORG` | The token's organization. |
-| `HERMES_LOOM_NAMESPACE` | One namespace the token permits. |
-| `HERMES_LOOM_USER_ID` | A fixed, named user for this profile; `-` and wildcards are rejected. |
-| `HERMES_LOOM_AGENT` | Writer agent name; defaults to `hermes`. |
+| Field                   | Value                                                                     |
+| ----------------------- | ------------------------------------------------------------------------- |
+| `HERMES_LOOM_BASE_URL`  | Server origin, such as `https://loom.example.com`; omit `/mcp` and `/v1`. |
+| `HERMES_LOOM_API_KEY`   | A token for that Loom server.                                             |
+| `HERMES_LOOM_ORG`       | The token's organization.                                                 |
+| `HERMES_LOOM_NAMESPACE` | One namespace the token permits.                                          |
+| `HERMES_LOOM_USER_ID`   | A fixed, named user for this profile; `-` and wildcards are rejected.     |
+| `HERMES_LOOM_AGENT`     | Writer agent name; defaults to `hermes`.                                  |
 
 Use `hermes memory status` to inspect activation. For a development check, ask
 Hermes to save one non-sensitive sample fact using `loom_remember`, inspect its
