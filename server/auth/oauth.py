@@ -803,13 +803,15 @@ async def _account_for(
         subject, org = (existing[0], existing[1]) if existing is not None else (email, "")
         if await scim.refuses_subject(subject, org=org, verified_email=email):
             return _Denied(_SIGN_IN_REFUSED)
+        if existing is None and await sso_links.reaching(email):
+            return _Denied("this email's accounts do not resolve to one account")
         await finish_unfinished_account(email)
         resolved = await resolve_identity_for_email(email)
         if resolved is not None:
             return resolved
         if await sso_links.reaching(email):
-            # Linked accounts that disagree (owners, orgs): fail closed, saying so.
-            return _Denied("this email's linked accounts do not resolve to one account")
+            # Reachable accounts that disagree (owners, orgs) fail closed.
+            return _Denied("this email's accounts do not resolve to one account")
         if await sso_links.unlinked_accounts(email):
             # Their password account: proving it links it, no new one is made.
             return await _offer_link(pending, email, upstream)
