@@ -324,8 +324,35 @@ async def _subtree_diagnostic(
                 "death_proved": 0,
                 "query_zero_proved": 0,
                 "unproved": 0,
+                "kernel_zombie_single_thread": 0,
+                "kernel_zombie_multi_thread": 0,
+                "kernel_present_non_zombie": 0,
+                "kernel_missing": 0,
+                "kernel_uninspectable": 0,
             }
             for row in captured:
+                kernel = "kernel_uninspectable"
+                proof = row["host_proof"].split("|")
+                here = provider_process.host_proof().split("|")
+                if len(proof) in {8, 9} and proof[:4] == here[:4] and proof[4].isdecimal():
+                    try:
+                        raw = await asyncio.to_thread(Path(f"/proc/{int(proof[4])}/stat").read_text)
+                        stat = raw.rsplit(")", 1)[1].split()
+                        if stat[19] == proof[5]:
+                            threads = int(stat[17])
+                            if stat[0] == "Z" and threads >= 1:
+                                kernel = (
+                                    "kernel_zombie_single_thread"
+                                    if threads == 1
+                                    else "kernel_zombie_multi_thread"
+                                )
+                            elif threads >= 1:
+                                kernel = "kernel_present_non_zombie"
+                    except FileNotFoundError:
+                        kernel = "kernel_missing"
+                    except (OSError, IndexError, ValueError):
+                        pass  # An unreadable identity does not establish a kernel state.
+                counts[kernel] += 1
                 counts["death_proved"] += int(provider_process.proves_stopped(row["host_proof"]))
                 accepted = proved or (bool(roles["background"]) and await retired(client, [row]))
                 counts["retirement_proved"] += int(accepted)

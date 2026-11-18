@@ -36,6 +36,13 @@ setup; its optional analyst-row work opens a separate verified, enrolled scope
 and obtains fresh acceptance. That bootstrap exception admits no tenant or token
 work.
 
+Local physical-death evidence requires the same host, kernel boot and PID namespace.
+It accepts an absent PID, a different process birth, or the captured birth in a
+single fresh kernel process record showing a zombie with exactly one thread. A
+zombie leader with other threads is unproved. Known-zero tagged queries remain a
+separate requirement before retirement; kernel process exit does not settle a
+query still executing in a store.
+
 The capability identifies installed code; it does not prove that every older
 process or unsafe retirement client has disappeared.
 
