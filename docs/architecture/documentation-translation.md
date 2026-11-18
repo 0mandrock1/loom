@@ -51,8 +51,30 @@ Source edits and faults affecting one original unit share one changed-input disp
 Repeated candidates, overlapping or reordered ranges, unsafe boundaries, unknown faults
 and pair refusals return conflicts. A changed completed unit among several unmatched
 original units needs proven counterpart cuts; the planner does not guess a partition.
-Replacement of a completed whole-page unit is unsupported. Exact whole-page reuse remains
-possible, but the API does not resolve every changed-page mapping.
+Changing a completed whole-page unit requires the raw source-origin proof below.
+Exact whole-page reuse and same-input correction do not require that proof.
+
+`SourceOrigins` optionally supplies the historical and current raw source text and
+language. The caller authenticates those Git bytes and their association with the exact
+paid requests, locale, model and prepared containers. The planner computes counterpart
+ranges; it does not accept a table of asserted cuts. This path requires every original
+unit to have a completed reference and leaves the no-evidence refusal unchanged.
+
+Both prepared containers must reconstruct exactly through the maintained language-bar
+placeholder, ordered source-associated link routes and generated heading anchors.
+External links, fragments, image kinds and occurrence order cannot be substituted.
+The raw source change must retain every original line in order. Earliest and latest
+monotone line embeddings must agree on each endpoint's neighbouring origins, with no
+insertion at a unit or separator boundary. All whole counterparts and their original
+separators must cover the complete current container. Ambiguous origins, replacements,
+reordering, incomplete originals and unsafe current parser cuts refuse.
+
+Changed whole counterparts retain their original references and fault identifiers and
+receive the `changed` disposition. Routing-only input changes also remain changed;
+canonical link equivalence grants no free reuse or old-assistant replay. The existing
+request-byte bound still applies to each whole changed or faulty counterpart. Raw origin
+proof does not establish historical settlement, clear a refusal, approve a translation
+or admit a provider call. Consumers retain the source evidence with their execution packet.
 
 Both `chunks.split` and `reconcile_completed_units` accept `bounded_new_request_bytes`,
 an integer from 1 to 16384, excluding booleans. The default preserves the 16 KiB cuts.
@@ -80,6 +102,39 @@ Consumers authenticate resolved replies and validate them against their current 
 then validate the complete assembled page. Content invariants and both table dialects still
 apply. Publication also requires semantic and language-completeness review against current
 English; structural success does not clear confirmed faults or refusals.
+
+## Completed histories
+
+`reconcile_completed_history` plans from multiple genuine source partitions without
+reassigning a retained reply to a later container. A `RequestPartition` records the
+complete actual planned ranges, hashes and empty or LF separators. It makes no
+completion or absence claim. Each `CompletionOrigin` identifies one actual reply variant
+and its whole slot in its own partition. A reused slot in a later execution creates no
+additional origin. Reply references are opaque variant identities; a request key alone
+is insufficient when it can identify different reply bytes.
+
+The caller authenticates every partition and the complete same-pair catalog against
+actual source, payload, default settings, reply and settlement evidence. It supplies
+explicit reuse eligibility for every catalog entry and binds the full metadata digest.
+The planner cannot establish that remote evidence or detect a self-consistent fabricated
+catalog. Consumers must account for unselected variants, uncertainty, partial attempts,
+refusals and security policy before execution. Nonselection clears no hold or charge.
+
+Selected reply references supply no current offsets. Unique exact whole matches or the
+maintained per-partition raw-origin proof determine their counterparts. Supplied origin
+evidence must validate even when exact reuse is possible. Selected counterparts must
+cover all current English in order without overlap, gaps or separator changes. This
+completed-only API refuses unfinished gaps and never splits a completed request. The
+single-history API retains its separate unfinished-work contract.
+
+Same-input faults require the exact reply variant and produce correction; changed input
+produces changed and cannot replay an old-input assistant. An eligible same-input
+completion prevents correction spending. An already completed current input must select
+its actual origin rather than relabel an older input as changed. All partitions, replies,
+eligibility and supplied faults remain in the result, including unselected history.
+Whole correction and changed requests obey the existing byte bound; unchanged reuse can
+exceed it. Matching generation-aware consumers must authenticate each selected origin
+against its own container and complete manifest; a plan alone admits no provider call.
 
 ## Assembled validation
 
@@ -132,6 +187,8 @@ This is a finite source contract, not a language classifier or a semantic review
 - `scripts/i18n/translate.py`: `english_requests`, `request_chars`, `translate_page`.
 - `scripts/i18n/translate.py`: `request_system`, `translate_text` and initial feedback.
 - `scripts/i18n/reconcile.py`: `reconcile_completed_units`, `OriginalUnit` and manifest binding.
+- `scripts/i18n/completed_history.py`: `reconcile_completed_history` and actual reply origins.
+- `scripts/i18n/origins.py`: `SourceOrigins` and complete source-origin correspondence.
 - `scripts/i18n/chunks.py`: protected ranges, contextual source cuts and parsed table cells.
 - `scripts/i18n/context.py`: source spelling declarations and residual label projection.
 - `scripts/i18n/requirements.in`: translation runtime dependencies.

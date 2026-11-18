@@ -62,6 +62,15 @@ async with Agent(org="acme", namespace="support") as agent:
 
 `invoke` needs a `SyncAgent`; `ainvoke` takes an `Agent` or a `SyncAgent`.
 
+The Python retrievers retain their bound and ambient `SessionProtection` contributors at
+construction and on each callback, including after client rebinding and across worker
+threads. When the caller enters `family.automatic()`, retained protection also guards
+automatic retrieval; without that context, direct retrieval and retriever tools stay
+explicit and observe responses. A mirrored result marks all retained families before
+documents return. A failed durable mark withholds the documents, and a marked family
+blocks later automatic retrieval. Use separate retrievers for independent conversation
+families.
+
 | Retriever                | `page_content`  | `id`                                                                                | `metadata`                                                                                        |
 | ------------------------ | --------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `LoomKnowledgeRetriever` | the chunk       | `<namespace>/<source_uri>#<chunk_idx>`                                              | `source_uri`, `chunk_idx`, `similarity`, `section`, `namespace`, `tags`                           |
@@ -166,6 +175,16 @@ was opened on; an `Agent` serves `aget` and `aput` on its own loop. `Memory` kee
 short-term messages in its own chat store (in process by default); only what the block
 receives reaches Loom.
 
+Wrap automatic callbacks in the application's `SessionProtection.automatic()` scope.
+The retriever and memory block retain the families bound at construction and contributed
+by earlier callbacks, including across client rebinding and sync worker threads. A
+mirrored recall marks those families before returning. Later automatic calls refuse
+protected work; explicit calls keep their response observers without becoming automatic.
+`aflush` retains each Loom block's contributors before reading the native buffer. A
+refused flush raises and leaves that window active for retry, without archiving it or
+acknowledging an unsent extraction. The native framework owns its overflow archival;
+`aflush` does not roll it back.
+
 ## Haystack
 
 `LoomDocumentStore` implements Haystack 3.5's `DocumentStore` protocol, and
@@ -258,6 +277,18 @@ extends the conversation history of one session there. Every process whose Loom 
 the same name reads the same Python history for the same session id and user, and a
 handoff between agents of one run keeps it. Python and TypeScript histories are separate
 because the frameworks use different item formats.
+
+Bind the application's existing protection family before constructing either
+native session. The instance retains constructor and callback client families,
+including after rebinding. Python also retains contributors active in the
+callback's context. Use one instance per logical conversation family; restore it
+with the same application-owned protection capsule. The native user and session
+ids select history, without establishing protection authority. History reads and
+additions are automatic work: a marked reply protects every contributor before
+returning and suppresses later automatic calls. An initial complete history reply
+may return; follow-up pages, hydration and batch writes stop. Explicit pop, clear
+and model-selected tools remain available, with reply observation retained for the
+session's manual deletions.
 
 ```python
 from loom.integrations.openai_agents import LoomSession
@@ -800,7 +831,10 @@ const assistant = new MastraAgent({
 
 `LoomMemoryStorage` implements the native `MemoryStorage` domain. It keeps mutable
 threads, complete message payloads and resource working memory in Loom through the SDK.
-Install `@mastra/core` 1.83.x and `@mastra/memory` alongside `@clickhouse/loom`:
+Install `@mastra/core` 1.83.x and `@mastra/memory` alongside `@clickhouse/loom`.
+
+For automatic native memory, the app supplies `conversationCapture`, a `SessionCapture`
+restored for the complete logical conversation family:
 
 ```ts
 import { MastraCompositeStore } from "@mastra/core/storage";
@@ -811,7 +845,11 @@ const memory = new Memory({
   storage: new MastraCompositeStore({
     id: "loom",
     domains: {
-      memory: new LoomMemoryStorage(agent, { resourceId: "alice", storeId: "assistant" }),
+      memory: new LoomMemoryStorage(agent, {
+        resourceId: "alice",
+        storeId: "assistant",
+        capture: conversationCapture,
+      }),
     },
   }),
   options: {
@@ -829,6 +867,20 @@ resource argument remain scoped to that bound user. Cross-resource writes are re
 cross-resource reads return missing or empty results. Keep the same Loom agent and
 `storeId` across processes to resume the same data. A store must not be shared across
 users, and resource reassignment is unsupported.
+
+With `capture`, construct a separate storage and `Memory` instance for each complete
+conversation family. Keep its durable protection state across reconnects and restarts;
+resource, store and thread IDs identify rows and do not restore protection authority.
+The adapter retains the supplied capture and the client's contributing families before
+asynchronous work. A marked recall returns only after every contributing family commits
+protection. Later automatic callbacks raise `AutomaticCaptureSuppressed`, including
+batch continuation, conditional-update retries and pending thread timestamp updates.
+A marked write also refuses the callback, so a failed batch can leave earlier writes
+stored. The refusal propagates through native `Memory` methods.
+
+Omit `capture` only for explicitly owned CRUD. Those calls retain response observers
+without becoming automatic. Model-selected `loomTools` calls remain explicit. The
+adapter does not supply durable protection storage or create a conversation family.
 
 Native listing supports thread/resource filters, date and metadata filters, ordering,
 pagination and included message context across that user's threads. Lists scan the
@@ -936,6 +988,15 @@ The [MCP/OpenAPI setup](mcp-clients.md#hosted-builders-and-chat-apps) also works
 the package.
 
 ## LangGraph
+
+A store retains application-owned constructor and callback conversation contributors
+across client rebinding. Bind complete contributor authority before construction and
+use one store per logical conversation family; restore that family's existing capsule.
+An existing automatic SDK context makes only that invocation automatic, with every
+retained family checked before dispatch. Direct calls and model-selected tools remain
+explicit, including after an automatic invocation ends. All calls retain response
+observation, so a marked or malformed reply protects earlier contributors before
+returning or refusing. Namespace, thread and user ids supply no protection authority.
 
 `LoomStore` (`sdk/python/loom/integrations/langgraph.py`) is a LangGraph `BaseStore`, so
 every graph node reaches it through `get_store()`.
