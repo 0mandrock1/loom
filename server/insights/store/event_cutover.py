@@ -20,7 +20,7 @@ from server.settings import settings
 
 CONSTRAINT = "ordinary_events_only"
 ORDINARY = "mirror_marked = 0 AND NOT match(namespace, '^acl-[0-9a-f]{24}$')"
-# Setup holds a 60-second lease; leave half its half-TTL budget for entity writes.
+# not a setting: setup holds a 60s lease; this fixed bound leaves time for entity writes.
 _BUDGET_S = 10
 _LIVE = (
     " SETTINGS skip_unavailable_shards = 0, max_parallel_replicas = 1, "
@@ -96,7 +96,7 @@ def _responders(rows: list[dict[str, Any]], count: int) -> frozenset[str]:
 
 
 def _identities(rows: list[dict[str, Any]]) -> tuple[tuple[str, str, str, str], ...]:
-    found = []
+    found: list[tuple[str, str, str, str]] = []
     for row in rows:
         tables = {str(name): (_uuid(uid), str(engine)) for name, uid, engine in row["tables"]}
         if (

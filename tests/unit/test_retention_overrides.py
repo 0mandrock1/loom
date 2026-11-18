@@ -111,7 +111,7 @@ def test_compute_alters_per_namespace_override_uses_multiif() -> None:
         ],
     )
     # Override applies to every managed table — one ALTER per table.
-    assert len(out) == 7
+    assert len(out) == 8
     audit_alter = next(s for t, s, _ in out if t.table == "loom.audit_log")
     assert "multiIf" in audit_alter
     assert "org = 'clickhouse'" in audit_alter
@@ -220,6 +220,7 @@ def test_compute_alters_per_namespace_applies_to_all_tables() -> None:
     tables = sorted(t.table for t, _, _ in out)
     assert tables == [
         "loom.agent_events",
+        "loom.agent_events_private",
         "loom.audit_log",
         "loom.chunks",
         "loom.conversations",

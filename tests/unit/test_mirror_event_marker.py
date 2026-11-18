@@ -44,11 +44,11 @@ async def test_logical_mark_reaches_normal_and_waited_event_rows(
         return rules
 
     async def write(table, row):
-        assert table == "loom.agent_events"
+        assert table == "loom.agent_events_private"
         rows.append(row)
 
     async def insert(table, data, *, settings, required_columns):
-        assert table == "loom.agent_events"
+        assert table == "loom.agent_events_private"
         assert required_columns == frozenset({"mirror_marked"})
         assert settings["async_insert"] == settings["wait_for_async_insert"] == 1
         rows.extend(data)

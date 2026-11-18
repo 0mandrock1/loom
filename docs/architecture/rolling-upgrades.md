@@ -944,6 +944,10 @@ unreachable; CI passes `--require`, which fails there instead.
 
 ### Analyst event storage cutover
 
+The CHECK proof requires ClickHouse with `system.constraints`, as supplied by the
+pinned deployment release. Upgrade the database before provisioning the event catalog;
+a server without that metadata refuses the cutover.
+
 `agent_events` retains ordinary event rows, its columns and the analyst's signed,
 namespace-scoped grant. Both builds can insert and query ordinary events while the
 entity catalog advances to version 5. The `ordinary_events_only` CHECK rejects marked

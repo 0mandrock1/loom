@@ -61,7 +61,7 @@ if str(ROOT) not in sys.path:  # run as a file: this checkout's server, not an i
 from server.core.sql_literal import sql_string  # noqa: E402
 from server.insights.domain import analysis as boundary  # noqa: E402
 
-CH_IMAGE = "clickhouse/clickhouse-server:26.5.1.882"
+CH_IMAGE = os.environ.get("LOOM_CLICKHOUSE_IMAGE", "clickhouse/clickhouse-server:26.10.4.207")
 CH_PASSWORD = "loomdev"
 JWT_SECRET = "mixed-version-gate-secret-" + "0" * 32
 # How long the carrying processes may take to acknowledge a new column
