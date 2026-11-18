@@ -99,8 +99,8 @@ def _failure(current, kind, message, units=()):
 
 
 def _safe_end(text: str, end: int, boundaries: set[int]) -> bool:
-    # Nonfinal requests omit the one newline owned by the assembly separator.
-    return end == len(text) or (end < len(text) and text[end] == "\n" and end + 1 in boundaries)
+    # A newline may belong to the unit itself or to its assembly separator.
+    return end in boundaries or (end < len(text) and text[end] == "\n" and end + 1 in boundaries)
 
 
 def _history_problem(historical, current, units, faults, manifest_sha256):
@@ -116,13 +116,13 @@ def _history_problem(historical, current, units, faults, manifest_sha256):
         if not (0 <= unit.start < unit.end <= len(historical.english)):
             return "authentication", "original unit range is invalid"
         if (previous == -1 and unit.start != 0) or (
-            previous != -1 and historical.english[previous : unit.start] != "\n"
+            previous != -1 and historical.english[previous : unit.start] not in {"", "\n"}
         ):
             return (
                 "authentication",
-                "original units must cover the container with newline separators",
+                "original units must cover the container with empty or LF separators",
             )
-        if unit.start <= previous or unit.reply_ref == "" or unit.reply_ref in refs:
+        if unit.start < previous or unit.reply_ref == "" or unit.reply_ref in refs:
             return "authentication", "original units overlap or repeat a reply reference"
         if _digest(historical.english[unit.start : unit.end]) != unit.source_sha256:
             return "authentication", "original unit source hash differs"
@@ -151,7 +151,8 @@ def _matches(old_text, unit, current, boundaries):
 
 
 def _new_gap(source, start, end):
-    pieces = chunks.split(source.english[start:end])
+    scope = SourceContext(source.path, source.english, start, end)
+    pieces = chunks.split(source.english[start:end], source_context=scope)
     planned = []
     for piece in pieces:
         planned.append(
@@ -175,7 +176,7 @@ def reconcile_completed_units(
     """Keep unique monotone whole units; bound only genuine new gaps and replacements.
 
     The authenticated manifest must include every original unit, complete or not,
-    covering the container with one newline between units. None is an explicit
+    covering the container with empty or LF separators. None is an explicit
     no-completion attestation, not permission inferred from missing cache files.
     Incomplete gaps use the bounded planner outside retained completed ranges.
     Changed input carries fault IDs but must never replay an old-input assistant.
@@ -190,7 +191,9 @@ def reconcile_completed_units(
     except ValueError as error:
         return _failure(current, "boundary", str(error))
     if any(
-        u.start not in old_cuts or not _safe_end(historical.english, u.end, old_cuts) for u in units
+        u.start not in old_cuts or not _safe_end(historical.english, u.end, old_cuts)
+        for u in units
+        if u.reply_ref is not None
     ):
         return _failure(current, "boundary", "original unit cuts are not parser-safe", units)
     fault_ids = {
@@ -211,7 +214,7 @@ def reconcile_completed_units(
             )
         if matches:
             anchors.append((index, *matches[0]))
-    if any(left[2] >= right[1] for left, right in pairwise(anchors)):
+    if any(left[2] > right[1] for left, right in pairwise(anchors)):
         return _failure(
             current, "ambiguity", "whole-unit alignment is not monotone and disjoint", units
         )
@@ -228,19 +231,34 @@ def reconcile_completed_units(
 
 def _plan(historical, current, units, anchors, cuts, fault_ids, manifest_sha256):
     planned, removed = [], []
-    left_index, left_end = -1, -1
-    for index, start, end in [*anchors, (len(units), len(current.english) + 1, 0)]:
+    left_index, left_end = -1, 0
+    for index, start, end in [*anchors, (len(units), len(current.english), 0)]:
         missing = units[left_index + 1 : index]
         completed = tuple(unit for unit in missing if unit.reply_ref is not None)
-        gap_start, gap_end = left_end + 1, start - 1
-        if gap_start < gap_end and completed and len(missing) > 1:
+        gap_start, gap_end = left_end, start
+        has_text = bool(current.english[gap_start:gap_end].strip("\n"))
+        if has_text and completed and len(missing) > 1:
             return _failure(
                 current,
                 "boundary",
                 "completed counterpart has no proven cuts among intervening original units",
                 missing,
             )
-        if gap_start < gap_end:
+        if has_text:
+            if completed:
+                old_left = units[left_index].end if left_index >= 0 else 0
+                old_right = units[index].start if index < len(units) else len(historical.english)
+                before = historical.english[old_left : completed[0].start]
+                after = historical.english[completed[0].end : old_right]
+                gap = current.english[gap_start:gap_end]
+                if not gap.startswith(before) or not gap.endswith(after):
+                    return _failure(
+                        current, "boundary", "changed unit separator ownership differs", completed
+                    )
+                gap_start += len(before)
+                gap_end -= len(after)
+            elif gap_start not in cuts and current.english[gap_start : gap_start + 1] == "\n":
+                gap_start += 1
             if gap_start not in cuts or not _safe_end(current.english, gap_end, cuts):
                 return _failure(
                     current,

@@ -2,10 +2,12 @@
 
 from dataclasses import replace
 from hashlib import sha256
+from itertools import pairwise
 
 import pytest
 
 from scripts.i18n import chunks
+from scripts.i18n.context import SourceContext
 from scripts.i18n.reconcile import (
     OriginalUnit,
     PreparedSource,
@@ -30,13 +32,17 @@ def _source(text):
 
 
 def _history(*parts):
-    source = _source("\n".join(parts))
+    return _history_with_separators(parts, ("\n",) * (len(parts) - 1))
+
+
+def _history_with_separators(parts, separators):
+    source = _source("".join(p + s for p, s in zip(parts, (*separators, ""), strict=True)))
     units, start = [], 0
-    for i, part in enumerate(parts):
+    for i, (part, separator) in enumerate(zip(parts, (*separators, ""), strict=True)):
         units.append(
             OriginalUnit(start, start + len(part), sha256(part.encode()).hexdigest(), str(i))
         )
-        start += len(part) + 1
+        start += len(part) + len(separator)
     return source, tuple(units)
 
 
@@ -237,7 +243,9 @@ def test_incomplete_gap_tracks_changed_english_outside_completed_cuts():
     _assert_assembly(plan)
     assert [unit.disposition for unit in plan.units] == ["reuse", "new", "reuse"]
     assert plan.units[0].original == units[0] and plan.units[-1].original == units[-1]
-    assert _texts(plan)[1] == "A changed gap.\n\nAnother new paragraph.\n"
+    # New work owns its full safe current gap; no historical completed cut is changed.
+    assert _texts(plan)[1] == "A changed gap.\n\nAnother new paragraph.\n\n"
+    assert plan.units[-1].separator_before == ""
 
 
 def test_partial_plan_preserves_completed_deletion_and_incomplete_gaps():
@@ -299,3 +307,132 @@ def test_never_completed_whole_page_can_receive_its_first_bounded_plan():
     plan = _reconcile(old, _source("Current English.\n"), units)
     _assert_assembly(plan)
     assert [unit.disposition for unit in plan.units] == ["new"]
+
+
+def _results_original_cut_layout():
+    # Exact original cut lengths and separator ownership; the prose itself is synthetic.
+    ends = [
+        7743,
+        15093,
+        22443,
+        30553,
+        38672,
+        46676,
+        54724,
+        62801,
+        70902,
+        78853,
+        87016,
+        94631,
+        102627,
+        110343,
+        111578,
+    ]
+    sizes = [ends[0], *(b - a for a, b in pairwise(ends))]
+    intro = "Intro " + "a" * (671 - len("Intro ") - 1) + "\n"
+    table = []
+    for i, size in enumerate(sizes):
+        prefix = ("| Item | Value |\n| --- | --- |\n" if i == 0 else "") + f"| Row {i} | "
+        table.append(prefix + "a" * (size - len(prefix) - 3) + " |\n")
+    tail = [
+        f"Tail {i} " + "a" * (size - len(f"Tail {i} ") - 1) + "\n"
+        for i, size in enumerate([2083, 1675, 942, 1045, 289])
+    ]
+    parts = [intro, *table, *tail]
+    old, units = _history_with_separators(parts, ("\n", *("",) * 14, *("\n",) * 5))
+    units = tuple(unit if i < 2 else replace(unit, reply_ref=None) for i, unit in enumerate(units))
+    assert len(old.english) == 118289
+    assert (units[1].start, units[1].end, units[2].start) == (672, 8415, 8415)
+    return old, units
+
+
+@pytest.mark.parametrize("insert", [False, True], ids=["unchanged", "paragraph-insertion"])
+def test_actual_twenty_one_cut_layout_keeps_two_completed_payloads(insert):
+    old, units = _results_original_cut_layout()
+    current = (
+        _source(old.english[:672] + "A new paragraph.\n\n" + old.english[672:]) if insert else old
+    )
+    plan = _reconcile(old, current, units)
+    _assert_assembly(plan)
+    assert [unit.original for unit in plan.units if unit.disposition == "reuse"] == list(units[:2])
+    assert all(
+        len(text.encode()) <= chunks.MAX_BYTES
+        for unit, text in zip(plan.units, _texts(plan), strict=True)
+        if unit.disposition == "new"
+    )
+
+
+def test_contiguous_completed_anchors_accept_no_assembly_separator():
+    old, units = _history_with_separators(("First.\n\n", "Last.\n"), ("",))
+    plan = _reconcile(old, old, units)
+    _assert_assembly(plan)
+    assert [unit.disposition for unit in plan.units] == ["reuse", "reuse"]
+    assert plan.units[1].separator_before == ""
+
+
+def test_changed_contiguous_completed_counterpart_preserves_its_outer_newlines():
+    old, units = _history_with_separators(("First.\n\n", "Old.\n\n", "Last.\n"), ("", ""))
+    current = _source("First.\n\nChanged.\n\nLast.\n")
+    plan = _reconcile(old, current, units, faults=(UnitFault("1", "fault"),))
+    _assert_assembly(plan)
+    assert [unit.disposition for unit in plan.units] == ["reuse", "changed", "reuse"]
+    assert _texts(plan)[1] == "Changed.\n\n"
+
+
+def test_contiguous_completed_deletion_preserves_neighbors():
+    old, units = _history_with_separators(("First.\n\n", "Removed.\n\n", "Last.\n"), ("", ""))
+    plan = _reconcile(old, _source("First.\n\nLast.\n"), units)
+    _assert_assembly(plan)
+    assert plan.removed == (units[1],)
+    assert [unit.original for unit in plan.units] == [units[0], units[2]]
+
+
+def test_incomplete_unsafe_old_cut_is_replanned_outside_completed_ranges():
+    old, units = _history_with_separators(("First.\n\n", "New para", "graph.\n"), ("", ""))
+    units = (units[0], replace(units[1], reply_ref=None), replace(units[2], reply_ref=None))
+    plan = _reconcile(old, old, units)
+    _assert_assembly(plan)
+    assert [unit.disposition for unit in plan.units] == ["reuse", "new"]
+    assert _texts(plan)[1] == "New paragraph.\n"
+
+
+def test_contiguous_completed_cut_inside_a_paragraph_is_still_refused():
+    old, units = _history_with_separators(("First para", "graph.\n"), ("",))
+    plan = _reconcile(old, old, units)
+    assert [conflict.kind for conflict in plan.conflicts] == ["boundary"]
+
+
+def test_headerless_gap_uses_full_current_table_rows_and_preserves_separator_lf():
+    header = "| Item | Value |\n| --- | --- |\n"
+    rows = [f"| Row {i} | " + "a" * 1000 + " |\n" for i in range(25)]
+    english = header + "".join(rows)
+    start, end = len(header + rows[0]), len(english) - 1
+    text = english[start:end]
+    scope = SourceContext("docs/table.md", english, start, end)
+    parts = chunks.split(text, source_context=scope)
+    assert len(parts) >= 2
+    assert "\n".join(parts) == text
+    assert all(len(part.encode()) <= chunks.MAX_BYTES for part in parts)
+    assert all(part.startswith("| Row ") for part in parts)
+
+
+@pytest.mark.parametrize("invalid", ["foreign", "negative", "past_end", "cell", "fence"])
+def test_contextual_split_refuses_foreign_or_unsafe_ranges_before_shortcut(invalid):
+    english = "| Field | Meaning |\n| --- | --- |\n| A | inside a cell |\n"
+    start, end = 0, len(english)
+    if invalid == "foreign":
+        text = "A different input."
+    else:
+        if invalid == "negative":
+            start = -1
+        elif invalid == "past_end":
+            end += 1
+        elif invalid == "cell":
+            end = english.index("inside") + 3
+        else:
+            english = "```text\ninside code\n```\n"
+            end = english.index("code") + len("code\n")
+        text = english[start:end]
+    scope = SourceContext("docs/table.md", english, start, end)
+    with pytest.raises(ValueError, match="source context|parser-safe"):
+        chunks.split(text, source_context=scope)
