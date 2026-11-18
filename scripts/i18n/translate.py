@@ -671,6 +671,25 @@ def reply_text(data: dict[str, Any]) -> str:
     return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
 
 
+# Additional trusted correction instructions, separate from the Markdown source bound.
+MAX_FEEDBACK_BYTES = 4096
+
+
+def request_system(lang: Language, *, initial_feedback: str = "") -> str:
+    """Canonical SYSTEM bytes, including any bounded current-source correction feedback."""
+    if len(initial_feedback) > MAX_FEEDBACK_BYTES or any(
+        char != "\n" and not " " <= char <= "~" for char in initial_feedback
+    ):
+        raise ValueError("initial feedback must be printable ASCII or LF, at most 4096 bytes")
+    system = SYSTEM.format(language=lang.english, style=lang.style)
+    if initial_feedback:
+        system += (
+            "\n\nAdditional corrections for this source; preserve every rule above:\n"
+            + initial_feedback
+        )
+    return system
+
+
 def translate_text(
     text: str,
     lang: Language,
@@ -678,10 +697,19 @@ def translate_text(
     spend: Spend,
     *,
     source_context: context.SourceContext | None = None,
+    initial_feedback: str = "",
 ) -> str:
+    """Start with current input and optional SYSTEM feedback, without an old assistant turn."""
+    system = request_system(lang, initial_feedback=initial_feedback)
+    if initial_feedback and (source_context is None or not source_context.path):
+        raise ValueError("initial feedback requires the current source context")
+    if source_context and (
+        not 0 <= source_context.start <= source_context.end <= len(source_context.english)
+        or source_context.english[source_context.start : source_context.end] != text
+    ):
+        raise ValueError("translation request does not match its source context")
     if not text.strip():
         return text
-    system = SYSTEM.format(language=lang.english, style=lang.style)
     messages = [{"role": "user", "content": text}]
     for _ in range(2):
         spend.before_call()
