@@ -99,7 +99,7 @@ async def test_real_predelete_capture_keeps_google_id_distinct_from_canonical_su
     prepared = await erasure.prepare("scim-person-id", encoded)
     result = erasure.load("scim-person-id", prepared)
     assert result.prepared and result.people == (
-        erasure.Person("team", "person", ("person@example.com",)),
+        erasure.Person("team", "person", ("person@example.com",), ("person", "person@example.com")),
     )
     assert result.workspaces == (
         erasure.Workspace(

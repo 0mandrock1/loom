@@ -14,7 +14,7 @@ from server.auth import authz
 from server.auth import source_registration as registration
 from server.auth.context import current_auth
 from server.auth.jwt import AuthInfo, verify_token
-from server.core.secrets_at_rest import unseal
+from server.core.secrets_at_rest import seal, unseal
 from server.operations.base import Role
 from server.settings import settings
 from tests.unit.principals import acting_as
@@ -74,6 +74,52 @@ async def test_retained_metadata_is_exact_scoped_and_never_becomes_a_request_pri
     assert json.loads(plain)["scope"] == dataclasses.asdict(_SCOPE)
     with pytest.raises(PermissionError, match="invalid auth principal"):
         await authz.check_authorized(approval.claims, Role.ADMIN, "team", "shared-space")
+
+
+@pytest.mark.parametrize("field", ["creator", "impersonated_by", "parent_subjects"])
+async def test_historical_approval_inspection_finds_typed_person_lineage_without_granting_authority(
+    world: Any,
+    key_view: list[str],
+    field: str,
+) -> None:
+    state, _http = world
+    _auth, _registrant, original, _raw = await _approval(state)
+    frame = json.loads(unseal(registration.PURPOSE, original))
+    # These are historical typed metadata, not a live AuthInfo or a newly approved source.
+    frame["claims"][field] = ["deleted-alias"] if field == "parent_subjects" else "deleted-alias"
+    if field == "parent_subjects":
+        frame["claims"]["parent_iats"] = [frame["claims"]["issued_at"]]
+    encoded = seal(registration.PURPOSE, json.dumps(frame))
+    before = current_auth()
+    assert registration.names_person(
+        encoded,
+        org="team",
+        namespace="shared-space",
+        source_id="crawl-source",
+        spellings=("deleted-alias",),
+    )
+    assert not registration.names_person(
+        encoded,
+        org="team",
+        namespace="shared-space",
+        source_id="crawl-source",
+        spellings=("someone-else",),
+    )
+    assert current_auth() is before
+
+
+@pytest.mark.parametrize("field", ["org", "namespace", "source_id"])
+async def test_person_inspection_cannot_retire_an_approval_copied_from_another_scope(
+    world: Any,
+    key_view: list[str],
+    field: str,
+) -> None:
+    state, _http = world
+    _auth, _registrant, encoded, _raw = await _approval(state)
+    scope = {"org": "team", "namespace": "shared-space", "source_id": "crawl-source"}
+    scope[field] = "foreign"
+    with pytest.raises(registration.Refused):
+        registration.names_person(encoded, **scope, spellings=("person", "person@example.com"))
 
 
 @pytest.mark.parametrize("field", ["namespace", "source_id", "generation", "org", "resource_hash"])

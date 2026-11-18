@@ -124,6 +124,33 @@ def load(encoded: str, scope: Scope, *, registrant: str) -> Approval:
     return Approval(scope, registrant, claims)
 
 
+def names_person(
+    encoded: str, *, org: str, namespace: str, source_id: str, spellings: tuple[str, ...]
+) -> bool:
+    """Inspect sealed historical PII, without treating expired metadata as live authority."""
+    try:
+        value = json.loads(unseal(PURPOSE, encoded, warn=False))
+        if not isinstance(value, dict) or not isinstance(value.get("scope"), dict):
+            raise Refused()
+        scope = Scope(**value["scope"])
+        if (scope.org, scope.namespace, scope.source_id) != (org, namespace, source_id):
+            raise Refused()
+        registrant = value["registrant"]
+        if not isinstance(registrant, str) or not registrant:
+            raise Refused()
+        approval = load(encoded, scope, registrant=registrant)
+        subjects = {
+            approval.registrant,
+            approval.claims.subject,
+            approval.claims.creator,
+            approval.claims.impersonated_by,
+            *approval.claims.parent_subjects,
+        }
+        return bool(subjects.intersection(spellings))
+    except (ValueError, TypeError, KeyError, RecursionError):
+        raise Refused() from None
+
+
 @dataclass(frozen=True, repr=False)
 class Approval:
     scope: Scope

@@ -73,14 +73,22 @@ class _World:
             found = [r for r in found if r["credential_mode"] == "crawl"]
         if "options_json = {before:String}" in sql:
             found = [r for r in found if r["options_json"] == params["before"]]
-        if "(registrant_subject = {subject:String} OR created_by = {subject:String})" in sql:
+        if (
+            "(registrant_subject = {subject:String} OR created_by IN {spellings:Array(String)})"
+            in sql
+        ):
             found = [
-                r for r in found if params["subject"] in (r["registrant_subject"], r["created_by"])
+                r
+                for r in found
+                if r["registrant_subject"] == params["subject"]
+                or r["created_by"] in params["spellings"]
             ]
         else:
             for key in ("registrant_subject", "created_by"):
                 if f"{key} = {{subject:String}}" in sql:
                     found = [r for r in found if r[key] == params["subject"]]
+            if "created_by IN {spellings:Array(String)}" in sql:
+                found = [r for r in found if r["created_by"] in params["spellings"]]
         if "(active OR approval_enc != '')" in sql:
             found = [r for r in found if r["active"] or r["approval_enc"]]
         if "hasAny(members" in sql:
@@ -203,3 +211,30 @@ async def test_malformed_historical_options_refuse_without_destroying_another_ow
     with pytest.raises(ValueError):
         await store.controls("org", "namespace", "source", "deleted", _EMAILS, ch=world)
     assert world.rows == before and not world.executed
+
+
+async def test_verified_creator_alias_is_redacted_without_treating_it_as_source_authority():
+    world = _World()
+    current = _row(created_by="person@example.com", options_json=_options("kept@example.com"))
+    foreign = _row(created_by="unverified@example.com", options_json=_options("kept@example.com"))
+    world.rows = [current, foreign]
+    affected = await store.controls(
+        "org",
+        "namespace",
+        "source",
+        "canonical-person",
+        _EMAILS,
+        spellings=("canonical-person", "person@example.com"),
+        ch=world,
+    )
+    assert (
+        not affected
+        and current["created_by"] == ""
+        and foreign["created_by"] == "unverified@example.com"
+    )
+    assert all(
+        row["active"]
+        and row["approval_enc"] == "sealed-original-approval"
+        and row["secret_enc"] == "sealed-shared-service-principal"
+        for row in world.rows
+    )

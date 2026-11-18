@@ -61,6 +61,7 @@ async def controls(
     subject: str,
     addresses: frozenset[str],
     *,
+    spellings: tuple[str, ...] = (),
     ch: _CHClient | None = None,
 ) -> bool:
     """Caller holds the refusal fence and namespace lease; no new approval is minted."""
@@ -70,7 +71,11 @@ async def controls(
     addresses = frozenset(email(v) for v in addresses)
     if not addresses:
         raise ValueError("verified crawl contacts required")
-    client, params = ch or _default_client(), _params(org, namespace, source_id)
+    client = ch or _default_client()
+    params: dict[str, Any] = {
+        **_params(org, namespace, source_id),
+        "spellings": sorted({subject, *spellings}),
+    }
     rows = await _history(client, params)
     rewrites = {r["options_json"]: without_selectors(r["options_json"], addresses) for r in rows}
     affected = any(before != after for before, after in rewrites.items()) or any(
@@ -92,7 +97,11 @@ async def controls(
                 ch=client,
             )
     for field in ("registrant_subject", "created_by"):
-        where = _CRAWL_SCOPE + f" AND {field} = {{subject:String}}"
+        where = _CRAWL_SCOPE + (
+            " AND registrant_subject = {subject:String}"
+            if field == "registrant_subject"
+            else " AND created_by IN {spellings:Array(String)}"
+        )
         if field == "registrant_subject":
             await _retire(client, where, {**params, "subject": subject})
         await count_then_mutate(
@@ -104,7 +113,9 @@ async def controls(
             final=False,
             ch=client,
         )
-    if await control_residue(org, namespace, source_id, subject, addresses, ch=client):
+    if await control_residue(
+        org, namespace, source_id, subject, addresses, spellings=spellings, ch=client
+    ):
         raise RuntimeError("crawl_control_history_remains")
     return affected
 
@@ -116,6 +127,7 @@ async def control_residue(
     subject: str,
     addresses: frozenset[str],
     *,
+    spellings: tuple[str, ...] = (),
     ch: _CHClient | None = None,
 ) -> int:
     client, params = ch or _default_client(), _params(org, namespace, source_id)
@@ -126,12 +138,52 @@ async def control_residue(
     with own_write_reads():
         row = await client.query_one(
             f"SELECT count() AS n FROM {_SOURCES} WHERE {_CRAWL_SCOPE} "
-            "AND (registrant_subject = {subject:String} OR created_by = {subject:String})",
-            params={**params, "subject": subject},
+            "AND (registrant_subject = {subject:String} "
+            "OR created_by IN {spellings:Array(String)})",
+            params={**params, "subject": subject, "spellings": sorted({subject, *spellings})},
         )
     if row is None or type(row.get("n")) is not int or row["n"] < 0:
         raise RuntimeError("crawl_control_history_unverified")
     return selectors + int(row["n"])
+
+
+async def approval_history(
+    org: str,
+    namespace: str,
+    source_id: str,
+    *,
+    ch: _CHClient | None = None,
+) -> list[str]:
+    maximum = settings.knowledge_crawl_registry_scan_limit
+    with own_write_reads():
+        rows = await (ch or _default_client()).query_all(
+            f"SELECT DISTINCT approval_enc FROM {_SOURCES} WHERE {_CRAWL_SCOPE} "
+            "AND approval_enc != '' ORDER BY approval_enc LIMIT {limit:UInt32}",
+            params={**_params(org, namespace, source_id), "limit": maximum + 1},
+        )
+    if len(rows) > maximum or any(not isinstance(r["approval_enc"], str) for r in rows):
+        raise RuntimeError("crawl_approval_history_unverified")
+    return [r["approval_enc"] for r in rows]
+
+
+async def retire_approval(
+    org: str,
+    namespace: str,
+    source_id: str,
+    encoded: str,
+    *,
+    ch: _CHClient | None = None,
+) -> None:
+    client = ch or _default_client()
+    where = _CRAWL_SCOPE + " AND approval_enc = {encoded:String}"
+    await _retire(client, where, {**_params(org, namespace, source_id), "encoded": encoded})
+    with own_write_reads():
+        row = await client.query_one(
+            f"SELECT count() AS n FROM {_SOURCES} WHERE {where}",
+            params={**_params(org, namespace, source_id), "encoded": encoded},
+        )
+    if row is None or type(row.get("n")) is not int or row["n"] != 0:
+        raise RuntimeError("crawl_approval_history_remains")
 
 
 async def memberships(

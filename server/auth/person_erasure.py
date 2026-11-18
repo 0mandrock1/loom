@@ -10,6 +10,7 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
+from server.auth import aliases
 from server.auth.reader_identity import resolve_reader
 from server.core.ch import get_client, own_write_reads, set_query_tag
 from server.core.errors import BackendUnavailableError
@@ -29,12 +30,16 @@ class Person:
     org: str
     subject: str
     emails: tuple[str, ...]
+    spellings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (
             any(not isinstance(v, str) or not v or "\0" in v for v in (self.org, self.subject))
             or not self.emails
             or self.emails != tuple(sorted(set(self.emails)))
+            or self.spellings != tuple(sorted(set(self.spellings)))
+            or self.subject not in self.spellings
+            or any(not isinstance(v, str) or not v or "\0" in v for v in self.spellings)
             or any(
                 not isinstance(v, str)
                 or v != v.lower()
@@ -58,7 +63,7 @@ class Workspace:
     emails: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        Person(self.org, self.subject, self.emails)
+        Person(self.org, self.subject, self.emails, (self.subject,))
         if any(
             not isinstance(value, str)
             or not value
@@ -95,7 +100,12 @@ async def capture(uid: str, email: str, ties: dict[str, set[str]]) -> str:
             identity = await resolve_reader(org, subject)
             if identity is None or email.lower() not in identity.emails:
                 raise unavailable()
-            person = Person(org, identity.subject, tuple(sorted(identity.emails)))
+            person = Person(
+                org,
+                identity.subject,
+                tuple(sorted(identity.emails)),
+                tuple(sorted(await aliases.verified_spellings(org, identity.subject))),
+            )
             key = org, identity.subject
             if key in people and people[key] != person:
                 raise unavailable()
@@ -118,13 +128,17 @@ def load(uid: str, encoded: str) -> Capture:
             or type(value["prepared"]) is not bool
             or any(
                 not isinstance(p, dict)
-                or set(p) != {"org", "subject", "emails"}
+                or set(p) != {"org", "subject", "emails", "spellings"}
                 or not isinstance(p["emails"], list)
+                or not isinstance(p["spellings"], list)
                 for p in value["people"]
             )
         ):
             raise unavailable()
-        people = tuple(Person(p["org"], p["subject"], tuple(p["emails"])) for p in value["people"])
+        people = tuple(
+            Person(p["org"], p["subject"], tuple(p["emails"]), tuple(p["spellings"]))
+            for p in value["people"]
+        )
         keys = [(p.org, p.subject) for p in people]
         if keys != sorted(set(keys)):
             raise unavailable()
@@ -193,6 +207,8 @@ class Pending:
                     identity is None
                     or identity.subject != person.subject
                     or identity.emails != frozenset(person.emails)
+                    or tuple(sorted(await aliases.verified_spellings(person.org, person.subject)))
+                    != person.spellings
                 ):
                     raise unavailable()
 
@@ -219,10 +235,18 @@ def interrupted(uid: str, encoded: str, observed: str) -> str:
     """Retain both verified intents when reactivation changed the canonical person."""
     previous, current = load(uid, encoded), load(uid, observed)
     merged: dict[tuple[str, str], set[str]] = {}
+    spellings: dict[tuple[str, str], set[str]] = {}
     for person in (*previous.people, *current.people):
         merged.setdefault((person.org, person.subject), set()).update(person.emails)
+        spellings.setdefault((person.org, person.subject), set()).update(person.spellings)
     people = tuple(
-        Person(org, subject, tuple(sorted(merged[org, subject]))) for org, subject in sorted(merged)
+        Person(
+            org,
+            subject,
+            tuple(sorted(merged[org, subject])),
+            tuple(sorted(spellings[org, subject])),
+        )
+        for org, subject in sorted(merged)
     )
     return _seal(Capture(uid, people, previous.workspaces, False))
 

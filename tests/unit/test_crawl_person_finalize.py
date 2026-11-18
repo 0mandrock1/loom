@@ -140,6 +140,7 @@ async def test_uncovered_historical_canonical_person_is_not_silently_destroyed(f
                     {
                         "org": "other-org",
                         "subject": "another-person",
+                        "spellings": ["another-person"],
                         "emails": ["other@example.com"],
                     }
                 ],

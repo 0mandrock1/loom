@@ -21,7 +21,9 @@ async def test_capture_retains_verified_canonical_subject_not_email_or_memory_us
     encoded = await erasure.capture("scim-person-id", "person@example.com", {"person": {"team"}})
     captured = erasure.load("scim-person-id", encoded)
     assert captured.id == "scim-person-id"
-    assert captured.people == (erasure.Person("team", "person", ("person@example.com",)),)
+    assert captured.people == (
+        erasure.Person("team", "person", ("person@example.com",), ("person", "person@example.com")),
+    )
     assert "person@example.com" not in encoded and "person@example.com" not in repr(captured)
     assert world.directory_reads > 0 and not world.native_requests and not world.writes
 
@@ -45,8 +47,27 @@ async def test_capture_cannot_be_replayed_for_a_different_deleted_identity(world
     [
         {"format": True},
         {"id": "another"},
-        {"people": [{"org": "team", "subject": "person", "emails": ["Unverified@example.com"]}]},
-        {"people": [{"org": "team", "subject": "person", "emails": [], "user_id": "person"}]},
+        {
+            "people": [
+                {
+                    "org": "team",
+                    "subject": "person",
+                    "emails": ["Unverified@example.com"],
+                    "spellings": ["person"],
+                }
+            ]
+        },
+        {
+            "people": [
+                {
+                    "org": "team",
+                    "subject": "person",
+                    "emails": [],
+                    "spellings": ["person"],
+                    "user_id": "person",
+                }
+            ]
+        },
     ],
 )
 async def test_malformed_sealed_metadata_never_turns_into_cleanup_authority(
@@ -56,7 +77,12 @@ async def test_malformed_sealed_metadata_never_turns_into_cleanup_authority(
         "format": 2,
         "id": "scim-person-id",
         "people": [
-            {"org": "team", "subject": "person", "emails": ["person@example.com"]},
+            {
+                "org": "team",
+                "subject": "person",
+                "emails": ["person@example.com"],
+                "spellings": ["person", "person@example.com"],
+            },
         ],
         "workspaces": [],
         "prepared": False,

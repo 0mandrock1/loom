@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from server.auth import person_erasure
+from server.auth import person_erasure, source_registration
 from server.clients._vendor import CredentialRefused
+from server.core.ch import set_query_tag
 from server.erasure.store import crawl_controls, crawl_person
 
 
@@ -19,6 +20,7 @@ async def erase_source(
     ch: Any,
 ) -> None:
     """The knowledge caller retains its org exclusion fence and exact source lease."""
+    set_query_tag("erasure.crawl_person.source")
     allowed = frozenset(
         {
             *person.emails,
@@ -33,6 +35,15 @@ async def erase_source(
     if person not in pending.captured.people or contacts != allowed:
         raise person_erasure.unavailable()
     await pending.validate(person.org)
+    for encoded in await crawl_controls.approval_history(person.org, namespace, source_id, ch=ch):
+        if source_registration.names_person(
+            encoded,
+            org=person.org,
+            namespace=namespace,
+            source_id=source_id,
+            spellings=person.spellings,
+        ):
+            await crawl_controls.retire_approval(person.org, namespace, source_id, encoded, ch=ch)
     copies = await crawl_person.namespaces(person.org, source_id, ch=ch)
     for mirror in copies:
         # A complete pre-erasure listing cannot admit a post-erasure union.
@@ -40,7 +51,15 @@ async def erase_source(
         await crawl_person.scrub(person.org, mirror, source_id, contacts, ch=ch)
         await crawl_controls.memberships(person.org, mirror, source_id, contacts, ch=ch)
         await pending.validate(person.org)
-    await crawl_controls.controls(person.org, namespace, source_id, person.subject, contacts, ch=ch)
+    await crawl_controls.controls(
+        person.org,
+        namespace,
+        source_id,
+        person.subject,
+        contacts,
+        spellings=person.spellings,
+        ch=ch,
+    )
     await pending.validate(person.org)
     # Removing a listing-only namespace may shrink discovery; newly appeared copies
     # must not be reported erased without another complete guarded pass.
@@ -51,6 +70,7 @@ async def erase_source(
 
 async def finalize(pending: person_erasure.Pending) -> None:
     """The SCIM caller holds its user lease after all exact-person cleanup succeeded."""
+    set_query_tag("erasure.crawl_person.capture")
     await pending.validate()
     history = await crawl_controls.capsule_history(pending.captured.id)
     if pending.encoded not in history:
@@ -61,6 +81,7 @@ async def finalize(pending: person_erasure.Pending) -> None:
             not any(
                 (old.org, old.subject) == (new.org, new.subject)
                 and set(old.emails).issubset(new.emails)
+                and set(old.spellings).issubset(new.spellings)
                 for new in pending.captured.people
             )
             for old in previous.people
