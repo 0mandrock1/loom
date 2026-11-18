@@ -336,7 +336,12 @@ test("blast radius and file context: 401 and a hanging server add nothing to the
             session_id: "s",
           };
           arrived.delete(op);
-          r = await run(hook, edit, { tmp, url, env: { LOOM_HOOK_TIMEOUT_MS: "500", LOOM_HOOK_EXIT_MS: "500" } });
+          // A failed lookup caches silence; each retry must exercise a fresh session.
+          r = await run(
+            hook,
+            { ...edit, session_id: `s-${hook}-${attempt}` },
+            { tmp, url, env: { LOOM_HOOK_TIMEOUT_MS: "500", LOOM_HOOK_EXIT_MS: "500" } },
+          );
           assert.equal(r.code, 0, `${hook} ${status}`);
           assert.equal(r.out, "", `${hook} ${status}`);
           assert.ok(r.ms < 7000, `${hook} ${status} took ${r.ms} ms`);

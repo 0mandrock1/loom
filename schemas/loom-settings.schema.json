@@ -2129,10 +2129,20 @@
           "type": "boolean",
           "description": "Repositories added from the Repositories page (loom.code_repos) merge with the configured entries (`code_repos_json` and the scalar entry); a configured entry for a namespace a member added from the page is skipped. Off = the operator's JSON is the only source."
         },
+        "code_self_service_git_unsandboxed": {
+          "default": false,
+          "type": "boolean",
+          "description": "True lets a host without the sandbox add and fetch a self-service entry with a network remote: its git jobs (ls-remote, clone, fetch) run as plain processes and it gets no compiler tier. Refused at load without code_self_service_platform_admin_only, where a request can carry no principal (auth off, or mcp_auth_mode open), and with code_sandbox_required. False: such an entry needs the sandbox."
+        },
         "code_self_service_max_repos": {
           "default": 20,
           "type": "integer",
           "description": "Active self-service entries per org (branches count); past it the add refuses with a message."
+        },
+        "code_self_service_platform_admin_only": {
+          "default": false,
+          "type": "boolean",
+          "description": "True leaves code.repo.remote_branches, code.repo.add and code.repo.add_branch to platform admins: a token scoped to namespaces, or a trusted caller acting for another subject, is refused too. False: each op's own role decides."
         },
         "code_setting_control": {
           "default": "",
@@ -3220,6 +3230,48 @@
           "minimum": 60,
           "type": "integer",
           "description": "Seconds one pass, which runs one job, may take before it is cancelled: the extractor's timeout plus embedding the largest source. A job cut off runs again from its start and counts toward its attempts."
+        },
+        "knowledge_live_search_max_ancestors": {
+          "default": 3,
+          "maximum": 3,
+          "minimum": 0,
+          "type": "integer",
+          "description": "Native parent lookups per Notion membership check, from zero to three. Zero accepts directly registered pages and database membership without parent fetches."
+        },
+        "knowledge_live_search_max_hits": {
+          "default": 10,
+          "maximum": 10,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Live hits across all registrations, and the per-provider page bound, from one to ten."
+        },
+        "knowledge_live_search_max_items": {
+          "default": 4,
+          "maximum": 4,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Registered Drive items searched per source, from one to four; no pagination."
+        },
+        "knowledge_live_search_max_sources": {
+          "default": 3,
+          "maximum": 3,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Connected registrations searched per live-search request, from one to three."
+        },
+        "knowledge_live_search_response_max_bytes": {
+          "default": 262144,
+          "maximum": 262144,
+          "minimum": 1,
+          "type": "integer",
+          "description": "Bytes read from one live-search provider response, at most 256 KiB. The document-source download limit may shorten this bound further."
+        },
+        "knowledge_live_search_timeout_s": {
+          "default": 5.0,
+          "exclusiveMinimum": 0,
+          "maximum": 5.0,
+          "type": "number",
+          "description": "Seconds for the whole optional live-search leg, including final membership checks. At most five; provider credential deadlines may shorten it further."
         },
         "knowledge_mirrored_sources_enabled": {
           "default": false,
