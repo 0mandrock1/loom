@@ -171,13 +171,6 @@ def other_deployments_sql(db: str) -> str:
     )
 
 
-def printed_checks() -> list[str]:
-    """Both checks naming Loom's database, for an admin whose session may
-    sit in another one."""
-    db = sql_string(database())
-    return [f"{foreign_policies_sql(db)};", f"{other_deployments_sql(db)};"]
-
-
 async def foreign_policies(*, ch: _CHClient | None = None) -> list[str]:
     ch = ch or _default_client()
     rows = await ch.query_all(foreign_policies_sql("currentDatabase()"))
@@ -270,16 +263,6 @@ async def own_grants(
             continue
         out |= {(m["table"], c.strip()) for c in m["columns"].split(",")}
     return frozenset(out)
-
-
-async def own_grant_lines(
-    *, password: str, extra: dict[str, Any], ch: _AnalystClient | None = None
-) -> list[str]:
-    """The analyst's own SHOW GRANTS, line by line, read as the analyst."""
-    ch = ch or _analyst_client()
-    with as_analyst(boundary.ANALYST_USER, password, extra):
-        _, _, rows = await ch.query_columns("SHOW GRANTS")
-    return [str(line) for (line,) in rows]
 
 
 async def write_entities(

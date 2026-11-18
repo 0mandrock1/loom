@@ -7,15 +7,20 @@ barrier waits for the finite insert set observed after every writer confirms it.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass, replace
+from typing import Any, Protocol, cast
 from uuid import UUID
 
 from server.core.ch import query_tag, statement_timeout
 from server.core.ch_errors import error_code
 from server.core.ch_names import database, quote
+from server.core.ch_observer import PolicyObserver
 from server.core.repo_base import _CHClient, _default_client
 from server.core.sql_literal import sql_string
+from server.insights.domain.analysis import ANALYST_USER
+from server.insights.domain.observation_policy import observer_policies_allow
 from server.settings import settings
 
 CONSTRAINT = "ordinary_events_only"
@@ -35,6 +40,10 @@ _TOPOLOGY = (
     "FROM system.clusters WHERE cluster = {cluster:String} "
     "ORDER BY shard_num, replica_num, host_name, port"
 )
+
+
+class _ObserverClient(_CHClient, Protocol):
+    def policy_observers(self) -> AbstractAsyncContextManager[tuple[PolicyObserver, ...]]: ...
 
 
 class EventCutoverUnavailable(RuntimeError):
@@ -158,17 +167,29 @@ class _Writers:
     topology: tuple[tuple[Any, ...], ...]
     servers: frozenset[str]
     tables: tuple[tuple[str, str, str, str], ...]
+    observers: tuple[PolicyObserver, ...] = ()
+    catalogs: tuple[tuple[str, ...], ...] = ()
 
-    async def read(self, ch: _CHClient, inner: str) -> list[dict[str, Any]]:
-        if await _topology(ch, self.configured) != self.topology:
-            raise EventCutoverUnavailable()
-        rows = await ch.query_all(_remote(inner, self.cluster), _params())
+    async def read(self, inner: str) -> list[dict[str, Any]]:
+        rows = []
+        for observer, catalog in zip(self.observers, self.catalogs, strict=True):
+            if tuple(sorted(await observer.policies())) != catalog:
+                raise EventCutoverUnavailable()
+            topology_sql = (
+                "SELECT toString(serverUUID()) AS server_uuid, "
+                "(SELECT groupArray((shard_num, replica_num, host_name, host_address, port, "
+                "user, default_database)) FROM (" + _TOPOLOGY + ")) AS topology"
+            )
+            observed = await observer.query_all(topology_sql + _LIVE, {"cluster": self.configured})
+            if len(observed) != 1 or tuple(map(tuple, observed[0]["topology"])) != self.topology:
+                raise EventCutoverUnavailable()
+            rows.extend(await observer.query_all(inner + _LIVE, _params()))
         if _responders(rows, len(self.servers)) != self.servers:
             raise EventCutoverUnavailable()
         return rows
 
-    async def verify(self, ch: _CHClient) -> None:
-        if _identities(await self.read(ch, _metadata())) != self.tables:
+    async def verify(self) -> None:
+        if _identities(await self.read(_metadata())) != self.tables:
             raise EventCutoverUnavailable()
 
 
@@ -196,114 +217,46 @@ async def _writers(ch: _CHClient) -> _Writers:
     return _Writers(cluster, configured, topology, servers, _identities(rows))
 
 
+@asynccontextmanager
+async def _observed(writers: _Writers, ch: _ObserverClient) -> AsyncIterator[_Writers]:
+    async with ch.policy_observers() as observers:
+        if (
+            len(observers) != len(writers.servers)
+            or frozenset(observer.server_uuid for observer in observers) != writers.servers
+            or any(
+                observer.user == ANALYST_USER or ANALYST_USER in observer.roles
+                for observer in observers
+            )
+        ):
+            raise EventCutoverUnavailable()
+        catalogs = []
+        for observer in observers:
+            catalog = tuple(sorted(await observer.policies()))
+            if not observer_policies_allow(catalog, database()):
+                raise EventCutoverUnavailable()
+            catalogs.append(catalog)
+        observed = replace(writers, observers=observers, catalogs=tuple(catalogs))
+        await observed.verify()
+        yield observed
+
+
 async def confirm_ordinary_events(*, ch: _CHClient | None = None) -> None:
     """Refuse unknown writers or surviving private rows; never kill, copy or erase."""
     ch = ch or _default_client()
     try:
         with query_tag("analysis.event_cutover"), statement_timeout(_BUDGET_S):
             async with asyncio.timeout(_BUDGET_S):
-                writers = await _writers(ch)
-                old = _inserts(await writers.read(ch, _processes()))
-                while old:
-                    await asyncio.sleep(0.05)
-                    old &= _inserts(await writers.read(ch, _processes()))
-                await writers.verify(ch)
-                rows = await writers.read(ch, _census())
-                if any(row["private"] != 0 for row in rows):
-                    raise EventCutoverUnavailable()
-                await writers.verify(ch)
+                async with _observed(await _writers(ch), cast(_ObserverClient, ch)) as writers:
+                    old = _inserts(await writers.read(_processes()))
+                    while old:
+                        await asyncio.sleep(0.05)
+                        old &= _inserts(await writers.read(_processes()))
+                    await writers.verify()
+                    rows = await writers.read(_census())
+                    if any(row["private"] != 0 for row in rows):
+                        raise EventCutoverUnavailable()
+                    await writers.verify()
     except asyncio.CancelledError:
         raise
-    except Exception as exc:  # An uncertain cutover must never grant raw access.
-        raise EventCutoverUnavailable() from exc
-
-
-def _literal(sql: str) -> str:
-    for name, value in _params().items():
-        sql = sql.replace("{" + name + ":String}", sql_string(value))
-    return sql.replace("{cluster:String}", sql_string(str(settings.ch_cluster)))
-
-
-def _same_snapshot(current: str, saved: str, columns: str) -> str:
-    selected = f"arraySort(groupArray(({columns})))"
-    return (
-        f"SELECT throwIf({selected} != (SELECT {selected} FROM {saved}), "
-        f"'Ordinary event cutover identity changed') FROM ({current}){_LIVE}"
-    )
-
-
-def _empty_snapshot(current: str, saved: str, bad: str) -> str:
-    return (
-        "SELECT throwIf(arraySort(groupArray(server_uuid)) != "
-        f"(SELECT arraySort(groupArray(server_uuid)) FROM {saved}) "
-        f"OR countIf({bad}) != 0, 'Ordinary event cutover is unconfirmed') "
-        f"FROM ({current}){_LIVE}"
-    )
-
-
-def printed_fence_sql(cluster: str) -> list[str]:
-    """Execution-time assertions for one sequential, stop-on-error admin session.
-
-    Temporary tables hold only the session's metadata snapshots. Reconnect after a
-    refusal; continuing the file or reconnecting between statements is unsupported.
-    """
-    topology, writers = "_loom_event_cutover_topology", "_loom_event_cutover_writers"
-    topology_sql = _literal(_TOPOLOGY + _LIVE)
-    metadata = _literal(_remote(_metadata(), cluster))
-    processes = _literal(_remote(_processes(), cluster))
-    census = _literal(_remote(_census(), cluster))
-    expected = f"(SELECT uniqExact((host_name, port)) FROM {topology})" if cluster else "1"
-    topology_columns = (
-        "shard_num, replica_num, host_name, host_address, port, user, default_database"
-    )
-    metadata_columns = "server_uuid, arraySort(tables), named, correct"
-    invalid = (
-        "named != 1 OR correct != 1 OR "
-        "arrayUniq(arrayMap(x -> x.2, tables)) != 2 OR "
-        "arraySort(arrayMap(x -> x.1, tables)) != ['agent_events', 'agent_events_private'] OR "
-        "NOT arrayAll(x -> toUUID(x.2) != toUUID('00000000-0000-0000-0000-000000000000') "
-        "AND x.3 IN ('MergeTree', 'ReplicatedMergeTree', 'SharedMergeTree'), tables)"
-    )
-    return [
-        f"CREATE TEMPORARY TABLE {topology} ENGINE = Memory AS {topology_sql}",
-        f"CREATE TEMPORARY TABLE {writers} ENGINE = Memory AS {metadata}",
-        f"SELECT throwIf(count() != {expected} OR count() = 0 OR "
-        "uniqExact(server_uuid) != count() OR "
-        "countIf(server_uuid = toString(serverUUID())) = 0 OR "
-        "countIf(server_uuid = '00000000-0000-0000-0000-000000000000') != 0 OR "
-        f"countIf({invalid}) != 0, 'Ordinary event CHECK is unconfirmed') FROM {writers}{_LIVE}",
-        *(
-            []
-            if cluster
-            else [
-                "SELECT throwIf(count() != 0, 'Ordinary event writer topology changed') "
-                f"FROM {topology}{_LIVE}"
-            ]
-        ),
-        _same_snapshot(topology_sql, topology, topology_columns),
-        _empty_snapshot(processes, writers, "notEmpty(inserts)"),
-        _same_snapshot(metadata, writers, metadata_columns),
-        _empty_snapshot(census, writers, "private != 0"),
-        _same_snapshot(metadata, writers, metadata_columns),
-        _same_snapshot(topology_sql, topology, topology_columns),
-        f"DROP TEMPORARY TABLE {writers}",
-        f"DROP TEMPORARY TABLE {topology}",
-    ]
-
-
-async def printed_fence(*, ch: _CHClient | None = None) -> list[str]:
-    """Choose the target mode; the printed file proves safety again when executed."""
-    ch = ch or _default_client()
-    cluster = str(settings.ch_cluster)
-    with query_tag("analysis.event_cutover_print"), statement_timeout(_BUDGET_S):
-        topology = await _topology(ch, cluster)
-        if cluster and not topology:
-            try:
-                await ch.query_all(_remote("SELECT toString(serverUUID()) AS server_uuid", cluster))
-            except Exception as exc:
-                if error_code(exc) != 701:
-                    raise
-                cluster = ""
-            else:
-                raise EventCutoverUnavailable()
-    return printed_fence_sql(cluster)
+    except Exception:  # noqa: BLE001 — an uncertain cutover must never grant raw access
+        raise EventCutoverUnavailable() from None

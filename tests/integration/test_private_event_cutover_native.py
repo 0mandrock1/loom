@@ -9,7 +9,6 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from clickhouse_connect.driver.exceptions import DatabaseError
 
 from server.core.ch import CHClient, query_tag
 from server.insights.store import event_cutover
@@ -232,35 +231,23 @@ async def test_native_disconnected_queued_insert_uses_the_installed_check(world)
 
 
 @pytest.mark.parametrize("valid", [False, True])
-async def test_native_printed_fence_rechecks_live_metadata_in_one_session(world, valid) -> None:
-    statements = await event_cutover.printed_fence(ch=world.client)
+async def test_native_unchecked_print_refuses_with_or_without_a_valid_fence(
+    world, valid, monkeypatch, capsys
+) -> None:
+    import argparse
+
+    from server.cli import ch_setup
+
     if not valid:
         await world.client.execute(
             f"ALTER TABLE {world.db}.agent_events DROP CONSTRAINT ordinary_events_only"
         )
-    completed = []
-    session = {"session_id": "event_cutover_" + uuid4().hex, "session_timeout": 30}
-    await world.client.execute("SELECT 1", settings=session)
-    session["session_check"] = 1
-    backend = await world.client.raw_bytes(
-        "SELECT toString(serverUUID()) FORMAT TSV", settings=session
-    )
-    assert backend.strip() and backend.strip() != b"00000000-0000-0000-0000-000000000000"
-    try:
-        for statement in statements:
-            await world.client.execute(statement, settings=session)
-            completed.append(statement)
-            assert (
-                await world.client.raw_bytes(
-                    "SELECT toString(serverUUID()) FORMAT TSV", settings=session
-                )
-                == backend
-            )
-    except DatabaseError as exc:
-        assert "Ordinary event CHECK is unconfirmed" in str(exc)
-        assert not valid, "A clean printed fence must finish in its one SQL session"
-        assert not any(s.startswith("GRANT ") for s in completed)
-        assert len(completed) == 2, "The first live metadata assertion must refuse"
-    else:
-        assert valid, "A print-time valid CHECK cannot replace execution-time proof"
-        assert completed == statements
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Unchecked files must not execute grants or administrative requests")
+
+    monkeypatch.setattr(ch_setup, "run_connected", forbidden)
+    args = argparse.Namespace(print_analyst_sql=True, apply_analyst_sql=False, print_sql=False)
+    assert ch_setup._cmd_ch_setup(args) == 2
+    out = capsys.readouterr()
+    assert not out.out and "--apply-analyst-sql" in out.err

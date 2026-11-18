@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -46,6 +47,46 @@ class WriterWorld:
         self.pending_forever = False
         self.change = ""
         self.sent = []
+        self.catalog = [(), ()]
+        self.observation_cache = {}
+
+    def policy_observer_origins(self):
+        return ("http://writer-1:8123/", "http://writer-2:8123/")
+
+    @asynccontextmanager
+    async def policy_observers(self):
+        world = self
+
+        class Observer:
+            def __init__(self, index):
+                self.index = index
+                self.server_uuid = world.servers[index]
+
+            user = "service"
+            roles = ()
+
+            async def policies(self):
+                return list(world.catalog[self.index])
+
+            async def query_all(self, sql, params=None):
+                if "AS topology" in sql:
+                    return [
+                        {
+                            "server_uuid": self.server_uuid,
+                            "topology": [tuple(row.values()) for row in world.topology],
+                        }
+                    ]
+                if self.index == 0:
+                    world.observation_cache[sql] = await world.query_all(sql, params)
+                return copy.deepcopy(
+                    [
+                        row
+                        for row in world.observation_cache[sql]
+                        if row["server_uuid"] == self.server_uuid
+                    ]
+                )
+
+        yield tuple(Observer(index) for index in range(len(self.policy_observer_origins())))
 
     async def query_all(self, sql, params=None):
         if "FROM system.clusters" in sql:
@@ -162,3 +203,24 @@ async def test_a_surviving_old_insert_exhausts_the_budget_without_grants(world, 
     with pytest.raises(event_cutover.EventCutoverUnavailable):
         await event_cutover.confirm_ordinary_events(ch=world)
     assert world.process_reads > 0 and world.census_reads == 0 and world.sent == []
+
+
+@pytest.mark.parametrize(
+    "target", ["loom.agent_events", "system.processes", "system.row_policies", "loom.*"]
+)
+async def test_filtered_empty_results_with_valid_writer_uuids_cannot_authorize_grants(
+    world, target
+):
+    # The normal SELECT interface can report clean aggregate UUID rows. The native
+    # access catalog still reveals the policy that made its population invisible.
+    world.catalog[1] = (
+        f"CREATE ROW POLICY hidden_rows ON {target} AS RESTRICTIVE FOR SELECT USING 0 TO ALL",
+    )
+    with pytest.raises(event_cutover.EventCutoverUnavailable):
+        await analysis.write_entities(
+            ["GRANT SELECT ON loom.agent_events TO loom_analyst"],
+            names=SettingNames("SQL_"),
+            ch=world,
+        )
+    assert world.process_reads == world.census_reads == 0
+    assert not world.sent
