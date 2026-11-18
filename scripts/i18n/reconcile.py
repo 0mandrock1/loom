@@ -228,6 +228,7 @@ def reconcile_completed_units(
         len(units) == 1
         and units[0].reply_ref is not None
         and (not anchors or fault_ids[units[0].reply_ref])
+        and historical.english != current.english
     ):
         return _failure(
             current, "whole_page_replacement", "a completed whole page cannot be replaced", units
