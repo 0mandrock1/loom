@@ -26,6 +26,7 @@ import { resolveIndexedRepo } from "../lib/repo-scope.mjs";
 import { accept, codeLookup, lookupBody, packPayload, renderPack } from "../lib/prompt-pack.mjs";
 import { symbolAnswerText } from "../lib/code-shunt.mjs";
 import { renderBlast } from "../lib/blast-radius.mjs";
+import { recalledDataBlock } from "../lib/prompt-recall.mjs";
 
 const ENABLED = envSwitch("LOOM_PROMPT_PACK", true);
 // The user's prompt waits on this search; pointers that arrive later help no one.
@@ -51,8 +52,12 @@ function renderLookup(lookup, response, repo) {
   if (lookup.op === "code.search") return accept(response, MIN_CONF) ? renderPack(response, { cap: TOP_K }).text : "";
   if (lookup.op === "code.symbol") {
     const text = symbolAnswerText(response, { asOf: repo.asOf, namespace: repo.namespace });
-    const signature = response.definitions?.[0]?.signature;
-    return text && signature ? `${text} Signature: ${String(signature).slice(0, 160)}` : text;
+    const definition = response.definitions?.[0];
+    const signature = definition?.signature;
+    const answer = text && signature ? `${text} Signature: ${String(signature).slice(0, 160)}` : text;
+    if (!answer || !lookup.includeBody || response.definitions.length !== 1 || definition.elided || !definition.body)
+      return answer;
+    return `${answer}\n${recalledDataBlock(definition.body)}`;
   }
   if (lookup.op === "code.impact") return renderBlast(lookup.name, response, { maxNames: TOP_K });
   const results = (response.edges || [])

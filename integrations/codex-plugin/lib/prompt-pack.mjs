@@ -63,6 +63,11 @@ export function codeLookup(prompt, token) {
       const name = match[1];
       if (name.length > 256 || redactSecrets(name, token) !== name) return null;
       if (/^(?:a|an|the|this|that|these|those|it|my|our|your)$/i.test(name)) continue;
+      if (op === "code.symbol") {
+        const includeBody =
+          pattern === DEFINITION_RES[1] || /\b(?:what does|how does|explain)\b/i.test(query.slice(match[0].length));
+        return { op, name, includeBody };
+      }
       return { op, name };
     }
   }
@@ -90,7 +95,7 @@ export function lookupBody(repo, lookup, { topK = 3, token } = {}) {
     return {
       ...body,
       token_budget: 600,
-      include_body: false,
+      include_body: lookup.includeBody === true,
       include_history: false,
       include_examples: false,
       uses: false,

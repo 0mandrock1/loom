@@ -24,7 +24,7 @@ import {
   runHookMain,
   scheduleExit,
 } from "../lib/loom-client.mjs";
-import { shouldAsk } from "../lib/prompt-pack.mjs";
+import { codeLookup, searchQuery, shouldAsk } from "../lib/prompt-pack.mjs";
 import { acceptPack, recallBody, recallPayload, renderRecall } from "../lib/prompt-recall.mjs";
 import { readJsonFile, sessionStatePath, writeCursor, writeJsonFile } from "../lib/tmp-state.mjs";
 
@@ -59,7 +59,13 @@ async function main() {
   }
   const payload = await readStdinJson();
   const prompt = String(payload.prompt || "");
-  if (!shouldAsk(prompt)) {
+  const lookup = MODE === "first" ? codeLookup(prompt, token) : null;
+  const asksMemory =
+    /\b(?:remember|recall|memory|memories|decisions?|conventions?|lessons?|preferences?|constraints?)\b/i.test(
+      searchQuery(prompt),
+    );
+  const namedCodeOnly = lookup?.name && !asksMemory;
+  if (!shouldAsk(prompt) || namedCodeOnly) {
     scheduleExit(0);
     return;
   }

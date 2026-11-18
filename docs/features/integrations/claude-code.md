@@ -218,15 +218,21 @@ disables automatic code pointers on prompts. Prompt-time memory recall has its o
 hooks alone does not establish a benchmark improvement.
 
 The prompt pack selects one bounded lookup for a clear named definition, callers or
-impact question, and uses search for concepts. It skips explicit memory questions,
+impact question, and uses search for concepts. Named implementation or behavior
+questions can receive the definition body within the existing 600-token server budget;
+pure location and signature questions receive pointers. Large definitions remain
+elided and need a focused read. Returned bodies are delimited as untrusted data.
+It skips explicit memory questions,
 local-only changes and self-contained requests. Ambiguous or empty typed answers do
 not trigger another automatic lookup. Search still respects the server's confidence
 and abstention. Supply a task inside `<issue>...</issue>` when a harness adds instructions;
 the existing query helper extracts that block.
 
 Memory recall's default `first` mode makes one attempt on the first qualifying prompt,
-even if the answer is empty or abstains. Use `on` only when recall on each qualifying
-prompt is wanted.
+even if the answer is empty or abstains. A clear named definition, caller or impact
+question skips default recall and leaves that attempt available. Mixed requests for
+saved memory, decisions, conventions or lessons still qualify, as do conceptual tasks.
+Use `on` when recall on each qualifying prompt, including named code questions, is wanted.
 
 The plugin's startup instructions prefer Loom for indexed-code questions. Its
 `loom-code` skill can load automatically; a skill with

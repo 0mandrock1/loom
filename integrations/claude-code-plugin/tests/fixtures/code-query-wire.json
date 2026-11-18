@@ -119,5 +119,35 @@
       "epistemic": "lower_bound",
       "causes": ["no_static_callers"]
     }
+  },
+  "symbol_body": {
+    "request": {
+      "org": "o",
+      "namespace": "code-x",
+      "name": "Parser.parse_record",
+      "include_lessons": false,
+      "consumer": "claude-code-prompt-pack",
+      "token_budget": 600,
+      "include_body": true,
+      "include_history": false,
+      "include_examples": false,
+      "uses": false,
+      "uses_brief": false
+    },
+    "response": {
+      "definitions": [
+        {
+          "path": "src/parser.py",
+          "start_line": 10,
+          "end_line": 14,
+          "symbol": "Parser.parse_record",
+          "signature": "(value)",
+          "body": "def parse_record(value):\n    return value.strip()\n",
+          "elided": false
+        }
+      ],
+      "ambiguous": false,
+      "tokens_returned": 120
+    }
   }
 }

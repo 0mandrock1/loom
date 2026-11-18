@@ -108,3 +108,42 @@ test("recall on attempts each qualifying prompt after an empty answer", async (t
   }
   assert.equal(requests.length, 2);
 });
+
+for (const prompt of [
+  "Where is Parser.parse_record defined, and what arguments does it take?",
+  "Which callers of Parser.parse_record can you establish from this checkout?",
+  "What code could be affected if I change how Parser.parse_record validates names?",
+]) {
+  test(`default recall skips a named code-only question: ${prompt}`, async (t) => {
+    const response = { blocks: [] };
+    const { requests, run } = await fixture(t, response);
+    assert.deepEqual(await run(prompt), { code: 0, out: "", err: "" });
+    assert.equal(requests.length, 0);
+    Object.assign(response, PACK);
+    assert.match((await run("What did we decide about record prefixes?")).out, /use the unit suite/);
+    assert.equal(requests.length, 1, "skipping code leaves the first recall attempt available");
+  });
+}
+
+for (const memory of [
+  "Include our saved decision.",
+  "Include our memory.",
+  "Include our conventions.",
+  "Include our lessons.",
+  "Recall our rationale.",
+]) {
+  test(`default recall keeps a mixed code question with ${memory}`, async (t) => {
+    const { requests, run } = await fixture(t, PACK);
+    const result = await run(`Where is Parser.parse_record defined? ${memory}`);
+    assert.equal(result.code, 0);
+    assert.match(result.out, /use the unit suite/);
+    assert.equal(requests.length, 1);
+  });
+}
+
+test("explicit on still recalls for each named code question", async (t) => {
+  const { requests, run } = await fixture(t, { blocks: [] }, "on");
+  for (const prompt of ["Where is Parser.parse_record defined?", "Who calls Parser.parse_record?"])
+    assert.deepEqual(await run(prompt), { code: 0, out: "", err: "" });
+  assert.equal(requests.length, 2);
+});

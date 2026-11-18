@@ -11,7 +11,8 @@
     "prompt": "Show the implementation of Parser.parse_record.",
     "operation": "code.symbol",
     "target": "Parser.parse_record",
-    "context": "src/parser.py:10-14"
+    "context": "src/parser.py:10-14",
+    "include_body": true
   },
   {
     "name": "callers",
@@ -61,6 +62,14 @@
     "prompt": "Use only the source excerpt below. What does this return?\n\ndef answer(): return 42",
     "operation": null
   },
-  { "name": "noncode", "prompt": "Return only this text in uppercase: ready for review", "operation": null },
-  { "name": "unknown target", "prompt": "What would this change affect?", "operation": null }
+  {
+    "name": "noncode",
+    "prompt": "Return only this text in uppercase: ready for review",
+    "operation": null
+  },
+  {
+    "name": "unknown target",
+    "prompt": "What would this change affect?",
+    "operation": null
+  }
 ]

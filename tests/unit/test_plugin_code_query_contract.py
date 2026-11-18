@@ -34,3 +34,8 @@ def test_prompt_pack_typed_fixtures_match_the_server_wire_contract():
         assert wire["empty_responses"][op].keys() <= response.model_fields.keys()
         response.model_validate(wire["empty_responses"][op])
     CodeSearchOutput.model_validate(wire["responses"]["code.search"])
+
+    body_request = CodeSymbolInput.model_validate(wire["symbol_body"]["request"])
+    assert body_request.include_body
+    assert body_request.token_budget == 600
+    CodeSymbolOutput.model_validate(wire["symbol_body"]["response"])
