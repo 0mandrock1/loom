@@ -378,6 +378,8 @@ def _github_rows(text: str) -> list[list[Label]]:
         if token.type == "tr_open" and token.map is not None:
             row = []
             first, end = (starts[n] for n in token.map)
+            # A request cut removes its separator newline, not the row's text.
+            end = first + len(text[first:end].rstrip("\r\n"))
         elif token.type == "inline" and row is not None:
             parser = _CellText()
             parser.feed(md.renderer.renderInline(token.children or [], md.options, {}))
