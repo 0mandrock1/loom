@@ -1,6 +1,8 @@
 """Pure whole-unit planning over authenticated prepared English containers.
 
-Callers authenticate selected reply references and all cross-version pair refusals.
+Callers authenticate the complete original plan and every completion status against
+their settled/uncertain ledger, cache and selected receipts, plus pair-wide refusals.
+The manifest digest binds supplied metadata; it cannot establish that evidence.
 This module checks source bindings and cuts; it neither resolves replies nor admits calls.
 Every reused reply still needs validation against its returned current SourceContext,
 followed by complete-page structural and semantic review before publication.
@@ -8,7 +10,8 @@ followed by complete-page structural and semantic review before publication.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import json
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 from itertools import pairwise
 from typing import Literal
@@ -27,11 +30,17 @@ class PreparedSource:
 
 
 @dataclass(frozen=True)
-class CompletedUnit:
+class OriginalUnit:
+    """One original planned unit; None attests no completed reply, never a missing file.
+
+    A settled bad reply remains a non-None reference with a UnitFault. Callers must
+    resolve uncertain attempts before attesting that a unit has no completion.
+    """
+
     start: int
     end: int
     source_sha256: str
-    reply_ref: str
+    reply_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -53,7 +62,7 @@ class PlannedUnit:
 
     scope: SourceContext
     disposition: Literal["reuse", "correction", "changed", "new"]
-    original: CompletedUnit | None = None
+    original: OriginalUnit | None = None
     fault_ids: tuple[str, ...] = ()
     separator_before: str = ""
 
@@ -62,20 +71,30 @@ class PlannedUnit:
 class Reconciliation:
     current: PreparedSource
     units: tuple[PlannedUnit, ...] = ()
-    removed: tuple[CompletedUnit, ...] = ()
+    removed: tuple[OriginalUnit, ...] = ()
     conflicts: tuple[ReconciliationConflict, ...] = ()
     trailing_separator: str = ""
     historical: PreparedSource | None = None
+    original_units: tuple[OriginalUnit, ...] = ()
+    unit_manifest_sha256: str = ""
 
 
 def _digest(text: str) -> str:
     return sha256(text.encode()).hexdigest()
 
 
+def original_unit_manifest_sha256(units: tuple[OriginalUnit, ...]) -> str:
+    """Canonical metadata digest, not authentication of receipts or missing completions."""
+    payload = {"schema": 1, "units": [asdict(unit) for unit in units]}
+    return _digest(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
+
+
 def _failure(current, kind, message, units=()):
     return Reconciliation(
         current,
-        conflicts=(ReconciliationConflict(kind, tuple(u.reply_ref for u in units), message),),
+        conflicts=(
+            ReconciliationConflict(kind, tuple(u.reply_ref for u in units if u.reply_ref), message),
+        ),
     )
 
 
@@ -84,11 +103,13 @@ def _safe_end(text: str, end: int, boundaries: set[int]) -> bool:
     return end == len(text) or (end < len(text) and text[end] == "\n" and end + 1 in boundaries)
 
 
-def _history_problem(historical, current, units, faults):
+def _history_problem(historical, current, units, faults, manifest_sha256):
     if historical.path != current.path or not current.path:
         return "context", "historical and current source paths must agree"
     if any(_digest(s.english) != s.sha256 for s in (historical, current)):
         return "authentication", "prepared container hash differs"
+    if original_unit_manifest_sha256(units) != manifest_sha256:
+        return "authentication", "original unit manifest hash differs"
     previous = -1
     refs = set()
     for unit in units:
@@ -101,11 +122,12 @@ def _history_problem(historical, current, units, faults):
                 "authentication",
                 "original units must cover the container with newline separators",
             )
-        if unit.start <= previous or not unit.reply_ref or unit.reply_ref in refs:
+        if unit.start <= previous or unit.reply_ref == "" or unit.reply_ref in refs:
             return "authentication", "original units overlap or repeat a reply reference"
         if _digest(historical.english[unit.start : unit.end]) != unit.source_sha256:
             return "authentication", "original unit source hash differs"
-        refs.add(unit.reply_ref)
+        if unit.reply_ref is not None:
+            refs.add(unit.reply_ref)
         previous = unit.end
     if (units and previous != len(historical.english)) or (not units and historical.english):
         return "authentication", "original units do not cover the complete container"
@@ -144,21 +166,23 @@ def _new_gap(source, start, end):
 def reconcile_completed_units(
     historical: PreparedSource,
     current: PreparedSource,
-    units: tuple[CompletedUnit, ...],
+    units: tuple[OriginalUnit, ...],
     *,
+    unit_manifest_sha256: str,
     faults: tuple[UnitFault, ...] = (),
     pair_refused: bool = False,
 ) -> Reconciliation:
     """Keep unique monotone whole units; bound only genuine new gaps and replacements.
 
-    Original ranges must cover the historical container, separated by exactly one
-    assembly newline. Repeated candidates, multiple changed units between retained
-    neighbors, unsafe cuts and whole-page replacements are explicit conflicts.
+    The authenticated manifest must include every original unit, complete or not,
+    covering the container with one newline between units. None is an explicit
+    no-completion attestation, not permission inferred from missing cache files.
+    Incomplete gaps use the bounded planner outside retained completed ranges.
     Changed input carries fault IDs but must never replay an old-input assistant.
     """
     if pair_refused:
         return _failure(current, "refusal", "locale/source pair is refused across source versions")
-    if problem := _history_problem(historical, current, units, faults):
+    if problem := _history_problem(historical, current, units, faults, unit_manifest_sha256):
         return _failure(current, *problem)
     try:
         old_cuts = set(chunks.request_boundaries(historical.english))
@@ -174,9 +198,12 @@ def reconcile_completed_units(
             sorted({f.finding_id for f in faults if f.reply_ref == unit.reply_ref})
         )
         for unit in units
+        if unit.reply_ref is not None
     }
     anchors = []
     for index, unit in enumerate(units):
+        if unit.reply_ref is None:
+            continue
         matches = _matches(historical.english, unit, current.english, cuts)
         if len(matches) > 1:
             return _failure(
@@ -188,24 +215,29 @@ def reconcile_completed_units(
         return _failure(
             current, "ambiguity", "whole-unit alignment is not monotone and disjoint", units
         )
-    if len(units) == 1 and (not anchors or fault_ids[units[0].reply_ref]):
+    if (
+        len(units) == 1
+        and units[0].reply_ref is not None
+        and (not anchors or fault_ids[units[0].reply_ref])
+    ):
         return _failure(
             current, "whole_page_replacement", "a completed whole page cannot be replaced", units
         )
-    return _plan(historical, current, units, anchors, cuts, fault_ids)
+    return _plan(historical, current, units, anchors, cuts, fault_ids, unit_manifest_sha256)
 
 
-def _plan(historical, current, units, anchors, cuts, fault_ids):
+def _plan(historical, current, units, anchors, cuts, fault_ids, manifest_sha256):
     planned, removed = [], []
     left_index, left_end = -1, -1
     for index, start, end in [*anchors, (len(units), len(current.english) + 1, 0)]:
         missing = units[left_index + 1 : index]
+        completed = tuple(unit for unit in missing if unit.reply_ref is not None)
         gap_start, gap_end = left_end + 1, start - 1
-        if len(missing) > 1:
+        if gap_start < gap_end and completed and len(missing) > 1:
             return _failure(
                 current,
                 "boundary",
-                "multiple changed original units have no proven current cuts",
+                "completed counterpart has no proven cuts among intervening original units",
                 missing,
             )
         if gap_start < gap_end:
@@ -217,8 +249,8 @@ def _plan(historical, current, units, anchors, cuts, fault_ids):
                     missing,
                 )
             scope = SourceContext(current.path, current.english, gap_start, gap_end)
-            if missing:
-                original = missing[0]
+            if completed:
+                original = completed[0]
                 if len(current.english[gap_start:gap_end].encode()) > chunks.MAX_BYTES:
                     return _failure(
                         current,
@@ -273,4 +305,6 @@ def _plan(historical, current, units, anchors, cuts, fault_ids):
         tuple(removed),
         trailing_separator=trailing,
         historical=historical,
+        original_units=units,
+        unit_manifest_sha256=manifest_sha256,
     )
