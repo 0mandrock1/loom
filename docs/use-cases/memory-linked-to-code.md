@@ -82,18 +82,21 @@ minutes.
 
 ## Check a lesson after a code edit
 
-On an indexed repository, save a lesson such as `` `fetch_page()` retries on code 115 ``
+On the repository's indexed trunk, save a lesson such as `` `fetch_page()` retries on code 115 ``
 with the repository tag or in its code namespace, as above. Use a name that resolves to
-one definition. After the link pass, read that definition with `code.symbol`: its
-`lessons` includes the saved memory with `code_state: "fresh"`. Include the memory's
-namespace in `lesson_namespaces` when the call needs it.
+one definition. After the link pass, read that definition with `code.symbol` and look for
+the saved memory under `lessons`. When included, it carries `code_state: "fresh"`.
+Include the memory's namespace in `lesson_namespaces` when the call needs it.
 
 Change an expression in the function's body, such as `return url` to `return url.strip()`,
-and commit it. After the index and link worker process that commit, read the definition
-again on the same branch. Under the default policy, the
-lesson remains present with `code_state: "changed"`; `changed_since` names the indexed
+and commit it on trunk. After the index and link worker process that commit, read the
+definition again in the same trunk namespace. Under the default policy, a returned
+lesson carries `code_state: "changed"`; `changed_since` names the indexed
 commit. This marks changed code, not a judgment that the lesson is false. Read the
 current body before applying it. Uncommitted editor changes do not trigger this check.
+
+Symbol cards cap the lessons they return and can omit the saved lesson. If it is absent,
+use `memory.get` to inspect that memory's `code` links and their states.
 
 The existing `test_memories_follow_their_code`
 [integration regression](https://github.com/ClickHouse/loom/blob/main/tests/integration/test_memory_code_links.py)
