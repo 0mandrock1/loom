@@ -260,3 +260,55 @@ async def test_raw_download_marks_have_one_required_event_on_every_exit(monkeypa
     assert event.mirror_marked and event.success is (outcome == "success")
     assert event.error_code == ("" if outcome == "success" else "REQUEST_INTERRUPTED")
     assert "private-backend-detail" not in repr(event.args)
+
+
+@pytest.mark.parametrize("later_chunk", [b"", b"still-private"])
+async def test_stream_completion_after_delivered_payload_keeps_next_request_usable(later_chunk):
+    from starlette.responses import Response, StreamingResponse
+
+    live = True
+    checks = []
+    sent = []
+
+    async def check():
+        checks.append(live)
+        if not live:
+            raise LostCorpus()
+
+    async def chunks():
+        yield b"private-payload"
+        if later_chunk:
+            yield later_chunk
+
+    async def app(scope, receive, send):
+        if scope["path"] == "/private":
+            request_tail.retain_publication(object(), check, lambda: live)
+            response = StreamingResponse(
+                chunks(),
+                headers={"content-length": str(len(b"private-payload") + len(later_chunk))},
+            )
+        else:
+            response = Response(b"ordinary")
+        await response(scope, receive, send)
+
+    async def send(message):
+        nonlocal live
+        sent.append(message)
+        # A Content-Length client can start its next request after these bytes.
+        if message.get("body") == b"private-payload":
+            live = False
+        await asyncio.sleep(0)
+
+    middleware = request_tail.RequestTailMiddleware(app)
+    scope = {"type": "http", "path": "/private", "asgi": {"spec_version": "2.4"}}
+    if later_chunk:
+        with pytest.raises(request_tail.RequiredTailError):
+            await middleware(scope, None, send)
+        assert not any(message.get("body") == later_chunk for message in sent)
+        assert checks == [True, True, False]
+    else:
+        await middleware(scope, None, send)
+        assert sent[-1] == {"type": "http.response.body", "body": b"", "more_body": False}
+        assert checks == [True, True]
+        await middleware({**scope, "path": "/ordinary"}, None, send)
+        assert sent[-1]["body"] == b"ordinary"

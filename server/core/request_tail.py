@@ -372,7 +372,9 @@ class RequestTailMiddleware:
             if message.get("type") == "http.response.start":
                 await settle(tail)
                 await _publication_barrier(tail)
-            elif message.get("type") == "http.response.body":
+            elif message.get("type") == "http.response.body" and message.get("body"):
+                # Empty completion frames publish no bytes; the client may already
+                # have consumed Content-Length and started its next request.
                 await _publication_barrier(tail)
             await send(message)
 
