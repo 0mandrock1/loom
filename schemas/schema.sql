@@ -16,13 +16,13 @@
 -- Do NOT hand-edit. Edit schemas/migrations/*.sql and re-dump.
 -- CI verifies this file matches what migrations would produce.
 --
--- Counts: 192 tables + 5 views + 19 materialized views.
+-- Counts: 193 tables + 5 views + 19 materialized views.
 
 CREATE DATABASE IF NOT EXISTS `loom`;
 CREATE DATABASE IF NOT EXISTS `loom_telemetry`;
 
 -- ======================================================================
--- Tables (192)
+-- Tables (193)
 -- ======================================================================
 
 -- loom.acl_versions
@@ -2189,6 +2189,31 @@ ENGINE = ReplacingMergeTree(version)
 ORDER BY (org, namespace, source_id)
 SETTINGS non_replicated_deduplication_window = 1000, index_granularity = 8192;
 
+-- loom.knowledge_source_push
+CREATE TABLE IF NOT EXISTS loom.knowledge_source_push
+(
+    `org` LowCardinality(String),
+    `namespace` LowCardinality(String),
+    `name` String,
+    `source_id` String,
+    `provider` LowCardinality(String),
+    `generation` String,
+    `fingerprint` String,
+    `provider_id` String DEFAULT '',
+    `status` LowCardinality(String) DEFAULT 'pending',
+    `secret_enc` String DEFAULT '',
+    `agent` LowCardinality(String) DEFAULT '-',
+    `user_id` String DEFAULT '-',
+    `session_id` String DEFAULT '-',
+    `actor` String DEFAULT '',
+    `source_class` LowCardinality(String) DEFAULT 'derived',
+    `updated_at` DateTime64(3) DEFAULT now64(3),
+    `version` UInt64 DEFAULT toUInt64(toUnixTimestamp64Nano(now64(9)))
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY (org, source_id)
+SETTINGS non_replicated_deduplication_window = 1000, index_granularity = 8192;
+
 -- loom.knowledge_sources
 CREATE TABLE IF NOT EXISTS loom.knowledge_sources
 (
@@ -3400,7 +3425,9 @@ CREATE TABLE IF NOT EXISTS loom.namespaces
     `retrieval_defaults` String DEFAULT '',
     `proposal_policy` String DEFAULT '',
     `code_change_policy` LowCardinality(String) DEFAULT '',
-    `released_aliases` Array(String) DEFAULT []
+    `released_aliases` Array(String) DEFAULT [],
+    `daily_user_cost_cap_usd` Float64 DEFAULT 0,
+    `budget_alert_inbox` String DEFAULT ''
 )
 ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY org
@@ -4157,6 +4184,9 @@ CREATE TABLE IF NOT EXISTS loom.task_events
     `patch` String DEFAULT '{}',
     `note` String DEFAULT '',
     `ts` DateTime64(3) DEFAULT now64(3),
+    `user_id` String DEFAULT '-',
+    `session_id` String DEFAULT '-',
+    `source_class` LowCardinality(String) DEFAULT '',
     INDEX idx_from_subject from_subject TYPE bloom_filter GRANULARITY 4
 )
 ENGINE = MergeTree
