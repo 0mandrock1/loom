@@ -6,8 +6,9 @@ and — for a defect report under a code scope — the tracker record; the
 sections are assembled into one payload and trimmed by the answer-first
 rules (answer_first.py). An ordinary leg failure returns
 `{"error": ..., "results": []}` under its section and the others still
-answer. Typed input refusals propagate instead of producing partial results. The MCP `loom_search` tool renders this payload as its text and
-lean result; the `search` operation returns it as is.
+answer. Typed input refusals propagate instead of producing partial results.
+The MCP `loom_search` tool renders this payload as its text and lean result;
+the `search` operation returns it as is.
 """
 
 from __future__ import annotations
