@@ -47,12 +47,12 @@ class LatchUnavailable(RuntimeError):
         super().__init__("Session protection state could not be confirmed")
 
 
-def _log_unavailable(stage: str, error: Exception) -> None:
+def _log_unavailable(proof_stage: str, error: Exception) -> None:
     # Exception bodies can contain session content or credentials.
     try:
         log.warning(
             "Session protection proof refused: stage=%s exception=%s code=%s",
-            stage,
+            proof_stage,
             type(error).__name__,
             error_code(error),
         )
@@ -128,38 +128,38 @@ async def enabled(*, ch: CHClient | None = None) -> bool:
         "ttl": 30,
     }
     sent = False
-    stage = "enabled.coordination"
+    proof_stage = "enabled.coordination"
     with query_tag("knowledge.mirror.latch"):
         try:
             # not a setting: the privacy proof must end within its fixed security deadline.
             async with asyncio.timeout(5), ch.coordination_session():
-                stage = "enabled.engines"
+                proof_stage = "enabled.engines"
                 backend = await _engines(ch)
-                stage = "enabled.latch"
+                proof_stage = "enabled.latch"
                 if await _latched(ch, backend):
                     return True
-                stage = "enabled.keeper_before"
+                proof_stage = "enabled.keeper_before"
                 before = await _keeper(ch, backend)
                 # The writer attests itself; a replayed bootstrap may exist on two backends.
                 sent = True
-                stage = "enabled.barrier"
+                proof_stage = "enabled.barrier"
                 await ch.execute(_BARRIER, params)
-                stage = "enabled.ordered_latch"
+                proof_stage = "enabled.ordered_latch"
                 latched = await _latched(ch, backend)
-                stage = "enabled.keeper_after_barrier"
+                proof_stage = "enabled.keeper_after_barrier"
                 if await _keeper(ch, backend) != before:
                     raise LatchUnavailable()
-                stage = "enabled.nonce_confirm"
+                proof_stage = "enabled.nonce_confirm"
                 await _confirm(ch, backend, params)
-                stage = "enabled.nonce_clear"
+                proof_stage = "enabled.nonce_clear"
                 await _clear(ch, backend, params)
-                stage = "enabled.keeper_after_clear"
+                proof_stage = "enabled.keeper_after_clear"
                 if await _keeper(ch, backend) != before:
                     raise LatchUnavailable()
                 sent = False
                 return latched
         except Exception as error:  # noqa: BLE001 — uncertain privacy state refuses without public backend diagnostics
-            _log_unavailable(stage, error)
+            _log_unavailable(proof_stage, error)
             raise LatchUnavailable() from None
         finally:
             if sent:
@@ -175,27 +175,27 @@ async def enabled(*, ch: CHClient | None = None) -> bool:
 async def ensure(*, ch: CHClient | None = None) -> None:
     """Set the real positive state; a racing identical insert is confirmed afresh."""
     ch = ch or get_client()
-    stage = "ensure.coordination_before"
+    proof_stage = "ensure.coordination_before"
     with query_tag("knowledge.mirror.latch_set"):
         try:
             # not a setting: positive confirmation shares the fixed privacy-proof deadline.
             async with asyncio.timeout(5):
                 async with ch.coordination_session():
-                    stage = "ensure.engines_before"
+                    proof_stage = "ensure.engines_before"
                     backend = await _engines(ch)
-                stage = "ensure.set"
+                proof_stage = "ensure.set"
                 try:
                     await ch.execute(_SET, {"backend": str(backend)})
                 except Exception as error:
                     if not key_exists(error):
                         raise
-                stage = "ensure.coordination_after"
+                proof_stage = "ensure.coordination_after"
                 async with ch.coordination_session():
-                    stage = "ensure.engines_after"
+                    proof_stage = "ensure.engines_after"
                     backend = await _engines(ch)
-                    stage = "ensure.latch_after"
+                    proof_stage = "ensure.latch_after"
                     if not await _latched(ch, backend):
                         raise LatchUnavailable()
         except Exception as error:  # noqa: BLE001 — uncertain privacy state refuses without public backend diagnostics
-            _log_unavailable(stage, error)
+            _log_unavailable(proof_stage, error)
             raise LatchUnavailable() from None
