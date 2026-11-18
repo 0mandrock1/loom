@@ -977,6 +977,12 @@ Knowledge documents and conversations: chunking, search floor, thread titles.
 | `LOOM_CONNECT_LINEAR_CLIENT_ID` | `str` | `''` |  | OAuth client id for personal project-tracker connections; empty disables it. |
 | `LOOM_CONNECT_LINEAR_CLIENT_SECRET` | `str` | *(unset)* |  | Secret of that project-tracker registration; kept outside source rows. |
 | `LOOM_CONNECT_NOTION_READ_CONTENT_ONLY` | `bool` | `False` |  | The operator has restricted the public integration to read-content capability. Its token response cannot prove this registration setting; false disables it. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_TIMEOUT_S` | `float` | `5.0` |  | Seconds for the whole optional live-search leg, including final membership checks. At most five; provider credential deadlines may shorten it further. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_MAX_SOURCES` | `int` | `3` |  | Connected registrations searched per live-search request, from one to three. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_MAX_HITS` | `int` | `10` |  | Live hits across all registrations, and the per-provider page bound, from one to ten. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_RESPONSE_MAX_BYTES` | `int` | `262144` |  | Bytes read from one live-search provider response, at most 256 KiB. The document-source download limit may shorten this bound further. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_MAX_ITEMS` | `int` | `4` |  | Registered Drive items searched per source, from one to four; no pagination. |
+| `LOOM_KNOWLEDGE_LIVE_SEARCH_MAX_ANCESTORS` | `int` | `3` |  | Native parent lookups per Notion membership check, from zero to three. Zero accepts directly registered pages and database membership without parent fetches. |
 | `LOOM_KNOWLEDGE_CONNECTED_STOP_TIMEOUT_S` | `float` | `20.0` |  | Seconds for local connection stops, including their source retirement writes. |
 | `LOOM_KNOWLEDGE_CONNECTED_REVOKE_TIMEOUT_S` | `float` | `5.0` |  | Seconds for best-effort provider revocation after every local stop has committed. |
 | `LOOM_KNOWLEDGE_CONNECTED_LEASE_TTL_S` | `float` | `60.0` |  | Seconds the renewed account-generation lease lives. Source leases follow it; provider requests hold neither. |

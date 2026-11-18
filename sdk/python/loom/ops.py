@@ -19175,6 +19175,7 @@ class SearchQueryInput(TypedDict, total=False):
     ]
     bodies: NotRequired[Literal["full", "excerpt", "none", "unit"]]
     explain: NotRequired[bool]
+    live: NotRequired[bool]
     page: NotRequired[str]
 
 
@@ -19193,6 +19194,7 @@ class SearchQueryBody(TypedDict, total=False):
     ]
     bodies: NotRequired[Literal["full", "excerpt", "none", "unit"]]
     explain: NotRequired[bool]
+    live: NotRequired[bool]
     page: NotRequired[str]
 
 
@@ -19200,12 +19202,31 @@ class SearchQueryOutput(TypedDict, total=False):
     'The sections, each `{"results": [...], ...}` as its plane\'s search'
 
     tracker: NotRequired[Optional[dict[str, Any]]]
+    live: NotRequired[Optional["LiveSearchResults"]]
     memory: NotRequired[dict[str, Any]]
     knowledge: NotRequired[dict[str, Any]]
     profile: NotRequired[dict[str, Any]]
     conversations: NotRequired[dict[str, Any]]
     withheld: NotRequired[Optional[dict[str, Any]]]
     namespaces_skipped: NotRequired[list[str]]
+
+
+class LiveSearchResults(TypedDict, total=False):
+    "Connected-source results returned only in this response."
+
+    live: NotRequired[Literal[True]]
+    results: NotRequired[list["LiveSearchHit"]]
+
+
+class LiveSearchHit(TypedDict, total=False):
+    "One ephemeral result from the asker's connected source."
+
+    id: Required[str]
+    title: Required[str]
+    url: Required[str]
+    provider: Required[Literal["gdrive", "notion", "linear"]]
+    content: NotRequired[str]
+    live: NotRequired[Literal[True]]
 
 
 class SessionBriefDeleteInput(TypedDict, total=False):
