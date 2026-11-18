@@ -118,6 +118,7 @@ PIPELINE_ACTORS: Final = frozenset(
         "process:period_digest",
         "process:proposal_policy",
         "process:session_brief",
+        "process:source-push",
         "process:task_lease_sweep",
     }
 )
