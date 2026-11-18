@@ -27,7 +27,8 @@ NOW = datetime(2025, 1, 1, tzinfo=UTC)
 
 
 def title(uri="gdrive:file#native", when=NOW):
-    return source_titles.Title(uri, "Mirror title", "markdown", "gdrive", "r1", 17, 0, when)
+    proof = SimpleNamespace(mirrored=True, check=AsyncMock(), fresh=lambda: True)
+    return source_titles.Title(uri, "Mirror title", "markdown", "gdrive", "r1", 17, 0, when, proof)
 
 
 def ordinary(uri="https://example.com/ordinary", when=NOW):

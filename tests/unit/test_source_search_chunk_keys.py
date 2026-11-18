@@ -16,10 +16,13 @@ def row(key=KEY):
     )
 
 
-async def test_key_probe_scopes_exact_live_embedded_model_and_never_fetches_text(monkeypatch):
+@pytest.mark.parametrize("embedded_only", [False, True])
+async def test_key_probe_scopes_exact_live_model_keys_and_never_fetches_text(
+    monkeypatch, embedded_only
+):
     ch = RecordingCH().on("FROM loom.chunks", [row()])
     ch.install(monkeypatch, "server.knowledge.store.source_candidates")
-    assert await store.chunk_keys("acme", "fake-model", [KEY]) == [KEY]
+    assert await store.chunk_keys("acme", "fake-model", [KEY], embedded_only=embedded_only) == [KEY]
     call = ch.calls[-1]
     assert call.params == {
         "org": "acme",
@@ -30,7 +33,8 @@ async def test_key_probe_scopes_exact_live_embedded_model_and_never_fetches_text
     }
     selected = call.sql.split(" FROM ", 1)[0]
     assert "content" not in selected and "context" not in selected and "tags" not in selected
-    assert "embedding_model = {model:String}" in call.sql and "embedding_dim > 0" in call.sql
+    assert "embedding_model = {model:String}" in call.sql
+    assert ("embedding_dim > 0" in call.sql) is embedded_only
     assert "doc_version" in selected and "AS revision" in selected
     assert "org = {org:String}" in call.sql and "LIMIT {limit:UInt32}" in call.sql
 

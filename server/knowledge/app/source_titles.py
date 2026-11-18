@@ -11,6 +11,7 @@ from server.core.diagnostics import private_work
 from server.knowledge.api.models_knowledge import KnowledgeListInput
 from server.knowledge.app import source_listing
 from server.knowledge.app.source_access import Admitted, ReadPlan
+from server.knowledge.app.source_list_proofs import ListProofs
 from server.knowledge.store import source_documents as store
 
 
@@ -24,9 +25,16 @@ class Title:
     version: int
     revision: int
     ingested_at: datetime
+    proof: ListProofs
 
 
-def _title(row: dict[str, Any], plan: ReadPlan, item: Admitted, namespace: str) -> Title:
+def _title(
+    row: dict[str, Any],
+    plan: ReadPlan,
+    item: Admitted,
+    namespace: str,
+    source_id: str | None,
+) -> Title:
     if item.namespace != namespace or (
         row["org"],
         row["namespace"],
@@ -59,6 +67,7 @@ def _title(row: dict[str, Any], plan: ReadPlan, item: Admitted, namespace: str) 
         version=int(row["version"]),
         revision=int(row["revision"]),
         ingested_at=row["ingested_at"],
+        proof=ListProofs(plan, False, (item,), source_id=source_id),
     )
 
 
@@ -94,7 +103,7 @@ async def collect(
                 )
                 if row is None:
                     return []
-                titles.append(_title(row, plan, item, namespace))
+                titles.append(_title(row, plan, item, namespace, source_id))
             if await source_listing.finish(plan, input, items, source_id=source_id) is None:
                 return []
             return titles
