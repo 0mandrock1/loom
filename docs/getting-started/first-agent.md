@@ -119,8 +119,9 @@ async def converse(a: Agent) -> None:
 - **`append()`** writes each turn to the conversation transcript (`conversation.append`)
   at once, and every `flush_every` turns (default 8) sends the batch to
   `memory.set_from_messages`, where the server extracts the facts worth keeping.
-  `close()` flushes the rest. On the fake LLM the transcript is stored but extraction
-  writes nothing.
+  `close()` flushes the rest. With the fake LLM the transcript is stored, and extraction
+  can synthesize facts as deterministic output for development and tests. Meaningful
+  extraction needs a configured real LLM.
 - **`offload()` / `fetch()`** park a large tool result once and keep only a pointer in
   the transcript; **`note()`** appends to the working-memory block the next pack carries.
 

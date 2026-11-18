@@ -282,12 +282,12 @@ The checkout and release-bundle `.env` templates both select single-user mode.
 The release bundle sets `LOOM_IDENTITY_PROVIDER=single-user` explicitly; the checkout
 leaves it empty and infers the same mode from `LOOM_AUTH_REQUIRED=false`.
 
-| Setting                                                                      | Value         | Effect                                                                    |
-| ---------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------- |
-| `LOOM_AUTH_REQUIRED=false`, `LOOM_IDENTITY_PROVIDER=single-user` (or empty)  | `single-user` | No login. Default namespace `dev/local`. SDK and MCP calls need no token. |
-| `LOOM_LLM_PROVIDER=fake`, `LOOM_LLM_MODEL=fake-echo-1`                       | fake LLM      | Extraction, entity tagging and `memory.ask` synthesis produce nothing.    |
-| `LOOM_EMBEDDING_MODEL=local`, `LOOM_EMBEDDING_DIM=384` (release bundle)      | bge-small     | Semantic search on CPU, from the model files the image carries.           |
-| `LOOM_EMBEDDING_MODEL=fake-ngram-3072`, `LOOM_EMBEDDING_DIM=3072` (checkout) | fake embedder | Search ranks by character n-grams. Enough to check wiring, not recall.    |
+| Setting                                                                      | Value         | Effect                                                                                                                              |
+| ---------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `LOOM_AUTH_REQUIRED=false`, `LOOM_IDENTITY_PROVIDER=single-user` (or empty)  | `single-user` | No login. Default namespace `dev/local`. SDK and MCP calls need no token.                                                           |
+| `LOOM_LLM_PROVIDER=fake`, `LOOM_LLM_MODEL=fake-echo-1`                       | fake LLM      | Deterministic output for development and tests; extraction can synthesize facts. Meaningful extraction needs a configured real LLM. |
+| `LOOM_EMBEDDING_MODEL=local`, `LOOM_EMBEDDING_DIM=384` (release bundle)      | bge-small     | Semantic search on CPU, from the model files the image carries.                                                                     |
+| `LOOM_EMBEDDING_MODEL=fake-ngram-3072`, `LOOM_EMBEDDING_DIM=3072` (checkout) | fake embedder | Search ranks by character n-grams. Enough to check wiring, not recall.                                                              |
 
 Both installers generate a unique `COMPOSE_PROJECT_NAME`, a random JWT signing secret, a
 random extractor token, and `LOOM_BIND_HOST=127.0.0.1`. Separate clones therefore do not
