@@ -88,9 +88,9 @@ The configuration catalog controls the provider-work, per-channel stop, total
 cleanup and worker-pass deadlines. Their defaults are 40, two, five and 120
 seconds. A pass stops starting renewals with enough time for one provider attempt
 and two cleanup windows. Configuration refuses provider work plus cleanup that
-could outlive the 120-second renewal lease, or a pass budget that leaves no time
-to start a renewal. The channel stop deadline cannot exceed the total cleanup
-window.
+could outlive the 48-second work window within the 120-second renewal lease, or a
+pass budget that leaves no time to start a renewal. The channel stop deadline
+cannot exceed the total cleanup window.
 
 ## Lifecycle and storage
 

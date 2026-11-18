@@ -2413,12 +2413,13 @@ class KnowledgeSettings(BaseModel):
                 "LOOM_KNOWLEDGE_SOURCE_PUSH_STOP_TIMEOUT_S must not exceed "
                 "LOOM_KNOWLEDGE_SOURCE_PUSH_CLEANUP_TIMEOUT_S"
             )
-        # renew_drive holds its source-specific renewal lease for 120 seconds.
-        if provider + cleanup >= 120:
+        # holding() permits work for 40% of renew_drive's 120-second lease.
+        # Keep this window in sync with leases.work_left; the regression checks both.
+        if provider + cleanup >= 48:
             raise ValueError(
                 "LOOM_KNOWLEDGE_SOURCE_PUSH_PROVIDER_TIMEOUT_S plus "
                 "LOOM_KNOWLEDGE_SOURCE_PUSH_CLEANUP_TIMEOUT_S must stay below the "
-                "120-second renewal lease"
+                "48-second renewal work window"
             )
         if provider + 2 * cleanup >= self.knowledge_source_push_max_pass_seconds:
             raise ValueError(
