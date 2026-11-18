@@ -124,18 +124,19 @@ spend read errors, the namespace reads as under its cap.
 
 `cost.budget_status` reports the same computation:
 
-| Output field             | Meaning                                                                                                     |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `spent_24h_usd`          | `sum(upstream_cost_usd)` over the last day                                                                  |
-| `cap_usd`, `cap_source`  | the effective cap and where it came from: `namespace`, `global`, `uncapped`, or `org` for the org-wide form |
-| `over_cap`, `pct_of_cap` | whether the selected cap is reached; share spent (`null` when uncapped)                                     |
-| `namespaces_with_spend`  | org-wide form only                                                                                          |
+| Output field             | Meaning                                                                                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `spent_24h_usd`          | Rolling 24h spend in USD; user mode withholds it as `null` except for a platform admin without namespace-role restrictions |
+| `cap_usd`, `cap_source`  | the effective cap and where it came from: `namespace`, `global`, `uncapped`, or `org` for the org-wide form                |
+| `over_cap`, `pct_of_cap` | Whether real spend reaches the selected cap; share spent (`null` when uncapped or user spend is withheld)                  |
+| `namespaces_with_spend`  | org-wide form only                                                                                                         |
 
 Omit `namespace` for the org-wide form, which is always uncapped and sums the namespaces
-you can read. Supply both `namespace` and `user_id` for one user's allowance and spend;
+you can read. Supply both `namespace` and `user_id` for one user's allowance and verdict;
 `cap_source` then reads `namespace_user`, `global_user`, or `uncapped`.
 `namespace_over_cap` separately reports whether the namespace ceiling blocks that user.
-A token pinned to one user cannot select another user's counters.
+A token pinned to one user cannot select another user's status. Caps and routing count
+all actual spend even when the response withholds its amount.
 
 Set `budget_alert_inbox` with `namespace.register` or the namespace settings dialog to
 an existing task inbox owned by that namespace. Empty disables warnings. A point budget
@@ -146,6 +147,11 @@ user's spend. Delivery is bounded and asynchronous: a failed delivery does not c
 the budget decision, and a later check retries it. Repeated checks deduplicate within
 each UTC day for the same scope, inbox, cap and share; the next day can send a reminder.
 Warnings wait until every live replica supports their erasure metadata.
+User warnings report the user, cap and warning share, with exact spend set to `null`
+for every recipient, including webhooks and warnings triggered by an operator.
+Namespace warnings retain the namespace total. A verdict or threshold crossing reveals
+bounds on spend, and changing a cap can narrow those bounds; these policy signals do
+not grant access to marked work, models or outcomes.
 Updates and watch streams show only warnings inside the caller's user and session
 scope. A scope without the required identity receives no warnings. Other task events
 retain their shared inbox visibility.
