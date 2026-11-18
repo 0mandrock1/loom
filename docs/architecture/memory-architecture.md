@@ -994,6 +994,14 @@ fallbacks. A search joins its cancelled local children before returning a refusa
 the repository decision pass also joins its sibling when either search fails.
 Local coroutine completion does not prove remote query retirement.
 
+Main namespace reads, entity-boost inputs, summary and observation namespace reads,
+anchor and key-match namespace reads, and digest-descent targets run in ordered
+windows of at most four child jobs per producer. A producer creates only the
+current window's awaitables and joins its children before returning a failure or
+cancellation. This bounds local fanout per producer, not the request's aggregate
+work. Supplemental query and set-expansion phrases retain their namespace fanout
+and shared duplicate selection by phrase completion.
+
 1. **Settle the request** (`request.py`): recipe and namespace `retrieval_defaults`, read
    scope, the `top_k` ceiling. A parked `page` handle is served directly.
 2. **Read-your-writes** (`consistency.py`): a namespace this process just wrote re-reads
@@ -1322,11 +1330,12 @@ document bucket configured, the bucket objects left under the erased namespaces
 namespace); a non-zero count re-opens `documents.tombstone`. The registry is in
 `server/erasure/store/census.py`:
 
-| List                | Holds                                                                                                                                                                                       |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_CENSUS`           | One `Substrate(table, live, user_pred, ns_step, user_step, final)` per table that can hold content in scope. Any live row in scope fails the saga.                                          |
-| `STEP_ONLY_TABLES`  | Tables a step clears that the census does not count (the shared embeddings a user erasure tombstones, consolidated tombstones, term aggregates, session outcomes, the code index purge, …). |
-| `NO_MEMORY_CONTENT` | Every other table, each with the reason it holds no content in scope.                                                                                                                       |
+| List                     | Holds                                                                                                                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_CENSUS`                | One `Substrate(table, live, user_pred, ns_step, user_step, final)` per table that can hold content in scope. Any live row in scope fails the saga.                                          |
+| `STEP_ONLY_TABLES`       | Tables a step clears that the census does not count (the shared embeddings a user erasure tombstones, consolidated tombstones, term aggregates, session outcomes, the code index purge, …). |
+| `CANONICAL_OWNER_TABLES` | Authentication registries keyed by canonical sign-in subject, erased by their owning lifecycle rather than a memory `user_id` or namespace saga.                                            |
+| `NO_MEMORY_CONTENT`      | Every other table, each with the reason it holds no content in scope.                                                                                                                       |
 
 The row links (`entity_triple_rows`, `entity_edge_rows`) carry the row's writer as
 `user_id`, so a user's erasure finds them after the row itself is gone.
@@ -1344,7 +1353,7 @@ store). A resumed saga re-runs the owning step of any table the last census foun
 and always re-runs `verify.residue`. `purge=true` hard-deletes: lightweight `DELETE FROM` on
 the tables in `LIGHTWEIGHT_PURGE_TABLES`, `ALTER TABLE … DELETE` on the rest, each mutation
 tagged and polled to completion. `tests/unit/test_every_table_is_classified.py` fails on a
-table in none of the three lists.
+table in none of the four lists.
 
 A user-scope step reaches a table with no `user_id` column through a predicate that holds
 a subquery: the user's memory keys, record ids or shared keys, or the graph keys and
@@ -1563,6 +1572,9 @@ writes no outbox rows ([rule 22](rolling-upgrades.md#the-rules)).
   are not atomic.
 - A table that can hold memory content is in `_CENSUS`, or in `STEP_ONLY_TABLES` with its
   reason.
+- Canonical authentication registries are in `CANONICAL_OWNER_TABLES`; their owner
+  lifecycle erases them by canonical sign-in subject, independently of memory `user_id`
+  and namespace erasure.
 
 ## Source entry points
 

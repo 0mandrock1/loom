@@ -62,6 +62,15 @@ async with Agent(org="acme", namespace="support") as agent:
 
 `invoke` needs a `SyncAgent`; `ainvoke` takes an `Agent` or a `SyncAgent`.
 
+The Python retrievers retain their bound and ambient `SessionProtection` contributors at
+construction and on each callback, including after client rebinding and across worker
+threads. When the caller enters `family.automatic()`, retained protection also guards
+automatic retrieval; without that context, direct retrieval and retriever tools stay
+explicit and observe responses. A mirrored result marks all retained families before
+documents return. A failed durable mark withholds the documents, and a marked family
+blocks later automatic retrieval. Use separate retrievers for independent conversation
+families.
+
 | Retriever                | `page_content`  | `id`                                                                                | `metadata`                                                                                        |
 | ------------------------ | --------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `LoomKnowledgeRetriever` | the chunk       | `<namespace>/<source_uri>#<chunk_idx>`                                              | `source_uri`, `chunk_idx`, `similarity`, `section`, `namespace`, `tags`                           |
@@ -165,6 +174,16 @@ or `flush` is called, which may run a call on another event loop than the one an
 was opened on; an `Agent` serves `aget` and `aput` on its own loop. `Memory` keeps its
 short-term messages in its own chat store (in process by default); only what the block
 receives reaches Loom.
+
+Wrap automatic callbacks in the application's `SessionProtection.automatic()` scope.
+The retriever and memory block retain the families bound at construction and contributed
+by earlier callbacks, including across client rebinding and sync worker threads. A
+mirrored recall marks those families before returning. Later automatic calls refuse
+protected work; explicit calls keep their response observers without becoming automatic.
+`aflush` retains each Loom block's contributors before reading the native buffer. A
+refused flush raises and leaves that window active for retry, without archiving it or
+acknowledging an unsent extraction. The native framework owns its overflow archival;
+`aflush` does not roll it back.
 
 ## Haystack
 
@@ -466,6 +485,14 @@ traceback AG2 sends for an exception, and the run goes on. Put the policy before
 trimming policy (`SlidingWindowPolicy`, `TokenBudgetPolicy`), which can cut the user's
 request out of the events the policy reads. Those policies trim events, not the prompt, so
 `top_k` is what bounds the memory block.
+
+Use one recall policy per conversation, with its Loom client bound to the
+application-owned `SessionProtection` family. The policy retains constructor and
+callback contributors across context exit and client rebinding. Native user and session
+ids do not select protection. A protected contributor stops automatic recall with
+`AutomaticCaptureSuppressed` before dispatch. A marked recall is durably observed before
+its content reaches the current prompt; later automatic recalls stop. Model-selected
+`loom_tools` calls remain explicit operations.
 
 ## Microsoft Agent Framework
 
