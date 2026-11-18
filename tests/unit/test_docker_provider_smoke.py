@@ -253,6 +253,7 @@ def _process_fixture(monkeypatch):
     rows = [
         {
             "participant_id": str(pid),
+            "children": [],
             "version": 5,
             "state": "running",
             "host_proof": f"h|b|c|1|{pid}|{pid * 10}|||cell-retirement-v1",
@@ -537,7 +538,7 @@ async def test_retirement_reader_preserves_string_identity_from_native_uuid():
     assert row["participant_id"] is participant_id
     assert client.query_all.await_args.args == (
         "SELECT participant_id, state, version, host_proof "
-        "FROM loom._provider_participants FINAL WHERE participant_id IN {ids:Array(UUID)}",
+        "FROM loom._provider_participants FINAL WHERE participant_id IN {ids:Array(UUID)} LIMIT 5",
         {"ids": [str(participant_id)]},
     )
 

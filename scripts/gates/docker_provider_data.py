@@ -9,12 +9,17 @@ import sys
 import time
 from multiprocessing import spawn
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from server.core import provider_process
 from server.core.ch import get_client
 from server.insights.app.provider_command import model_command
 from server.settings import settings
+from server.workers.child import child_argv
+
+if TYPE_CHECKING:
+    from server.core.repo_base import _CHClient
 
 SUPERVISOR = [
     "-m",
@@ -149,19 +154,91 @@ def _workers(rows: list[dict], parent: dict) -> list[dict]:
     return sorted(workers, key=lambda row: row["host_proof"])
 
 
-async def _worker_rows(client) -> list[dict]:
-    return await client.query_all(
+def _proof(process: dict[str, Any]) -> str:
+    parts = provider_process.host_proof().split("|")
+    assert len(parts) == 8 and all(parts[:4]), "Incomplete fixture process scope"
+    parts[4:6] = [str(process["pid"]), process["start"]]
+    return provider_process.certified("|".join(parts))
+
+
+async def _proof_rows(client: "_CHClient", proofs: list[str]) -> list[dict[str, Any]]:
+    assert 1 <= len(proofs) <= 4 and len(set(proofs)) == len(proofs)
+    rows = await client.query_all(
         "SELECT toString(participant_id) AS participant_id, state, version, host_proof "
-        "FROM loom._provider_participants FINAL WHERE state != 'retired'"
+        "FROM loom._provider_participants FINAL WHERE state != 'retired' "
+        "AND host_proof IN {proofs:Array(String)} LIMIT 5",
+        {"proofs": proofs},
     )
+    assert len(rows) <= len(proofs), "Duplicate captured process registrations"
+    return rows
+
+
+async def _worker_rows(client) -> list[dict]:
+    return await _proof_rows(client, [_proof(p) for p in _kernel_workers().values()])
+
+
+def _background_children(
+    roots: list[dict[str, Any]], parent: dict[str, Any]
+) -> dict[str, list[dict[str, Any]]]:
+    found = {}
+    for root in roots:
+        web = _worker_process(root["host_proof"], parent)
+        children = []
+        for value in Path(f"/proc/{web['pid']}/task/{web['pid']}/children").read_text().split():
+            process = _process(int(value))
+            command = process["command"]
+            if "server.worker_main" not in command:
+                continue
+            assert process["parent"] == web["pid"], "Background child parent changed"
+            assert process["namespace"] == web["namespace"], "Background child namespace changed"
+            assert process["executable"] == web["executable"], "Background child executable changed"
+            assert len(command) == 7, "Background child command mismatch"
+            fds = [int(command[4]), int(command[6])]
+            assert min(fds) >= 0 and command == child_argv(*fds), (
+                "Background child command mismatch"
+            )
+            children.append(process)
+        assert len(children) <= 1, "More than one background child per web worker"
+        assert _worker_process(root["host_proof"], parent) == web, (
+            "Web worker changed during child census"
+        )
+        found[root["participant_id"]] = children
+    return found
 
 
 async def workers(client) -> list[dict]:
     parent = _supervisor()
     result = _workers(await _worker_rows(client), parent)
     assert len(result) == 2, "Worker registration census is incomplete"
+    children = _background_children(result, parent)
+    proofs = [_proof(p) for values in children.values() for p in values]
+    rows = await _proof_rows(client, proofs) if proofs else []
+    for root in result:
+        root["children"] = []
+        for process in children[root["participant_id"]]:
+            matches = [row for row in rows if row["host_proof"] == _proof(process)]
+            if not matches:
+                raise _WorkersPending("Background child exact registration is pending")
+            assert len(matches) == 1, "Background child registration is ambiguous"
+            row = matches[0]
+            assert provider_process.has_certificate(row["host_proof"]), (
+                "Background child certificate invalid"
+            )
+            root["children"].append(
+                {key: row[key] for key in ("participant_id", "host_proof", "version")}
+            )
+    assert _background_children(result, parent) == children, (
+        "Background child identities changed during census"
+    )
+    assert len({row["participant_id"] for row in _captured(result)}) == 2 + len(proofs)
     assert _supervisor() == parent, "Fixture supervisor changed during registration census"
     return result
+
+
+def _captured(roots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    assert 1 <= len(roots) <= 2
+    assert all(type(root["children"]) is list and len(root["children"]) <= 1 for root in roots)
+    return [row for root in roots for row in (root, *root["children"])]
 
 
 def _kill_worker(worker: dict, parent: dict) -> None:
@@ -180,9 +257,10 @@ def _kill_worker(worker: dict, parent: dict) -> None:
 
 
 async def _retirement_rows(client, captured: list[dict]) -> list[dict]:
+    assert 1 <= len(captured) <= 4
     rows = await client.query_all(
         "SELECT participant_id, state, version, host_proof "
-        "FROM loom._provider_participants FINAL WHERE participant_id IN {ids:Array(UUID)}",
+        "FROM loom._provider_participants FINAL WHERE participant_id IN {ids:Array(UUID)} LIMIT 5",
         {"ids": [row["participant_id"] for row in captured]},
     )
     return [{**row, "participant_id": str(row["participant_id"])} for row in rows]
@@ -232,11 +310,38 @@ async def retired(client, captured: list[dict], *, observation: dict | None = No
     return result("proved")
 
 
+async def _subtree_diagnostic(
+    client: "_CHClient", roots: list[dict[str, Any]], *, proved: bool
+) -> None:
+    """Print closed role counts, preserving the original retirement failure."""
+    try:
+        roles = {"web": roots, "background": [c for r in roots for c in r["children"]]}
+        summary = {}
+        for role, captured in roles.items():
+            counts = {
+                "captured": len(captured),
+                "retirement_proved": 0,
+                "death_proved": 0,
+                "query_zero_proved": 0,
+                "unproved": 0,
+            }
+            for row in captured:
+                counts["death_proved"] += int(provider_process.proves_stopped(row["host_proof"]))
+                accepted = proved or (bool(roles["background"]) and await retired(client, [row]))
+                counts["retirement_proved"] += int(accepted)
+                counts["query_zero_proved"] += int(accepted)
+                counts["unproved"] += int(not accepted)
+            summary[role] = counts
+        print("Provider subtree retirement diagnostic: " + json.dumps(summary, sort_keys=True))
+    except BaseException:  # noqa: BLE001 — diagnostics must preserve the original retirement failure
+        print("Provider subtree retirement diagnostic unavailable")
+
+
 async def crash_worker(client) -> None:
     parent = _supervisor()
     before = await workers(client)
     victim = before[0]
-    for worker in before:
+    for worker in _captured(before):
         rows = await _retirement_rows(client, [worker])
         identity_matches = len(rows) == 1 and rows[0]["participant_id"] == worker["participant_id"]
         if not identity_matches:
@@ -255,7 +360,7 @@ async def crash_worker(client) -> None:
         assert _supervisor() == parent
         stopped = provider_process.proves_stopped(victim["host_proof"])
         observation = {"death": "proved" if stopped else "unproved", "retirement": "not_checked"}
-        if stopped and await retired(client, [victim], observation=observation):
+        if stopped and await retired(client, _captured([victim]), observation=observation):
             try:
                 after = _workers(await _worker_rows(client), parent)
             except _WorkersPending:
@@ -270,10 +375,12 @@ async def crash_worker(client) -> None:
                 victim_absent=victim["participant_id"] not in new,
             )
             if len(new) == 2 and len(old & new) == 1 and victim["participant_id"] not in new:
+                await _subtree_diagnostic(client, [victim], proved=True)
                 return
         await asyncio.sleep(1)
     if observation["retirement"] == "row_count":
         observation.update(await _native_retirement_observation(client, [victim]))
+    await _subtree_diagnostic(client, [victim], proved=False)
     raise AssertionError(
         "Crashed worker retirement or supervised replacement was not proved: "
         + json.dumps(observation, sort_keys=True)
@@ -418,9 +525,10 @@ async def main() -> None:
         elif sys.argv[1] == "crash-worker":
             await crash_worker(client)
         elif sys.argv[1] == "retired":
-            assert await retired(client, json.loads(sys.argv[2])), (
-                "Recreated workers did not retire"
-            )
+            captured = json.loads(sys.argv[2])
+            accepted = await retired(client, _captured(captured))
+            await _subtree_diagnostic(client, captured, proved=accepted)
+            assert accepted, "Recreated workers did not retire"
         else:
             await verify(sys.argv[1], int(sys.argv[2]))
     finally:
