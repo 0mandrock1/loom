@@ -49,6 +49,6 @@ async def test_blank_sessions_keep_distinct_readable_chunk_identities(monkeypatc
     assert len(set(sessions)) == 2
     for row in [first, second]:
         sid = row["session_id"]
-        assert str(UUID(sid)) == sid
+        assert UUID(sid).hex == sid
         assert split_chunk_key(f"chunk:{sid}:{row['chunk_index']}") == (sid, row["chunk_index"])
         assert _chunk_anchor_keys([row]) == [(sid, row["chunk_index"])]
