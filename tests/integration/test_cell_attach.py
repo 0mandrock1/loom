@@ -132,14 +132,29 @@ def cell_clickhouse_databases() -> Iterator[tuple[str, str]]:
 
 
 @pytest.fixture
+def genuine_cell_processes() -> bool:
+    """Synthetic cases own their rows; the live-replica case uses the real readers."""
+    return False
+
+
+@pytest.fixture
 async def cell_stores(
-    monkeypatch: pytest.MonkeyPatch, cell_clickhouse_databases: tuple[str, str]
+    monkeypatch: pytest.MonkeyPatch,
+    cell_clickhouse_databases: tuple[str, str],
+    genuine_cell_processes: bool,
 ) -> AsyncIterator[dict[str, Any]]:
     cell_dsn = os.environ.get("LOOM_PG_DSN") or pytest.skip("LOOM_PG_DSN not set")
     router_dsn = os.environ.get("LOOM_ROUTER_PG_DSN") or pytest.skip("LOOM_ROUTER_PG_DSN not set")
     os.environ.get("LOOM_CH_HOST") or pytest.skip("LOOM_CH_HOST not set")
     cell_db, own_cell = await create_database(cell_dsn)
-    router_db, own_router = await create_database(router_dsn)
+    try:
+        router_db, own_router = await create_database(router_dsn)
+    except BaseException as first:  # Release only the database already created by this fixture.
+        try:
+            await drop_database(cell_dsn, cell_db)
+        except BaseException as error:  # noqa: BLE001 — cleanup retains the creation failure.
+            first.add_note(f"cell database cleanup also failed: {type(error).__name__}")
+        raise
     deployment = f"dep-{uuid.uuid4().hex[:8]}"
     tag = f"it-{uuid.uuid4().hex[:8]}-"
     for name, value in {
@@ -160,13 +175,11 @@ async def cell_stores(
         "oauth_issuer": "",
     }.items():
         monkeypatch.setattr(settings, name, value)
-    await pg.close_pool()
     monkeypatch.setattr(directory, "_pool", None)
     # A step's poll interval and the waits stay short.
     monkeypatch.setattr(cell_attach_pg, "POLL_S", 0.2)
     ch = ch_core.CHClient()
     monkeypatch.setattr(ch_core, "_ch", ch)
-    await ch.connect()
     ids: list[str] = []
     real_live, real_recent = instances.read_live, instances.read_recent
 
@@ -181,9 +194,12 @@ async def cell_stores(
         return [r for r in rows if r["instance_id"] in ids]
 
     # These assertions inspect only the heartbeat identities created by this fixture.
-    monkeypatch.setattr(instances, "read_live", read_live)
-    monkeypatch.setattr(instances, "read_recent", read_recent)
+    if not genuine_cell_processes:
+        monkeypatch.setattr(instances, "read_live", read_live)
+        monkeypatch.setattr(instances, "read_recent", read_recent)
     try:
+        await pg.close_pool()
+        await ch.connect()
         await pg_migrate.migrate()
         await pg.execute(
             "INSERT INTO loom.authority (authority, epoch, deployment_id) "
@@ -193,30 +209,63 @@ async def cell_stores(
         await directory.migrate()
         await ch.insert(
             "loom.storage_authority",
-            [{"authority": "postgres", "epoch": 10**12, "deployment_id": deployment}],
+            [
+                {
+                    "authority": "postgres",
+                    "epoch": 1 if genuine_cell_processes else 10**12,
+                    "deployment_id": deployment,
+                }
+            ],
         )
         cell.set_deployment_id(deployment)
         yield {"ch": ch, "ids": ids, "tag": tag, "deployment": deployment, "db": cell_db}
     finally:
         cell.set_deployment_id("")
-        await ch.execute(
+        await _close_cell_stores(
+            ch, deployment, ids, tag, (cell_dsn, cell_db), (router_dsn, router_db), sys.exception()
+        )
+
+
+async def _close_cell_stores(
+    ch: Any,
+    deployment: str,
+    ids: list[str],
+    tag: str,
+    cell_database: tuple[str, str],
+    router_database: tuple[str, str],
+    first: BaseException | None,
+) -> None:
+    # Every operation owns an exact database, deployment, heartbeat id or org prefix.
+    cleanup = [
+        ch.execute(
             "ALTER TABLE loom.storage_authority DELETE WHERE deployment_id = {d:String} "
             "SETTINGS mutations_sync = 2",
             {"d": deployment},
-        )
-        for table in (instances.TABLE, instances.CELL_TABLE):
-            await ch.execute(
+        ),
+        *(
+            ch.execute(
                 f"ALTER TABLE {table} DELETE WHERE has({{ids:Array(String)}}, instance_id)",
                 {"ids": ids},
             )
-        await ch.execute(
-            "DELETE FROM loom.namespaces WHERE startsWith(org, {p:String})", {"p": tag}
-        )
-        await ch.disconnect()
-        await pg.close_pool()
-        await directory.close()
-        await drop_database(cell_dsn, cell_db)
-        await drop_database(router_dsn, router_db)
+            for table in (instances.TABLE, instances.CELL_TABLE)
+        ),
+        ch.execute("DELETE FROM loom.namespaces WHERE startsWith(org, {p:String})", {"p": tag}),
+        ch.disconnect(),
+        pg.close_pool(),
+        directory.close(),
+        drop_database(*cell_database),
+        drop_database(*router_database),
+    ]
+    for operation in cleanup:
+        try:
+            await operation
+        except BaseException as error:  # noqa: BLE001 — attempt every owned cleanup; keep first failure.
+            if first is None:
+                first = error
+            else:
+                first.add_note(f"store cleanup also failed: {type(error).__name__}")
+    if first is not None:
+        raise first
 
 
 def _value(**keys: Any) -> str:
