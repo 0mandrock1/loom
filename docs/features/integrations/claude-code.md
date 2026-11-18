@@ -203,6 +203,11 @@ Check the setup in this order:
    access. Have the policy owner approve the intended Loom tools; do not rename the
    registration or disable the policy to evade the denial.
 
+`LOOM_CODE_SHUNT=off` disables code-read substitution, and `LOOM_PROMPT_PACK=off`
+disables automatic code pointers on prompts. Prompt-time memory recall has its own
+`LOOM_PROMPT_RECALL` control. Record these choices in comparisons; enabling the code
+hooks alone does not establish a benchmark improvement.
+
 The plugin's startup instructions prefer Loom for indexed-code questions. Its
 `loom-code` skill can load automatically; a skill with
 `disable-model-invocation: true` requires a manual invocation. For an explicit project
@@ -225,6 +230,25 @@ and indexed commits, listed code tools, hook output, explicit tool calls, failed
 cost and elapsed time. Keep the task and test budgets equal between arms. To isolate
 the test gate's contribution, compare a baseline, the plugin with `LOOM_TEST_GATE=off`,
 and the full plugin. Index the issue's starting commit so the real fix is not searchable.
+
+### Hook context does not appear
+
+The file-context hook runs on `PreToolUse`, before `Edit`, `Write`, `MultiEdit` and
+`NotebookEdit`. It emits context only when `memory.for_file` renders matching memories,
+decisions or constraints. Lookups are cached per session and file, including empty
+answers, for `LOOM_FILE_CONTEXT_TTL_MIN` minutes.
+
+The blast-radius hook runs on `PostToolUse` after `Edit`, `Write` and `MultiEdit`.
+It stays quiet for untracked files, empty diffs, repeated impact results, an unavailable
+index or a failed request. Edits performed through `Bash`, including scripts using
+`python` or `sed`, do not match either edit hook.
+
+Headless sessions support `hookSpecificOutput.additionalContext`; ordinary visible
+assistant output does not prove whether that context reached the model. Capture
+`--debug hooks,mcp` output privately and redact tokens and authorization headers before
+sharing it. Include the hook event, tool name, hook output and relevant stream events.
+Correlate them with server requests to `memory.for_file` and `code.impact` to distinguish
+hook matching, request execution, nonempty context and delivery to the agent.
 
 ## Configuration
 
