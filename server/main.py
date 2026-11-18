@@ -40,6 +40,7 @@ from server.operations.capabilities import operation_rows
 from server.settings import settings
 from server.transport import http as http_transport
 from server.transport import mcp as mcp_transport
+from server.transport.request_scope import HTTPApplication
 from server.wiring import wire
 
 # Install formatter before any uvicorn / module-level logging fires.
@@ -362,7 +363,7 @@ async def _with_repo_umask(target: FastAPI) -> AsyncIterator[None]:
             yield
 
 
-app = FastAPI(
+app = HTTPApplication(
     title="Loom Control Plane",
     description=(
         "Shared memory, knowledge, and observability data plane for AI agents "

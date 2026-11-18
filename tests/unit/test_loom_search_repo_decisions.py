@@ -149,6 +149,7 @@ async def _assemble(
         page="",
         explain=explain,
         repo_namespace=TRUNK,
+        tracker_plan=None,
     )
 
 

@@ -390,7 +390,7 @@ jobs:
           assistant=(--set assistant.enabled=true --set assistant.existingSecret=ci)
           # TLS on Loom's port, which the assistant (in "all") cannot reach: its own render.
           tls=(--set tls.secretName=ci --set 'ingress.annotations.alb\.ingress\.kubernetes\.io/backend-protocol=HTTPS' --set workers.enabled=true --set networkPolicy.enabled=true "${on[@]}" "${extractor[@]}")
-          all=(--set workers.enabled=true --set workers.replicaCount=2 --set autoscaling.enabled=true --set networkPolicy.enabled=true --set alerts.prometheusRule.enabled=true --set mustMatchChange.publish=ci --set settingsFile.memory_ask_recency_weight=0.3 "${on[@]}" "${extractor[@]}" "${assistant[@]}")
+          all=(--set workers.enabled=true --set workers.replicaCount=2 --set autoscaling.enabled=true --set networkPolicy.enabled=true --set alerts.prometheusRule.enabled=true --set mustMatchChange.publish=ci --set cellProbe.port=8777 --set settingsFile.memory_ask_recency_weight=0.3 "${on[@]}" "${extractor[@]}" "${assistant[@]}")
           # The PrometheusRule's schema: the CRD catalog at a pinned commit.
           crd='https://raw.githubusercontent.com/datreeio/CRDs-catalog/c86448cbf1a840ca62d119259864863897c8748a/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
 
@@ -465,6 +465,8 @@ jobs:
       # TLS on Loom's port: the Secret's mount, the settings, HTTPS probes, and the refusals.
       - name: tls
         run: python3 -m scripts.gates.helm_tls
+      - name: private cell probe
+        run: python3 -m scripts.gates.helm_cell_probe
 
   agent-plugins:
     name: coding-agent plugins (node --test)
@@ -948,6 +950,16 @@ jobs:
           tests/integration/test_mirror_search_chunk_keys.py
           tests/integration/test_mirror_title_projection.py
           tests/integration/test_mirror_ask_http.py
+          tests/integration/test_marked_admin_events_native.py
+          tests/integration/test_marked_analytics_export_native.py
+          tests/integration/test_marked_assistant_ledger_native.py
+          tests/integration/test_marked_cost_summary_native.py
+          tests/integration/test_marked_derived_activity_native.py
+          tests/integration/test_marked_event_readers_native.py
+          tests/integration/test_marked_mentor_agents_native.py
+          tests/integration/test_marked_rollup_migration_native.py
+          tests/integration/test_marked_durable_folds_native.py
+          tests/integration/test_marked_sql_surface_native.py
       - name: pytest online-index durability on a private physical standby
         timeout-minutes: 8
         env:
@@ -985,6 +997,7 @@ jobs:
         env:
           LOOM_AUTH_REQUIRED: "true"
           LOOM_INSTANCE_LABEL: "ci:integration-postgres-auth"
+          LOOM_CH_ANALYSIS_PROBE_INTERVAL_S: "10"
         run: |
           LOOM_WEB_WORKERS=3 PORT=7778 nohup sh scripts/serve.sh > server-auth.log 2>&1 &
           for _ in $(seq 1 60); do
@@ -1004,6 +1017,7 @@ jobs:
         env:
           LOOM_AUTH_REQUIRED: "true"
           LOOM_BASE_URL: http://localhost:7778
+          LOOM_CH_ANALYSIS_PROBE_INTERVAL_S: "10"
         run: >-
           pytest -q
           tests/integration/test_cross_principal_leakage.py
@@ -1016,6 +1030,7 @@ jobs:
           tests/integration/test_blacklist.py
           tests/integration/test_mirror_checked_search_http.py
           tests/integration/test_mirror_checked_list_http.py
+          tests/integration/test_analysis_isolation.py
           tests/integration/test_sensitivity_high_canary.py
           tests/integration/test_pg_authority.py
           -k "not test_a_duplicate_never_resolves_to_a_canonical_outside_the_scope

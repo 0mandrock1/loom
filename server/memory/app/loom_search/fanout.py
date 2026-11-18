@@ -1,13 +1,14 @@
 """The loom_search fan-out: one question over every plane that could answer it.
 
 Memory (plus the scoped repository's decisions), knowledge (plus the scoped
-repository's documents), profile and conversations are searched in parallel,
-and — for a defect report under a code scope — the tracker record; the
+repository's documents), profile, conversations and authorized tracker records
+are searched in parallel after their capture consent is resolved; the
 sections are assembled into one payload and trimmed by the answer-first
-rules (answer_first.py). A leg that fails returns
+rules (answer_first.py). An ordinary leg failure returns
 `{"error": ..., "results": []}` under its section and the others still
-answer. The MCP `loom_search` tool renders this payload as its text and
-lean result; the `search` operation returns it as is.
+answer. Typed input refusals propagate instead of producing partial results.
+The MCP `loom_search` tool renders this payload as its text and lean result;
+the `search` operation returns it as is.
 """
 
 from __future__ import annotations
@@ -18,19 +19,20 @@ from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Literal
 
+from server.core import request_tail
 from server.core.ch import set_query_tag
 from server.core.diagnostics import private_work
-from server.core.errors import LoomServerError, caller_text
+from server.core.errors import LoomServerError, VectorInputTooLargeError, caller_text
 from server.identity.app.request_scope import request_scope
 from server.identity.domain.read_scope import ReadFilters
-from server.knowledge.app import repo_docs
+from server.knowledge.app import repo_docs, source_publication
 from server.knowledge.app.source_access import ReadPlan, prepare
 from server.memory.api.models_search import MemorySearchInput, _MemorySearchHit
 from server.memory.app.agent_rules import request_rule_agent, served_hits
 from server.memory.app.ask.reader_render import render_reader_block
 from server.memory.app.loom_search.answer_first import answer_first
 from server.memory.app.loom_search.repo_decisions import memory_with_repo_decisions
-from server.memory.app.loom_search.tracker_leg import tracker_leg
+from server.memory.app.loom_search.tracker_leg import TrackerSearchPlan, tracker_leg
 from server.memory.app.profile_search import search_profile
 from server.memory.domain import code_change
 
@@ -279,6 +281,8 @@ async def _knowledge_section(
     initial = await _filtered_knowledge(first.output, expanded, agent, top_k)
     if wider is None and widening_error is None:
         if first.fresh():
+            for proof in first.publication_proofs:
+                source_publication.retain(proof)
             return initial
         return await _ordinary_knowledge(first, None, agent)
     await first.current()
@@ -299,7 +303,20 @@ async def _knowledge_section(
     final = await _filtered_knowledge(first.output, cached, agent, top_k)
     if not first.fresh() or (used_wider and wider is not None and not wider.fresh()):
         return await _ordinary_knowledge(first, wider, agent)
+    for result in (first, wider) if used_wider and wider is not None else (first,):
+        for proof in result.publication_proofs:
+            source_publication.retain(proof)
     return final
+
+
+async def _published_knowledge(
+    first: repo_docs.RepoSearch, plan: ReadPlan, agent: str
+) -> dict[str, Any]:
+    with request_tail.publication_group() as publication:
+        section = await _knowledge_section(first, plan, agent)
+        # answer_first retains section metadata and counts withheld hits.
+        publication.commit()
+        return section
 
 
 async def search_sections(
@@ -316,6 +333,7 @@ async def search_sections(
     page: str,
     explain: bool,
     repo_namespace: str,
+    tracker_plan: TrackerSearchPlan | None,
 ) -> dict[str, Any]:
     """The assembled loom_search payload for `query` addressed to
     (`org`, `namespace`); every leg reads the namespaces `namespaces_to_search`
@@ -380,7 +398,7 @@ async def search_sections(
                 org, namespaces, query, top_k=top_k, lexical=profile_hit_matches, scope=scope
             ),
             _conversation_leg(conv_input, scope),
-            tracker_leg(query, top_k=top_k),  # A defect-shaped query under a code scope
+            tracker_leg(query, plan=tracker_plan, top_k=top_k),
             return_exceptions=True,
         )
 
@@ -388,7 +406,8 @@ async def search_sections(
             (
                 result
                 for result in (mem_result, know_result, profile_rows, conv_result, t_section)
-                if isinstance(result, BaseException) and not isinstance(result, Exception)
+                if isinstance(result, VectorInputTooLargeError)
+                or (isinstance(result, BaseException) and not isinstance(result, Exception))
             ),
             None,
         )
@@ -421,7 +440,7 @@ async def search_sections(
             payload["memory"] = drop_flagged_hits(memory)
         if not isinstance(know_result, Exception):
             try:
-                payload["knowledge"] = await _knowledge_section(know_result, plan, agent)
+                payload["knowledge"] = await _published_knowledge(know_result, plan, agent)
             except Exception as error:  # noqa: BLE001 — a failed knowledge renewal leaves other sections available
                 know_result = error
         if isinstance(know_result, Exception):

@@ -9,6 +9,7 @@ import asyncio
 import logging
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from types import TracebackType
 from typing import Any
 
 from server.auth.fanout import Fanout, resolve_fanout
@@ -16,6 +17,7 @@ from server.core.background import create_deferred_task
 from server.core.ch import get_client
 from server.core.errors import VectorInputTooLargeError
 from server.core.llm_free import reads_llm_free
+from server.core.shielded import to_its_end
 from server.memory.api.models_search import SEARCH_ENTITY_FILTER_MAX, MemorySearchInput
 from server.memory.app.search.query_plan import _enrichment_parser_gate_active
 from server.memory.domain.graph_quality import names_only
@@ -71,26 +73,54 @@ class _SearchRun:
     # and left by `close`.
     sequential_scope: ExitStack = field(default_factory=ExitStack)
 
-    def cancel_pending(self) -> None:
+    async def __aenter__(self) -> _SearchRun:
+        return self
+
+    async def __aexit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        failure: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> None:
+        await self.close(failure=failure)
+
+    def cancel_pending(self) -> list[asyncio.Task[Any]]:
         """Cancel every task this pass launched that is still running. The normal path has
         awaited them all; an exception, or a `wait_for` timeout cancelling a re-entrant pass,
         would otherwise leave their ClickHouse reads running after the search returned."""
-        for task in (
-            self.rerank_cfg_task,
-            self.calibration_task,
-            self.fanout_task,
-            self.canonical_task,
-            self.term_task,
-            *self.side_tasks,
-        ):
-            if task is not None and not task.done():
+        tasks = [
+            task
+            for task in (
+                self.rerank_cfg_task,
+                self.calibration_task,
+                self.fanout_task,
+                self.canonical_task,
+                self.term_task,
+                *self.side_tasks,
+            )
+            if task is not None
+        ]
+        for task in tasks:
+            if not task.done():
                 task.cancel()
+        return tasks
 
-    def close(self) -> None:
-        """End the pass: cancel what it launched (`cancel_pending`) and leave the
-        sequential reads `admit` entered."""
-        self.cancel_pending()
-        self.sequential_scope.close()
+    async def close(self, *, failure: BaseException | None = None) -> None:
+        """Join the pass's cancelled children before leaving its read scope."""
+        tasks = self.cancel_pending()
+
+        async def stopped() -> None:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        try:
+            if any(not task.done() for task in tasks):
+                await to_its_end(stopped(), name="memory.search.cleanup")
+        except asyncio.CancelledError:
+            # Keep the first failed read after repeated cancellation during its cleanup.
+            if failure is None:
+                raise
+        finally:
+            self.sequential_scope.close()
 
 
 def _launch_scope_reads(input: MemorySearchInput) -> _SearchRun:

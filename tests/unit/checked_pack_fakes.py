@@ -37,6 +37,9 @@ class _OrdinaryStack:
     async def ordinary(self) -> Any:
         return self.output
 
+    def publication_proofs(self) -> tuple[()]:
+        return ()
+
 
 def install_pack_stack(monkeypatch: Any, handler: Any) -> None:
     from server.memory.app import stack
