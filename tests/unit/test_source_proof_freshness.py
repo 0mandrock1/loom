@@ -180,7 +180,7 @@ async def test_search_freshness_uses_document_evidence_without_repeating_key_pro
     proof = SearchProofs(plan, "fake-model", (item,))
     await proof.check()
     assert proof.fresh()
-    query.assert_awaited_once_with("acme", "fake-model", [key])
+    query.assert_awaited_once_with("acme", "fake-model", [key], embedded_only=True)
     clock.at += timedelta(seconds=6)
     assert not proof.fresh() and proof.invalid
     query.assert_awaited_once()
@@ -234,7 +234,7 @@ async def test_search_is_unchecked_until_the_entire_initial_key_sequence_complet
             await release.wait()
         return [item]
 
-    async def keys(*_args):
+    async def keys(*_args, embedded_only=True):
         if phase == "keys":
             entered.set()
             await release.wait()

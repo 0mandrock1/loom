@@ -2,23 +2,69 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack
+import time
+from collections.abc import AsyncIterator, Iterator
+from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass
+from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException
 from starlette.requests import ClientDisconnect
 from starlette.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 
+from server.auth.context import current_auth
+from server.core import request_work
 from server.core.ch import sequential_reads, set_query_tag
 from server.core.diagnostics import private_work
-from server.knowledge.app import source_documents
+from server.knowledge.app import source_documents, source_publication
 from server.knowledge.app.download_routes import _HEAD_BYTES, _headers
 from server.knowledge.app.source_access import ReadPlan
 from server.knowledge.app.source_documents import CheckedDocument
 from server.knowledge.domain.documents import text_download_filename
 from server.knowledge.store import blobs
+from server.observability import cost_accumulator
+from server.observability.ledger import emit_agent_event, required_call_exit
+
+
+@contextmanager
+def download_request(org: str, namespace: str) -> Iterator[None]:
+    """The raw HTTP read owns the same required marked ledger attempt as an op."""
+    from server.identity.domain.read_scope import request_read_filters
+    from server.observability.consumer import bind_current_consumer
+    from server.observability.traffic_class import bind_claimed_class
+
+    auth = current_auth()
+    scope = request_read_filters(auth)
+    bag = request_work.begin()
+    bag.admitted = (org, namespace)
+    cost_accumulator.begin_op()
+    bind_current_consumer({}, auth)
+    bind_claimed_class(auth)
+    metadata: dict[str, Any] = {
+        "op_name": "knowledge.download",
+        "identity": {
+            "org": org,
+            "namespace": namespace,
+            "agent": "-",
+            "user_id": scope.user_id or "-",
+            "session_id": scope.session_id or "-",
+        },
+        "request_id": str(uuid4()),
+        "impersonated_by": auth.impersonated_by if auth is not None else "",
+        "transport": "http",
+    }
+    began = time.perf_counter()
+    with required_call_exit(**metadata, run_id=""):
+        yield
+        if request_work.mirror_marked():
+            emit_agent_event(
+                **metadata,
+                latency_ms=int((time.perf_counter() - began) * 1000),
+                success=True,
+                error_code="",
+            )
 
 
 class _Unavailable(Exception):
@@ -58,6 +104,7 @@ class CheckedDownload(StreamingResponse):
         self.public_uri = public_uri
         self.inline = inline
         self._began = False
+        self._publication = source_publication.retain_document(plan, document)
 
     async def _require_current(self) -> None:
         refreshed = await source_documents.refresh(self.plan, self.document)
@@ -157,3 +204,6 @@ class CheckedDownload(StreamingResponse):
                         "message": "no document at this source_uri in the namespace",
                     },
                 ) from None
+            finally:
+                if not self._began:
+                    source_publication.discard(self._publication)

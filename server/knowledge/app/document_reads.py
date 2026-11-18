@@ -31,7 +31,7 @@ from server.knowledge.api.models_knowledge import (
     _KnowledgeListEntry,
     _OutlineEntry,
 )
-from server.knowledge.app import pg_serving
+from server.knowledge.app import pg_serving, source_publication
 from server.knowledge.app.readable import readable_namespaces
 from server.knowledge.app.source_access import ReadPlan
 from server.knowledge.app.source_corpus import LostCorpus
@@ -92,6 +92,11 @@ class _ListRenderer:
     def render(
         self, ordinary: list[DocumentListRow], mirrored: list[DocumentListRow]
     ) -> KnowledgeListOutput:
+        return _list_output(self.selected(ordinary, mirrored), self.request)
+
+    def selected(
+        self, ordinary: list[DocumentListRow], mirrored: list[DocumentListRow]
+    ) -> list[DocumentListRow]:
         raw_rows = list(ordinary)
         if mirrored:
             families = {(row["namespace"], row["source_uri"]) for row in ordinary}
@@ -107,7 +112,7 @@ class _ListRenderer:
                 reverse=True,
             )
             raw_rows = raw_rows[: self.request.input.limit + 1]
-        return _list_output(raw_rows, self.request)
+        return raw_rows
 
 
 @dataclass
@@ -125,6 +130,7 @@ class CheckedList:
         if self._failed:
             raise LostCorpus()
         if self.proofs is not None:
+            source_publication.discard(self.proofs)
             self.proofs, self.lost = None, True
             try:
                 self.output = self._renderer.render(self._ordinary, [])
@@ -153,7 +159,9 @@ class CheckedList:
 
 
 async def handle_knowledge_list(input: KnowledgeListInput) -> KnowledgeListOutput:
-    return (await checked_knowledge_list(input)).output
+    checked = await checked_knowledge_list(input)
+    source_publication.retain(checked.proofs)
+    return checked.output
 
 
 async def checked_knowledge_list(input: KnowledgeListInput) -> CheckedList:
@@ -192,6 +200,17 @@ async def run_checked_list(request: ListRequest, plan: ReadPlan) -> CheckedList:
             mirrored = listing.rows
             proofs = listing.proofs if listing.proofs.mirrored else None
         renderer = _ListRenderer(request)
+        if proofs is not None:
+            mirrored_rows = {id(row) for row in mirrored}
+            proofs = proofs.selected(
+                {
+                    (row["namespace"], row["source_uri"])
+                    for row in renderer.selected(ordinary, mirrored)
+                    if id(row) in mirrored_rows
+                }
+            )
+            if not proofs.mirrored:
+                proofs = None
         output = renderer.render(ordinary, mirrored)
         lost = False
         if proofs is not None:
@@ -295,7 +314,19 @@ async def handle_knowledge_outline(input: KnowledgeOutlineInput) -> KnowledgeOut
         )
         for item in admitted
     ]
-    return _outline_output(input, checked.row.title or "", chunks)
+    from server.knowledge.app.source_search_proofs import SearchProofs
+
+    output = _outline_output(input, checked.row.title or "", chunks)
+    source_publication.retain_document(plan, checked)
+    source_publication.retain(
+        SearchProofs(
+            plan,
+            get_embedder().model_name,
+            tuple(item.admitted for item in admitted),
+            embedded_only=False,
+        )
+    )
+    return output
 
 
 def _outline_chunk(idx: int, content: str, metadata: str) -> Chunk:
@@ -358,6 +389,8 @@ async def handle_knowledge_get(input: KnowledgeGetInput) -> KnowledgeGetOutput:
     if row is not None or not plan.marked:
         return _get_output(row, input.source_uri)
     checked = await source_documents.get(plan, input.namespace, input.source_uri)
+    if checked is not None:
+        source_publication.retain_document(plan, checked)
     return _get_output(
         checked.row if checked else None, input.source_uri, mirrored=checked is not None
     )

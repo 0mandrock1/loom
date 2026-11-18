@@ -902,7 +902,7 @@ schema. These rules keep that safe. The operator procedure is in
     refused until the read, request, session and deployment protections are complete.
 
 62. **User cost caps and private budget warnings** (migration
-    `106_user_cost_budgets.sql`): activate the global and namespace user caps and alert
+    `107_user_cost_budgets.sql`): activate the global and namespace user caps and alert
     inboxes only after every serving build supports the migration; keep them disabled
     and do not rely on user caps while any build is older or unknown. N-1 cannot enforce
     user caps, filters no private warning events, and has no user-erasure step for those
@@ -941,6 +941,22 @@ It does not check new enum values (rule 3), wire formats (rule 4), signing keys 
 than `default` (rule 5), new revocation keys (rule 18), an `/assistant` history entry
 (rule 46), or a process killed mid-migration. It skips with exit 0 where docker is
 unreachable; CI passes `--require`, which fails there instead.
+
+### Analyst event-view cutover
+
+The marked-event boundary replaces the analyst's raw event grant with the signed,
+typed `analysis_agent_events` view and advances the entity version. The raw table
+keeps a deny policy for the analyst while interrupted provisioning repairs its grants.
+The entity stamp is written after the view and grants, under the existing access lease.
+
+Deploy the probe ordering described in [Analyst probes across catalog versions](#analyst-probes-across-catalog-versions)
+across the fleet before this cutover. A capable older probe checks the key canary,
+then trusts the newer catalog; supported ordinary statements keep working without
+restoring raw access. Earlier probes count their raw event grant first and can refuse
+`insights.query` until rolled forward. Complete the fleet while mirrored creation is
+disabled. Raw SQL statements must use the catalog's masked relation. Starting an older
+build after enablement still requires the marked-event rollback cleanup; regranting
+raw access cannot substitute for it.
 
 ### Analyst probes across catalog versions
 

@@ -792,6 +792,10 @@ Raised in `server/code/app/repo_admin.py`.
 
 Raised in `server/code/app/repo_admin.py`.
 
+#### `REQUEST_INTERRUPTED`
+
+Raised in `server/observability/ledger.py`.
+
 #### `RESERVED_BLOB_KEY`
 
 Raised in `server/memory/app/context_offload.py`.

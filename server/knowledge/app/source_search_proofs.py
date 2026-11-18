@@ -32,6 +32,7 @@ class SearchProofs:
     plan: ReadPlan
     model: str
     items: InitVar[tuple[Admitted, ...]]
+    embedded_only: bool = True
     invalid: bool = field(default=False, init=False)
     _documents: Proofs = field(init=False, repr=False)
     _keys: tuple[store.ChunkKey, ...] = field(default=(), init=False, repr=False)
@@ -72,7 +73,9 @@ class SearchProofs:
                     await self._documents.check()
                     for start in range(0, len(self._keys), 64):
                         keys = list(self._keys[start : start + 64])
-                        current = await store.chunk_keys(self.plan.org, self.model, keys)
+                        current = await store.chunk_keys(
+                            self.plan.org, self.model, keys, embedded_only=self.embedded_only
+                        )
                         if len(current) != len(keys) or set(current) != set(keys):
                             raise LostCorpus()
                     await self._documents.check()

@@ -52,7 +52,17 @@ def world(monkeypatch):
         assert checked is plan and namespace == "team" and limit == 200 and source_id == SID
         events.append("titles")
         return [
-            source_titles.Title("gdrive:file#native", "Notes", "html", "gdrive", "r1", 7, 0, NOW)
+            source_titles.Title(
+                "gdrive:file#native",
+                "Notes",
+                "html",
+                "gdrive",
+                "r1",
+                7,
+                0,
+                NOW,
+                SimpleNamespace(mirrored=True, check=AsyncMock(), fresh=lambda: True),
+            )
         ]
 
     monkeypatch.setattr(source_access, "prepare", AsyncMock(side_effect=prepare))

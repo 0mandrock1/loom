@@ -27,6 +27,7 @@ from server.knowledge.api.models_knowledge import (
     KnowledgeSearchOutput,
     _SearchHit,
 )
+from server.knowledge.app import source_publication
 from server.settings import settings
 
 log = logging.getLogger("loom.repo_docs")
@@ -35,6 +36,8 @@ log = logging.getLogger("loom.repo_docs")
 if TYPE_CHECKING:
     from server.knowledge.app.knowledge_search import CheckedSearch, SearchRequest
     from server.knowledge.app.source_access import ReadPlan
+    from server.knowledge.app.source_list_proofs import ListProofs
+    from server.knowledge.app.source_search_proofs import SearchProofs
 
 
 @dataclasses.dataclass(frozen=True)
@@ -72,6 +75,8 @@ class RepoSearch:
     extra: CheckedSearch | None
 
     _lost: bool = dataclasses.field(default=False, init=False)
+    _base_used: bool = dataclasses.field(default=False, init=False)
+    _extra_used: bool = dataclasses.field(default=False, init=False)
     _checking: asyncio.Lock = dataclasses.field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
@@ -153,6 +158,13 @@ class RepoSearch:
         return (self.base, self.extra) if self.extra is not None else (self.base,)
 
     @property
+    def publication_proofs(self) -> tuple[SearchProofs, ...]:
+        children = ((self.base,) if self._base_used else ()) + (
+            (self.extra,) if self._extra_used and self.extra is not None else ()
+        )
+        return tuple(child.proofs for child in children if child.proofs is not None)
+
+    @property
     def output(self) -> KnowledgeSearchOutput:
         extra = (
             []
@@ -164,7 +176,13 @@ class RepoSearch:
                 for hit in self.extra.output.results
             ]
         )
-        return _merge_output(self.base.output, extra, int(self.request.base.input.top_k))
+        output = _merge_output(self.base.output, extra, int(self.request.base.input.top_k))
+        selected = {id(hit) for hit in output.results}
+        self._base_used = self.base.metadata_uses_mirrors or any(
+            id(hit) in selected for hit in self.base.output.results
+        )
+        self._extra_used = any(id(hit) in selected for hit in extra)
+        return output
 
 
 async def resolve_repo_search(
@@ -254,7 +272,10 @@ async def knowledge_with_repo_docs(
     plan = await prepare(know_input.org, request.namespaces)
     with private_work() if plan.marked else nullcontext():
         result = await run_repo_search(request, plan)
-        return await result.current()
+        output = await result.current()
+        for proof in result.publication_proofs:
+            source_publication.retain(proof)
+        return output
 
 
 def _merge_output(
@@ -285,23 +306,28 @@ DOCS_SECTION_MAX_DOCS = 12
 _LIST_CACHE: dict[tuple[str, str, int], tuple[float, list[RepoDoc]]] = {}
 
 
+@dataclasses.dataclass(frozen=True)
+class RepoListing:
+    namespace: str
+    docs: list[RepoDoc]
+    proof: ListProofs | None = None
+
+
 async def list_repo_docs(
     org: str,
     code_namespace: str,
     *,
     limit: int = DOCS_SECTION_MAX_DOCS,
     timeout_s: float | None = None,
-) -> tuple[str, list[RepoDoc]]:
-    """(docs namespace, [{source_uri, title, description}]) — the
-    repository's live documents, newest first as `knowledge.list` orders
-    them; ("", []) when there is nothing the caller may read, or on failure."""
+) -> RepoListing:
+    """Return repository titles with the physical owners of the selected page."""
     if timeout_s is None:
         timeout_s = settings.knowledge_repo_docs_timeout_s
     from server.code.app.repo_scope import readable_repo_namespace
 
     ns = await readable_repo_namespace(org, code_namespace)
     if not ns:
-        return "", []
+        return RepoListing("", [])
     try:
         from server.knowledge.app.document_reads import resolve_list, run_checked_list
         from server.knowledge.app.source_access import prepare
@@ -320,7 +346,7 @@ async def list_repo_docs(
             if not plan.marked:
                 hit = _LIST_CACHE.get((org, ns, limit))
                 if hit is not None and hit[0] > time.monotonic():
-                    return ns, list(hit[1])
+                    return RepoListing(ns, list(hit[1]))
             checked = await run_checked_list(request, plan)
             await settle([checked])
         # Check retained deadlines after the timeout context has finished its cleanup.
@@ -328,7 +354,7 @@ async def list_repo_docs(
             await checked.ordinary()
     except Exception:  # noqa: BLE001 — a failed additive listing cannot expose private details
         log.info("repo docs listing did not answer")
-        return ns, []
+        return RepoListing(ns, [])
     docs = [
         RepoDoc(source_uri=r.source_uri, title=r.title, description=r.description)
         for r in checked.output.rows
@@ -338,7 +364,11 @@ async def list_repo_docs(
             time.monotonic() + settings.knowledge_repo_docs_list_ttl_s,
             docs,
         )
-    return ns, list(docs)
+    proof = checked.proofs
+    if proof is not None:
+        # The docs section uses page rows/counts, never knowledge.list's cursor.
+        proof = proof.selected({(ns, row.source_uri) for row in checked.output.rows})
+    return RepoListing(ns, list(docs), proof)
 
 
 def reset_cache_for_tests() -> None:

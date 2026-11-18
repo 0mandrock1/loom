@@ -68,7 +68,7 @@ from server.knowledge.api.models_inspect import (
     MemoryFindingRef,
     SourceJobs,
 )
-from server.knowledge.app import ingest_jobs, source_access, source_titles
+from server.knowledge.app import ingest_jobs, source_access, source_publication, source_titles
 from server.knowledge.app.ingest_run import JOB_LEASE_S
 from server.knowledge.domain.ingest_states import OPEN_STATES
 from server.knowledge.store import documents as documents_repo
@@ -989,25 +989,33 @@ async def handle_knowledge_inspect(input: KnowledgeInspectInput) -> KnowledgeIns
             if input.sample_limit
             else []
         )
+        private = [
+            (
+                InspectDocument(
+                    source_uri=title.source_uri,
+                    title=title.title,
+                    format=title.format,
+                    source_scheme=title.source_scheme,
+                    version=title.version,
+                    revision=title.revision,
+                    ingested_at=title.ingested_at,
+                ),
+                title.proof,
+            )
+            for title in titles
+        ]
         output.listed = sorted(
             [
                 *output.listed,
-                *(
-                    InspectDocument(
-                        source_uri=title.source_uri,
-                        title=title.title,
-                        format=title.format,
-                        source_scheme=title.source_scheme,
-                        version=title.version,
-                        revision=title.revision,
-                        ingested_at=title.ingested_at,
-                    )
-                    for title in titles
-                ),
+                *(doc for doc, _proof in private),
             ],
             key=lambda doc: (to_naive_utc_second(doc.ingested_at), doc.source_uri),
             reverse=True,
         )[: input.sample_limit]
+        selected = {id(doc) for doc in output.listed}
+        for doc, proof in private:
+            if id(doc) in selected:
+                source_publication.retain(proof)
         output.listed_complete = False
         return output
 
