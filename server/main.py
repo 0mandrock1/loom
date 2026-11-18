@@ -228,7 +228,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await boot.require_storage_authority(ch)
     # The deployment's cell state, before the first heartbeat reports this process
     # serving and before the lease is decided on it.
-    from server.insights.app.provider_barrier import register_process
+    from server.insights.app.provider_barrier import register_process, retire_reaped_process
 
     await register_process()
     for task in await boot.start_cell_gate():
@@ -273,7 +273,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # the background workers, the holder of the ClickHouse lease, in a child
     # process of its own unless LOOM_WORKERS_PROCESS=inline.
     lease = await _leader.decide_supervisor(settings.workers_mode())
-    supervisor = _workers_child.worker_runner(lease)
+    supervisor = _workers_child.worker_runner(lease, retire_child=retire_reaped_process)
     _leader.set_current(lease)
     # Apply per-table retention overrides from LOOM_RETENTION_*_DAYS, if set —
     # from the deployment's leader only, and only where the TTL differs.

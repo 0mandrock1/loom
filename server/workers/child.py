@@ -27,9 +27,8 @@ import os
 import signal
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from uuid import UUID
 
 from server.core.errors import error_kind
 from server.settings import settings
@@ -45,8 +44,6 @@ ALIVE_WINDOW_S = 15.0
 # The longest a stop waits for the child before killing it, whatever the
 # deadline: the lifespan's shutdown drains share 40 s.
 STOP_TIMEOUT_S = 20.0
-# Not a setting: proof work fits within the existing stop or restart deadline.
-_REAP_RETIRE_S = 1.0
 RESTART_DELAY_S = 5.0
 # A child that exits sooner than this after it started failed to start; after
 # MAX_FAILED_STARTS in a row this process gives the lease up.
@@ -62,8 +59,11 @@ _PR_SET_PDEATHSIG = 1
 class ChildWorkers:
     """The supervisor's start/stop/status surface, backed by a child process."""
 
-    def __init__(self, lease: leader.SupervisorLease) -> None:
+    def __init__(
+        self, lease: leader.SupervisorLease, *, retire_child: Callable[[str], Awaitable[None]]
+    ) -> None:
         self._lease = lease
+        self._retire_callback = retire_child
         self._proc: asyncio.subprocess.Process | None = None
         self._child_proof: str | None = None
         self._child_parent_proof: str | None = None
@@ -209,8 +209,6 @@ class ChildWorkers:
 
     async def _retire_child(self, proc: asyncio.subprocess.Process, end: float) -> None:
         from server.core import provider_process
-        from server.insights.app.provider_barrier import retire_participant
-        from server.insights.store.provider_participants import participants
 
         proof = self._child_proof
         if proc is not self._proc or proc.returncode is None or proof is None:
@@ -230,11 +228,10 @@ class ChildWorkers:
         ):
             return
         try:
-            async with asyncio.timeout(min(_REAP_RETIRE_S, max(0.0, end - time.monotonic()))):
-                rows = await participants(host_proof=proof)
-                if len(rows) != 1 or rows[0].get("host_proof") != proof:
-                    return
-                await retire_participant(UUID(str(rows[0]["participant_id"])), expected_proof=proof)
+            async with asyncio.timeout(
+                min(settings.workers_child_retirement_timeout_s, max(0.0, end - time.monotonic()))
+            ):
+                await self._retire_callback(proof)
         except Exception:  # noqa: BLE001 — unproved retirement must not replace child cleanup
             log.warning("reaped workers child retirement remains unproved")
 
@@ -330,12 +327,14 @@ def child_env(parent: Mapping[str, str]) -> dict[str, str]:
 _RUNNER: WorkerSupervisor | ChildWorkers | None = None
 
 
-def worker_runner(lease: leader.SupervisorLease) -> WorkerSupervisor | ChildWorkers:
+def worker_runner(
+    lease: leader.SupervisorLease, *, retire_child: Callable[[str], Awaitable[None]]
+) -> WorkerSupervisor | ChildWorkers:
     """What runs the workers here: a child process for an `auto` lease holder
     (`LOOM_WORKERS_PROCESS=child`), else the in-process supervisor."""
     global _RUNNER
     if lease.mode == "auto" and settings.workers_process == "child":
-        _RUNNER = ChildWorkers(lease)
+        _RUNNER = ChildWorkers(lease, retire_child=retire_child)
     else:
         _RUNNER = get_supervisor()
     return _RUNNER

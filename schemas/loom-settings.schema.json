@@ -7078,6 +7078,12 @@
           "type": "number",
           "description": "A pass with a failed leg on a worker whose interval is longer than this retries after this long, doubling with each further such pass, up to the interval: a weekly pass must not leave one namespace's transient failure standing for a week."
         },
+        "workers_child_retirement_timeout_s": {
+          "default": 1.0,
+          "exclusiveMinimum": 0,
+          "type": "number",
+          "description": "At most this many seconds to certify a reaped worker child; also bounded by the remaining stop or restart delay. Expiry leaves its participant unretired."
+        },
         "workers_process": {
           "default": "child",
           "enum": [

@@ -319,6 +319,14 @@ def participant_lifespan[T](
     return wrapped
 
 
+async def retire_reaped_process(host_proof: str) -> None:
+    """Retire only the one recorded process matching its owner's captured birth."""
+    rows = await participants(host_proof=host_proof)
+    if len(rows) != 1 or rows[0].get("host_proof") != host_proof:
+        return
+    await retire_participant(UUID(str(rows[0]["participant_id"])), expected_proof=host_proof)
+
+
 async def retire_participant(
     participant: UUID, *, ch: Any = None, expected_proof: str | None = None
 ) -> str:

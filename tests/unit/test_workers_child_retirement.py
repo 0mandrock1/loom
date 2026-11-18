@@ -191,7 +191,7 @@ async def _owned(monkeypatch, *, fault=None):
     proc = Process()
     monkeypatch.setattr(child.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc))
     lease = SimpleNamespace(fresh=lambda: True, remaining_s=lambda: 10)
-    workers = child.ChildWorkers(lease)
+    workers = child.ChildWorkers(lease, retire_child=barrier.retire_reaped_process)
     await workers._spawn()
     if fault == "parent_changed":
         monkeypatch.setattr(
