@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
+from server.core import ch as ch_module
 from server.core import ch_observer
 from server.core.ch_observer import ObservationUnavailable, PolicyObserver, observer_origins
 
@@ -195,3 +196,102 @@ def test_only_explicit_distinct_origins_can_receive_existing_credentials(additio
 def test_secure_service_cannot_downgrade_observer_transport():
     with pytest.raises(ObservationUnavailable):
         observer_origins({"host": "writer", "port": 8443, "secure": True}, ("http://other:8123",))
+
+
+@pytest.fixture
+def owner(monkeypatch):
+    configuration = {
+        "host": "writer",
+        "port": 8123,
+        "secure": False,
+        "username": "service",
+        "password": "password",
+        "database": "loom",
+    }
+    monkeypatch.setattr(ch_module, "connection_kwargs", lambda: dict(configuration))
+    monkeypatch.setattr(ch_module.settings, "ch_analysis_observer_urls", ["http://other:8123"])
+    client = ch_module.CHClient()
+    client._client = object()
+    client._connection_config = dict(configuration)
+    instances = []
+
+    class Channel:
+        bootstrap_failure = None
+        close_failure = None
+
+        def __init__(self, origin, user, password, database, guarded, options):
+            self.guarded = guarded
+            self.closed = False
+            instances.append(self)
+
+        async def bootstrap(self):
+            if self.bootstrap_failure:
+                raise self.bootstrap_failure
+
+        async def close(self):
+            self.closed = True
+            if self.close_failure:
+                raise self.close_failure
+
+    monkeypatch.setattr(ch_module, "PolicyObserver", Channel)
+    return client, configuration, instances, Channel
+
+
+async def test_core_preserves_bootstrap_cancellation_across_missing_session_cleanup(owner):
+    client, config, channels, channel = owner
+    channel.bootstrap_failure = asyncio.CancelledError()
+    channel.close_failure = ObservationUnavailable()
+    with pytest.raises(asyncio.CancelledError):
+        async with client.policy_observers():
+            pytest.fail("Cancelled bootstrap cannot authorize an observer")
+    assert len(channels) == 1 and channels[0].closed
+
+
+async def test_core_cleanup_failure_cannot_authorize_a_successful_proof(owner):
+    client, config, channels, channel = owner
+    channel.close_failure = ObservationUnavailable()
+    with pytest.raises(ObservationUnavailable):
+        async with client.policy_observers():
+            pass
+    assert len(channels) == 2 and all(item.closed for item in channels)
+
+
+async def test_core_closes_all_owned_routes_concurrently(owner, monkeypatch):
+    client, config, channels, channel = owner
+    arrived = set()
+    release = asyncio.Event()
+
+    async def close(self):
+        arrived.add(id(self))
+        if len(arrived) == len(channels):
+            release.set()
+        await release.wait()
+        self.closed = True
+
+    monkeypatch.setattr(channel, "close", close)
+    async with asyncio.timeout(5):
+        async with client.policy_observers():
+            pass
+    assert len(channels) == 2 and all(item.closed for item in channels)
+
+
+@pytest.mark.parametrize("drift", ["driver", "generation", "credential", "route"])
+async def test_core_refuses_changed_owner_configuration_before_any_send(owner, monkeypatch, drift):
+    client, config, channels, channel = owner
+    sent = []
+
+    async def send():
+        sent.append(True)
+
+    async with client.policy_observers() as observers:
+        if drift == "driver":
+            client._client = object()
+        elif drift == "generation":
+            client._generation += 1
+        elif drift == "credential":
+            config["password"] = "replacement"
+        else:
+            monkeypatch.setattr(ch_module.settings, "ch_analysis_observer_urls", [])
+        with pytest.raises(ObservationUnavailable):
+            await observers[0].guarded("SELECT 1", send)
+    assert not sent and all(item.closed for item in channels)

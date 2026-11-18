@@ -969,11 +969,31 @@ An ALTER alone does not settle old pipelines. Missing writers, changed topology,
 unknown metadata, a deadline or any surviving forbidden row refuses provisioning;
 existing rows remain untouched. Writers continue accepting valid ordinary inserts.
 
-The printed setup file repeats its proof when executed. Run the whole file through
-one administrative SQL session that stops on its first error, without
-`--ignore-error`. Its temporary metadata snapshots belong to that session. After a
-refusal, reconnect and run the whole file again. The printed path requires no running
-INSERTs at its fence; it never kills a writer or transfers a print-time proof.
+Negative observations use a checked administrative HTTP session on each writer.
+The configured service origin is included; `LOOM_CH_ANALYSIS_OBSERVER_URLS` adds
+explicit trusted HTTP origins using the same existing service credentials. Every
+writer UUID needs exactly one route. Missing routes, aliases to the same backend,
+redirects, backend changes and incomplete replies refuse. Routes must preserve
+non-replaying POST semantics, including any intermediary. HTTPS cannot downgrade.
+The proof never discovers another credential or derives HTTP ports from native
+cluster addresses.
+
+Each writer supplies its complete native `SHOW CREATE ROW POLICIES` catalog. A
+SELECT from `system.row_policies` cannot establish visibility because policies can
+filter that catalog too. Policies on process, topology or CHECK metadata sources,
+database-wide policies and unknown event policies refuse. Generated analyst event
+policies require their matching unrestricted policy for other users: an analyst-only
+policy can implicitly hide every row from another user. The observer cannot be the
+analyst user or hold its enabled role. Catalog, backend, principal and table identities
+remain fixed through the drain and census. The complete proof has a ten-second
+deadline; exact owned sessions close concurrently with one bounded cleanup interval.
+
+Run `loom ch-setup --apply-analyst-sql` with explicitly configured existing
+access-management credentials to apply only the analyst boundary. It uses the same
+live proof and lease without rebuilding the reader user. `--print-analyst-sql` refuses
+with a nonzero result and prints no grants or secrets: an unchecked SQL file cannot
+enforce the native policy-catalog observation. General `--print-sql` still prints
+database and reader preparation with a password placeholder.
 
 Mirrored creation remains disabled until the fleet, read and session protections
 and enablement procedure are complete. Before an older build serves after enablement,

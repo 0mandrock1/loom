@@ -481,8 +481,13 @@ def _cmd_ch_setup(args: argparse.Namespace) -> int:
             _apply_analyst()
         except Exception as error:  # noqa: BLE001 — administrative failures need one safe line
             from server.insights.app.analysis import SetupRefused, shown_cause
+            from server.insights.store.event_cutover import EventCutoverUnavailable
 
-            cause = str(error) if isinstance(error, SetupRefused) else shown_cause(error)[0]
+            cause = (
+                error_line(error)
+                if isinstance(error, (SetupRefused, EventCutoverUnavailable))
+                else shown_cause(error)[0]
+            )
             print(f"✗ {cause}", file=sys.stderr)
             return 2
         print("✓ loom_analyst (insights.query): written")
@@ -526,18 +531,18 @@ _HELP = (
 
 def register_ch_setup_cli(sub: Any) -> None:
     p = sub.add_parser("ch-setup", help=_HELP, description=__doc__)
-    p.add_argument(
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument(
         "--print-sql",
         action="store_true",
         help="Print the SQL for an admin (password as a placeholder); change nothing.",
     )
-    analyst = p.add_mutually_exclusive_group()
-    analyst.add_argument(
+    mode.add_argument(
         "--print-analyst-sql",
         action="store_true",
         help="Refuse unchecked analyst SQL files and name the guarded apply command.",
     )
-    analyst.add_argument(
+    mode.add_argument(
         "--apply-analyst-sql",
         action="store_true",
         help=(

@@ -400,6 +400,19 @@ def test_guarded_analyst_apply_does_not_prepare_the_reader(monkeypatch, capsys):
     assert "written" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("printing", ["--print-sql", "--print-analyst-sql"])
+def test_analyst_apply_cannot_be_combined_with_a_print_only_mode(printing):
+    import argparse
+
+    from server.cli import ch_setup
+
+    parser = argparse.ArgumentParser()
+    ch_setup.register_ch_setup_cli(parser.add_subparsers())
+    with pytest.raises(SystemExit) as error:
+        parser.parse_args(["ch-setup", printing, "--apply-analyst-sql"])
+    assert error.value.code == 2
+
+
 def test_the_per_org_count_comes_back_down_when_a_statement_fails(
     monkeypatch: pytest.MonkeyPatch, ready: None
 ) -> None:

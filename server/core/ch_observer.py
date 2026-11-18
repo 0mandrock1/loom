@@ -16,7 +16,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
-# not a setting: the whole observation proof has a fixed ten-second deadline.
+from server.core.ch_names import qualify
+
+# not a setting: ten seconds of proof plus room for bounded native cleanup.
 _SESSION_TTL_S = 15
 # not a setting: a larger access catalog refuses instead of returning a partial proof.
 _BODY_BYTES = 4 * 1024 * 1024
@@ -101,6 +103,7 @@ class PolicyObserver:
         if self._failed and not closing:
             raise ObservationUnavailable()
         try:
+            sql = qualify(sql)
             params = {
                 **{k: str(v) for k, v in self._settings(sql).items()},
                 "database": self.database,

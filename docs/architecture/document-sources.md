@@ -567,7 +567,11 @@ the public fallback. No reranking provider receives the provisional pools.
   keeps ordinary signed, namespace-scoped reads and cannot read the private table or
   its physical metadata. Provisioning verifies the CHECK on every writer, drains
   the finite set of prepared INSERTs and refuses any existing private contamination
-  before granting access. It preserves those rows for operator resolution.
+  before granting access. Checked per-writer HTTP sessions read the native access
+  catalog and prove that policies cannot hide the process or event populations.
+  Unknown visibility, writer routes or metadata refuse. It preserves existing rows
+  for operator resolution. Administrative application uses
+  `loom ch-setup --apply-analyst-sql`; unchecked analyst SQL files refuse.
 - **Private event reads are folded and masked.** The analytics export and
   `sql_v1_usage_daily` union both stores and fold marked spend into a namespace/day row
   with agent and operation `-`. `sql_v1_agent_events` and the signed
