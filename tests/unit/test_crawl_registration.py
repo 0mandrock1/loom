@@ -122,6 +122,22 @@ async def test_person_inspection_cannot_retire_an_approval_copied_from_another_s
         registration.names_person(encoded, **scope, spellings=("person", "person@example.com"))
 
 
+@pytest.mark.parametrize("nested", [False, True])
+async def test_unknown_retained_claim_restrictions_refuse_instead_of_being_ignored(
+    world: Any,
+    key_view: list[str],
+    nested: bool,
+) -> None:
+    state, _http = world
+    _auth, registrant, original, _raw = await _approval(state)
+    frame = json.loads(unseal(registration.PURPOSE, original))
+    target = frame["claims"]["signing_authority"] if nested else frame["claims"]
+    target["future_restriction"] = {"deny": True}
+    encoded = seal(registration.PURPOSE, json.dumps(frame))
+    with pytest.raises(registration.Refused):
+        registration.load(encoded, _SCOPE, registrant=registrant)
+
+
 @pytest.mark.parametrize("field", ["namespace", "source_id", "generation", "org", "resource_hash"])
 async def test_copied_ciphertext_cannot_approve_another_source_or_generation(
     world: Any,

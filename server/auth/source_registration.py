@@ -11,7 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from server.auth import aliases, authz, revocation, scim, tenancy
 from server.auth.context import current_auth
-from server.auth.jwt import AuthInfo, AuthorizationClaims, _check_not_revoked
+from server.auth.jwt import AuthInfo, AuthorizationClaims, SigningAuthority, _check_not_revoked
 from server.auth.reader_identity import resolve_reader
 from server.core import cell, grant_cache
 from server.core.ch import own_write_reads
@@ -22,6 +22,8 @@ from server.settings import settings
 PURPOSE = "knowledge_crawl.approval"
 _now = time.time
 _CLAIMS = TypeAdapter(AuthorizationClaims)
+_CLAIM_FIELDS = frozenset(field.name for field in dataclasses.fields(AuthorizationClaims))
+_SIGNING_FIELDS = frozenset(field.name for field in dataclasses.fields(SigningAuthority))
 
 
 class Refused(PermissionError):
@@ -114,6 +116,13 @@ def load(encoded: str, scope: Scope, *, registrant: str) -> Approval:
             or value["scope"] != dataclasses.asdict(scope)
             or not registrant
             or value["registrant"] != registrant
+            or not isinstance(value["claims"], dict)
+            or set(value["claims"]) != _CLAIM_FIELDS
+        ):
+            raise Refused()
+        signing = value["claims"].get("signing_authority")
+        if signing is not None and (
+            not isinstance(signing, dict) or set(signing) != _SIGNING_FIELDS
         ):
             raise Refused()
         claims = _CLAIMS.validate_json(json.dumps(value["claims"]), strict=True)
