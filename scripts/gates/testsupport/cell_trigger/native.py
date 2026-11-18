@@ -1535,6 +1535,7 @@ class Fixture:
                                 cause,
                                 "error_type errno"
                                 + (" sqlstate" if "sqlstate" in cause else "")
+                                + (" cancel_reason" if "cancel_reason" in cause else "")
                                 + (" site" if "site" in cause else ""),
                             )
                             need(
@@ -1543,6 +1544,15 @@ class Fixture:
                                 and re.fullmatch(r"[0-9A-Z]{5}", cause["sqlstate"]),
                                 "native Postgres failure cause",
                             )
+                            if "cancel_reason" in cause:
+                                need(
+                                    cause["error_type"] == "QueryCanceledError"
+                                    and cause.get("sqlstate") == "57014"
+                                    and type(cause["cancel_reason"]) is str
+                                    and cause["cancel_reason"]
+                                    in {"statement_timeout", "user_request", "unknown"},
+                                    "native Postgres cancellation reason",
+                                )
                             if "site" in cause:
                                 cause_site = cause["site"]
                                 closed(cause_site, "file line function")

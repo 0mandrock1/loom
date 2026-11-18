@@ -1453,8 +1453,13 @@ async def _run(
             async with asyncio.timeout(SETTLE_S):
                 await _settle_api(conn, ch, args, api)
             block = await _build_block(args, batch)
-            async with asyncio.timeout(SETTLE_S):
-                await _stage(conn, ch, block)
+            stage_started = time.perf_counter_ns()
+            try:
+                async with asyncio.timeout(SETTLE_S):
+                    await _stage(conn, ch, block)
+            except BaseException as error:
+                await _stage_failure(conn, block, artifact, arm, stage_started, error)
+                raise
             rps = await _delivery(args, batch, emit=artifact.emit, arm=arm)
             async with asyncio.timeout(SETTLE_S):
                 await _verify(conn, ch, args, block)
@@ -1510,6 +1515,107 @@ async def _run(
                 raise
         if interrupted and prior is None:
             raise asyncio.CancelledError
+
+
+def _stage_plan(value: Any) -> list[dict[str, Any]]:
+    if type(value) is str:
+        _require(len(value) <= 65_536, "bounded stage plan bytes")
+        value = json.loads(value)
+    _require(type(value) is list and len(value) == 1, "one stage plan")
+    pending = [(value[0]["Plan"], 0)]
+    nodes = []
+    node_types = {
+        "Nested Loop",
+        "Hash Join",
+        "Merge Join",
+        "Seq Scan",
+        "Index Scan",
+        "Index Only Scan",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Sort",
+        "Incremental Sort",
+        "Function Scan",
+        "LockRows",
+        "Hash",
+        "Materialize",
+        "Memoize",
+        "Gather",
+        "Gather Merge",
+        "Result",
+        "Append",
+        "Merge Append",
+        "Unique",
+        "Aggregate",
+        "Limit",
+    }
+    join_types = {"Inner", "Left", "Right", "Full", "Semi", "Anti", "Right Anti"}
+    while pending:
+        node, depth = pending.pop()
+        _require(type(node) is dict and len(nodes) < 32 and depth <= 8, "bounded stage plan")
+        kind = node.get("Node Type")
+        out: dict[str, Any] = {
+            "depth": depth,
+            "node_type": kind if type(kind) is str and kind in node_types else "other",
+        }
+        if "Join Type" in node:
+            join = node["Join Type"]
+            out["join_type"] = join if type(join) is str and join in join_types else "other"
+        for source, target in (
+            ("Plan Rows", "plan_rows"),
+            ("Startup Cost", "startup_cost"),
+            ("Total Cost", "total_cost"),
+        ):
+            number = node.get(source)
+            _require(
+                type(number) in {int, float} and math.isfinite(number) and 0 <= number <= 1e18,
+                "bounded stage plan estimate",
+            )
+            out[target] = number
+        nodes.append(out)
+        children = node.get("Plans", [])
+        _require(type(children) is list and len(children) <= 32, "bounded stage plan children")
+        pending.extend((child, depth + 1) for child in reversed(children))
+    return nodes
+
+
+async def _stage_failure(
+    conn: Any, block: Block, artifact: Artifact, arm: int, started: int, error: BaseException
+) -> None:
+    try:
+        artifact.emit(
+            "stage_error",
+            arm=arm,
+            key_count=len(block.rows),
+            elapsed_ms=max(0, time.perf_counter_ns() - started) / 1_000_000,
+        )
+    except BaseException:  # noqa: BLE001 — stage diagnostics cannot replace the work failure.
+        pass
+    try:
+        causes = native_failure_metadata(error).get("driver", {}).get("causes", [])
+        if not any(cause.get("sqlstate") == "57014" for cause in causes):
+            return
+        from server.memory.store import pg_memory
+
+        async with asyncio.timeout(IO_S):
+            _require(not conn.is_in_transaction(), "idle stage plan observer")
+            keys = sorted({pg_memory.identity_key(row) for row in block.rows})
+            plan = await conn.fetchval(
+                "EXPLAIN (FORMAT JSON) " + pg_memory._LOCK_HEADS,
+                *pg_memory._key_arrays(keys),
+            )
+            # This independent session plans afresh after rollback; it cannot expose
+            # the failed pooled backend's cached plan or its former wait state.
+            artifact.emit(
+                "freshplan_after_failure",
+                arm=arm,
+                key_count=len(keys),
+                observer="independent_connection",
+                analyze=False,
+                nodes=_stage_plan(plan),
+            )
+    except BaseException:  # noqa: BLE001 — a failed observation preserves the stage's first error.
+        pass
 
 
 async def _cleanup(triggers: Triggers | None, conn: Any, artifact: Artifact) -> None:

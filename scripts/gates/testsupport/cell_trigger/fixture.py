@@ -641,6 +641,17 @@ def native_failure_metadata(error: BaseException, *, files: tuple[str, ...] = FI
         sqlstate = getattr(cause, "sqlstate", None)
         if type(sqlstate) is str and re.fullmatch(r"[0-9A-Z]{5}", sqlstate):
             causes[-1]["sqlstate"] = sqlstate
+        if name == "QueryCanceledError" and sqlstate == "57014":
+            # Compare fixed server messages; exception text never enters the receipt.
+            message = getattr(cause, "message", None)
+            causes[-1]["cancel_reason"] = (
+                {
+                    "canceling statement due to statement timeout": "statement_timeout",
+                    "canceling statement due to user request": "user_request",
+                }.get(message, "unknown")
+                if type(message) is str
+                else "unknown"
+            )
         cause = cause.__cause__ if cause.__cause__ is not None else cause.__context__
     driver = {"code": code, "causes": causes}
     sqlstate = getattr(error, "sqlstate", None)

@@ -39,7 +39,12 @@ def test_actual_stage_failure_retains_pg_cause_in_invalid_result(
     expected = (
         {"error_type": "ConnectionResetError", "errno": 104}
         if fault == "connection"
-        else {"error_type": "QueryCanceledError", "errno": None, "sqlstate": "57014"}
+        else {
+            "error_type": "QueryCanceledError",
+            "errno": None,
+            "sqlstate": "57014",
+            "cancel_reason": "unknown",
+        }
     )
     assert metadata["driver"]["causes"] == [expected]
     invalid = json.loads(output.read_text().splitlines()[-1])
