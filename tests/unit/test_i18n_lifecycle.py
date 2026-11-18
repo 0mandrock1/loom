@@ -58,6 +58,66 @@ def publish(root: pathlib.Path, source: str) -> None:
     put(root, t.target_path("ja", source), translated(source))
 
 
+@pytest.mark.parametrize("preferred", ["docs/use-cases/index.md", "docs/index.md"])
+def test_subset_retires_its_landing_and_preserves_other_readme_navigation(
+    repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch, preferred: str
+) -> None:
+    from scripts.docs_site import locales
+
+    put(repo, "README.md", "# Loom\n\n<!-- languages -->\n<!-- /languages -->\n")
+    landings = {preferred, "docs/use-cases/index.md"}
+    for source in landings:
+        put(repo, source, "# Alpha\n")
+    git(repo, "add", "README.md", "docs")
+    for code in ("ja", "es"):
+        lang = next(lg for lg in t.LANGUAGES if lg.code == code)
+        for source in ("README.md", *sorted(landings)):
+            text, line = t.prepare(source, lang)
+            body = "\n".join(t.english_requests(text)).replace("# Alpha", "# Uno")
+            put(
+                repo,
+                t.target_path(code, source),
+                t.render(source, lang, body, line, t.DEFAULT_MODEL),
+            )
+    publish(repo, "docs/a.md")
+    publish(repo, "docs/b.md")
+    t.write_language_lines()
+    assert not t.language_lines_differ()
+    spanish = repo / "i18n/es/README.md"
+    retained = spanish.read_bytes()
+    (repo / preferred).unlink()
+    t.write_language_lines(["ja"])
+    assert spanish.read_bytes() == retained
+    assert not t.language_lines_differ()
+
+    # An unrelated selected page still progresses through the normal fake-provider path.
+    put(repo, "docs/extra.md", "# Alpha\n")
+    git(repo, "add", "docs/extra.md")
+    calls = []
+    monkeypatch.setenv("LOOM_I18N_MAX_USD", "5")
+    monkeypatch.setattr(t, "bedrock_client", object)
+
+    def translate(source, lang, client, spend):
+        calls.append((source, lang.code))
+        lc.stage(t.target_path(lang.code, source), translated(source))
+
+    monkeypatch.setattr(t, "translate_page", translate)
+    assert t.update(codes=["ja"]) == 0
+    assert calls == [("docs/extra.md", "ja")]
+    assert not (repo / t.target_path("ja", preferred)).exists()
+    assert (repo / t.target_path("es", preferred)).is_file()
+    retained_uri = locales.localized_uri("es", preferred.removeprefix("docs/"))
+    assert locales.translations(repo)[retained_uri]["obsolete"]
+    assert spanish.read_bytes() == retained
+    assert not t.language_lines_differ()
+    assert t.check(skip_stale=True) == 0
+
+    assert lc.retire_obsolete() == (1, 0)
+    assert not (repo / t.target_path("es", preferred)).exists()
+    assert not t.language_lines_differ()
+    assert t.check(skip_stale=True) == 0
+
+
 def test_inventory_tracks_nested_generated_additions_but_not_untracked_or_deleted(
     repo: pathlib.Path,
 ) -> None:

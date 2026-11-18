@@ -334,7 +334,7 @@ def readme_documentation(current: str) -> str:
         return ""
     for source in ("docs/index.md", "docs/use-cases/index.md"):
         target = target_path(language.code, source)
-        if lifecycle.regular(target) and source in sources():
+        if lifecycle.regular(target):
             text = (ROOT / target).read_text()
             if lifecycle.owner(target, text) is not None:
                 url = indexnow.SITE + language.code + "/" + indexnow.page_path(source)
