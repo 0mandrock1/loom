@@ -22,7 +22,9 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 packages="$toolchain_prefix/lib/loom-node-tools"
 mkdir -p "$packages" "$toolchain_prefix/bin"
 cp "$script_dir/code-toolchains/package.json" "$script_dir/code-toolchains/package-lock.json" "$packages/"
-npm ci --prefix "$packages" --no-fund --no-audit
+npm ci --prefix "$packages" --ignore-scripts --no-fund --no-audit
+node "$script_dir/code-toolchains/bind-native.cjs" "$packages" bun pnpm
+npm rebuild --prefix "$packages" --ignore-scripts --offline --no-fund --no-audit
 for tool in scip-typescript scip-python pnpm pnpx yarn yarnpkg bun bunx; do
   ln -sf "../lib/loom-node-tools/node_modules/.bin/$tool" "$toolchain_prefix/bin/$tool"
 done
@@ -31,7 +33,7 @@ done
 modern="$toolchain_prefix/lib/loom-yarn-modern"
 mkdir -p "$modern"
 cp "$script_dir/code-toolchains/yarn-modern/package.json" "$script_dir/code-toolchains/yarn-modern/package-lock.json" "$modern/"
-npm ci --prefix "$modern" --no-fund --no-audit
+npm ci --prefix "$modern" --ignore-scripts --no-fund --no-audit
 ln -sf ../lib/loom-yarn-modern/node_modules/.bin/yarn "$toolchain_prefix/bin/yarn-modern"
 
 # The TypeScript tier installs with this pnpm and never fetches the one a repository

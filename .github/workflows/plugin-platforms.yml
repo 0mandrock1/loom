@@ -17,6 +17,7 @@ on:
       - ".gitattributes"
       - ".github/workflows/plugin-platforms.yml"
       - ".github/agent-clis/**"
+      - "scripts/code-toolchains/bind-native.cjs"
   pull_request:
     branches: [main, "release/**"]
     paths:
@@ -26,6 +27,7 @@ on:
       - ".gitattributes"
       - ".github/workflows/plugin-platforms.yml"
       - ".github/agent-clis/**"
+      - "scripts/code-toolchains/bind-native.cjs"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
@@ -69,11 +71,13 @@ jobs:
       - name: install the agent CLIs
         if: ${{ !cancelled() }}
         run: |
-          npm ci --prefix .github/agent-clis --no-fund --no-audit
+          npm ci --prefix .github/agent-clis --ignore-scripts --no-fund --no-audit
+          node scripts/code-toolchains/bind-native.cjs .github/agent-clis claude
           root=$(npm root --prefix .github/agent-clis)
           exe=''
           if [ "$RUNNER_OS" = Windows ]; then root=$(cygpath -m "$root"); exe=.exe; fi
           codex=$(ls "$root"/@openai/codex-*/vendor/*/bin/codex$exe | head -1)
+          test -n "$codex" && test -x "$codex" || { echo "The locked native agent executable is missing" >&2; exit 1; }
           echo "CLAUDE_BIN=$root/@anthropic-ai/claude-code/bin/claude.exe" >> "$GITHUB_ENV"
           echo "CODEX_BIN=$codex" >> "$GITHUB_ENV"
       - name: Claude Code session
@@ -125,9 +129,11 @@ jobs:
           docker run --rm -v "$PWD:/src:ro" "$ALPINE_IMAGE" sh -euc '
             apk add --quiet git bash
             cp -r /src /tmp/repo && chown -R node /tmp/repo
-            npm ci --prefix /tmp/repo/.github/agent-clis --no-fund --no-audit >/dev/null
+            npm ci --prefix /tmp/repo/.github/agent-clis --ignore-scripts --no-fund --no-audit >/dev/null
+            node /tmp/repo/scripts/code-toolchains/bind-native.cjs /tmp/repo/.github/agent-clis claude
             root=$(npm root --prefix /tmp/repo/.github/agent-clis)
             codex=$(ls "$root"/@openai/codex-linux-*/vendor/*/bin/codex | head -1)
+            test -n "$codex" && test -x "$codex" || { echo "The locked native agent executable is missing" >&2; exit 1; }
             su node -s /bin/sh -c "
               set -e
               cd /tmp/repo
@@ -162,9 +168,11 @@ jobs:
           # A clone inside WSL, with Linux modes and line endings, as a WSL user's is.
           git -c safe.directory='*' clone --quiet --no-local . /home/ci/repo
           chown -R ci /home/ci/repo
-          npm ci --prefix /home/ci/repo/.github/agent-clis --no-fund --no-audit >/dev/null
+          npm ci --prefix /home/ci/repo/.github/agent-clis --ignore-scripts --no-fund --no-audit >/dev/null
+          node /home/ci/repo/scripts/code-toolchains/bind-native.cjs /home/ci/repo/.github/agent-clis claude
           root=$(npm root --prefix /home/ci/repo/.github/agent-clis)
           codex=$(ls "$root"/@openai/codex-linux-*/vendor/*/bin/codex | head -1)
+          test -n "$codex" && test -x "$codex" || { echo "The locked native agent executable is missing" >&2; exit 1; }
           su ci -s /bin/sh -c "
             set -e
             cd /home/ci/repo

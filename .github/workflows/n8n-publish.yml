@@ -25,7 +25,7 @@ jobs:
           node-version: "24"
       - name: Install the locked package manager
         run: |
-          npm ci --prefix .github/pnpm --no-fund --no-audit
+          npm ci --prefix .github/pnpm --ignore-scripts --no-fund --no-audit
           echo "$PWD/.github/pnpm/node_modules/.bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
         working-directory: integrations/n8n
@@ -63,7 +63,7 @@ jobs:
         run: '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]'
       - name: Install the locked package manager
         run: |
-          npm ci --prefix .github/pnpm --no-fund --no-audit
+          npm ci --prefix .github/pnpm --ignore-scripts --no-fund --no-audit
           echo "$PWD/.github/pnpm/node_modules/.bin" >> "$GITHUB_PATH"
       - run: pnpm install --frozen-lockfile
         working-directory: integrations/n8n
