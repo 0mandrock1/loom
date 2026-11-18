@@ -71,6 +71,16 @@ class AuthInsufficientError(LoomServerError, PermissionError):
     status_code = 403
 
 
+class SessionProtectionRequiredError(LoomServerError):
+    """409 — session-content operations need the client's protection promise."""
+
+    code = "SESSION_PROTECTION_REQUIRED"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__("This operation requires a client that protects session content")
+
+
 class IdentityIncompleteError(LoomServerError):
     """A scoped token was presented without org+namespace in the request
     body. NOT a permissions failure — the token may be perfectly
@@ -558,6 +568,7 @@ CLASS_BY_CODE: dict[str, tuple[ErrorCategory, bool]] = {
     # Committed already, and its message says not to make the write again.
     "PUBLICATION_PENDING": ("dependency", False),
     # Only an operator's fix ends these; resending changes nothing.
+    "SESSION_PROTECTION_REQUIRED": ("configuration", False),
     "SCHEMA_PENDING": ("configuration", False),
     "TENANCY_REFUSED": ("configuration", False),
     "OVERRIDE_NOT_STORED": ("configuration", False),
