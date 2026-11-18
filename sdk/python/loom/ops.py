@@ -5367,6 +5367,7 @@ class AssistantAskBody(TypedDict, total=False):
 
 
 class AssistantAskOutput(TypedDict, total=False):
+    mirrored: NotRequired[bool]
     answer: NotRequired[str]
     run_id: NotRequired[str]
     model: NotRequired[str]

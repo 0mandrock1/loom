@@ -613,6 +613,18 @@ their contributing proofs. A raw download owns the same required marked accounti
 attempt as a registered operation. Cancellation and disconnects still propagate
 through owned cleanup. These checks end at the server's response-send boundary.
 
+The assistant's incremental stream has a terminal accounting boundary because final
+usage is unavailable before its early text. Its server-owned first event is
+`data: {"mirrored":true}` when marked. Partial text remains provisional until the
+response closes and joins its producers, captures final usage and confirms its
+required private cost row before `[DONE]` or a terminal error. Disconnect cleanup
+retains and joins that required delivery. Whole answers and checked source frames
+keep the accounting-before-publication boundary above. The answer token's distinct
+`answer_mirrors` bit fixes mirror admission before model work, so a source activated
+during a negative answer cannot introduce an unmarked tool leg. Missing admission is
+false; ordinary delegation drops it. See the
+[assistant boundary](assistant.md#the-bridge-each-callers-own-identity).
+
 A multi-entry MCP batch refuses every response-bearing marked entry with the same
 instruction to send it individually, including denied and empty entries. Notifications
 remain silent. It discards each marked entry's complete frame before buffering it or

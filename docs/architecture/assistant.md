@@ -71,6 +71,38 @@ session and components, and links verified citations into the memory and documen
 
 ## The bridge: each caller's own identity
 
+Before checking model spend, the bridge reads the authorized namespace's public
+mirrored-source registrations. Any active registration marks the complete answer,
+even when its tools admit no document. The chat route sends `data: {"mirrored":true}`
+as its first SSE event, or `mirrored: true` as its whole response's first field.
+`assistant.ask` carries the same first field. A marked refusal carries it too. This
+decision also routes the answer's cost row to private storage and suppresses public
+diagnostics before subsequent model, budget or tool work.
+
+The answer token keeps the caller's `session_protection` promise and a separate
+`answer_mirrors` admission bit. Only an already marked answer for a declared caller
+receives positive admission. Missing or false admission disables its mirror legs,
+including when a source becomes active during an initially ordinary answer. Ordinary
+namespace reads retain their authorization. Current ACL checks still decide each
+mirrored item; the bit grants no access by itself. Ordinary delegated children omit
+both claims and cannot regain mirror admission through a request header. An answer
+token or any descendant cannot start another assistant answer.
+
+Streaming output is provisional until `[DONE]`. The response owns its required
+accounting lifetime beyond HTTP headers: it closes and joins model and citation work,
+captures final usage once, and confirms private cost delivery before sending `[DONE]`
+or a terminal error. Disconnects join producer cleanup and required delivery before
+propagating cancellation. A failed cost write cannot publish a completed answer.
+Whole answers and checked tool responses retain their accounting-before-publication
+boundary. Incremental text precedes final usage, so its completion boundary is the
+terminal event. A streaming client must reject EOF without `[DONE]` as incomplete.
+
+Mirrored-source creation stays unavailable until every serving build and consumer
+implements the admission, first-output marker, session and accounting boundaries.
+An older verifier accepting an unknown claim does not enforce it; schema equality
+does not establish this capability. The fleet and rollback requirements in
+[rolling upgrades](rolling-upgrades.md) still apply.
+
 LibreChat's agents API authenticates a LibreChat API key and runs the agent as that
 key's LibreChat user. The agent's tools are Loom's MCP server, and what they may read is
 decided by the token on each tool call, never by the LibreChat user. LibreChat v0.8.8

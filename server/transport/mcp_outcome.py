@@ -185,6 +185,7 @@ def _handler_failed(
     HTTP's body and is recorded under its code; any other exception is one that
     says only "internal error" and is logged with its traceback."""
     from server.core.errors import handler_failure_detail
+    from server.core.request_work import flag_response
     from server.transport.mcp_refusals import refusal_body, refusal_text, server_failure
 
     refused = refusal_body(e)
@@ -192,6 +193,7 @@ def _handler_failed(
     if failure is not None:
         failure = handler_failure_detail(failure, failure["status"], op.idempotent)
     if refused is not None:
+        refused = flag_response(refused)
         log.info("mcp.refused %s request_id=%s: %s", op.name, request_id, refused.get("code"))
     elif failure is not None:  # the raiser logged its cause; no traceback for a named 5xx
         log.warning("mcp.unavailable %s request_id=%s: %s", op.name, request_id, failure["code"])
@@ -232,27 +234,40 @@ def _handler_failed(
     except Exception:  # noqa: BLE001 — telemetry must never mask the handler's error
         pass
     if refused is not None:
-        return _ok(
-            req_id,
-            {
-                "content": [{"type": "text", "text": refusal_text(refused)}],
-                "isError": True,
-                "structuredContent": refused,
-            },
+        return flag_response(
+            _ok(
+                req_id,
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(refused)
+                            if refused.get("mirrored") is True
+                            else refusal_text(refused),
+                        }
+                    ],
+                    "isError": True,
+                    "structuredContent": refused,
+                },
+            )
         )
     if failure is not None:  # HTTP's 503/504 body, as the error's message and data
-        return _err(
-            req_id,
-            TOOL_EXEC_FAILED,
-            f"tool execution failed: {refusal_text(failure)}; request_id={request_id}",
-            data={**failure, "tool": name, "request_id": request_id},
+        return flag_response(
+            _err(
+                req_id,
+                TOOL_EXEC_FAILED,
+                f"tool execution failed: {refusal_text(failure)}; request_id={request_id}",
+                data=flag_response({**failure, "tool": name, "request_id": request_id}),
+            )
         )
     # The exception's text (ClickHouse / SQL) stays in the log line above.
-    return _err(
-        req_id,
-        TOOL_EXEC_FAILED,
-        f"tool execution failed: internal error; request_id={request_id}",
-        data={"code": "INTERNAL_ERROR", "tool": name, "request_id": request_id},
+    return flag_response(
+        _err(
+            req_id,
+            TOOL_EXEC_FAILED,
+            f"tool execution failed: internal error; request_id={request_id}",
+            data=flag_response({"code": "INTERNAL_ERROR", "tool": name, "request_id": request_id}),
+        )
     )
 
 

@@ -161,6 +161,8 @@ class AuthInfo:
     reads_as_creator: bool = False
     # The bridge fixes the caller's session-protection promise for one answer.
     session_protection: bool = False
+    # A marked answer's fixed mirror admission, separate from its caller's promise.
+    answer_mirrors: bool = False
     # `saves_to` claim: where a list token's calls that name no namespace save,
     # chosen at mint and read by `caller_home._pick_default`; '' = none recorded.
     saves_to: str = ""
@@ -266,6 +268,7 @@ def mint_token(
     creator: str | None = None,
     reads_as_creator: bool = False,
     session_protection: bool = False,
+    answer_mirrors: bool = False,
     saves_to: str | None = None,
     issued_at: int | None = None,
 ) -> str:
@@ -350,8 +353,12 @@ def mint_token(
         payload["creator"] = creator
     if reads_as_creator:
         payload["reads_as_creator"] = True
-    if _bool_claim({"session_protection": session_protection}, "session_protection"):
-        payload["session_protection"] = True
+    for name, value in (
+        ("session_protection", session_protection),
+        ("answer_mirrors", answer_mirrors),
+    ):
+        if _bool_claim({name: value}, name):
+            payload[name] = True
     if saves_to:
         payload["saves_to"] = saves_to
     if ttl_seconds is not None:
@@ -467,6 +474,7 @@ def verify_token(token: str, *, secret: str | None = None) -> AuthInfo:
         creator=_creator_claim(decoded),
         reads_as_creator=_bool_claim(decoded, "reads_as_creator"),
         session_protection=_bool_claim(decoded, "session_protection"),
+        answer_mirrors=_bool_claim(decoded, "answer_mirrors"),
         saves_to=_optional_str_claim(decoded, "saves_to"),
         session_id=_optional_str_claim(decoded, "sid"),
         first_party=_bool_claim(decoded, "fps"),
@@ -508,6 +516,7 @@ def _end_user_key(token: str) -> tuple[str, EndUserIssuer, Any] | None:
 
 # Claims an end-user token may not carry: its identity is the user, nothing more.
 _NOT_FOR_END_USERS = (
+    "answer_mirrors",
     "namespaces",
     "ns_write",
     "ns_roles",
