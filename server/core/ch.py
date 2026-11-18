@@ -910,7 +910,8 @@ class CHClient:
             raise CoordinationSessionLost()
         session = _CoordinationSession(self, self.client, self.generation, uuid.uuid4().hex)
         configuration = dict(self._connection_config)
-        await acquire_slot(self._stream_slots, "ClickHouse coordination transports")
+        # Lifetime capacity shares the caller's proof deadline, not a statement's wait.
+        await self._stream_slots.acquire()
         token = _coordination_session.set(session)
         failed = True
         try:
