@@ -808,6 +808,73 @@ describe("LoomMemoryStorage conversation capture ownership", () => {
     expect(replacement.state.value).toBe("clean");
   });
 
+  it("retains a completed callback family when it is marked before the next client rebind", async () => {
+    const constructorFamily = captureFamily();
+    const producer = captureFamily();
+    const earlier = captureFamily();
+    const replacement = captureFamily();
+    const h = harness({ root: constructorFamily.root });
+    const storage = captureStorage(h.agent, new SessionCapture([producer.root]));
+    bindStorageClient(h.agent, earlier.root);
+    await storage.saveThread({ thread: thread("prior") });
+    expect(earlier.state.value).toBe("clean");
+    await earlier.root.mark();
+    bindStorageClient(h.agent, replacement.root);
+    const before = JSON.stringify([...h.rows]);
+    h.calls.length = 0;
+    await expect(storage.saveMessages({ messages: [message("unsent", "prior")] })).rejects.toBeInstanceOf(
+      AutomaticCaptureSuppressed,
+    );
+    expect(h.calls).toEqual([]);
+    expect(JSON.stringify([...h.rows])).toBe(before);
+    expect([constructorFamily.state.value, producer.state.value, replacement.state.value]).toEqual([
+      "clean",
+      "clean",
+      "clean",
+    ]);
+  });
+
+  it("durably marks a completed callback family before returning a later marked recall after rebind", async () => {
+    const release = deferred();
+    const observed = deferred();
+    const earlier = captureFamily(async () => {
+      observed.resolve();
+      await release.promise;
+    });
+    const constructorFamily = captureFamily();
+    const producer = captureFamily();
+    const replacement = captureFamily();
+    const h = harness({ root: constructorFamily.root });
+    await h.storage().updateResource({ resourceId: "alice", workingMemory: "retained notes" });
+    const storage = captureStorage(h.agent, new SessionCapture([producer.root]));
+    bindStorageClient(h.agent, earlier.root);
+    expect((await storage.getResourceById({ resourceId: "alice" }))?.workingMemory).toBe("retained notes");
+    expect(earlier.state.value).toBe("clean");
+    bindStorageClient(h.agent, replacement.root);
+    h.controls.mirrored = (op) => op === "memory.get";
+    h.calls.length = 0;
+    let returned = false;
+    const read = storage.getResourceById({ resourceId: "alice" }).then((resource) => {
+      returned = true;
+      return resource;
+    });
+    try {
+      const first = await Promise.race([read.then(() => "returned"), observed.promise.then(() => "marking")]);
+      expect(first).toBe("marking");
+      expect(returned).toBe(false);
+      expect(earlier.state.value).toBe("clean");
+    } finally {
+      release.resolve();
+      await read;
+    }
+    expect((await read)?.workingMemory).toBe("retained notes");
+    expect(earlier.state.marks).toBe(1);
+    expect([earlier.state.value, constructorFamily.state.value, producer.state.value, replacement.state.value]).toEqual(
+      ["protected", "protected", "protected", "protected"],
+    );
+    expect(h.calls.map((call) => call.op)).toEqual(["memory.get"]);
+  });
+
   it("retains a callback family before hashing when that client is rebound during the hash", async () => {
     const constructorFamily = captureFamily();
     const producer = captureFamily();

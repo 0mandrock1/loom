@@ -396,7 +396,7 @@
     "sdk/typescript/src/integrations/claude-memory.ts": "c846f0011d7cf1ba4b30e99fbfd8adb6b29abff56856d0dbe14fba620007f6bc",
     "sdk/typescript/src/integrations/google-adk.ts": "26035863d6a81630e1a10c2045128b4483151ad9e4d13e9202d9c90054cf62d6",
     "sdk/typescript/src/integrations/langchain.ts": "2e6b93cbd2eb3ed57d910404845f8de9b06b9d3e9e2c59194100ad95f8819ce8",
-    "sdk/typescript/src/integrations/mastra-memory.ts": "49d42ea9faee417130822cff50eb7691d96871692adbb1fb106e5bde5a2982f0",
+    "sdk/typescript/src/integrations/mastra-memory.ts": "a0c21387e645579117bd00c4961efd1c65938c0a7128eb31c88256d49522710a",
     "sdk/typescript/src/integrations/openai-agents.ts": "cc284291bc50fad8948272868f00750d0a9cb92097b9ec209f6d11a05eea75be",
     "sdk/typescript/src/session.ts": "49c162dd55f578d508a9c537891a991d7e46866ee3dbaf5f9b9e4d67242b5e05"
   }

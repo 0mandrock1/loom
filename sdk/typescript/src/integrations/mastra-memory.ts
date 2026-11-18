@@ -51,7 +51,7 @@ export class LoomMemoryStorage extends MemoryStorage {
   private readonly identity: ReturnType<Agent["identity"]>;
   private readonly client: Agent["client"];
   private readonly capture?: SessionCapture;
-  private readonly observers?: SessionCapture;
+  private observers?: SessionCapture;
 
   constructor(agent: Agent, options: LoomMemoryStorageOptions) {
     super();
@@ -74,6 +74,7 @@ export class LoomMemoryStorage extends MemoryStorage {
     const roots = responseRoots(this.client.transport.sessionProtection, this.capture, this.observers);
     if (!roots.length) return {};
     const retained = new SessionCapture(roots);
+    this.observers = retained;
     return this.capture ? { capture: retained } : { observe: retained };
   }
 
