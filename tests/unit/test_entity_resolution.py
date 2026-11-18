@@ -306,6 +306,8 @@ async def test_payload_map_normalization_work_is_linear_once(monkeypatch, novel)
     # Each fetched row contributes two normalized text fields. Mentions retain
     # their existing normalization, matching and similarity work allowance.
     assert calls <= 2 * len(rows) + 8 * len(entities) + 8
+    # Equal rendered row fields share one parse; distinct fields still need both.
+    assert calls <= len(rows) + 4 * len(entities)
 
 
 @pytest.mark.asyncio

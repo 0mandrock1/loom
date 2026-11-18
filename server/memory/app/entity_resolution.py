@@ -372,8 +372,10 @@ async def resolve_entities_for_write(
     for row in rows:
         raw_mention = row.get("mention_text")
         raw_canonical = row.get("canonical_text")
-        m_text = canonical_entity_text(str(raw_mention or ""))
-        c_text = canonical_entity_text(str(raw_canonical or ""))
+        mention_raw = str(raw_mention or "")
+        canonical_raw = str(raw_canonical or "")
+        m_text = canonical_entity_text(mention_raw)
+        c_text = m_text if canonical_raw == mention_raw else canonical_entity_text(canonical_raw)
         if raw_mention:
             by_mention[m_text] = row
         if raw_canonical:
