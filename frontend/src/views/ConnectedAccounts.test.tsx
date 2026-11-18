@@ -175,6 +175,30 @@ describe("Connected accounts", () => {
     expect(await screen.findByText("reader@example.com")).toBeInTheDocument();
   });
 
+  it("keeps keyboard focus on Refresh and ignores another press while its read is pending", async () => {
+    const user = userEvent.setup();
+    render(<ConnectedAccounts />);
+    await screen.findByText("reader@example.com");
+    const load = pending<{ connections: api.ConnectionEntry[] }>();
+    vi.mocked(api.listConnections).mockReturnValueOnce(load.promise);
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    screen.getByRole("button", { name: "Back to settings" }).focus();
+    await user.tab();
+    expect(refresh).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(refresh).toHaveAttribute("aria-busy", "true"));
+    expect(refresh).not.toBeDisabled();
+    expect(refresh).toHaveFocus();
+    expect(screen.getByText("reader@example.com")).toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(api.listConnections).toHaveBeenCalledTimes(2);
+    await act(async () => load.resolve({ connections: entries("refreshed@example.com") }));
+    expect(await screen.findByText("refreshed@example.com")).toBeInTheDocument();
+    expect(refresh).not.toHaveAttribute("aria-busy");
+    expect(refresh).not.toBeDisabled();
+    expect(refresh).toHaveFocus();
+  });
+
   it.each(["person", "organization"])("clears displayed and late data on a change of %s", async (change) => {
     render(<ConnectedAccounts />);
     await screen.findByText("reader@example.com");

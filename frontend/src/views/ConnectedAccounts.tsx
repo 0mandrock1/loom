@@ -12,7 +12,9 @@ import {
 import { confirmAction } from "../components/ConfirmDialog";
 import { toast, toastError } from "../components/Toast";
 import { Loading, PageHeader } from "../components/ui";
+import { BusyButton } from "../components/ui/BusyButton";
 import { ListState } from "../components/ui/ListState";
+import { SectionHeading } from "../components/ui/SectionHeading";
 import { PageContainer } from "../layout/PageContainer";
 import { canCallOwnConnections } from "../lib/canCall";
 import { useAbortableEffect, useMounted } from "../lib/hooks";
@@ -82,9 +84,12 @@ function OwnConnections({ org, subject }: { org: string; subject: string }) {
   const navSeq = useStore((s) => s.navSeq);
   const asked = urlParam("kind");
   const selected = CONNECTION_KINDS.find((kind) => kind === asked);
-  const headings = useRef<Partial<Record<ConnectionKind, HTMLHeadingElement | null>>>({});
+  const providerList = useRef<HTMLUListElement>(null);
+  const focusProvider = (kind: ConnectionKind) => {
+    providerList.current?.querySelector<HTMLElement>(`#connection-${kind}`)?.focus();
+  };
   useEffect(() => {
-    if (selected && connections) headings.current[selected]?.focus();
+    if (selected && connections) focusProvider(selected);
   }, [selected, connections !== null, navSeq]);
 
   useAbortableEffect(
@@ -120,7 +125,7 @@ function OwnConnections({ org, subject }: { org: string; subject: string }) {
         const result = await disconnectConnection(org, entry.kind, { signal: actions.current?.signal });
         if (!current()) return;
         if (result.disconnected) {
-          headings.current[entry.kind]?.focus();
+          focusProvider(entry.kind);
           setConnections(
             (rows) =>
               rows?.map((row) =>
@@ -145,35 +150,28 @@ function OwnConnections({ org, subject }: { org: string; subject: string }) {
   return (
     <section aria-label="Your connected accounts" aria-busy={connections !== null && reading}>
       <div className="mb-3 flex justify-end">
-        <Button
+        <BusyButton
           type="secondary"
           htmlType="button"
-          disabled={reading || busy !== null}
+          busy={reading}
+          disabled={busy !== null}
           onClick={() => setReload((n) => n + 1)}
         >
           Refresh
-        </Button>
+        </BusyButton>
       </div>
       {!!error && (
         <ListState kind="error" things="connected accounts" error={error} onRetry={() => setReload((n) => n + 1)} />
       )}
       {!error && connections === null && <Loading label="Loading connected accounts" />}
       {!error && connections !== null && (
-        <ul className="divide-y divide-border">
+        <ul ref={providerList} className="divide-y divide-border">
           {CONNECTION_KINDS.map((kind) => {
             const entry = connections.find((row) => row.kind === kind);
             return (
               <li key={kind} className="flex flex-wrap items-center gap-3 py-4">
                 <div className="min-w-0 flex-1 basis-40">
-                  <h2
-                    ref={(node) => {
-                      headings.current[kind] = node;
-                    }}
-                    tabIndex={-1}
-                    className="text-base text-text"
-                  >
-                    {LABELS[kind]}
-                  </h2>
+                  <SectionHeading id={`connection-${kind}`} label={LABELS[kind]} level={2} focusable />
                   {entry?.connected && entry.account_email && (
                     <p className="m-0 break-all text-sm text-text-muted">{entry.account_email}</p>
                   )}
