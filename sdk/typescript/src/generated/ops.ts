@@ -2545,14 +2545,17 @@ export interface CostAgentSummaryOutput {
 export interface CostBudgetStatusInput {
   org: string;
   namespace?: string | null;
+  user_id?: string | null;
 }
 
 export interface CostBudgetStatusOutput {
   namespace: string;
-  spent_24h_usd: number;
+  user_id?: string | null;
+  spent_24h_usd: number | null;
   cap_usd: number;
-  cap_source: "namespace" | "global" | "uncapped" | "org";
+  cap_source: "namespace" | "global" | "namespace_user" | "global_user" | "uncapped" | "org";
   over_cap: boolean;
+  namespace_over_cap?: boolean | null;
   pct_of_cap?: number | null;
   namespaces_with_spend?: number;
 }
@@ -4474,6 +4477,7 @@ export interface KnowledgeSourceUpdateOutput {
 export interface KnowledgeSynthesizeInput {
   org: string;
   namespace: string;
+  user_id?: string;
   source_uris?: string[];
   datasets?: QueryDataset[];
   task: string;
@@ -7718,6 +7722,8 @@ export interface NamespaceGetOutput {
   coverage_sweep?: boolean | null;
   consolidation_enabled?: boolean | null;
   daily_cost_cap_usd?: number | null;
+  daily_user_cost_cap_usd?: number | null;
+  budget_alert_inbox?: string | null;
   conflict_threshold?: number | null;
   retention_days?: number | null;
   warm_days?: number | null;
@@ -7886,6 +7892,8 @@ export interface NamespaceEntry {
   active: boolean;
   consolidation_enabled?: boolean;
   daily_cost_cap_usd?: number;
+  daily_user_cost_cap_usd?: number;
+  budget_alert_inbox?: string;
   conflict_threshold?: number | null;
   retention_days?: number;
   warm_days?: number;
@@ -8010,6 +8018,8 @@ export interface NamespaceRegisterInput {
   coverage_sweep?: boolean | null;
   consolidation_enabled?: boolean | null;
   daily_cost_cap_usd?: number | null;
+  daily_user_cost_cap_usd?: number | null;
+  budget_alert_inbox?: string | null;
   conflict_threshold?: number | null;
   retention_days?: number | null;
   warm_days?: number | null;

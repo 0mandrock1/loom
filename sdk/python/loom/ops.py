@@ -9113,19 +9113,25 @@ class CostAgentSummaryRow(TypedDict, total=False):
 class CostBudgetStatusInput(TypedDict, total=False):
     org: Required[str]
     namespace: NotRequired[Optional[str]]
+    user_id: NotRequired[Optional[str]]
 
 
 class CostBudgetStatusBody(TypedDict, total=False):
     org: NotRequired[str]
     namespace: NotRequired[Optional[str]]
+    user_id: NotRequired[Optional[str]]
 
 
 class CostBudgetStatusOutput(TypedDict, total=False):
     namespace: Required[str]
-    spent_24h_usd: Required[float]
+    user_id: NotRequired[Optional[str]]
+    spent_24h_usd: Required[Optional[float]]
     cap_usd: Required[float]
-    cap_source: Required[Literal["namespace", "global", "uncapped", "org"]]
+    cap_source: Required[
+        Literal["namespace", "global", "namespace_user", "global_user", "uncapped", "org"]
+    ]
     over_cap: Required[bool]
+    namespace_over_cap: NotRequired[Optional[bool]]
     pct_of_cap: NotRequired[Optional[float]]
     namespaces_with_spend: NotRequired[int]
 
@@ -11884,6 +11890,7 @@ class KnowledgeSynthesizeInput(TypedDict, total=False):
 
     org: Required[str]
     namespace: Required[str]
+    user_id: NotRequired[str]
     source_uris: NotRequired[list[str]]
     datasets: NotRequired[list["QueryDataset"]]
     task: Required[str]
@@ -11897,6 +11904,7 @@ class KnowledgeSynthesizeBody(TypedDict, total=False):
 
     org: NotRequired[str]
     namespace: NotRequired[str]
+    user_id: NotRequired[str]
     source_uris: NotRequired[list[str]]
     datasets: NotRequired[list["QueryDataset"]]
     task: Required[str]
@@ -16722,6 +16730,8 @@ class NamespaceGetOutput(TypedDict, total=False):
     coverage_sweep: NotRequired[Optional[bool]]
     consolidation_enabled: NotRequired[Optional[bool]]
     daily_cost_cap_usd: NotRequired[Optional[float]]
+    daily_user_cost_cap_usd: NotRequired[Optional[float]]
+    budget_alert_inbox: NotRequired[Optional[str]]
     conflict_threshold: NotRequired[Optional[float]]
     retention_days: NotRequired[Optional[int]]
     warm_days: NotRequired[Optional[int]]
@@ -16952,6 +16962,8 @@ class NamespaceEntry(TypedDict, total=False):
     active: Required[bool]
     consolidation_enabled: NotRequired[bool]
     daily_cost_cap_usd: NotRequired[float]
+    daily_user_cost_cap_usd: NotRequired[float]
+    budget_alert_inbox: NotRequired[str]
     conflict_threshold: NotRequired[Optional[float]]
     retention_days: NotRequired[int]
     warm_days: NotRequired[int]
@@ -17072,6 +17084,8 @@ class NamespaceRegisterInput(TypedDict, total=False):
     coverage_sweep: NotRequired[Optional[bool]]
     consolidation_enabled: NotRequired[Optional[bool]]
     daily_cost_cap_usd: NotRequired[Optional[float]]
+    daily_user_cost_cap_usd: NotRequired[Optional[float]]
+    budget_alert_inbox: NotRequired[Optional[str]]
     conflict_threshold: NotRequired[Optional[float]]
     retention_days: NotRequired[Optional[int]]
     warm_days: NotRequired[Optional[int]]
@@ -17145,6 +17159,8 @@ class NamespaceRegisterBody(TypedDict, total=False):
     coverage_sweep: NotRequired[Optional[bool]]
     consolidation_enabled: NotRequired[Optional[bool]]
     daily_cost_cap_usd: NotRequired[Optional[float]]
+    daily_user_cost_cap_usd: NotRequired[Optional[float]]
+    budget_alert_inbox: NotRequired[Optional[str]]
     conflict_threshold: NotRequired[Optional[float]]
     retention_days: NotRequired[Optional[int]]
     warm_days: NotRequired[Optional[int]]

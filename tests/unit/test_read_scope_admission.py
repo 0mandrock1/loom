@@ -264,6 +264,7 @@ _ACTS_AS_A_USER = [
     "knowledge.add",
     "knowledge.bulk_add",
     "knowledge.ingest",
+    "knowledge.synthesize",
     "knowledge.upsert",
     "memory.bulk_set",
     "memory.delete",

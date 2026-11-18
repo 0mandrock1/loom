@@ -349,14 +349,13 @@ def note_send(query_id: str, deadline: float = 0.0, max_s: float = 0.0) -> None:
 
 
 async def _measure_skew(ch: Any) -> None:
-    """The server's clock against this host's, from one round trip's midpoint."""
+    """A server-clock lower bound: its sampled stamp precedes receipt of the reply."""
     global _server_anchor, _skew_at
-    sent = time.monotonic()
     row = await ch.query_one("SELECT toUnixTimestamp64Milli(now64(3)) AS ms")
     back = time.monotonic()
     if row is None:
         raise BackendUnavailableError("rmt carry: the server's clock cannot be read; retry")
-    _server_anchor = (int(row["ms"]) / 1000, (sent + back) / 2)
+    _server_anchor = (int(row["ms"]) / 1000, back)
     _skew_at = back
 
 

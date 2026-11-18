@@ -364,12 +364,21 @@ same code for any cause. The exceptions are these:
    - Its spend (input, output and embedding tokens, and cost) depends only on what
      exception 1 lets the answer depend on: no model or embedding call runs, or is
      chosen, on a mirror candidate before the check. It counts in its namespace's totals
-     and cap. Below a platform admin it shows only in the per-namespace-day total and in
-     `cost.budget_status`'s live total, and every other `cost.summary` dimension leaves
+     and cap. Except to a verified platform admin without namespace-role restrictions,
+     it shows only in the per-namespace-day total and in
+     `cost.budget_status`'s live namespace or org total, and every other `cost.summary` dimension leaves
      it out. The fold carries ops, those tokens and cost only, and leaves marked
      requests out of `errors` and the latency figures. A viewer can still difference a
      live or daily total around another person's marked request and so learn that
-     request's spend; that residual is accepted.
+     request's spend; that residual is accepted. Named-user caps also count marked
+     spend. Their public status exposes the cap and whether the user or namespace
+     ceiling is reached, but exact user spend and percentage are `null` except to that
+     operator. User warnings expose the selected user, cap, warning share and threshold
+     crossing, with exact spend withheld from every recipient, including an operator's
+     configured inbox or webhook. Namespace warnings retain the allowed namespace
+     total. These policy signals expose bounds; an admin changing caps can infer tighter
+     bounds. That residual is accepted, not a claim of full noninterference or a grant
+     to marked work, models or outcome fields.
    - Its work figures (statements, rows and bytes read, chunks injected, `llm_calls`,
      `response_tokens`, the stored duration), its `model` and the outcome fields a model
      call can change (`success`, `error_code`, `status_class`) go to a platform admin

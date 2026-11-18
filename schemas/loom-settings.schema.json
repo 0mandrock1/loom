@@ -2349,6 +2349,13 @@
           "type": "string",
           "description": "Comma-separated origin list. \"*\" allows all (acceptable when auth_required=True). Empty disables CORS entirely."
         },
+        "cost_budget_alert_share": {
+          "default": 0.8,
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "type": "number",
+          "description": "Fraction of a cap that warns its namespace's configured inbox on the next check."
+        },
         "dashboard_redirect_url": {
           "default": "",
           "type": "string",
@@ -2358,6 +2365,12 @@
           "default": 1.0,
           "type": "number",
           "description": "Daily LLM spend cap per namespace, USD: extraction workers skip a namespace whose rolling 24 h cost reached it. Overridden per namespace by loom.namespaces.daily_cost_cap_usd; 0.0 disables on both tiers."
+        },
+        "default_daily_user_cost_cap_usd": {
+          "default": 0.0,
+          "minimum": 0,
+          "type": "number",
+          "description": "Separate rolling-24h cap per named user_id within a namespace, USD; 0 disables it. A namespace's daily_user_cost_cap_usd overrides this default when positive."
         },
         "default_namespace": {
           "default": "local",
