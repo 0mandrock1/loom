@@ -186,15 +186,22 @@ def slug(heading: str, seen: Counter[str]) -> str:
     return base if n == 0 else f"{base}-{n}"
 
 
-def anchor_headings(text: str, seen: Counter[str]) -> str:
+def anchor_headings(
+    text: str, seen: Counter[str], *, insertions: list[tuple[int, int, str]] | None = None
+) -> str:
     """Put `<a id="english-anchor"></a>` above every heading outside code; `seen` carries
     the page's anchors across its sections."""
     out: list[str] = []
+    offset = 0
     for line, in_code in outside_fences(text):
         heading = None if in_code else HEADING.match(line)
         if heading:
-            out += [f'<a id="{slug(heading.group(2), seen)}"></a>', ""]
+            anchor = f'<a id="{slug(heading.group(2), seen)}"></a>'
+            if insertions is not None:
+                insertions.append((offset, offset, anchor + "\n\n"))
+            out += [anchor, ""]
         out.append(line)
+        offset += len(line) + 1
     return "\n".join(out)
 
 
@@ -205,56 +212,91 @@ def target_path(lang: str, source: str) -> str:
     return f"{OUT_DIR}/{lang}/{source}"
 
 
-def in_prose(text: str, change: Callable[[str], str]) -> str:
-    """`text` with `change` applied to its prose only: not to fenced code, not to code spans."""
-    out: list[str] = []
-    chunk: list[str] = []
-
-    def flush() -> None:
-        prose = "\n".join(chunk)
-        parts, at = [], 0
-        for span in CODE_SPAN.finditer(prose):
-            parts += [change(prose[at : span.start()]), span.group(0)]
-            at = span.end()
-        out.append("".join([*parts, change(prose[at:])]))
-        chunk.clear()
-
+def prose_ranges(text: str) -> list[tuple[int, int]]:
+    """Offsets of prose outside the same fences and code spans used by rewriting."""
+    blocks, start, offset = [], None, 0
     for line, in_code in outside_fences(text):
-        if in_code:
-            if chunk:
-                flush()
-            out.append(line)
-        else:
-            chunk.append(line)
-    if chunk:
-        flush()
-    return "\n".join(out)
+        if in_code and start is not None:
+            blocks.append((start, offset - 1))
+            start = None
+        elif not in_code and start is None:
+            start = offset
+        offset += len(line) + 1
+    if start is not None:
+        blocks.append((start, len(text)))
+    spans = []
+    for start, end in blocks:
+        at = start
+        for match in CODE_SPAN.finditer(text, start, end):
+            spans.append((at, match.start()))
+            at = match.end()
+        spans.append((at, end))
+    return spans
+
+
+def replace_spans(text: str, edits: list[tuple[int, int, str]]) -> str:
+    """Apply complete ordered nonoverlapping source-associated replacements."""
+    parts, at = [], 0
+    for start, end, replacement in edits:
+        if not 0 <= at <= start <= end <= len(text):
+            raise ValueError("source transformations overlap or leave their container")
+        parts.extend((text[at:start], replacement))
+        at = end
+    return "".join([*parts, text[at:]])
+
+
+def in_prose(text: str, change: Callable[[str], str]) -> str:
+    """Apply a change outside fenced code and inline code spans."""
+    return replace_spans(text, [(a, b, change(text[a:b])) for a, b in prose_ranges(text)])
+
+
+def link_targets(text: str) -> list[tuple[int, int, str, bool]]:
+    """Source target spans and image kinds, in complete prose occurrence order."""
+    targets = []
+    for a, b in prose_ranges(text):
+        prose = text[a:b]
+        for match in LINK.finditer(prose):
+            prefix, link = match.groups()
+            image = prefix == 'src="' or (prefix == "](" and _is_image(prose, match.start()))
+            targets.append((a + match.start(2), a + match.end(2), link, image))
+    return targets
+
+
+def link_routes(link: str, image: bool, source: str, lang: str) -> tuple[str, ...]:
+    """The exact English and native routes associated with one raw source occurrence."""
+    if re.match(r"[a-z]+:|#|/", link):
+        return (link,)
+    path, _, anchor = link.partition("#")
+    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), unquote(path)))
+    suffix = f"#{anchor}" if anchor else ""
+    english = f"{REPO_URL}/{'raw' if image else 'blob'}/main/{quote(resolved)}{suffix}"
+    if not lifecycle.source_path(resolved):
+        return (english,)
+    here = posixpath.dirname(target_path(lang, source))
+    native = quote(posixpath.relpath(target_path(lang, resolved), here)) + suffix
+    return (english, native)
 
 
 def rewrite_links(text: str, source: str, lang: str) -> str:
     """Point every relative link of `source` at its target as seen from the translation."""
-    here = posixpath.dirname(target_path(lang, source))
     inventory = frozenset(sources())
-
-    def fix(prose: str, match: re.Match[str]) -> str:
-        prefix, link = match.groups()
-        if re.match(r"[a-z]+:|#|/", link):
-            return match.group(0)
-        path, _, anchor = link.partition("#")
-        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), unquote(path)))
-        suffix = f"#{anchor}" if anchor else ""
-        translated = ROOT / target_path(lang, resolved)
-        if (
-            resolved in inventory
-            and translated.is_file()
-            and not translated.is_symlink()
-            and (not anchor or f'<a id="{unquote(anchor)}"></a>' in translated.read_text())
-        ):
-            return prefix + quote(posixpath.relpath(target_path(lang, resolved), here)) + suffix
-        image = prefix == 'src="' or (prefix == "](" and _is_image(prose, match.start()))
-        return f"{prefix}{REPO_URL}/{'raw' if image else 'blob'}/main/{quote(resolved)}{suffix}"
-
-    return in_prose(text, lambda prose: LINK.sub(lambda m: fix(prose, m), prose))
+    edits = []
+    for start, end, link, image in link_targets(text):
+        routes = link_routes(link, image, source, lang)
+        target = routes[0]
+        if len(routes) == 2:
+            path, _, anchor = link.partition("#")
+            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), unquote(path)))
+            translated = ROOT / target_path(lang, resolved)
+            if (
+                resolved in inventory
+                and translated.is_file()
+                and not translated.is_symlink()
+                and (not anchor or f'<a id="{unquote(anchor)}"></a>' in translated.read_text())
+            ):
+                target = routes[1]
+        edits.append((start, end, target))
+    return replace_spans(text, edits)
 
 
 def _is_image(text: str, close: int) -> bool:
@@ -356,7 +398,9 @@ def _label_links(text: str) -> tuple[tuple[str, str], ...]:
     return tuple((m[1], m[0].partition("](")[2]) for m in LINK_TEXT.finditer(text))
 
 
-def _label_nodes(text: str) -> dict[tuple, context.Label]:
+def _label_nodes(
+    text: str, *, tables: chunks.TableAnalysis | None = None
+) -> dict[tuple, context.Label]:
     # Retain character offsets so a request can be checked inside its source containers.
     def blank(value: str) -> str:
         return "".join("\n" if c == "\n" else " " for c in value)
@@ -391,7 +435,7 @@ def _label_nodes(text: str) -> dict[tuple, context.Label]:
             key = (*identity, seen[identity])
             seen[identity] += 1
             nodes[key] = context.Label(inner, links=links, start=match.start(), end=match.end())
-    nodes.update(chunks.table_labels(text))
+    nodes.update(chunks.table_labels(text) if tables is None else tables.labels)
     return nodes
 
 
@@ -430,6 +474,8 @@ def _label_differences(
     translation: str,
     source_path: str,
     scope: context.SourceContext | None = None,
+    *,
+    tables: tuple[chunks.TableAnalysis, chunks.TableAnalysis] | None = None,
 ) -> list[str]:
     english = scope.english if scope else source
     if scope and english[scope.start : scope.end] != source:
@@ -437,7 +483,8 @@ def _label_differences(
     candidate = scope.candidate(translation) if scope else translation
     start, end = (scope.start, scope.end) if scope else (0, len(source))
     target_end = start + len(translation)
-    wanted, actual = _label_nodes(english), _label_nodes(candidate)
+    wanted = _label_nodes(english, tables=tables[0] if tables is not None else None)
+    actual = _label_nodes(candidate, tables=tables[1] if tables is not None else None)
     source_labels: Counter[str] = Counter()
     target_labels: Counter[str] = Counter()
     protections = _source_protections(wanted, source_path)
@@ -478,12 +525,13 @@ def differences(
     *,
     source_path: str = "",
     source_context: context.SourceContext | None = None,
+    _tables: tuple[chunks.TableAnalysis, chunks.TableAnalysis] | None = None,
 ) -> list[str]:
     """How `translation` breaks the invariants of `source`; empty when it keeps them.
     A translation may add a number (a spelled-out one written as digits), never drop one,
     and may not hand back a heading, link text, alt text or table cell in English."""
     source_path = source_context.path if source_context else source_path
-    found = _label_differences(source, translation, source_path, source_context)
+    found = _label_differences(source, translation, source_path, source_context, tables=_tables)
     if code_blocks(source) != code_blocks(translation):
         found.append("code blocks: copy every fenced code block unchanged, in the same order")
     want, got = invariants(source), invariants(translation)
@@ -493,6 +541,14 @@ def differences(
         extra = Counter() if name == "numbers" else actual - expected
         if missing or extra:
             found.append(f"{name}: missing {sorted(missing)[:8]}, unexpected {sorted(extra)[:8]}")
+    return found
+
+
+def page_differences(source: str, translation: str, *, source_path: str) -> list[str]:
+    tables = chunks.table_analysis(source), chunks.table_analysis(translation)
+    found = differences(source, translation, source_path=source_path, _tables=tables)
+    if tables[0].shape != tables[1].shape:
+        found.append("table row/cell layout differs after request assembly")
     return found
 
 
@@ -766,15 +822,20 @@ def _same_edges(source: str, text: str) -> str:
 # ---- pages ----------------------------------------------------------------------------
 
 
+def language_placeholder(text: str) -> list[tuple[int, int, str]]:
+    """The source-language bar is not part of a translation request."""
+    match = LANGUAGE_LINE.search(text)
+    return [(match.start(), match.end(), "<!-- languages -->")] if match else []
+
+
 def prepare(source: str, lang: Language) -> tuple[str, str]:
     """The English text to translate and the language line to put back afterwards ('' when
     the page has none)."""
     text = (ROOT / source).read_text()
     target = target_path(lang.code, source)
-    match = LANGUAGE_LINE.search(text)
-    line = language_line(target) if match else ""
-    if match:
-        text = text[: match.start()] + "<!-- languages -->" + text[match.end() :]
+    edits = language_placeholder(text)
+    line = language_line(target) if edits else ""
+    text = replace_spans(text, edits)
     return rewrite_links(text, source, lang.code), line
 
 
@@ -813,9 +874,7 @@ def translate_page(source: str, lang: Language, client: Any, spend: Spend) -> No
     body = "\n".join(replies)
     # A section can borrow an English label from another part of the page; `check` reads the
     # whole page, so the page is held to the same rule before it is written.
-    problems = differences(english, body, source_path=source)
-    if chunks.table_shape(english) != chunks.table_shape(body):
-        problems.append("table row/cell layout differs after request assembly")
+    problems = page_differences(english, body, source_path=source)
     if problems:
         raise TranslationDiffers(f"assembled page differs: {problems}")
     path = target_path(lang.code, source)

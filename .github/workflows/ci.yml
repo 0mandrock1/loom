@@ -193,7 +193,8 @@ jobs:
         run: |
           SEED="${{ github.run_id }}${{ github.run_attempt }}"
           echo "pytest-randomly seed: $SEED"
-          pytest tests/unit -q -n auto -p randomly --randomly-seed="$SEED" --durations=15 \
+          pytest tests/unit -vv -n auto -p randomly --randomly-seed="$SEED" --durations=15 \
+            -o faulthandler_timeout=300 \
             --cov=server --cov=sdk/python/loom --cov-branch --cov-report= \
             --junitxml=junit-unit-${{ matrix.part }}.xml
       # Also after a failure: the failing part's test times are what a reader needs.
@@ -1085,6 +1086,49 @@ jobs:
         run: python scripts/gates/mixed_version.py --require --base HEAD~1
       - name: Published build ordinary-event compatibility
         run: python scripts/gates/mixed_version.py --require --base 1cbaf0411114512957b96ec5ea7bbb8058828543
+
+  sdk-rust:
+    needs: validate-ref
+    name: rust sdk (${{ matrix.rust }}, fmt, tests, clippy, docs, package)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: ["1.84.1", stable]
+    defaults:
+      run:
+        working-directory: sdk/rust
+    env:
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust with format and lint components
+        run: |
+          rustup toolchain install "${{ matrix.rust }}" --profile minimal --component rustfmt --component clippy
+          rustup override set "${{ matrix.rust }}"
+      # The library leaves dependency locking to its consumers; each toolchain resolves once.
+      - name: Resolve dependencies for this toolchain
+        run: cargo generate-lockfile
+      - name: Rust formatting
+        run: cargo fmt --check
+      - name: Unit, HTTP contract and documentation tests
+        run: cargo test --locked
+      - name: Lint the library, tests and examples
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps
+      - name: Verify the distributable crate and its license
+        run: |
+          cargo package --locked
+          for archive in target/package/clickhouse-loom-*.crate; do
+            package="$(basename "$archive" .crate)"
+            tar -xOf "$archive" "$package/LICENSE" | cmp - ../../LICENSE
+          done
 
   sdk-typescript:
     needs: validate-ref
