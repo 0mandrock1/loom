@@ -18,6 +18,48 @@ import pytest
 from bench import cell_trigger_gate as gate
 
 
+@pytest.mark.parametrize("fault", ["", "query", "overflow"])
+async def test_physical_cost_diagnostics_are_bounded_and_exclude_query_text(monkeypatch, fault):
+    from server.core import ch_names
+
+    monkeypatch.setattr(ch_names, "database", lambda: "gate_cell")
+    monkeypatch.setattr(ch_names, "telemetry_database", lambda: "gate_cell_t")
+    cost = {
+        "shape": 123,
+        "calls": 25,
+        "elapsed_ms": 900,
+        "max_ms": 75,
+        "read_rows": 10000,
+        "read_bytes": 20000,
+        "written_rows": 6,
+        "cpu_us": 100000,
+        "query": "secret-token raw SQL",
+        "log_comment": "secret-subject",
+    }
+    costs = [cost] * (21 if fault == "overflow" else 1)
+    observation = RuntimeError("secret-token") if fault == "query" else costs
+    ch = SimpleNamespace(query_all=AsyncMock(side_effect=[[{"rows": 1, "parts": 1}], observation]))
+    conn = SimpleNamespace(fetch=AsyncMock(return_value=[]), fetchval=AsyncMock(return_value=1))
+    result = await gate._physical(conn, ch)
+    expected = (
+        {"error_type": "RuntimeError" if fault == "query" else "Invalid"}
+        if fault
+        else {"rows": [{key: value for key, value in cost.items() if type(value) is int}]}
+    )
+    assert result.get("clickhouse_query_costs") == expected
+    assert result["clickhouse_parts"] == [{"rows": 1, "parts": 1}]
+    assert result["postgres_rows"] == dict.fromkeys(
+        ("memory_current", "memory_revisions", "memory_deliveries", "audit_outbox"), 1
+    )
+    assert "secret" not in json.dumps(result)
+    sql = ch.query_all.await_args_list[-1].args[0]
+    assert "normalized_query_hash" in sql and "LIMIT 20" in sql
+    assert "max_execution_time=3" in sql and "max_rows_to_read=1000000" in sql
+    assert "max_bytes_to_read=134217728" in sql and "max_result_bytes=16384" in sql
+    pg_sql = conn.fetch.await_args.args[0]
+    assert "seq_tup_read" in pg_sql and "idx_tup_fetch" in pg_sql
+
+
 @pytest.fixture(autouse=True)
 def no_external_io(monkeypatch):
     async def forbidden(*_args, **_kwargs):

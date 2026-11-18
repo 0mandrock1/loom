@@ -1392,17 +1392,55 @@ async def _settle_api(
     await _verify(conn, ch, args, rows)
 
 
+async def _query_costs(ch: Any, dbs: list[str]) -> dict[str, Any]:
+    fields = (
+        "shape",
+        "calls",
+        "elapsed_ms",
+        "max_ms",
+        "read_rows",
+        "read_bytes",
+        "written_rows",
+        "cpu_us",
+    )
+    try:
+        async with asyncio.timeout(5):
+            rows = await ch.query_all(
+                "SELECT normalized_query_hash AS shape, count() AS calls, "
+                "sum(query_duration_ms) AS elapsed_ms, max(query_duration_ms) AS max_ms, "
+                "sum(read_rows) AS read_rows, sum(read_bytes) AS read_bytes, "
+                "sum(written_rows) AS written_rows, sum(ProfileEvents['UserTimeMicroseconds'] "
+                "+ ProfileEvents['SystemTimeMicroseconds']) AS cpu_us FROM system.query_log "
+                "WHERE type='QueryFinish' AND hasAny(databases, {dbs:Array(String)}) "
+                "AND event_time >= now() - INTERVAL 2 HOUR GROUP BY shape "
+                "ORDER BY elapsed_ms DESC LIMIT 20 SETTINGS max_execution_time=3, "
+                "max_rows_to_read=1000000, max_bytes_to_read=134217728, "
+                "read_overflow_mode='throw', max_result_rows=20, max_result_bytes=16384, "
+                "result_overflow_mode='throw'",
+                {"dbs": dbs},
+            )
+        _require(len(rows) <= 20, "query cost rows")
+        clean = [{key: row[key] for key in fields} for row in rows]
+        _require(
+            all(type(n) is int and n >= 0 for row in clean for n in row.values()), "query costs"
+        )
+        return {"rows": clean}
+    except Exception as error:  # noqa: BLE001 — optional cost diagnostics cannot replace acceptance or cleanup.
+        return {"error_type": type(error).__name__}
+
+
 async def _physical(conn: Any, ch: Any) -> dict[str, Any]:
     from server.core.ch_names import database, telemetry_database
 
     pg = await conn.fetch(
         "SELECT relname, n_live_tup AS estimated_rows, "
-        "pg_total_relation_size(relid) AS bytes FROM pg_stat_user_tables WHERE "
+        "pg_total_relation_size(relid) AS bytes, seq_scan, seq_tup_read, idx_scan, "
+        "idx_tup_fetch, n_dead_tup, n_mod_since_analyze FROM pg_stat_user_tables WHERE "
         "schemaname='loom' ORDER BY relname"
     )
     parts = await ch.query_all(
         "SELECT database, table, sum(rows) AS rows, sum(bytes_on_disk) AS "
-        "bytes FROM system.parts WHERE active AND database IN "
+        "bytes, count() AS parts FROM system.parts WHERE active AND database IN "
         "{dbs:Array(String)} GROUP BY database, table ORDER BY database, table",
         {"dbs": [database(), telemetry_database()]},
     )
@@ -1413,6 +1451,7 @@ async def _physical(conn: Any, ch: Any) -> dict[str, Any]:
         "postgres_rows": exact,
         "postgres_estimates": [dict(r) for r in pg],
         "clickhouse_parts": parts,
+        "clickhouse_query_costs": await _query_costs(ch, [database(), telemetry_database()]),
     }
 
 
