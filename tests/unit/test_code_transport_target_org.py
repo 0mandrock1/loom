@@ -217,4 +217,96 @@ def test_required_identity_fields_are_not_filled_by_the_target() -> None:
 
     inp = RequiredIdentity(org="", namespace="")
     target = Target("acme", "code-repo", None, "code-repo")
-    assert with_target(inp, target) is inp
+    assert with_target(OPERATIONS_BY_NAME["code.symbol"], inp, target) is inp
+
+
+@pytest.mark.parametrize("kind", ["http", "mcp"])
+@pytest.mark.parametrize(
+    "name,fields,answer",
+    [
+        ("code.outcome", {"action": "shunt_hit"}, {"recorded": True}),
+        (
+            "code.scip_ingest",
+            {
+                "batch_id": "00000000-0000-4000-8000-000000000001",
+                "seq": 0,
+                "total_parts": 1,
+                "payload": "{}",
+            },
+            {
+                "batch_id": "00000000-0000-4000-8000-000000000001",
+                "parts_received": 1,
+                "total_parts": 1,
+                "complete": False,
+            },
+        ),
+        (
+            "code.coverage.watch",
+            {"commit": "a" * 40, "inbox": "builds"},
+            {
+                "org": "acme",
+                "namespace": "code-repo",
+                "commit": "a" * 40,
+                "inbox": "builds",
+                "event_id": "ready",
+            },
+        ),
+        (
+            "code.coverage.unwatch",
+            {"commit": "a" * 40, "inbox": "builds"},
+            {"commit": "a" * 40, "inbox": "builds", "removed": True},
+        ),
+    ],
+)
+def test_writes_preserve_pre_upgrade_replays_and_hidden_mcp_routes(
+    transport: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    name: str,
+    fields: dict[str, Any],
+    answer: dict[str, Any],
+) -> None:
+    from server.core import idempotency
+
+    client, _ = transport
+    op = OPERATIONS_BY_NAME[name]
+    assert op.idempotent and not op.read_only
+    body = {"namespace": "code-repo", **fields}
+    legacy = op.input_model.model_validate(body)
+    assert legacy.org == ""
+    legacy_hash = idempotency.request_hash(legacy)
+    cached = op.output_model.model_validate(answer).model_dump(mode="json")
+    checks: list[str] = []
+
+    async def check(key: str, body_hash: str) -> idempotency.CacheResult:
+        assert key == idempotency.scoped_key("retry", org="acme", subject="reader", operation=name)
+        checks.append(body_hash)
+        hit = idempotency.CacheHit(200, cached, {}) if body_hash == legacy_hash else None
+        return idempotency.CacheResult(hit=hit, conflict=hit is None)
+
+    async def never_write(inp: Any) -> Any:
+        pytest.fail("an existing idempotency receipt must replay without the handler")
+
+    op = dataclasses.replace(op, handler=never_write)
+    monkeypatch.setitem(mcp_call.TOOLS_BY_NAME, op.mcp_tool_name, op)
+    monkeypatch.setattr(http_mod, "ALL_OPERATIONS", [op])
+    monkeypatch.setattr(settings, "code_org", "acme")
+    monkeypatch.setattr(idempotency, "check", check)
+    credential = mint_token(
+        subject="reader", org="acme", namespaces=["code-repo"], roles=["admin"], ttl_seconds=300
+    )
+    if kind == "http":
+        app = FastAPI()
+        app.include_router(http_mod.build_router())
+        response = TestClient(app).post(
+            f"/v1/{name}",
+            json=body,
+            headers={"Authorization": f"Bearer {credential}", "Idempotency-Key": "retry"},
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers.get("X-Idempotent-Replay") == "true"
+    else:
+        response = call(client, kind, name, {**body, "_idempotency_key": "retry"}, credential)
+        assert response["result"]["isError"] is True, response
+        assert response["result"]["structuredContent"]["code"] == "OP_NOT_ON_MCP"
+    assert checks == ([legacy_hash] if kind == "http" else [])
