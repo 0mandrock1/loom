@@ -171,6 +171,7 @@ def smoke(image: str, extractor_image: str, clickhouse_image: str) -> None:
                 "LOOM_EXTRACTOR_IMAGE_REPOSITORY": extractor_repository,
                 "LOOM_VERSION": tag,
                 "LOOM_PORT": str(port),
+                "LOOM_CODE_INGEST_ENABLED": "false",
             },
         )
         compose = [
