@@ -568,6 +568,8 @@ def untranslated_pages() -> list[str]:
                 if text.startswith(prefix):
                     text = text[len(prefix) :]
             rel = path.relative_to(ROOT).as_posix()
+            english = lifecycle.canonical_links(english, rel)
+            text = lifecycle.canonical_links(text, rel)
             problems.extend(
                 f"{rel}: {problem}" for problem in _label_differences(english, text, source)
             )
