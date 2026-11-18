@@ -4,16 +4,78 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 import pytest_asyncio
 
-from server.core.ch import CHClient, query_tag
+from server.core import ch as ch_module
+from server.core.ch import CHClient, as_analyst, query_tag, uncaptured
+from server.core.sql_literal import sql_string
 from server.insights.store import event_cutover
 
 pytestmark = pytest.mark.usefixtures("ch_target_required")
+
+
+@asynccontextmanager
+async def _observer_principal(world, monkeypatch):
+    """A private native login whose policies cannot narrow other test principals."""
+    username, password = "cutover_observer_" + uuid4().hex, uuid4().hex
+    client = CHClient()
+    configuration = ch_module.connection_kwargs()
+    try:
+        with uncaptured():
+            await world.client.execute(
+                f"CREATE USER {username} IDENTIFIED WITH sha256_password BY "
+                + sql_string(password),
+                settings={"log_queries_cut_to_length": 1, "log_formatted_queries": 0},
+            )
+        for access in (
+            f"SELECT ON {world.db}.*",
+            "SELECT ON system.*",
+            "SHOW ROW POLICIES ON *.*",
+            "SHOWPROCESSLIST ON *.*",
+        ):
+            await world.client.execute(f"GRANT {access} TO {username}")
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                ch_module,
+                "connection_kwargs",
+                lambda: {
+                    **configuration,
+                    "username": username,
+                    "password": password,
+                },
+            )
+            try:
+                await client.connect()
+                assert await client.query_one("SELECT currentUser() AS user") == {"user": username}
+                yield client, username
+            finally:
+                await client.disconnect()
+    finally:
+        await world.client.execute(f"DROP USER IF EXISTS {username}")
+
+
+@asynccontextmanager
+async def _hidden_population(world, username, target, predicate):
+    """Keep other principals unrestricted while narrowing only the owned observer."""
+    suffix = uuid4().hex
+    allow, hide = "cutover_allow_" + suffix, "cutover_hide_" + suffix
+    try:
+        await world.client.execute(
+            f"CREATE ROW POLICY {allow} ON {target} AS PERMISSIVE FOR SELECT USING 1 TO ALL"
+        )
+        await world.client.execute(
+            f"CREATE ROW POLICY {hide} ON {target} AS RESTRICTIVE "
+            f"FOR SELECT USING {predicate} TO {username}"
+        )
+        yield
+    finally:
+        for name in (hide, allow):
+            await world.client.execute(f"DROP ROW POLICY IF EXISTS {name} ON {target}")
 
 
 @pytest_asyncio.fixture
@@ -86,6 +148,37 @@ async def test_native_private_contamination_is_preserved_and_refused(world) -> N
     assert row and row["n"] == 1
 
 
+async def test_native_filtered_contamination_and_self_hidden_policy_catalog_still_refuse(
+    world, monkeypatch
+):
+    await world.client.execute(
+        f"ALTER TABLE {world.db}.agent_events DROP CONSTRAINT ordinary_events_only"
+    )
+    await world.client.execute(
+        f"INSERT INTO {world.db}.agent_events (mirror_marked) VALUES (1)",
+        settings={"async_insert": 0},
+    )
+    await world.client.execute(
+        f"ALTER TABLE {world.db}.agent_events ADD CONSTRAINT ordinary_events_only CHECK {event_cutover.ORDINARY}"
+    )
+    async with _observer_principal(world, monkeypatch) as (observer, username):
+        async with _hidden_population(
+            world, username, f"{world.db}.agent_events", "mirror_marked = 0"
+        ):
+            async with _hidden_population(world, username, "system.row_policies", "0"):
+                assert await observer.query_one(
+                    f"SELECT count() AS n FROM {world.db}.agent_events"
+                ) == {"n": 0}
+                assert await observer.query_one("SELECT count() AS n FROM system.row_policies") == {
+                    "n": 0
+                }
+                with pytest.raises(event_cutover.EventCutoverUnavailable):
+                    await event_cutover.confirm_ordinary_events(ch=observer)
+                assert await world.client.query_one(
+                    f"SELECT count() AS n FROM {world.db}.agent_events"
+                ) == {"n": 1}
+
+
 async def _running(client: CHClient, marker: str) -> dict | None:
     return await client.query_one(
         "SELECT query_id, read_rows FROM system.processes "
@@ -94,19 +187,35 @@ async def _running(client: CHClient, marker: str) -> dict | None:
     )
 
 
-async def test_native_insert_with_old_metadata_drains_before_the_private_census(world) -> None:
+@pytest.mark.parametrize("hide_old_insert", [False, True])
+async def test_native_insert_with_old_metadata_drains_before_the_private_census(
+    world, monkeypatch, hide_old_insert
+) -> None:
     await world.client.execute(
         f"ALTER TABLE {world.db}.agent_events DROP CONSTRAINT ordinary_events_only"
     )
     producer = CHClient()
     task = None
     marker = "cutover_old_insert_" + uuid4().hex
+    producer_user, producer_password = "cutover_producer_" + uuid4().hex, uuid4().hex
+    user_created = False
     try:
+        user_created = True
+        with uncaptured():
+            await world.client.execute(
+                f"CREATE USER {producer_user} IDENTIFIED WITH sha256_password BY "
+                + sql_string(producer_password),
+                settings={"log_queries_cut_to_length": 1, "log_formatted_queries": 0},
+            )
+        await world.client.execute(f"GRANT INSERT ON {world.db}.agent_events TO {producer_user}")
         await producer.connect()
 
         async def insert() -> None:
-            with query_tag(marker):
-                await producer.execute(
+            with query_tag(marker), as_analyst(producer_user, producer_password, {}):
+                assert await producer.query_one("SELECT currentUser() AS user") == {
+                    "user": producer_user
+                }
+                await producer.raw_bytes(
                     f"INSERT INTO {world.db}.agent_events (mirror_marked) "
                     "SELECT toUInt8(1) FROM numbers(100) WHERE sleepEachRow(0.05) = 0 "
                     "SETTINGS async_insert = 0, max_block_size = 10, max_threads = 1, "
@@ -126,21 +235,58 @@ async def test_native_insert_with_old_metadata_drains_before_the_private_census(
         query_id = row["query_id"]
         observed = {"old": False, "census": False}
 
-        async def query(sql, params=None):
-            if "AS private" in sql:
-                assert observed["old"]
-                assert await _running(world.client, marker) is None
-                observed["census"] = True
-            rows = await world.client.query_all(sql, params=params)
-            if "FROM system.processes" in sql:
-                observed["old"] |= any(
-                    query_id == item[1] for entry in rows for item in entry["inserts"]
-                )
-            return rows
+        def recording(read):
+            async def query(sql, params=None):
+                if "AS private" in sql:
+                    assert observed["old"]
+                    assert await _running(world.client, marker) is None
+                    observed["census"] = True
+                rows = await read(sql, params=params)
+                if "FROM system.processes" in sql:
+                    observed["old"] |= any(
+                        (producer_user, query_id) == tuple(item)
+                        for entry in rows
+                        for item in entry["inserts"]
+                    )
+                return rows
 
-        with pytest.raises(event_cutover.EventCutoverUnavailable):
-            await event_cutover.confirm_ordinary_events(ch=SimpleNamespace(query_all=query))
-        assert observed == {"old": True, "census": True}
+            return query
+
+        @asynccontextmanager
+        async def observers():
+            async with world.client.policy_observers() as channels:
+                yield tuple(
+                    SimpleNamespace(
+                        server_uuid=channel.server_uuid,
+                        user=channel.user,
+                        roles=channel.roles,
+                        policies=channel.policies,
+                        query_all=recording(channel.query_all),
+                    )
+                    for channel in channels
+                )
+
+        if hide_old_insert:
+            async with _observer_principal(world, monkeypatch) as (observer, username):
+                async with _hidden_population(world, username, "system.processes", "0"):
+                    assert await _running(world.client, marker) is not None
+                    assert await observer.query_one(
+                        "SELECT count() AS n FROM system.processes WHERE query_kind = 'Insert' "
+                        "AND query_id = {qid:String}",
+                        {"qid": query_id},
+                    ) == {"n": 0}
+                    with pytest.raises(event_cutover.EventCutoverUnavailable):
+                        await event_cutover.confirm_ordinary_events(ch=observer)
+            assert observed == {"old": False, "census": False}
+        else:
+            with pytest.raises(event_cutover.EventCutoverUnavailable):
+                await event_cutover.confirm_ordinary_events(
+                    ch=SimpleNamespace(
+                        query_all=recording(world.client.query_all),
+                        policy_observers=observers,
+                    )
+                )
+            assert observed == {"old": True, "census": True}
         await task
         assert await _running(world.client, marker) is None
         row = await world.client.query_one(f"SELECT count() AS n FROM {world.db}.agent_events")
@@ -149,6 +295,8 @@ async def test_native_insert_with_old_metadata_drains_before_the_private_census(
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
         await producer.disconnect()
+        if user_created:
+            await world.client.execute(f"DROP USER IF EXISTS {producer_user}")
 
 
 async def _queued(world, query_id: str) -> None:
