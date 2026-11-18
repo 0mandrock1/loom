@@ -55,12 +55,17 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     async def get_source(*args: object, **kwargs: object):
         return state.src
 
-    async def get_reg(org: str, source_id: str):
-        if state.reg and state.reg.org == org and state.reg.source_id == source_id:
+    async def get_reg(org: str, namespace: str, source_id: str, *, ch=None):
+        if (
+            state.reg
+            and state.reg.org == org
+            and state.reg.namespace == namespace
+            and state.reg.source_id == source_id
+        ):
             return state.reg
         return None
 
-    async def put(reg: PushRegistration):
+    async def put(reg: PushRegistration, *, ch=None):
         state.reg = reg
         state.writes.append(reg)
 
@@ -99,6 +104,7 @@ async def setup_notion(env: SimpleNamespace) -> None:
 async def capture(env: SimpleNamespace, token: str = "verification-challenge") -> None:
     await app.receive(
         "org",
+        "docs",
         "source-id",
         env.reg.generation,
         json.dumps({"verification_token": token}).encode(),
@@ -175,12 +181,12 @@ async def test_active_notion_only_records_one_hint_and_preserves_full_request(
     signature = "sha256=" + hmac.new(b"verification-challenge", raw, hashlib.sha256).hexdigest()
     for _ in range(2):
         await app.receive(
-            "org", "source-id", env.reg.generation, raw, {"x-notion-signature": signature}
+            "org", "docs", "source-id", env.reg.generation, raw, {"x-notion-signature": signature}
         )
     assert len(env.requests) == 1
     env.sync = {"detail": json.dumps({"requested_at": "earlier", "full": True, "cursor": "keep"})}
     await app.receive(
-        "org", "source-id", env.reg.generation, raw, {"x-notion-signature": signature}
+        "org", "docs", "source-id", env.reg.generation, raw, {"x-notion-signature": signature}
     )
     assert json.loads(env.sync["detail"]) == {
         "requested_at": "earlier",
@@ -188,11 +194,13 @@ async def test_active_notion_only_records_one_hint_and_preserves_full_request(
         "cursor": "keep",
     }
     with pytest.raises(DeliveryRefused):
-        await app.receive("org", "source-id", env.reg.generation, raw, {})
+        await app.receive("org", "docs", "source-id", env.reg.generation, raw, {})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["removed", "replaced", "items", "retired", "other-org"])
+@pytest.mark.parametrize(
+    "change", ["removed", "replaced", "items", "retired", "other-org", "other-namespace"]
+)
 async def test_late_delivery_cannot_reach_changed_registration(
     env: SimpleNamespace, change: str
 ) -> None:
@@ -206,15 +214,17 @@ async def test_late_delivery_cannot_reach_changed_registration(
         env.src = dataclasses.replace(env.src, items=[{"type": "page", "id": "new"}])
     elif change == "retired":
         await app.retire(env.src)
+    before = len(env.writes)
     with pytest.raises(DeliveryRefused):
         await app.receive(
             "other-org" if change == "other-org" else "org",
+            "other-docs" if change == "other-namespace" else "docs",
             "source-id",
             generation,
             b'{"verification_token":"verification-challenge"}',
             {},
         )
-    assert not env.requests
+    assert not env.requests and len(env.writes) == before
 
 
 @pytest.mark.asyncio
@@ -340,8 +350,8 @@ async def test_lost_publication_ack_does_not_stop_current_drive_channels(
     monkeypatch.setattr(app.gdrive_push, "stop", stopped)
     original_put = app.store.put
 
-    async def uncertain_put(reg: PushRegistration):
-        await original_put(reg)
+    async def uncertain_put(reg: PushRegistration, *, ch=None):
+        await original_put(reg, ch=ch)
         if reg.status == "active":
             raise ConnectionError("ack lost after commit")
 
@@ -370,14 +380,19 @@ async def test_linear_prepares_stable_address_then_requires_exact_confirmation(
     pending = await app.handle_configure(
         PushConfigureInput(org="org", namespace="docs", name="source")
     )
-    assert pending.status == "pending" and pending.callback_url
+    assert pending.status == "pending"
+    assert pending.callback_url == (
+        f"https://loom.example/hooks/knowledge/org/docs/source-id/{pending.generation}"
+    )
     generation = pending.generation
     raw = json.dumps(
         {"organizationId": "organization", "webhookTimestamp": int(time.time() * 1000)}
     ).encode()
     signature = hmac.new(b"signing-secret", raw, hashlib.sha256).hexdigest()
     with pytest.raises(DeliveryRefused):
-        await app.receive("org", "source-id", generation, raw, {"linear-signature": signature})
+        await app.receive(
+            "org", "docs", "source-id", generation, raw, {"linear-signature": signature}
+        )
     with pytest.raises(app.ValidationError):
         await app.handle_confirm(
             PushConfirmInput(
@@ -398,7 +413,7 @@ async def test_linear_prepares_stable_address_then_requires_exact_confirmation(
         )
     )
     assert active.status == "active" and active.callback_url == pending.callback_url
-    await app.receive("org", "source-id", generation, raw, {"linear-signature": signature})
+    await app.receive("org", "docs", "source-id", generation, raw, {"linear-signature": signature})
     assert len(env.requests) == 1
 
 
@@ -423,7 +438,7 @@ async def test_deployment_opt_out_refuses_existing_delivery(
     signature = "sha256=" + hmac.new(b"verification-challenge", raw, hashlib.sha256).hexdigest()
     with pytest.raises(DeliveryRefused):
         await app.receive(
-            "org", "source-id", env.reg.generation, raw, {"x-notion-signature": signature}
+            "org", "docs", "source-id", env.reg.generation, raw, {"x-notion-signature": signature}
         )
     assert not env.requests
 
@@ -442,3 +457,130 @@ async def test_paused_setup_can_be_inspected_and_disabled_without_public_origin(
         PushConfigureInput(org="org", namespace="docs", name="source", enabled=False)
     )
     assert disabled.status == "disabled" and env.reg.secret_enc == ""
+
+
+@pytest.mark.asyncio
+async def test_provider_and_channel_cleanup_read_configured_timeouts(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    waits = []
+
+    @asynccontextmanager
+    async def timeout(seconds: float):
+        waits.append(seconds)
+        yield
+
+    monkeypatch.setattr(app.asyncio, "timeout", timeout)
+    monkeypatch.setattr(app.settings, "knowledge_source_push_provider_timeout_s", 17.0)
+    monkeypatch.setattr(app.settings, "knowledge_source_push_stop_timeout_s", 1.25)
+    monkeypatch.setattr(app.settings, "knowledge_source_push_cleanup_timeout_s", 3.0)
+    await setup_notion(env)
+    assert waits == [17.0]
+    env.src = dataclasses.replace(env.src, kind="gdrive")
+    env.reg = dataclasses.replace(env.reg, provider="gdrive")
+    monkeypatch.setattr(app.gdrive, "parse_service_account", lambda key: object())
+    monkeypatch.setattr(app.gdrive, "access_token", AsyncMock(return_value="token"))
+    monkeypatch.setattr(app.gdrive_push, "member_drives", AsyncMock(return_value=set()))
+    monkeypatch.setattr(
+        app.gdrive_push,
+        "watch",
+        AsyncMock(
+            return_value={
+                "id": "created",
+                "token": "channel-token",
+                "resource_id": "resource",
+                "expiration": time.time() + 3600,
+                "drive_id": "",
+            }
+        ),
+    )
+    stopped = AsyncMock()
+    monkeypatch.setattr(app.gdrive_push, "stop", stopped)
+    await app._renew_drive(env.reg, initial=True)
+    assert waits == [17.0, 17.0, 3.0]
+    await app._stop_channels("token", [{"id": "superseded"}])
+    assert waits == [17.0, 17.0, 3.0, 1.25]
+    stopped.assert_awaited_once_with("token", {"id": "superseded"})
+
+
+@pytest.mark.parametrize(
+    "overrides,error",
+    [
+        ({"knowledge_source_push_stop_timeout_s": 6.0}, "STOP_TIMEOUT_S"),
+        ({"knowledge_source_push_provider_timeout_s": 115.0}, "renewal lease"),
+        ({"knowledge_source_push_max_pass_seconds": 50.0}, "MAX_PASS_SECONDS"),
+    ],
+)
+def test_push_budgets_refuse_cleanup_or_attempt_outside_deadline(
+    overrides: dict[str, float], error: str
+) -> None:
+    from pydantic import ValidationError
+
+    from server.settings.catalog import KnowledgeSettings
+
+    with pytest.raises(ValidationError, match=error):
+        KnowledgeSettings(**overrides)
+
+
+def test_push_budgets_accept_configured_deadlines() -> None:
+    from server.settings.catalog import KnowledgeSettings
+
+    configured = KnowledgeSettings(
+        knowledge_source_push_provider_timeout_s=60.0,
+        knowledge_source_push_stop_timeout_s=3.0,
+        knowledge_source_push_cleanup_timeout_s=8.0,
+        knowledge_source_push_max_pass_seconds=180.0,
+    )
+    assert configured.knowledge_source_push_provider_timeout_s == 60.0
+    assert configured.knowledge_source_push_stop_timeout_s == 3.0
+    assert configured.knowledge_source_push_cleanup_timeout_s == 8.0
+    assert configured.knowledge_source_push_max_pass_seconds == 180.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("namespace", ["docs", "other-docs", "missing"])
+async def test_registry_lookup_requires_the_namespace_key(namespace: str) -> None:
+    from server.knowledge.store import source_push
+
+    rows = [
+        PushRegistration(
+            org="org",
+            namespace=ns,
+            name="source",
+            source_id="shared-id",
+            provider="notion",
+            generation=ns,
+            fingerprint="fp",
+            secret_enc=ns,
+        )
+        for ns in ("docs", "other-docs")
+    ]
+
+    class Ch:
+        async def query_one(self, sql: str, params: dict[str, str]):
+            assert "org = {org:String} AND namespace = {ns:String}" in sql
+            assert "source_id = {source:String}" in sql
+            assert params == {"org": "org", "ns": namespace, "source": "shared-id"}
+            return next(
+                (dataclasses.asdict(row) for row in rows if row.namespace == params["ns"]), None
+            )
+
+    result = await source_push.get("org", namespace, "shared-id", ch=Ch())
+    assert result == next((row for row in rows if row.namespace == namespace), None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan", ["drive_page", "sealed_page"])
+async def test_registry_maintenance_cursor_follows_the_namespace_key(scan: str) -> None:
+    from server.knowledge.store import source_push
+
+    after = ("org", "docs", "shared-id")
+
+    class Ch:
+        async def query_all(self, sql: str, params: dict[str, tuple[str, str, str]]):
+            assert "(org, namespace, source_id) > {after:Tuple(String, String, String)}" in sql
+            assert "ORDER BY org, namespace, source_id LIMIT" in sql
+            assert params == {"after": after}
+            return []
+
+    assert await getattr(source_push, scan)(after, ch=Ch()) == []

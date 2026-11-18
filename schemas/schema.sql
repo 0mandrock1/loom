@@ -2211,7 +2211,7 @@ CREATE TABLE IF NOT EXISTS loom.knowledge_source_push
     `version` UInt64 DEFAULT toUInt64(toUnixTimestamp64Nano(now64(9)))
 )
 ENGINE = ReplacingMergeTree(version)
-ORDER BY (org, source_id)
+ORDER BY (org, namespace, source_id)
 SETTINGS non_replicated_deduplication_window = 1000, index_granularity = 8192;
 
 -- loom.knowledge_sources

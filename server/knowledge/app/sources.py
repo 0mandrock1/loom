@@ -308,14 +308,14 @@ async def _source_refusal(org: str, namespace: str) -> ValidationError | None:
     return None
 
 
-async def _require_no_erasure(org: str, namespace: str) -> None:
+async def _require_no_erasure(org: str, namespace: str, *, ch: Any = None) -> None:
     """Refuse a new source while an erasure of the namespace will still run: its first step
     may have read the sources already, so what a later source wrote would outlast it."""
     # Imported here: the erasure saga imports this module.
     from server.erasure.app import ledger_reads
     from server.erasure.domain.scopes import may_cover
 
-    for row in await ledger_reads.open_namespace_erasures(org):
+    for row in await ledger_reads.open_namespace_erasures(org, ch=ch):
         if may_cover(str(row["scope_type"]), str(row["scope_value"]), namespace):
             raise ErasureRunningError(
                 f"an erasure of {namespace!r} will still run; change its sources once it finishes"
@@ -525,14 +525,16 @@ def _sources_lease_name(org: str, namespace: str) -> str:
 
 
 @contextlib.asynccontextmanager
-async def sources_lease(org: str, namespace: str, *, wait_s: float = 5.0) -> AsyncIterator[None]:
+async def sources_lease(
+    org: str, namespace: str, *, wait_s: float = 5.0, ch: Any = None
+) -> AsyncIterator[None]:
     """Hold the lease that serializes every write of a namespace's sources. Busy
     past `wait_s`: OVERLOADED, retry; a lease store that cannot answer refuses
     (LeaseUnavailable), never writes unlocked."""
     # The TTL outlives the few reads and inserts of one write with room to spare (a
     # holder that dies is taken over after it).
     async with leases.holding(
-        _sources_lease_name(org, namespace), ttl_s=60.0, wait_s=wait_s
+        _sources_lease_name(org, namespace), ttl_s=60.0, wait_s=wait_s, ch=ch
     ) as held:
         if not held:
             raise OverloadedError(

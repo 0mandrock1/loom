@@ -11,9 +11,7 @@ from fastapi.testclient import TestClient
 from server.knowledge.app import source_push_routes as routes
 from server.knowledge.domain.source_push import MAX_BODY_BYTES, DeliveryRefused
 
-URL = (
-    "/hooks/knowledge/org/12345678-1234-1234-1234-123456789abc/22345678-1234-1234-1234-123456789abc"
-)
+URL = "/hooks/knowledge/org/docs/12345678-1234-1234-1234-123456789abc/22345678-1234-1234-1234-123456789abc"
 
 
 def client() -> TestClient:
@@ -29,7 +27,13 @@ def test_verified_delivery_acknowledges_200_inside_provider_deadline(
     monkeypatch.setattr(routes, "receive", receive)
     assert client().post(URL, content=b"signal").status_code == 200
     assert routes.CALLBACK_TIMEOUT_S < 5
-    assert receive.call_args.args[3] == b"signal"
+    assert receive.call_args.args[:5] == (
+        "org",
+        "docs",
+        "12345678-1234-1234-1234-123456789abc",
+        "22345678-1234-1234-1234-123456789abc",
+        b"signal",
+    )
 
 
 def test_oversized_delivery_never_reaches_store(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,3 +48,10 @@ def test_unverifiable_delivery_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
         routes, "receive", AsyncMock(side_effect=DeliveryRefused("unverifiable delivery"))
     )
     assert client().post(URL, content=b"signal").status_code == 403
+
+
+def test_callback_without_namespace_is_not_a_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    receive = AsyncMock()
+    monkeypatch.setattr(routes, "receive", receive)
+    assert client().post(URL.replace("/org/docs/", "/org/"), content=b"signal").status_code == 404
+    receive.assert_not_awaited()

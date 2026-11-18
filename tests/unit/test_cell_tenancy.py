@@ -401,7 +401,7 @@ _ORG_FREE_MODULES = {
 ROUTES: dict[str, str] = {
     "/.well-known/oauth-authorization-server GET": "discovery document: no data",
     "/assets WS": "the dashboard's static assets",
-    "/hooks/knowledge/{org}/{source_id}/{generation} POST": "named",
+    "/hooks/knowledge/{org}/{namespace}/{source_id}/{generation} POST": "named",
     "/mcp DELETE": "ends an MCP session: no org's data",
     "/mcp POST": "op transport: the op gate checks each call's org",
     "/oauth/agent-claim GET": "the claim page: no data",
@@ -592,7 +592,7 @@ def test_provider_callback_requires_an_already_held_org_without_placement(
     app = FastAPI()
     source_push_routes.attach(app)
     url = (
-        f"/hooks/knowledge/{org}/12345678-1234-1234-1234-123456789abc/"
+        f"/hooks/knowledge/{org}/docs/12345678-1234-1234-1234-123456789abc/"
         "22345678-1234-1234-1234-123456789abc"
     )
     with TestClient(app) as client:

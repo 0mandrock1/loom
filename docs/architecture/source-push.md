@@ -42,7 +42,7 @@ binds an org, namespace, source ID, provider and random setup generation to a
 fingerprint of the source's credential and items. Configuration is an admin
 operation. An explicitly configured HTTPS public base URL is required.
 
-The callback URL names the org, source ID and setup generation. A callback
+The callback URL names the org, namespace, source ID and setup generation. A callback
 re-reads the registry and current source under the namespace's source lease
 before recording a sync request. A removed or replaced source, changed
 credential, changed item set, inactive namespace or retired generation refuses
@@ -84,8 +84,18 @@ new unique channel, validates the response and source generation, then swaps it
 under the source lease. It stops the old channel best effort. A failed renewal
 leaves polling available and exposes the expired channel in setup status.
 
+The configuration catalog controls the provider-work, per-channel stop, total
+cleanup and worker-pass deadlines. Their defaults are 40, two, five and 120
+seconds. A pass stops starting renewals with enough time for one provider attempt
+and two cleanup windows. Configuration refuses provider work plus cleanup that
+could outlive the 120-second renewal lease, or a pass budget that leaves no time
+to start a renewal. The channel stop deadline cannot exceed the total cleanup
+window.
+
 ## Lifecycle and storage
 
+The registry is ordered by org, namespace and source ID, so namespace reads
+prune their physical key range. Maintenance scans advance in that same order.
 The registry stores the full identity tuple, server-stamped actor and derived
 provenance. Secrets use purpose-bound sealing and participate in resealing.
 Ordinary source reads and audit subjects never include tokens or challenges.

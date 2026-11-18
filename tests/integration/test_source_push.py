@@ -50,7 +50,7 @@ async def test_push_setup_provider_proofs_source_lifecycle_and_erasure(
     headers = {"Authorization": f"Bearer {token}"}
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://localhost", timeout=30
+            transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30
         ) as client:
 
             async def post(op: str, **body: Any) -> dict[str, Any]:
@@ -277,7 +277,7 @@ async def test_push_setup_provider_proofs_source_lifecycle_and_erasure(
             assert (await client.post(drive_path, headers=old_headers)).status_code == 200
             assert (await post("knowledge.source.inspect", name="folders"))["sync"]["requested_at"]
             source_id = drive_path.split("/")[-2]
-            registration = await push_store.get(org, source_id)
+            registration = await push_store.get(org, namespace, source_id)
             assert registration is not None
             await renew_drive(registration)
             assert len(channels) == 4 and stop.await_count == 2
