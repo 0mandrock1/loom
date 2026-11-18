@@ -299,6 +299,7 @@ async def write_memory_chunks(
     fact layer so cosine is comparable. Fail-open.
     """
     import hashlib
+    import uuid
 
     from server.core.ch import get_client
     from server.embedding import get_embedder
@@ -322,8 +323,9 @@ async def write_memory_chunks(
     embedder = get_embedder()
     ch = get_client()
 
-    # Empty and '-' both mean no session; keep a readable chunk key for that identity.
-    session_id = str(getattr(input, "session_id", "") or "-")
+    # Caller need not provide a session_id; generate a per-call UUID so chunks
+    # from one ingest are co-grouped.
+    session_id = getattr(input, "session_id", "") or uuid.uuid4().hex
     parent_keys = list(dict.fromkeys(k for k in (parent_memory_keys or []) if k))
     parent_memory_key = next((k for k in parent_keys if k), "")
     source_resource_id = (

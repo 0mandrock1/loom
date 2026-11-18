@@ -1028,7 +1028,8 @@ and shared duplicate selection by phrase completion.
    the canonical memory row's status and time predicates. The parent match includes
    agent, user, session and key within the org and namespace, so another writer's row
    cannot hide a passage. Anonymous user and session spellings compare as the same
-   sentinel. Conversation chunks use that sentinel so their keys stay readable. A session-only chunk without a matching memory parent stays
+   sentinel. Blank-session ingests retain independent generated session ids. A chunk
+   with no matching canonical parent, including such a generated session, stays
    eligible. Hard tags also require a matching searchable parent.
 
    A pooled chunk of a long `memory.set` value folds onto the row whose current value cuts

@@ -28,28 +28,27 @@ async def _project(monkeypatch, user, session):
     return call.args[1]
 
 
-@pytest.mark.parametrize("user,session", [("", "s"), ("u", ""), ("", ""), ("-", "-")])
-async def test_chunk_projection_uses_the_anonymous_identity_sentinel(monkeypatch, user, session):
+@pytest.mark.parametrize("user,session", [("", "s"), ("u", "s"), ("", "-"), ("-", "-")])
+async def test_chunk_projection_keeps_explicit_sessions(monkeypatch, user, session):
     rows = await _project(monkeypatch, user, session)
     assert {(r["agent"], r["user_id"], r["session_id"], r["parent_memory_key"]) for r in rows} == {
-        ("a", user or "-", session or "-", "parent")
+        ("a", user or "-", session, "parent")
     }
 
 
-@pytest.mark.parametrize("session", ["", "-"])
-async def test_an_anonymous_projection_remains_searchable_and_resolvable(monkeypatch, session):
-    from server.memory.app.handlers import split_chunk_key
-    from server.memory.app.retrieval.chunks import _chunk_anchor_keys, _search_memory_chunks
-    from tests.unit.test_chunk_two_stage import _stage2_row
-    from tests.unit.test_memory_search_service import StubCH, _q
+@pytest.mark.parametrize("second_user", ["first", "second"])
+async def test_blank_sessions_keep_distinct_readable_chunk_identities(monkeypatch, second_user):
+    from uuid import UUID
 
-    row = (await _project(monkeypatch, "", session))[0]
-    ch = StubCH()
-    ch.query_all_returns.append([{**row, "distance": 0.2}])
-    full = _stage2_row(row["session_id"], row["chunk_index"], parent="parent")
-    ch.query_all_returns.append([full])
-    q = _q(query_text="")
-    hits = await _search_memory_chunks(ch, q, {"q": q.query_vec})
-    assert len(hits) == 1
-    assert split_chunk_key(hits[0].memory_key) == ("-", row["chunk_index"])
-    assert _chunk_anchor_keys([full]) == [("-", row["chunk_index"])]
+    from server.memory.app.handlers import split_chunk_key
+    from server.memory.app.retrieval.chunks import _chunk_anchor_keys
+
+    first = (await _project(monkeypatch, "first", ""))[0]
+    second = (await _project(monkeypatch, second_user, ""))[0]
+    sessions = [first["session_id"], second["session_id"]]
+    assert len(set(sessions)) == 2
+    for row in [first, second]:
+        sid = row["session_id"]
+        assert str(UUID(sid)) == sid
+        assert split_chunk_key(f"chunk:{sid}:{row['chunk_index']}") == (sid, row["chunk_index"])
+        assert _chunk_anchor_keys([row]) == [(sid, row["chunk_index"])]
