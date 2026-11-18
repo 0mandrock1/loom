@@ -52,7 +52,7 @@ for (const width of [1400, 375]) {
       expect(disconnects).toBe(0);
       await page.getByRole("button", { name: "Disconnect Google Drive" }).click();
       await confirm.getByRole("button", { name: "Disconnect", exact: true }).click();
-      await expect(page.getByRole("button", { name: "Connect Google Drive" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Connect Google Drive", exact: true })).toBeVisible();
       await expect(page.getByText("reader@example.com")).toHaveCount(0);
       await expect(page.getByRole("heading", { name: "Google Drive", exact: true })).toBeFocused();
       expect(disconnects).toBe(1);
