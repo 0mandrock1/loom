@@ -234,8 +234,8 @@ async def decomposed_retrieval(
     """Retrieve each sub-question on its own and union the
     hits into `ranked` (whole-question hits first, then per part in order,
     merged by row through `PooledRows`). Returns (sub_questions, merged). A part
-    whose retrieval raises is skipped (fail-open) and counted in
-    `stats["failed"]` — the count rides the response and the
+    whose retrieval has an ordinary failure is skipped and counted in
+    `stats["failed"]`; typed input refusals propagate — the count rides the response and the
     ledger, so a lever that stops working is a number, not a log line."""
     from server.memory.app.search import handle_memory_search
 
