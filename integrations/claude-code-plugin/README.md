@@ -1,5 +1,8 @@
 # Loom for Claude Code
 
+For tool discovery, default code-tool use and hook-versus-agent call counts, see
+[Claude does not call Loom tools](../../docs/features/integrations/claude-code.md#claude-does-not-call-loom-tools).
+
 Shared long-term memory and code intelligence for Claude Code, self-hosted on
 ClickHouse. The MCP tools save and recall decisions, preferences and corrections
 across sessions and teammates. Lifecycle hooks capture each session with no model

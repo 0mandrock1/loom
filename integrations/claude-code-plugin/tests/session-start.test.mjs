@@ -17,6 +17,17 @@ import { recalledDataBlock } from "../lib/prompt-recall.mjs";
 
 const scope = { org: "o", namespace: "coding", agent: "claude-code", project: "loom", tags: [] };
 
+test("indexed code guidance starts with Loom and reuses answers supplied by hooks", () => {
+  const text = codeArbitration({ git_head: "abc", fetch_overdue: false });
+  assert.match(text.split("\n")[1], /Use Loom first/);
+  assert.doesNotMatch(text, /Grep or Read the names you know first/);
+  assert.match(text, /loom_code_symbol.*definitions/);
+  assert.match(text, /loom_code_callers.*callers/);
+  assert.match(text, /hook already supplied.*do not repeat/);
+  assert.match(text, /uncommitted.*local/);
+  assert.match(text, /unavailable or abstains.*local/);
+});
+
 test("the session-start pack leaves the runs manifest out by default, so the primer stays the same", () => {
   const off = startPackBody(scope, { session_id: "s1", cwd: "/repo" }, { tokenBudget: 1200, runId: "cc-s1", env: {} });
   assert.equal(off.include_runs, undefined);

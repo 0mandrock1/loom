@@ -10,7 +10,6 @@ description: >
   repos loom hasn't indexed (a code.search that abstains on everything is
   the tell), and NOT for your own uncommitted files (grep those; pass your
   diff to code.impact for blast radius).
-disable-model-invocation: true
 ---
 
 # loom-code — the indexed answer before the grep reflex
@@ -21,6 +20,9 @@ several whole-file reads and returns what grep cannot see: resolved callers,
 blast radius, the tests that reach a function. The `loom-code-shunt` hook
 enforces the substitutions mechanically (a symbol grep or a bulk read in an
 indexed repo is denied with the answer or the tool to call).
+
+If a hook already supplied relevant indexed evidence, use it without repeating
+the search. Call another code tool for what that evidence leaves open.
 
 ## The tools (MCP names)
 

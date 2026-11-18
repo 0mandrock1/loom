@@ -8,6 +8,11 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const skill = fs.readFileSync(path.join(here, "..", "skills", "loom-code", "SKILL.md"), "utf8");
 
+test("Claude can load the code guidance without a manual slash command", () => {
+  const frontmatter = skill.split("---")[1];
+  assert.doesNotMatch(frontmatter, /^disable-model-invocation:\s*true\s*$/m);
+});
+
 test("the loom-code skill stays short and names the MCP tools; the tables live in reference.md", () => {
   // Codex loads a skill by reading SKILL.md whole (`sed -n 1,240p`): a
   // definition question can pay ~2,400 tokens for the file before the one

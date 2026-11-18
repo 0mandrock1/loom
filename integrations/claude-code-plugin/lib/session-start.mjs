@@ -173,11 +173,13 @@ export function localFirstBlock(asOf, scopeLine = "") {
 // repo is actually indexed so it never confuses sessions on other projects.
 const CODE_ARBITRATION =
   "# Loom code index: this repository is indexed (per-merge fresh).\n" +
-  "- Grep or Read the names you know first. When grep misses or floods, or there is no name " +
-  "to grep: loom_code_search. Every definition or caller of a symbol, exactly (C++ overloads " +
-  "included): loom_code_symbol, loom_code_callers. Independent lookups go in one turn.\n" +
-  "- Exact strings or your uncommitted changes: grep — the index knows merged code. " +
-  "abstain: true means grep.\n" +
+  "- Use Loom first for indexed code: loom_code_symbol for definitions and implementation, " +
+  "loom_code_callers for callers, loom_code_search for concepts, and loom_code_impact before edits. " +
+  "Independent lookups go in one turn.\n" +
+  "- If a Loom hook already supplied the answer or a relevant pointer, use it and do not repeat " +
+  "the search. Read only the returned span when verification is needed.\n" +
+  "- Exact strings, uncommitted changes and unindexed files: use local grep/Read. " +
+  "If Loom is unavailable or abstains, use a targeted local lookup and say what was unavailable.\n" +
   "- A hit carries the unit's path, lines and code: answer from it; open a file to change it, " +
   "not to re-read a hit.\n" +
   "- Already reported? loom_tracker_duplicate_check. What introduced a bug? " +

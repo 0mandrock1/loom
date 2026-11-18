@@ -172,6 +172,60 @@ Every option is optional; Claude Code asks once, and an empty answer falls back 
 - **One MCP entry only.** Do not add a user-scope `loom` entry as well: every tool would
   be listed twice, and that copy carries no code scope.
 
+## Claude does not call Loom tools
+
+Count agent tool calls and hook requests separately. Before Claude chooses a tool,
+the prompt hook can search the code index and supply matching symbols and line ranges.
+Claude can use those pointers through a targeted `Read` with no explicit Loom tool call.
+The test gate also calls `code.test_gate` itself; it names test obligations and does not
+execute the tests. Zero explicit calls alone does not establish that Loom was unused.
+
+Check the setup in this order:
+
+1. Run `claude plugin list` and check that `loom@loom` is enabled. The plugin and server
+   have separate versions; updating the server does not update the plugin.
+2. Open `/mcp` in Claude Code. Check that Loom is connected and lists `loom_code_symbol`,
+   `loom_code_callers` and `loom_code_search`. A connected server without these tools
+   cannot serve Claude's code lookups. Use the plugin's `toolset=coding` option.
+   `toolset=all` omits code tools when the server's `LOOM_MCP_CODE_TOOLS` is false;
+   it is not a substitute for `coding`.
+3. Run `/loom:loom-status` for runtime, server, token and namespace checks. Never share
+   tokens or authorization headers in a support report.
+4. Check the SessionStart output for the matched repository and code namespace. Compare
+   the indexed commit from `code.index_status` with the checkout's `git rev-parse HEAD`.
+   A missing remote, an unindexed repository or a failed lookup needs attention before
+   measuring retrieval. See [adding repositories](../code-index/repositories.md).
+5. Check `/hooks` for the plugin's SessionStart and UserPromptSubmit handlers. A harness
+   using `--bare`, `--safe-mode` or disabled hooks does not run the normal plugin path.
+6. Inspect failed tool results as well as attempted calls. In headless `dontAsk` mode,
+   an unapproved tool is denied. When managed settings set
+   `allowManagedPermissionRulesOnly`, a command-line `--allowedTools` list cannot grant
+   access. Have the policy owner approve the intended Loom tools; do not rename the
+   registration or disable the policy to evade the denial.
+
+The plugin's startup instructions prefer Loom for indexed-code questions. Its
+`loom-code` skill can load automatically; a skill with
+`disable-model-invocation: true` requires a manual invocation. For an explicit project
+policy, add this to the repository's `CLAUDE.md`:
+
+```markdown
+For code indexed by Loom, use its tools first: loom_code_symbol for definitions,
+loom_code_callers for callers, loom_code_search for concepts, and loom_code_impact
+before edits. Use the repository scope supplied by the Loom startup hook.
+If a hook already supplied relevant evidence, use it without repeating the search.
+Use local tools for uncommitted or unindexed code, or when Loom is unavailable
+or abstains. Report the limitation instead of inventing a result.
+```
+
+For headless Claude Code, keep the `project` setting source enabled: passing
+`--setting-sources ''` excludes the project's `CLAUDE.md` as well as its settings.
+
+When reporting a comparison, include the plugin and server versions, model, repository
+and indexed commits, listed code tools, hook output, explicit tool calls, failed requests,
+cost and elapsed time. Keep the task and test budgets equal between arms. To isolate
+the test gate's contribution, compare a baseline, the plugin with `LOOM_TEST_GATE=off`,
+and the full plugin. Index the issue's starting commit so the real fix is not searchable.
+
 ## Configuration
 
 **Where the hooks find the server and the identity.** Environment first, then the install
