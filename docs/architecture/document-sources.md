@@ -266,6 +266,11 @@ the redirect URI registered with the store is built from it, never from a reques
   dashboard's Connected accounts page for the kind, where the person signs in if they
   have not. PKCE where the store takes it; `include_granted_scopes=false`, so an earlier
   grant of the same client is not folded in.
+  After consent succeeds, a callback whose HTTP `Accept` header prefers HTML returns
+  a redirect to the fixed same-origin `/settings/connected-accounts` path. Other clients
+  receive `{"connected": true}` as JSON. Both responses disable caching, carry
+  `Referrer-Policy: no-referrer`, vary on `Accept`, and clear the browser binding cookie.
+  The dashboard URL carries no code, state, token or caller-supplied return address.
 - Scopes, the narrowest each store has:
   - `gdrive`: `https://www.googleapis.com/auth/drive.readonly`, `openid` and `email`
     (which the token answer spells `https://www.googleapis.com/auth/userinfo.email`).

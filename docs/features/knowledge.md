@@ -115,6 +115,20 @@ says whether this deployment runs it (`enabled`, `LOOM_KNOWLEDGE_SOURCE_SYNC_ENA
 off by default). The design of connected accounts and access that follows the store's
 permissions is in [document sources](../architecture/document-sources.md).
 
+Open **Settings → Connected accounts** to connect your Google Drive, Notion or Linear
+account. Choose **Connect**, complete the provider's consent screen, and return to the
+dashboard to see its status. An account email appears only when the provider supplies
+one. **Reconnect** repeats consent; **Disconnect** asks for confirmation and stops your
+document sources that use that connection. Connections belong to your signed-in account
+in the current organization, independently of the namespace selected in the dashboard.
+The deployment must have that provider's OAuth application configured; consent requires
+a personal primary sign-in session.
+
+[`connection.list`](../reference/operations/connection.md#connectionlist) returns a
+`connect_url` that opens this page on the named provider. Browser consent returns to the
+page without OAuth parameters. API clients receive the JSON callback result unless
+their HTTP `Accept` header prefers `text/html` over `application/json`.
+
 On the dashboard, an opened repository on the Repositories page shows its sources under
 Sources, and the Library's **Sources** button, in the header's actions and counting them
 (its icon alone on a phone), opens the sources of the shared namespace or collection in
