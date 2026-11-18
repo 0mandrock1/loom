@@ -540,3 +540,43 @@ async def test_retirement_reader_preserves_string_identity_from_native_uuid():
         "FROM loom._provider_participants FINAL WHERE participant_id IN {ids:Array(UUID)}",
         {"ids": [str(participant_id)]},
     )
+
+
+@pytest.mark.parametrize(
+    "fault", ["gone", "zombie", "dead", "live", "permission", "unreadable", "malformed", "one-live"]
+)
+def test_worker_census_omits_only_proved_exited_children(monkeypatch, fault):
+    from types import SimpleNamespace
+
+    parent, _processes, rows = _process_fixture(monkeypatch)
+    process = data._process
+
+    def observed_process(pid):
+        if pid == 7:
+            if fault == "permission":
+                raise PermissionError("unreadable child executable")
+            raise FileNotFoundError("disappeared child executable")
+        return process(pid)
+
+    def read(path):
+        if path == "/proc/1/task/1/children":
+            return "7 8" if fault == "one-live" else "7 8 9"
+        assert path == "/proc/7/stat"
+        if fault == "gone":
+            raise FileNotFoundError("reaped child")
+        if fault == "unreadable":
+            raise PermissionError("unreadable child stat")
+        if fault == "malformed":
+            return "7 (incomplete child)"
+        state = "X" if fault == "dead" else "R" if fault == "live" else "Z"
+        return f"7 (exited child) {state} 1"
+
+    monkeypatch.setattr(data, "_process", observed_process)
+    monkeypatch.setattr(data, "Path", lambda path: SimpleNamespace(read_text=lambda: read(path)))
+    if fault in {"gone", "zombie", "dead"}:
+        assert data._workers(rows, parent) == [
+            {key: row[key] for key in ("participant_id", "host_proof", "version")} for row in rows
+        ]
+    else:
+        with pytest.raises((OSError, IndexError, AssertionError)):
+            data._workers(rows, parent)

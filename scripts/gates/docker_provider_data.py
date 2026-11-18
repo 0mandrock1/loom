@@ -87,7 +87,17 @@ def _kernel_workers() -> dict[int, dict]:
     children = Path("/proc/1/task/1/children").read_text().split()
     for value in children:
         pid = int(value)
-        process = _process(pid)
+        try:
+            process = _process(pid)
+        except FileNotFoundError:
+            # An exited child can remain in the supervisor's census until reaped.
+            try:
+                state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+            except FileNotFoundError:
+                continue
+            if state in {"Z", "X"}:
+                continue
+            raise
         command = process["command"]
         if not any(
             value.startswith("from multiprocessing.spawn import spawn_main;") for value in command
