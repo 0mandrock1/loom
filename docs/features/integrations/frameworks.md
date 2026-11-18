@@ -166,6 +166,16 @@ was opened on; an `Agent` serves `aget` and `aput` on its own loop. `Memory` kee
 short-term messages in its own chat store (in process by default); only what the block
 receives reaches Loom.
 
+Wrap automatic callbacks in the application's `SessionProtection.automatic()` scope.
+The retriever and memory block retain the families bound at construction and contributed
+by earlier callbacks, including across client rebinding and sync worker threads. A
+mirrored recall marks those families before returning. Later automatic calls refuse
+protected work; explicit calls keep their response observers without becoming automatic.
+`aflush` retains each Loom block's contributors before reading the native buffer. A
+refused flush raises and leaves that window active for retry, without archiving it or
+acknowledging an unsent extraction. The native framework owns its overflow archival;
+`aflush` does not roll it back.
+
 ## Haystack
 
 `LoomDocumentStore` implements Haystack 3.5's `DocumentStore` protocol, and
