@@ -172,6 +172,8 @@ def placement_refusal(cell_name: str, name: str, value: dict[str, Any]) -> str:
 
     Reserve the longest escaped org in each envelope and name only the largest fields.
     """
+    # Native callers materialize known defaults; retain unknown stored fields too.
+    value = {**value, "fields": {**cell.DEFAULTS, **value["fields"]}}
     # The default encoding is the longest: spaces after separators, non-ASCII escaped.
     size = (
         max(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import sys
 from typing import Any
@@ -18,6 +19,9 @@ from server.cli.cell_control import Owner
 from server.core import cell, pg
 from server.router.directory import PLACE_MAX_S
 from server.settings import settings
+
+# The directory statement bound plus connection and client cleanup.
+REQUEST_S = PLACE_MAX_S + 10.0  # not a setting: derived
 
 
 class PlacementRefused(Exception):
@@ -66,13 +70,21 @@ async def _directory(
     router: httpx.URL, name: str, org: str, deployment: str, fingerprint: dict[str, Any]
 ) -> None:
     url = cell_cli.at(router, f"/cells/v1/operator/cells/{name}/place")
-    async with httpx.AsyncClient(trust_env=router.scheme == "https") as client:
+    manager = httpx.AsyncClient(trust_env=router.scheme == "https")
+    client = await manager.__aenter__()
+    try:
         answer = await client.post(
             url,
             headers={"Authorization": f"Bearer {settings.router_operator_token}"},
             json={"org": org, "deployment_id": deployment, "fingerprint": fingerprint},
-            timeout=httpx.Timeout(PLACE_MAX_S + 10.0, connect=5.0),
+            timeout=httpx.Timeout(REQUEST_S, connect=5.0),
         )
+    except BaseException:  # Client exit preserves the request's first failure.
+        with contextlib.suppress(BaseException):
+            await manager.__aexit__(*sys.exc_info())
+        raise
+    else:
+        await manager.__aexit__(None, None, None)
     posted = cell_cli.router_answer(answer, {"org": org}, cell_cli.OPERATOR_REFUSALS)
     if posted is None:
         raise PlacementRefused(cell_cli.not_the_router(answer))
@@ -88,7 +100,7 @@ async def _directory(
 
 async def place(args: argparse.Namespace, router: httpx.URL) -> dict[str, str]:
     """Hold the operator lock through directory placement and an acknowledged local commit.
-    Every local phase, including opening and closing the direct session, has a deadline."""
+    Local phases and the complete directory exchange have separate deadlines."""
     owner = Owner(exit_s=_bound_s())
 
     async def opening() -> None:
@@ -113,7 +125,10 @@ async def place(args: argparse.Namespace, router: httpx.URL) -> dict[str, str]:
 
     async def work() -> dict[str, str]:
         deployment, fingerprint = await owner.call(initial, total_s=_bound_s())
-        await _directory(router, args.cell, args.org, deployment, fingerprint)
+        await owner.call(
+            lambda: _directory(router, args.cell, args.org, deployment, fingerprint),
+            total_s=REQUEST_S,
+        )
 
         async def local() -> None:
             conn = owner.conn
