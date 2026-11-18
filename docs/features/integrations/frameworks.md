@@ -440,6 +440,14 @@ async with Agent(org="acme", namespace="support") as loom_agent:
 An `AssistantAgent` holding a `LoomMemory` cannot be dumped with `dump_component`: the Loom
 agent and its credential are not component config.
 
+Bind one memory instance per conversation to its application-owned `SessionProtection`
+family. Constructor and callback contributors remain bound across context exit and
+client rebinding. `update_context` snapshots them before awaiting native messages and
+runs as automatic work. A marked recall is durably observed before system-message
+injection; later automatic work stops. Direct `query` and `add` remain explicit unless
+their caller owns automatic work, while their responses still observe known families.
+Native user and session ids do not select protection.
+
 ## AG2
 
 An AG2 1.3 agent gets context through assembly policies, which run before each model call,
