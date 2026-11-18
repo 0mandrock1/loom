@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from loom.session_protection import SessionProtection, automatic_for, response_roots
+from loom.session_protection import (
+    SessionProtection,
+    automatic_for,
+    observation_scope,
+    response_roots,
+)
 
 
 class _CallbackProtection:
@@ -20,6 +25,12 @@ class _CallbackProtection:
     def automatic(self, bound: SessionProtection | None) -> Iterator[None]:
         self.remember(bound)
         with automatic_for(self._roots):
+            yield
+
+    @contextmanager
+    def observing(self, bound: SessionProtection | None) -> Iterator[None]:
+        self.remember(bound)
+        with observation_scope(self._roots):
             yield
 
     @property
