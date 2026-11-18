@@ -62,7 +62,10 @@ async def test_stage_two_is_a_pk_lookup_under_final_over_the_candidates() -> Non
     assert len(ch.query_all_calls) == 2
     sql1, p1 = ch.query_all_calls[0]
     sql2, p2 = ch.query_all_calls[1]
-    assert " FINAL" not in sql1 and "FROM loom.memory_chunks AS c FINAL" in sql2
+    # Parent heads need FINAL; only the vector candidate table must avoid it.
+    assert "FROM loom.memory_chunks AS c FINAL" not in sql1
+    assert "FROM loom.memory_chunks AS c FINAL" in sql2
+    assert "FROM loom.memory FINAL" in sql1
     assert (
         "(c.session_id, c.chunk_index) IN arrayZip({cand_sess:Array(String)}, {cand_idx:Array(UInt32)})"
         in sql2
