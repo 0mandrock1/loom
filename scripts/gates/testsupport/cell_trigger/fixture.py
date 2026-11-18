@@ -745,24 +745,81 @@ class Owner:
                     and os.stat(f"/proc/{store['host_pid']}").st_uid == store["uid"],
                     "resource store birth changed",
                 )
-            pending = [self.owned.pid] + [s["host_pid"] for s in self.spec["stores"].values()]
-            seen = set()
-            while pending:
-                pid = pending.pop()
-                if pid in seen:
-                    continue
-                seen.add(pid)
-                before = self.owned.identity(pid)
+            roots = [self.owned.pid] + [s["host_pid"] for s in self.spec["stores"].values()]
+            births = {pid: self.owned.identity(pid) for pid in roots}
+            need(all(births.values()), "resource root disappeared")
+            observed = dict(births)
+            disappeared = set()
+
+            def complete_forest() -> bool:
+                pending = list(roots)
+                seen = set()
+                while pending:
+                    need(time.monotonic() - now < 3, "resource census stale")
+                    pid = pending.pop()
+                    if pid in seen:
+                        continue
+                    seen.add(pid)
+                    before = self.owned.identity(pid)
+                    if before is None:
+                        need(pid not in births, "resource root disappeared")
+                        disappeared.add(pid)
+                        return False
+                    need(
+                        pid not in disappeared
+                        and (pid not in observed or observed[pid][:2] == before[:2]),
+                        "resource process birth changed",
+                    )
+                    observed[pid] = before
+                    need(
+                        self.owned.rss(pid) * 1024 <= POLICY["stop_process_rss_bytes"],
+                        "process RSS",
+                    )
+                    try:
+                        children = self.owned.children(pid)
+                    except (FileNotFoundError, ProcessLookupError):
+                        need(
+                            pid not in births and self.owned.identity(pid) is None,
+                            "resource child census unknown",
+                        )
+                        disappeared.add(pid)
+                        return False
+                    after = self.owned.identity(pid)
+                    if after is None:
+                        need(pid not in births, "resource root disappeared")
+                        disappeared.add(pid)
+                        return False
+                    need(after[:2] == before[:2], "resource process birth changed")
+                    pending.extend(children)
+                return True
+
+            # Discard an incomplete traversal; only a fresh whole forest can renew the sample.
+            for _attempt in range(3):
+                need(time.monotonic() - now < 3, "resource census stale")
+                for pid, birth in births.items():
+                    current = self.owned.identity(pid)
+                    need(
+                        current is not None and current[:2] == birth[:2],
+                        "resource root birth changed",
+                    )
                 need(
-                    before is not None, "enumerated resource process disappeared; sample incomplete"
+                    Path("/proc/sys/kernel/random/boot_id").read_text().strip() == boot
+                    and os.stat(f"/proc/{self.owned.pid}").st_uid == os.geteuid(),
+                    "resource owner birth changed",
                 )
-                need(self.owned.rss(pid) * 1024 <= POLICY["stop_process_rss_bytes"], "process RSS")
-                pending.extend(self.owned.children(pid))
-                after = self.owned.identity(pid)
-                need(
-                    after is not None and after[:2] == before[:2],
-                    "resource process disappeared or changed; sample incomplete",
-                )
+                for store in self.spec["stores"].values():
+                    need(
+                        births[store["host_pid"]][1] == store["start_ticks"]
+                        and Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+                        == store["boot_id"]
+                        and os.stat(f"/proc/{store['host_pid']}").st_uid == store["uid"],
+                        "resource store birth changed",
+                    )
+                if complete_forest():
+                    need(time.monotonic() - now < 3, "resource census stale")
+                    break
+            else:
+                raise Refused("resource process census remained incomplete")
             for item in tuple(self.leaders):
                 need(item["log"].stat().st_size <= 16 * 1024 * 1024, "child log bound")
             driver_artifact = Path(self.spec["workdir"]) / "driver.jsonl"
