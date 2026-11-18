@@ -19,6 +19,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Set
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import FrameType
 from typing import Any, cast
@@ -167,6 +168,37 @@ _analyst_var: ContextVar[tuple[str, str, dict[str, Any]] | None] = ContextVar(
 )
 
 
+class CoordinationSessionLost(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("ClickHouse coordination session was not preserved")
+
+
+@dataclass
+class _CoordinationSession:
+    owner: CHClient
+    driver: AsyncClient
+    generation: int
+    identifier: str
+    checked: bool = False
+    closed: bool = False
+
+    def check(self, client: CHClient | None = None) -> None:
+        if (
+            self.closed
+            or (client is not None and client is not self.owner)
+            or self.owner.generation != self.generation
+            or self.owner.client is not self.driver
+            or _analyst_var.get() is not None
+        ):
+            self.closed = True
+            raise CoordinationSessionLost()
+
+
+_coordination_session: ContextVar[_CoordinationSession | None] = ContextVar(
+    "ch_coordination_session", default=None
+)
+
+
 @contextmanager
 def as_analyst(user: str, password: str, extra: dict[str, Any]) -> Iterator[None]:
     """Every statement in this block logs in as `user` and carries `extra`
@@ -201,6 +233,9 @@ def _reader_auth() -> dict[str, Any]:
     Only the query path sends it, where every statement is read-class and so
     carries the caller-shaped ceilings too. Inside `as_analyst` it sends the
     analyst user instead, always."""
+    if session := _coordination_session.get():
+        session.check()
+        return {}
     analyst = _analyst_var.get()
     if analyst is not None:
         user, password = analyst[0], analyst[1]
@@ -512,6 +547,9 @@ def statement_settings(
     LOOM_CH_SETTINGS_BY_TRAFFIC_CLASS (`priority`, `max_threads`, …) — the
     caller's own `extra` wins on a name it already sets, and neither setting
     changes which rows the statement returns."""
+    session = _coordination_session.get()
+    if session is not None:
+        session.check()
     out = query_settings(extra)
     cls = cls or statement_class(sql)
     _apply_class_timeout(out, cls)
@@ -540,6 +578,14 @@ def statement_settings(
         for name, value in traffic_class_settings(tclass).items():
             out.setdefault(name, value)
     _apply_caller_ceilings(out, cls)
+    if session is not None:
+        out.update(
+            session_id=session.identifier,
+            session_check=int(session.checked),
+            session_timeout=30,
+            use_query_cache=0,
+            use_query_condition_cache=0,
+        )
     return _with_request_query_id(out)
 
 
@@ -812,6 +858,25 @@ class CHClient:
         if "_reconnect_lock" not in d:
             d["_reconnect_lock"] = asyncio.Lock()
 
+    @asynccontextmanager
+    async def coordination_session(self) -> AsyncIterator[None]:
+        """Keep a checked named session, service principal and local client identity.
+
+        Creation can retry, so callers also attest the backend at each proof step.
+        Later queries require the named session; errors and client changes invalidate it.
+        """
+        if _coordination_session.get() is not None or _analyst_var.get() is not None:
+            raise CoordinationSessionLost()
+        session = _CoordinationSession(self, self.client, self.generation, uuid.uuid4().hex)
+        token = _coordination_session.set(session)
+        try:
+            await self.query_one("SELECT 1 AS coordination_ready")
+            session.checked = True
+            yield
+        finally:
+            session.closed = True
+            _coordination_session.reset(token)
+
     @property
     def connected(self) -> bool:
         return self._client is not None
@@ -1004,6 +1069,26 @@ class CHClient:
         if self._slots is not None:
             self._slots.release()
 
+    async def _guard_schema(
+        self, op_name: str, sql: str, cls: str, *, insert_table: str | None = None
+    ) -> None:
+        session = _coordination_session.get()
+        if session is None:
+            await guard_pending_schema(op_name, sql, cls, insert_table=insert_table)
+            return
+        try:
+            session.check(self)
+            # The advisory ledger refresh uses the global client, outside the proof.
+            token = _coordination_session.set(None)
+            try:
+                await guard_pending_schema(op_name, sql, cls, insert_table=insert_table)
+            finally:
+                _coordination_session.reset(token)
+            session.check(self)
+        except BaseException:
+            session.closed = True
+            raise
+
     async def _with_retry(  # type: ignore[no-untyped-def]
         self,
         op_name: str,
@@ -1017,9 +1102,22 @@ class CHClient:
         retried batch lands once); a replica-bound server error gets up to two
         more connections; a class deadline and every other error raise at once."""
         self._ensure_state()
-        took = await self._acquire_slot(op_name)
+        session = _coordination_session.get()
+        took = False
         try:
+            if session is not None:
+                session.check(self)
+            took = await self._acquire_slot(op_name)
+            if session is not None:
+                session.check(self)
+                result = await self._bounded(op_name, cls, fn)
+                session.check(self)
+                return result
             return await self._retry_ladder(op_name, fn, cls=cls)
+        except BaseException:
+            if session is not None:
+                session.closed = True
+            raise
         finally:
             if took:
                 self._release_slot()
@@ -1110,7 +1208,7 @@ class CHClient:
             note_result_summary(res)
             return res
 
-        await guard_pending_schema(op_name, sql, "read")
+        await self._guard_schema(op_name, sql, "read")
         try:
             return await self._with_retry(op_name, lambda: _q(sql), cls="read")
         except Exception as e:
@@ -1168,7 +1266,7 @@ class CHClient:
                 **_reader_auth(),
             )
 
-        await guard_pending_schema("raw_bytes", sql, "read")
+        await self._guard_schema("raw_bytes", sql, "read")
         return bytes(await self._with_retry("raw_bytes", _q, cls="read"))
 
     @asynccontextmanager
@@ -1184,6 +1282,9 @@ class CHClient:
         of the `STREAM_SLOTS` until the block exits, not a pool slot, since the client sets
         how long that takes. `settings` are this statement's own ClickHouse settings."""
 
+        if session := _coordination_session.get():
+            session.closed = True
+            raise CoordinationSessionLost()
         held: list[int] = []  # the generation whose client opened the stream
 
         async def _open() -> Any:
@@ -1203,7 +1304,7 @@ class CHClient:
             return stream
 
         self._ensure_state()
-        await guard_pending_schema("raw_stream", sql, "read")
+        await self._guard_schema("raw_stream", sql, "read")
         await acquire_slot(self._stream_slots, "streaming read")
         try:
             stream = await self._retry_ladder("raw_stream", _open, cls="read")
@@ -1249,7 +1350,7 @@ class CHClient:
             )
             note_result_summary(res)
 
-        await guard_pending_schema("execute", sql, cls)
+        await self._guard_schema("execute", sql, cls)
         await self._with_retry("execute", _q, cls=cls)
 
     async def insert(
@@ -1279,7 +1380,10 @@ class CHClient:
         _validate_required_insert_columns(table, rows, required)
         # Before the DESCRIBE — that read is the first statement
         # to raise code 60 against a table the service does not have yet.
-        await guard_pending_schema("insert", "", "write", insert_table=table)
+        if session := _coordination_session.get():
+            session.closed = True
+            raise CoordinationSessionLost()
+        await self._guard_schema("insert", "", "write", insert_table=table)
         from server.core import rmt_carry
 
         if not rmt_carry.carries(table):

@@ -16,13 +16,13 @@
 -- Do NOT hand-edit. Edit schemas/migrations/*.sql and re-dump.
 -- CI verifies this file matches what migrations would produce.
 --
--- Counts: 193 tables + 5 views + 19 materialized views.
+-- Counts: 194 tables + 5 views + 19 materialized views.
 
 CREATE DATABASE IF NOT EXISTS `loom`;
 CREATE DATABASE IF NOT EXISTS `loom_telemetry`;
 
 -- ======================================================================
--- Tables (193)
+-- Tables (194)
 -- ======================================================================
 
 -- loom.acl_versions
@@ -2161,6 +2161,16 @@ ENGINE = ReplacingMergeTree(version)
 ORDER BY (org, namespace, ingestion_id)
 TTL toDateTime(updated_at) + toIntervalDay(30)
 SETTINGS non_replicated_deduplication_window = 1000, index_granularity = 1024;
+
+-- loom.knowledge_mirror_latch
+CREATE TABLE IF NOT EXISTS loom.knowledge_mirror_latch
+(
+    `id` UInt8,
+    `set_at` DateTime64(3),
+    CONSTRAINT one_deployment CHECK id = 0
+)
+ENGINE = KeeperMap('/loom/knowledge_mirror_latch')
+PRIMARY KEY id;
 
 -- loom.knowledge_mirrors
 CREATE TABLE IF NOT EXISTS loom.knowledge_mirrors

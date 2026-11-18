@@ -21,9 +21,9 @@ ROOT = t.ROOT
 
 
 @pytest.mark.parametrize("source", t.sources())
-def test_a_page_cuts_into_sections_that_join_back_to_it(source: str) -> None:
+def test_page_requests_reconstruct_the_anchored_source(source: str) -> None:
     text, _ = t.prepare(source, t.LANGUAGES[0])
-    assert "\n".join(t.sections(text)) == text
+    assert "\n".join(t.english_requests(text)) == t.anchor_headings(text, Counter())
 
 
 def test_a_short_page_goes_in_one_request_and_a_long_one_by_section() -> None:
@@ -36,9 +36,10 @@ def test_a_short_page_goes_in_one_request_and_a_long_one_by_section() -> None:
     assert '<a id="more"></a>' in joined and '<a id="more-1"></a>' in joined
 
 
-def test_sections_start_at_level_two_headings_outside_code() -> None:
-    page = "# Title\n\nintro\n\n## One\n\n```md\n## not a heading\n```\n\n## Two\n"
-    assert [s.split("\n")[0] for s in t.sections(page)] == ["# Title", "## One", "## Two"]
+def test_request_heading_cuts_ignore_fenced_headings() -> None:
+    page = "# Title\n\n" + "Loom\n\n" * 1400
+    page += "## One\n\n```md\n## not a heading\n```\n\n## Two\n"
+    assert [s.split("\n")[2] for s in t.english_requests(page)] == ["# Title", "## One", "## Two"]
 
 
 def test_anchors_follow_github_slugs_across_sections() -> None:
@@ -264,7 +265,7 @@ def test_a_label_borrowed_from_another_section_keeps_the_page_unwritten(
     monkeypatch.setattr(
         t,
         "translate_text",
-        lambda text, lang, client, spend: replies["A" if "## A" in text else "B"],
+        lambda text, lang, client, spend, **_kwargs: replies["A" if "## A" in text else "B"],
     )
     with pytest.raises(t.TranslationDiffers, match="Get a token"):
         t.translate_page("docs/x.md", t.LANGUAGES[1], None, t.Spend("claude-sonnet-5-5", 1.0))
@@ -467,6 +468,88 @@ def test_a_new_language_is_linked_from_every_readme_without_translating(
     assert t.language_lines_differ() == []
     text = (tmp_path / "i18n/ja/README.md").read_text()
     assert "Xx" in text and "../xx/README.md" not in text
+
+
+def test_translated_readme_links_to_its_existing_site_landing(tmp_path, monkeypatch) -> None:
+    from scripts.docs_site import indexnow
+
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    monkeypatch.setattr(indexnow, "SITE", "https://example.com/docs/")
+    for source in ("README.md", "docs/index.md", "docs/use-cases/index.md"):
+        path = tmp_path / source
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Source\n")
+    monkeypatch.setattr(
+        t, "sources", lambda: ("README.md", "docs/index.md", "docs/use-cases/index.md")
+    )
+    spanish = next(lang for lang in t.LANGUAGES if lang.code == "es")
+    for source in ("README.md", "docs/use-cases/index.md"):
+        path = tmp_path / t.target_path("es", source)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(t.header(source, spanish, t.DEFAULT_MODEL, "a" * 40) + "# Página\n")
+    assert '<a href="https://example.com/docs/es/use-cases/">Documentación</a>' in t.language_line(
+        "i18n/es/README.md"
+    )
+    assert "https://example.com" not in t.language_line("README.md")
+    path = tmp_path / "i18n/es/docs/index.md"
+    path.write_text(t.header("docs/index.md", spanish, t.DEFAULT_MODEL, "a" * 40) + "# Inicio\n")
+    assert '<a href="https://example.com/docs/es/">Documentación</a>' in t.language_line(
+        "i18n/es/README.md"
+    )
+    path.unlink()
+    (tmp_path / "i18n/es/docs/use-cases/index.md").unlink()
+    assert "https://example.com" not in t.language_line("i18n/es/README.md")
+
+
+def test_generated_readme_uses_the_same_site_base_as_mkdocs() -> None:
+    import yaml
+
+    from scripts.docs_site import indexnow
+
+    config = yaml.compose((ROOT / "mkdocs.yml").read_text())
+    site_url = next(value.value for key, value in config.value if key.value == "site_url")
+    assert site_url == indexnow.SITE
+
+
+@pytest.mark.parametrize(
+    "sources,expected,route",
+    [
+        (
+            ("getting-started/quickstart.md",),
+            "getting-started/quickstart.md",
+            "getting-started/quickstart/",
+        ),
+        (("zeta.md", "guide.md"), "guide.md", "guide/"),
+        (('guide "advanced".md',), 'guide "advanced".md', "guide%20%22advanced%22/"),
+        (("guía & casos.md",), "guía & casos.md", "gu%C3%ADa%20%26%20casos/"),
+    ],
+)
+def test_readme_keeps_a_native_site_link_without_a_translated_index(
+    tmp_path, monkeypatch, sources, expected, route
+) -> None:
+    from html.parser import HTMLParser
+
+    from scripts.docs_site import indexnow, locales
+
+    class Links(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == "a" and dict(attrs).get("href", "").startswith(indexnow.SITE):
+                links.append(dict(attrs))
+
+    monkeypatch.setattr(t, "ROOT", tmp_path)
+    language = next(lang for lang in t.LANGUAGES if lang.code == "ja")
+    for source in ("README.md", *("docs/" + source for source in sources)):
+        english = tmp_path / source
+        english.parent.mkdir(parents=True, exist_ok=True)
+        english.write_text("# Loom\n")
+        target = tmp_path / t.target_path(language.code, source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(t.header(source, language, t.DEFAULT_MODEL, t.blob(source)) + "# Loom\n")
+    uri = locales.landing_uri(language.code, locales.translations(tmp_path))
+    assert uri == language.code + "/" + expected
+    links = []
+    Links().feed(t.language_line("i18n/ja/README.md"))
+    assert links == [{"href": indexnow.SITE + "ja/" + route}]
 
 
 def _translations() -> list[tuple[str, t.Language]]:

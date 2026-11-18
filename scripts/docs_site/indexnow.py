@@ -34,6 +34,8 @@ BUILD_INPUTS = (
     "scripts/codegen/page_summary.py",
     "scripts/docs_site/hooks.py",
     "scripts/docs_site/locales.py",
+    "scripts/docs_site/messages.py",
+    "scripts/docs_site/video_labels.py",
     "scripts/docs_site/paths.py",
     "scripts/docs_site/requirements.txt",
     "scripts/docs_site/overrides/",

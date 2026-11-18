@@ -3132,6 +3132,11 @@
           "type": "integer",
           "description": "Seconds one pass, which runs one job, may take before it is cancelled: the extractor's timeout plus embedding the largest source. A job cut off runs again from its start and counts toward its attempts."
         },
+        "knowledge_mirrored_sources_enabled": {
+          "default": false,
+          "type": "boolean",
+          "description": "Require protected automatic session capture and persist deployment privacy state. Off does not lift protection while the deployment latch remains set."
+        },
         "knowledge_noise_filter": {
           "default": true,
           "type": "boolean",

@@ -117,6 +117,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> _World:
             consumer: str | None = None,
             jti: str | None = None,
             reads_as_creator: bool = False,
+            session_protection: bool = False,
         ) -> str:
             w.delegated["minted"] = (subject, consumer)
             return "answer-token"
@@ -1272,6 +1273,7 @@ def test_an_answer_token_carries_the_id_its_children_are_told_by(
             consumer: str | None = None,
             jti: str | None = None,
             reads_as_creator: bool = False,
+            session_protection: bool = False,
         ) -> str:
             minted.update(subject=subject, consumer=consumer, jti=jti)
             return "answer-token"

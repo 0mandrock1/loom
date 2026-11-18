@@ -47,6 +47,7 @@ def test_a_change_to_the_build_submits_every_page() -> None:
         "mkdocs.yml",
         "scripts/docs_site/overrides/main.html",
         "scripts/docs_site/locales.py",
+        "scripts/docs_site/video_labels.py",
         "scripts/docs_site/paths.py",
         "scripts/docs_site/hooks.py",
         "scripts/docs_site/requirements.txt",
