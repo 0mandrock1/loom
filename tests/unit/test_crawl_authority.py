@@ -392,7 +392,14 @@ async def test_configured_crawl_lease_ttl_reaches_the_real_publication_guard(
         async with original(key, **kwargs):
             yield
 
+    @asynccontextmanager
+    async def holding(key: str, **kwargs: Any):
+        assert key == "knowledge-source:team:shared-space"
+        async with crawl_world.lease(key, **kwargs):
+            yield True
+
     monkeypatch.setattr(leases, "cluster_lease", record)
+    monkeypatch.setattr(leases, "holding", holding)
     assert crawl_world.source is not None
     authority = await crawl_authority.resolve(
         crawl_world.source,

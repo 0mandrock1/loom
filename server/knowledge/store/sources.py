@@ -2,14 +2,15 @@
 each source's sync state (a `loom.code_index_state` row under
 `knowledge_source:<name>`).
 
-Both tables are ReplacingMergeTree(version): every write is a full version row
-and every read uses FINAL. A registry row changes only on add, update, rotate, remove
+Ordinary writes use ReplacingMergeTree(version) rows; latest-version reads use
+FINAL. Canonical-person cleanup redacts raw history under the namespace lease.
+A registry row otherwise changes on add, update, rotate, remove
 and the retirement when its namespace goes (`code.repo.remove`, `namespace.delete`,
 `collection.delete`, the erasure step `knowledge_sources.retire`), all under the
-namespace's lease, and on `loom secrets reseal`, the one writer outside it: it
-writes the row it read at version + 1, so any later write wins while the ClickHouse
-servers' clocks differ by less than the time between the two writes. The sync state is
-a separate row, so a sync never rewrites the row that holds the credential.
+namespace's lease. `loom secrets reseal` takes the same lease and reads the newest
+ciphertext before conditionally updating only that column across its history.
+Even a late statement cannot revive metadata removed by canonical-person cleanup.
+The sync state is a separate row, so a sync never rewrites the credential row.
 
 A source a build without items can read (`id_list_config` is not None) is written as
 that build writes it, `kind`, `config_json` and the credential in `credential_enc`,
@@ -121,6 +122,45 @@ async def reseal_crawl_approval(
     residue = await ch.query_one(f"SELECT count() AS n FROM {TABLE} WHERE {where}", params=params)
     if residue is None or residue["n"]:
         raise RuntimeError("crawl_approval_reseal_residue")
+
+
+async def reseal_source_ciphertext(
+    org: str,
+    namespace: str,
+    name: str,
+    source_id: str,
+    column: str,
+    before: str,
+    after: str,
+    *,
+    ch: _CHClient,
+) -> None:
+    if column not in {"credential_enc", "secret_enc"}:
+        raise ValueError("source ciphertext column refused")
+    where = (
+        "org = {org:String} AND namespace = {ns:String} AND name = {name:String} "
+        f"AND source_id = {{id:String}} AND {column} = {{old:String}}"
+    )
+    params = {
+        "org": org,
+        "ns": namespace,
+        "name": name,
+        "id": source_id,
+        "old": before,
+        "new": after,
+    }
+    # Copy no metadata: a late statement cannot restore canonical-person data.
+    await ch.execute(
+        f"ALTER TABLE loom.knowledge_sources UPDATE {column} = {{new:String}} WHERE {where}",
+        params=params,
+        settings={"mutations_sync": 2},
+    )
+    residue = await ch.query_one(
+        f"SELECT count() AS n FROM loom.knowledge_sources WHERE {where}",
+        params=params,
+    )
+    if residue is None or residue["n"]:
+        raise RuntimeError("source_reseal_residue")
 
 
 async def crawl_history(

@@ -270,7 +270,7 @@ async def test_registration_native_publication_and_indexed_reader_share_exact_ge
     before = len(world.provider_calls), len(world.native_requests)
     with acting_as(verify_token(_token())):
         plan = await reads.prepare("team", ["shared-space"])
-        [admitted] = await plan.check([candidate])
+        [admitted] = await plan.check([candidate], chunks=True)
         assert admitted.document == document and plan.current(admitted)
     assert (len(world.provider_calls), len(world.native_requests)) == before
 
@@ -289,8 +289,8 @@ async def test_actual_embedding_wait_cannot_publish_after_registrant_loses_names
 ) -> None:
     await _register(world)
     world.lose_during_embedding = True
-    result = await _turn(world)
-    assert result.status != "ok"
+    with pytest.raises(PermissionError):
+        await _turn(world)
     assert (
         world.embedded
         and not world.document_writes
@@ -310,7 +310,7 @@ async def test_indexed_evidence_is_removed_after_person_or_registration_fence_ch
     candidate["doc_version"] = document["version"]
     with acting_as(verify_token(_token())):
         plan = await reads.prepare("team", ["shared-space"])
-        [admitted] = await plan.check([candidate])
+        [admitted] = await plan.check([candidate], chunks=True)
         if change == "pending":
             world.person_erasure_pending = True
         elif change == "epoch":
@@ -318,7 +318,7 @@ async def test_indexed_evidence_is_removed_after_person_or_registration_fence_ch
         else:
             assert world.source is not None
             world.source = dataclasses.replace(world.source, crawl_generation="replaced")
-        assert await plan.check([candidate]) == []
+        assert await plan.check([candidate], chunks=True) == []
         assert not plan.current(admitted)
 
 
@@ -341,7 +341,7 @@ async def test_reapproved_generation_cannot_reuse_an_older_completed_listing(wor
         )
         assert world.source.crawl_generation != before
         plan = await reads.prepare("team", ["shared-space"])
-        assert plan.sources == {} and await plan.check([candidate]) == []
+        assert plan.sources == {} and await plan.check([candidate], chunks=True) == []
 
 
 async def test_reactivation_does_not_readmit_until_an_explicit_verified_update(

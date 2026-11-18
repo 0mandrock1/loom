@@ -261,6 +261,17 @@ class _Table:
         return row
 
     async def query_all(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        if "SELECT owner_email, contact_email" in sql:
+            assert set(params) == {"org", "sub"}
+            assert "FROM loom.namespaces FINAL" in sql and "LIMIT 8" in sql
+            assert "ifNull(active, true) = true" in sql and "contact_email != ''" in sql
+            return [
+                {"owner_email": subject, "contact_email": email}
+                for email, subjects in self.accounts.items()
+                for subject in subjects
+                if params["org"] in self.reached_in.get(subject, ["acme"])
+                and params["sub"].lower() in {subject.lower(), email.lower()}
+            ]
         if "SELECT n.namespace, n.owner_email, n.contact_email, n.password_hash," in sql:
             assert set(params) == {"org", "sub", "owner"}
             assert "FROM loom.namespaces FINAL" in sql and "FROM loom.sso_links FINAL" in sql

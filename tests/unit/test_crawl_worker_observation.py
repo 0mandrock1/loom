@@ -18,7 +18,7 @@ from tests.unit.test_crawl_authority import account as account
 from tests.unit.test_crawl_authority import crawl_world as crawl_world
 from tests.unit.test_crawl_authority import key_view as key_view
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.claim_cap]
 
 
 def _file(id: str = "file") -> dict[str, Any]:
@@ -53,7 +53,7 @@ async def test_actual_native_single_item_observation_keeps_ownership_without_own
 
     async def provider(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/drive/v3/files/file":
-            assert request.url.params["fields"].endswith("owners(me,emailAddress)")
+            assert request.url.params["fields"].endswith("owners(me,emailAddress),trashed")
             crawl_world.native_requests.append(request)
             return httpx.Response(200, json=_file())
         return await original(request)

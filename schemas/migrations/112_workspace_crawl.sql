@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS loom.knowledge_crawl_exclusion_keys
     pending_id String DEFAULT '',
     pending_digests Array(String) DEFAULT [],
     pending_exclude Bool DEFAULT false,
-    version UInt64 DEFAULT toUnixTimestamp64Micro(now64(6))
+    version UInt64 DEFAULT toUnixTimestamp64Nano(now64(9))
 )
 ENGINE = ReplacingMergeTree(version)
 ORDER BY org
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS loom.knowledge_crawl_exclusions
     org String,
     digest String,
     excluded Bool,
-    version UInt64 DEFAULT toUnixTimestamp64Micro(now64(6))
+    version UInt64 DEFAULT toUnixTimestamp64Nano(now64(9))
 )
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (org, digest)

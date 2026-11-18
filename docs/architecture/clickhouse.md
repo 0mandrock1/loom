@@ -678,6 +678,12 @@ with `purge=true`, runner state, and the supersession rows `knowledge.restore` r
   refused because an erasure removed the document it was built from deletes the chunk
   rows it inserted (lightweight `DELETE FROM loom.chunks` by source and version,
   `chunks.delete_versions`), so its text and author do not outlive the erasure.
+- **Source credential resealing** conditionally updates only the matching old
+  ciphertext for an exact org, namespace, name and source id, under the source
+  lease. It rewrites raw versions and checks for old-ciphertext residue before
+  the previous root is retired. A full-row replacement could revive selectors
+  or identity metadata erased during a delayed write; the mutation preserves
+  every other column, including the version and unrelated sources.
 - **SCIM cleanup capsule resealing** updates matching historical `scim_users` rows
   in place under the identity lease, by exact SCIM row id and old ciphertext. The
   replacement retains the captured canonical/provider identity and cleanup phase.
