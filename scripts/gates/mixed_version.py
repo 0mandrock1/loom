@@ -29,7 +29,7 @@ runs in a throwaway container on its default config, so custom settings take
 as in `dev/ci_start_clickhouse.sh`. The gate needs docker; without it, or `git`,
 it skips with exit 0, or fails with `--require` (CI).
 
-    python scripts/gates/mixed_version.py [--base REV] [--keep] [--require]
+    python scripts/gates/mixed_version.py [--base REV] [--keep] [--require] [--ranking-neutral]
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +59,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:  # run as a file: this checkout's server, not an installed one
     sys.path.insert(0, str(ROOT))
 
+from bench.retrieval_determinism import (  # noqa: E402
+    RANKING_OPS,
+    assert_rankings_equal,
+    capture_rankings,
+    ranking_timings,
+)
 from server.core.sql_literal import sql_string  # noqa: E402
 from server.insights.domain import analysis as boundary  # noqa: E402
 
@@ -207,13 +214,16 @@ def base_tree(rev: str, into: Path) -> Path:
 class Server:
     """One Loom process of one build; `restart` keeps its port."""
 
-    def __init__(self, name: str, tree: Path, ch_port: int, logs: Path) -> None:
+    def __init__(
+        self, name: str, tree: Path, ch_port: int, logs: Path, *, ranking_neutral: bool = False
+    ) -> None:
         self.name, self.tree, self.ch_port = name, tree, ch_port
         self.port = _free_port()
         self.url = f"http://127.0.0.1:{self.port}"
         self.log = logs / f"{name}.log"
         self.proc: subprocess.Popen[bytes] | None = None
         self.workers = "off"
+        self.ranking_neutral = ranking_neutral
 
     def env(self) -> dict[str, str]:
         env = {k: v for k, v in os.environ.items() if not k.startswith("LOOM_")}
@@ -238,6 +248,10 @@ class Server:
             LOOM_OTEL_ENABLED="false",
             LOOM_INSTANCE_LABEL=f"ci:mixed-version-{self.name}",
         )
+        if self.ranking_neutral:
+            env.update(
+                LOOM_MEMORY_ASK_RECENCY_WEIGHT="0", LOOM_MEMORY_SEARCH_RECENCY_POOL_WEIGHT="0"
+            )
         if self.workers != "off":
             env["LOOM_DEPLOYMENT"] = "1"  # one shared lease, not one per instance label
         return env
@@ -363,8 +377,10 @@ class Scenario:
         out = self.call(build, "memory.get", {**self.ident, "memory_key": key})
         return dict(out.get("memory") or out)
 
-    def run_all(self) -> list[str]:
+    def run_all(self, *, ranking_sources: tuple[str, str] | None = None) -> list[str]:
         self.all_ready()
+        if ranking_sources is not None:
+            self.ranking_neutrality(*ranking_sources)
         ids = self.memories_read_across()
         self.absence_precondition_across()
         for a, b in (("N", "N-1"), ("N-1", "N")):
@@ -377,6 +393,208 @@ class Scenario:
         self.dashboard_loads_across()
         self.one_leader()
         return self.failures
+
+    def ranking_neutrality(self, base: str, head: str) -> None:
+        """Compare the real base and head readers over one immutable fake-vector corpus."""
+        corpus = {
+            "orchard": "Amber orchard fruit harvest",
+            "garden": "Green garden seed watering",
+            "harbor": "Quiet harbor fishing boats",
+            "river": "Swift river stone crossing",
+            "summit": "Snowy summit mountain trail",
+            "valley": "Sunny valley meadow flowers",
+        }
+        positives = {corpus[key]: key for key in ("orchard", "harbor", "summit")}
+        identity = {**self.ident, "namespace": "ranking"}
+        token = mint(self.org, "ranking")
+        for srv in self.builds.values():
+            health = httpx.get(f"{srv.url}/v1/health", timeout=10)
+            assert health.status_code == 200
+            assert health.json().get("fake_embedding") is True
+            assert health.json().get("fake_llm") is True
+            assert srv.ranking_neutral and srv.workers == "off"
+        for key, value in corpus.items():
+            written = self.builds["N-1"].call(
+                token,
+                "memory.set",
+                {
+                    **identity,
+                    "memory_key": key,
+                    "memory_type": "semantic",
+                    "value": value,
+                },
+            )
+            assert written.get("memory_key") == key and written.get("status") == "active"
+            assert written.get("version", 0) > 0 and written.get("noop") is False
+        anchor = datetime.now(UTC)
+        common = {
+            **identity,
+            "top_k": len(corpus),
+            "namespace_scope": "this",
+            "search_mode": "semantic",
+            "personalization": "none",
+            "reinforcement_weight": 0,
+            "as_of": anchor.isoformat(),
+            "observation_date": anchor.date().isoformat(),
+        }
+        census = {**common, "query": next(iter(positives)), "auto_touch": False}
+        pending = dict(self.builds)
+        deadline = time.monotonic() + SETTLE_S
+        while pending:
+            for label, srv in list(pending.items()):
+                rows = srv.call(token, "memory.search_trace", census).get("results")
+                assert isinstance(rows, list), "missing fixture census"
+                keys = [row["memory_key"] for row in rows]
+                assert len(keys) == len(set(keys)) and set(keys) <= set(corpus)
+                if set(keys) == set(corpus):
+                    pending.pop(label)
+            assert not pending or time.monotonic() < deadline, "incomplete ranking fixture census"
+            if pending:
+                time.sleep(1)
+        requests = {
+            op: {
+                query: {
+                    **common,
+                    "query": query,
+                    **(
+                        {
+                            "allow_synthesis": False,
+                            "reinforce": False,
+                            "precedents": False,
+                            "decompose": "off",
+                            "world_knowledge": "forbid",
+                            "personalize": False,
+                            "knowledge": False,
+                            "llm_cache": False,
+                            "depth": "excerpt",
+                        }
+                        if op == "memory.ask"
+                        else {"auto_touch": False, "recency_pool_weight": 0}
+                    ),
+                }
+                for query in positives
+            }
+            for op in RANKING_OPS
+        }
+        snapshots = {}
+        elapsed: dict[str, dict[str, dict[str, float]]] = {}
+        native = {}
+        for label, srv in self.builds.items():
+            since = sql(self.ch_port, "SELECT toString(now64(6))")
+            elapsed[label] = {}
+            snapshots[label] = capture_rankings(
+                lambda op, body, srv=srv: srv.call(token, op, body),
+                requests,
+                positives,
+                elapsed=elapsed[label],
+            )
+            until = sql(self.ch_port, "SELECT toString(now64(6))")
+            native[label] = self.ranking_native_settings(since, until, required=label == "N")
+        assert_rankings_equal(snapshots["N-1"], snapshots["N"], queries=list(positives))
+        for snapshot in snapshots.values():
+            for queries in snapshot.values():
+                for rows in queries.values():
+                    keys = [row["identity"]["memory_key"] for row in rows]
+                    assert len(keys) == len(set(keys)) and set(keys) <= set(corpus)
+
+        def digest(value: Any) -> str:
+            return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+        print(
+            "ranking-neutral "
+            + json.dumps(
+                {
+                    "sources": {"base": base, "head": head},
+                    "admission_sources": {
+                        label: {
+                            "present": (srv.tree / "server/core/vectors/admission.py").is_file(),
+                            "sha256": hashlib.sha256(
+                                (srv.tree / "server/core/vectors/admission.py").read_bytes()
+                            ).hexdigest()
+                            if (srv.tree / "server/core/vectors/admission.py").is_file()
+                            else None,
+                            "catalog_sha256": hashlib.sha256(
+                                (srv.tree / "server/settings/catalog.py").read_bytes()
+                            ).hexdigest(),
+                        }
+                        for label, srv in self.builds.items()
+                    },
+                    "corpus_sha256": digest(corpus),
+                    "requests_sha256": digest(requests),
+                    "identity": identity,
+                    "profile": {
+                        "embedding_model": "fake-ngram-1024",
+                        "llm_provider": "fake",
+                        "workers": "off",
+                        "ask_recency_weight": 0,
+                        "search_recency_pool_weight": 0,
+                    },
+                    "native_settings": native,
+                    "admission_credits": (
+                        "not measured; native settings witness attributed execution only"
+                    ),
+                    "timing_method": (
+                        "three queries per op/build; p99 nearest rank; no statistical guarantee"
+                    ),
+                    "timings": {label: ranking_timings(calls) for label, calls in elapsed.items()},
+                    "snapshots": snapshots,
+                },
+                sort_keys=True,
+            )
+        )
+        self.check(True, "base and head preserve all three ordered retrieval results and scores")
+
+    def ranking_native_settings(
+        self, since: str, until: str, *, required: bool
+    ) -> list[dict[str, Any]]:
+        """Audit native settings on the compared reads, not source presence alone."""
+        names = ("max_rows_to_read", "max_memory_usage", "max_execution_time", "read_overflow_mode")
+        defaults = {
+            row["name"]: row["default"]
+            for row in map(
+                json.loads,
+                sql(
+                    self.ch_port,
+                    "SELECT name, default FROM system.settings WHERE name IN "
+                    "('max_rows_to_read','max_memory_usage',"
+                    "'max_execution_time','read_overflow_mode') "
+                    "FORMAT JSONEachRow",
+                ).splitlines(),
+            )
+        }
+        assert set(defaults) == set(names), "missing native setting defaults"
+        sql(self.ch_port, "SYSTEM FLUSH LOGS")
+        raw = sql(
+            self.ch_port,
+            "SELECT splitByChar(' ', log_comment)[1] AS operation, "
+            "Settings['max_rows_to_read'] AS max_rows_to_read, "
+            "Settings['max_memory_usage'] AS max_memory_usage, "
+            "Settings['max_execution_time'] AS max_execution_time, "
+            "Settings['read_overflow_mode'] AS read_overflow_mode, count() AS queries "
+            "FROM system.query_log WHERE type = 'QueryFinish' AND is_initial_query "
+            "AND event_time_microseconds BETWEEN {since:DateTime64(6)} AND {until:DateTime64(6)} "
+            "AND positionCaseInsensitive(query, 'cosineDistance(') > 0 "
+            "AND splitByChar(' ', log_comment)[1] IN "
+            "('memory.search','memory.search_trace','memory.ask') "
+            "GROUP BY operation, max_rows_to_read, max_memory_usage, max_execution_time, "
+            "read_overflow_mode ORDER BY operation, max_rows_to_read FORMAT JSONEachRow",
+            {"since": since, "until": until},
+        )
+        rows = [json.loads(line) for line in raw.splitlines()]
+        assert {row["operation"] for row in rows} == set(RANKING_OPS), (
+            "missing native read witnesses"
+        )
+        for row in rows:
+            row["limits"] = {name: row.pop(name) or defaults[name] for name in names}
+            row["queries"] = int(row["queries"])
+            assert row["queries"] > 0
+            if required:
+                limits = row["limits"]
+                assert float(limits["max_rows_to_read"]) == 1_000_000
+                assert limits["read_overflow_mode"] == "throw"
+                assert 0 < float(limits["max_memory_usage"]) <= 4_000_000_000
+                assert 0 < float(limits["max_execution_time"]) <= 30
+        return [{"window": {"since": since, "until": until}, **row} for row in rows]
 
     def all_ready(self) -> None:
         for label, srv in {**self.builds, "N+1": self.next}.items():
@@ -879,6 +1097,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--require", action="store_true", help="fail instead of skipping when it cannot run"
     )
+    ap.add_argument(
+        "--ranking-neutral",
+        action="store_true",
+        help="compare retrieval on the current base and head",
+    )
     args = ap.parse_args(argv)
     if args.port_base:
         _PORTS.extend(range(args.port_base, args.port_base + 4))
@@ -899,13 +1122,28 @@ def main(argv: list[str] | None = None) -> int:
                 required=args.require,
             )
         base = mb.stdout.strip()
+    ranking_sources = None
+    if args.ranking_neutral:
+        base_sha, head_sha = (
+            subprocess.check_output(
+                ["git", "-C", str(ROOT), "rev-parse", ref + "^{commit}"], text=True
+            ).strip()
+            for ref in (base, "HEAD")
+        )
+        ranking_sources = (base_sha, head_sha)
     work = Path(tempfile.mkdtemp(prefix="loom-mixed-"))
     failures: list[str] = []
     servers: list[Server] = []
     try:
         with clickhouse(args.keep) as ch_port:
-            old = Server("base", base_tree(base, work / "base"), ch_port, work)
-            new = Server("head", ROOT, ch_port, work)
+            old = Server(
+                "base",
+                base_tree(base, work / "base"),
+                ch_port,
+                work,
+                ranking_neutral=args.ranking_neutral,
+            )
+            new = Server("head", ROOT, ch_port, work, ranking_neutral=args.ranking_neutral)
             nxt = Server("next", worktree_copy(work / "next"), ch_port, work)
             servers += [old, new, nxt]
             print(f"next carries {add_noop_migration(nxt.tree)}")
@@ -922,7 +1160,7 @@ def main(argv: list[str] | None = None) -> int:
             print("base restarts on head's schema")
             old.restart()
             nxt.start()
-            failures = Scenario(old, new, nxt, ch_port).run_all()
+            failures = Scenario(old, new, nxt, ch_port).run_all(ranking_sources=ranking_sources)
     except Exception:
         for s in servers:
             print(f"--- {s.name} log tail ---\n{s.tail()}")
