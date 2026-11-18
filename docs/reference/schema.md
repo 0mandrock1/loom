@@ -151,6 +151,7 @@ the `loom` tables each view reads, and, for each materialized view, its target, 
 | `acl_versions` | `SummingMergeTree(changes)` | `(org, kind)` |  |  |  |
 | `agent_cost_rollup_daily` | `AggregatingMergeTree` | `(org, namespace, agent, day, operation)` | `toYYYYMM(day)` |  |  |
 | `agent_events` | `MergeTree` | `(org, namespace, agent, ts)` | `toYYYYMM(ts)` |  | 2 skip index (bloom_filter, minmax) |
+| `agent_events_private` | `MergeTree` | `(org, namespace, agent, ts)` | `toYYYYMM(ts)` |  | 2 skip index (bloom_filter, minmax) |
 | `agent_run_claims` | `KeeperMap('/loom/agent_run_claims')` |  |  |  |  |
 | `agent_runs` | `ReplacingMergeTree(version)` | `(org, namespace, run_id)` |  |  | 1 skip index (bloom_filter) |
 | `agent_turn_usage` | `ReplacingMergeTree(version)` | `(org, namespace, session_id, message_id)` | `toYYYYMM(turn_at)` |  |  |
@@ -346,17 +347,17 @@ the `loom` tables each view reads, and, for each materialized view, its target, 
 
 | View | Reads from |
 | --- | --- |
-| `sql_v1_agent_events` | `agent_events`, `code_repos`, `namespaces`, `sql_access` |
+| `sql_v1_agent_events` | `agent_events`, `agent_events_private`, `code_repos`, `namespaces`, `sql_access` |
 | `sql_v1_conversations` | `code_repos`, `conversations`, `namespaces`, `sql_access` |
 | `sql_v1_memories` | `code_repos`, `memory`, `namespaces`, `sql_access` |
 | `sql_v1_memory_history` | `code_repos`, `memory_versions`, `namespaces`, `sql_access` |
-| `sql_v1_usage_daily` | `agent_events`, `code_repos`, `namespaces`, `sql_access` |
+| `sql_v1_usage_daily` | `agent_events`, `agent_events_private`, `code_repos`, `namespaces`, `sql_access` |
 
 #### Materialized views
 
 | View | Writes to | Reads from | Runs |
 | --- | --- | --- | --- |
-| `agent_cost_rollup_refresh` | `agent_cost_rollup_daily` | `agent_events` | refreshable, every 1 minute |
+| `agent_cost_rollup_refresh` | `agent_cost_rollup_daily` | `agent_events`, `agent_events_private` | refreshable, every 1 minute |
 | `chunk_context_term_freq_mv` | `chunk_term_freq` | `chunks` | on insert |
 | `chunk_term_freq_mv` | `chunk_term_freq` | `chunks` | on insert |
 | `code_doc_stats_mv` | `code_doc_stats` | `code_chunks` | on insert |
@@ -373,7 +374,7 @@ the `loom` tables each view reads, and, for each materialized view, its target, 
 | `memory_usage_totals_mv` | `memory_usage_totals` | `memory_usage_events` | on insert |
 | `memory_versions_mv` | `memory_versions` | `memory` | on insert |
 | `session_brief_revisions_mv` | `session_brief_revisions` | `session_briefs` | on insert |
-| `subject_last_seen_refresh` | `subject_last_seen` | `agent_events` | refreshable, every 1 minute |
+| `subject_last_seen_refresh` | `subject_last_seen` | `agent_events`, `agent_events_private` | refreshable, every 1 minute |
 | `loom_telemetry.sli_minute_refresh` | `loom_telemetry.sli_minute` | `agent_events` | refreshable, every 1 minute |
 
 <!-- prettier-ignore-end -->
