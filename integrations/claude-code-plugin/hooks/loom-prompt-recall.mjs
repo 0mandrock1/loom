@@ -24,7 +24,7 @@ import {
   runHookMain,
   scheduleExit,
 } from "../lib/loom-client.mjs";
-import { codeLookup, memoryRequested, searchQuery, shouldAsk } from "../lib/prompt-pack.mjs";
+import { codeLookup, memoryRequested, searchQuery, shouldRecall } from "../lib/prompt-pack.mjs";
 import { acceptPack, recallBody, recallPayload, renderRecall } from "../lib/prompt-recall.mjs";
 import { readJsonFile, sessionStatePath, writeCursor, writeJsonFile } from "../lib/tmp-state.mjs";
 
@@ -66,7 +66,7 @@ async function main() {
       searchQuery(prompt),
     );
   const namedCodeOnly = lookup?.name && !asksMemory;
-  if (!shouldAsk(prompt) || namedCodeOnly) {
+  if (!shouldRecall(prompt, asksMemory) || namedCodeOnly) {
     scheduleExit(0);
     return;
   }

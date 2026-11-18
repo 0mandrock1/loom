@@ -14,7 +14,13 @@ export function shouldAsk(prompt, minChars = MIN_PROMPT_CHARS) {
   if (p.length < minChars) return false;
   if (p.startsWith("/")) return false;
   const query = searchQuery(p);
-  if (SELF_CONTAINED_RE.test(query) || LOCAL_QUERY_RE.test(query) || CHAT_RE.test(query)) return false;
+  if (
+    SELF_CONTAINED_RE.test(query) ||
+    LITERAL_QUERY_RE.test(query) ||
+    LOCAL_QUERY_RE.test(query) ||
+    CHAT_RE.test(query)
+  )
+    return false;
   // A question about a change in history is answered from git history: code pointers
   // only send the agent to read files that do not answer it.
   if (HISTORY_RE.test(searchQuery(p))) return false;
@@ -22,10 +28,21 @@ export function shouldAsk(prompt, minChars = MIN_PROMPT_CHARS) {
 }
 
 const SELF_CONTAINED_RE =
-  /^(?:find|locate|search for|grep for) (?:the )?(?:exact|literal) (?:error )?(?:text|string)\b|^use only (?:the )?(?:(?:provided|supplied) )?(?:source|context|excerpt|evidence)\b|^return only this text\b/i;
+  /^use only (?:the )?(?:(?:provided|supplied) )?(?:source|context|excerpt|evidence)\b|^return only this text\b/i;
+const LITERAL_QUERY_RE =
+  /^(?:find|locate|search for|grep for) (?:the )?(?:exact|literal) (?:error )?(?:text|string)\b/i;
 const LOCAL_QUERY_RE =
   /^i (?:just )?(?:created|edited) (?:an? |the )?(?:untracked|uncommitted|unindexed)\b|^(?:review|inspect|read|use) (?:my|this|the) (?:uncommitted|untracked|unindexed|working[- ]tree)\b/i;
 const CHAT_RE = /^(?:thanks(?:,? that(?:'s| is) all)?|thank you|hello|hi|good morning)[.!\s]*$/i;
+
+/** A local code task can still need saved context; supplied-only tasks cannot. */
+export function shouldRecall(prompt, asksMemory) {
+  if (!asksMemory) return shouldAsk(prompt);
+  const p = String(prompt || "").trim();
+  const query = searchQuery(p);
+  return p.length >= MIN_PROMPT_CHARS && !p.startsWith("/") && !SELF_CONTAINED_RE.test(query) && !CHAT_RE.test(query);
+}
+
 const MEMORY_QUERY_RES = [
   /\b(?:did|have) (?:we|i) (?:decide|choose|say|save)\b|\bcite (?:the )?saved (?:decision|memory|preference)\b|^(?:remember|recall (?:our|my)|save (?:this|that) (?:fact|decision))\b/i,
   /^(?:recall|retrieve|find|show(?: me)?) (?:(?:the|my|our) )?(?:saved|recorded) (?:decisions?|memor(?:y|ies)|preferences?|conventions?|lessons?)\b/i,

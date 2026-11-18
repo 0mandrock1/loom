@@ -148,3 +148,26 @@ test("explicit on still recalls for each named code question", async (t) => {
     assert.deepEqual(await run(prompt), { code: 0, out: "", err: "" });
   assert.equal(requests.length, 2);
 });
+
+for (const mode of ["first", "on"]) {
+  for (const prompt of [
+    "Review my uncommitted changes in parser.py. Cite the saved decision about validation.",
+    "Find the exact error string invalid record locally. What did we decide about that error?",
+  ]) {
+    test(`${mode} recall keeps an explicit memory request alongside local code: ${prompt}`, async (t) => {
+      const { requests, run } = await fixture(t, PACK, mode);
+      const result = await run(prompt);
+      assert.match(result.out, /use the unit suite/);
+      assert.equal(requests.length, 1);
+    });
+  }
+  test(`${mode} recall respects supplied-only evidence even when it mentions decisions`, async (t) => {
+    const { requests, run } = await fixture(t, PACK, mode);
+    assert.deepEqual(await run("Use only the supplied excerpt. It describes our saved decision."), {
+      code: 0,
+      out: "",
+      err: "",
+    });
+    assert.equal(requests.length, 0);
+  });
+}
