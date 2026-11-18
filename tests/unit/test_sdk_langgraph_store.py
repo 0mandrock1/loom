@@ -352,14 +352,9 @@ async def _protection_agent(
         session_protection=root,
     )
     transport = agent.transport
-    original_client = transport._client
-    transport._client = httpx.AsyncClient(
-        base_url="http://inert.invalid",
-        transport=httpx.MockTransport(respond),
-        auth=auth,
-        trust_env=False,
-    )
-    await original_client.aclose()
+    transport._client._transport = httpx.MockTransport(respond)
+    if auth is not None:
+        transport._client.auth = auth
     try:
         yield agent, posts
     finally:
