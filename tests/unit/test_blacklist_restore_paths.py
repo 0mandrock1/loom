@@ -272,3 +272,31 @@ async def test_a_blocked_payload_does_not_create_namespace_or_grants(monkeypatch
         )
     ch.insert.assert_not_awaited()
     grant.assert_not_awaited()
+
+
+@pytest.mark.parametrize("guarded", [False], indirect=True)
+@pytest.mark.parametrize("repair", ["undelete", "undo"])
+async def test_a_restore_retry_cannot_repair_a_blacklisted_search_document(
+    monkeypatch, guarded, repair
+):
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def lock(*args):
+        yield
+
+    existing = row(status="active")
+    mirror = AsyncMock()
+    monkeypatch.setattr(restore, "_read_restorable", AsyncMock(return_value=existing))
+    monkeypatch.setattr(restore, "_restore_embedding_mirror", mirror)
+    monkeypatch.setattr(restore, "_unsupersede", mirror)
+    monkeypatch.setattr(restore, "_undelete_left_unmirrored", AsyncMock(return_value=True))
+    monkeypatch.setattr(restore, "_landed_late", AsyncMock(return_value=True))
+    monkeypatch.setattr(restore, "_key_lock", lock)
+    monkeypatch.setattr(restore, "_reopen_facts", AsyncMock())
+    with pytest.raises(HTTPException, match="422"):
+        if repair == "undo":
+            await restore._restore_superseded(restore_input(), ch=object())
+        else:
+            await restore._restore_live(restore_input(), {"memory_type": "semantic"}, ch=object())
+    mirror.assert_not_awaited()
