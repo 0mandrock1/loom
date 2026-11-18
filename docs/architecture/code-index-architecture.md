@@ -262,6 +262,12 @@ count leaves out. Constructor calls (`T x(...)`, `new T`, `make_unique<T>`) are 
 `go_receivers.py`) bind member calls. Edge kinds are `calls`, `includes`, `inherits`,
 `overrides`, `uses_type`, `fixture_use`, `reads` and `writes`.
 
+`code.callers` and `code.impact` expand a method to its base declarations through
+indexed `overrides` edges or a bounded `inherits` walk from its class. A matching
+method name or signature on an unrelated class does not establish virtual dispatch.
+Missing relationships leave the graph answer a lower bound, with the missing-dispatch
+cause disclosed when the compiler tier cannot rule it out.
+
 **Dependents.** Edges resolve against a repository-wide name table, so a commit that
 adds, removes or re-signs a symbol changes the edges of untouched files that name it.
 `code/app/index/dependents.py` re-extracts only those files' edges at the same
