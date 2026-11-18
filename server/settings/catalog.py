@@ -2555,11 +2555,9 @@ class McpSettings(BaseModel):
     # "full" (+ outputSchema) or "compact" (first paragraph, argument tree).
     # Per request: `?schema_profile=`.
     mcp_schema_profile: Annotated[Literal["standard", "full", "compact"], CaseFolded] = "standard"
-    # Ops whose tools/list entry carries `_meta: {"anthropic/alwaysLoad": true}`, so a host
-    # that defers MCP tools behind tool search lists these up front and an agent calls them
-    # on its first turn instead of spending a turn loading them. Comma-separated op names;
-    # empty = none.
-    mcp_always_load_tools: str = "code.search,code.symbol"
+    # Comma-separated ops whose MCP descriptors request eager loading with anthropic/alwaysLoad.
+    # Empty leaves loading to the host; set names to keep selected tools upfront.
+    mcp_always_load_tools: str = ""
     # Seconds without a tool call after which the mcp_session_run_sweep worker
     # closes an MCP session's implicit run (one per token and `Mcp-Session-Id`,
     # begun on the first run-scoped tool call); with no background workers

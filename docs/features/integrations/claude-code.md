@@ -208,6 +208,11 @@ MCP tool loading. Omitting it loads the MCP schemas into context up front; it do
 show whether the task needed those tools. `--allowedTools` controls permission and
 cannot restore a tool omitted from `--tools`. See [Claude Code tool search](https://code.claude.com/docs/en/mcp#configure-tool-search).
 
+The server leaves eager loading to the host by default. An operator can set
+`LOOM_MCP_ALWAYS_LOAD_TOOLS=code.search,code.symbol` to request those schemas upfront.
+This affects loading metadata, not tool availability or permission. Tool search may
+add a discovery step when a task needs a deferred tool; no task or cost gain is guaranteed.
+
 Managed settings can also set hook environment variables. Clearing the launcher's
 environment does not clear those settings; inspect the effective configuration and
 respect its policy. See [settings precedence](https://code.claude.com/docs/en/settings#settings-precedence).
@@ -256,6 +261,25 @@ and indexed commits, listed code tools, hook output, explicit tool calls, failed
 cost and elapsed time. Keep the task and test budgets equal between arms. To isolate
 the test gate's contribution, compare a baseline, the plugin with `LOOM_TEST_GATE=off`,
 and the full plugin. Index the issue's starting commit so the real fix is not searchable.
+
+### Who owns the calls and validation
+
+| Path                             | Who chooses the operation                       | Evidence to check                                          |
+| -------------------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
+| SDK or HTTP stages               | Application code invokes the stage directly.    | A valid scoped result and the controller's validation.     |
+| Plugin hooks                     | Configured handlers run on matching CLI events. | Hook event, server request, returned context and delivery. |
+| Model tools backed by SDK or MCP | The model decides whether to investigate.       | The actual call and a valid result, not a listed tool.     |
+
+Exposing an SDK binding does not force the model to use it. Zero model-selected MCP
+calls can still include automatic hook requests. A request attempt alone does not
+prove success or useful context. Required retrieval or validation belongs to a
+controller that runs the stage and rejects missing or invalid results; a tool listing
+or a prompt instruction does not enforce the gate. See [agent integration](../../guides/agent-integration.md).
+
+Normal `claude -p` runs can discover project settings, plugins and hooks. `--bare`
+skips discovery: explicit MCP configuration or plugin flags can still load tools,
+but hooks do not run, even when explicitly configured. Calling a model API directly
+runs only the client program, without CLI hooks. See [headless usage](https://code.claude.com/docs/en/headless).
 
 ### Hook context does not appear
 

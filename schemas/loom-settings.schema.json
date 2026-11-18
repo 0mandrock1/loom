@@ -3583,9 +3583,9 @@
           "description": "Request-body cap, bytes, enforced by ASGI middleware before any parser (413 PAYLOAD_TOO_LARGE); uvicorn has no limit of its own. 0 disables."
         },
         "mcp_always_load_tools": {
-          "default": "code.search,code.symbol",
+          "default": "",
           "type": "string",
-          "description": "Ops whose tools/list entry carries `_meta: {\"anthropic/alwaysLoad\": true}`, so a host that defers MCP tools behind tool search lists these up front and an agent calls them on its first turn instead of spending a turn loading them. Comma-separated op names; empty = none."
+          "description": "Comma-separated ops whose MCP descriptors request eager loading with anthropic/alwaysLoad. Empty leaves loading to the host; set names to keep selected tools upfront."
         },
         "mcp_auth_mode": {
           "default": "required",
