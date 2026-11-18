@@ -7,8 +7,10 @@ import asyncio
 import dataclasses
 import importlib
 import json
+import os
 import sys
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -248,25 +250,62 @@ def _asked(text: str) -> list[Any]:
     return [ModelRequest([TextInput(text)])]
 
 
-def _protected_agent(
+@asynccontextmanager
+async def _protected_agent(
     family: SessionProtection | None,
     respond: Callable[[httpx.Request], httpx.Response],
-) -> Agent:
-    agent = Agent(
-        org="acme",
-        namespace="support",
-        agent="bot",
-        base_url="http://inert.invalid",
-        api_key="test-token",
-        session_protection=family,
-        pacing=False,
-        coalesce_sets=False,
-        auto_run=False,
-        mentor_brief=False,
-        retry={"max_attempts": 1},
-    )
-    agent.transport._client._transport = httpx.MockTransport(respond)
-    return agent
+) -> AsyncIterator[Agent]:
+    with pytest.MonkeyPatch.context() as environment:
+        environment.setenv("NO_PROXY", "*")
+        environment.setenv("no_proxy", "*")
+        agent = Agent(
+            org="acme",
+            namespace="support",
+            agent="bot",
+            base_url="http://inert.invalid",
+            api_key="test-token",
+            session_protection=family,
+            pacing=False,
+            coalesce_sets=False,
+            auto_run=False,
+            mentor_brief=False,
+            retry={"max_attempts": 1},
+        )
+        agent.transport._client._transport = httpx.MockTransport(respond)
+        try:
+            yield agent
+        finally:
+            await agent.transport.close()
+
+
+def test_protected_agent_mock_transport_ignores_inherited_proxies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    monkeypatch.setenv("NO_PROXY", "localhost")
+    monkeypatch.setenv("no_proxy", "localhost")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("Transport selection must not send a request")
+
+    async def go() -> None:
+        async with _protected_agent(None, respond) as loom:
+            selected = loom.transport._client._transport_for_url(
+                httpx.URL("http://inert.invalid/v1/memory.search")
+            )
+            assert isinstance(selected, httpx.MockTransport)
+        assert os.environ["NO_PROXY"] == "localhost"
+        assert os.environ["no_proxy"] == "localhost"
+
+    asyncio.run(go())
 
 
 @pytest.mark.parametrize("constructor_context", ["bound", "ambient"])
@@ -282,8 +321,9 @@ def test_policy_constructor_contributors_survive_client_rebinding(
         return httpx.Response(200, json={"results": []})
 
     async def go() -> None:
-        loom = _protected_agent(original if constructor_context == "bound" else None, respond)
-        try:
+        async with _protected_agent(
+            original if constructor_context == "bound" else None, respond
+        ) as loom:
             if constructor_context == "ambient":
                 with original.automatic():
                     policy = LoomRecallPolicy(loom)
@@ -301,8 +341,6 @@ def test_policy_constructor_contributors_survive_client_rebinding(
                 await native.ask("Keep this turn private")
             assert posts == [] and config.calls == []
             assert not replacement.protected
-        finally:
-            await loom.transport.close()
 
     asyncio.run(go())
 
@@ -318,9 +356,8 @@ def test_policy_retains_previous_callback_contributors(tmp_path: Path) -> None:
         return httpx.Response(200, json={"results": []})
 
     async def go() -> None:
-        loom = _protected_agent(bound, respond)
-        policy = LoomRecallPolicy(loom)
-        try:
+        async with _protected_agent(bound, respond) as loom:
+            policy = LoomRecallPolicy(loom)
             events = _asked("First turn")
             with observation_scope((contributor,)):
                 prompts, returned = await policy.apply(["base"], events, None)  # type: ignore[arg-type]
@@ -331,8 +368,6 @@ def test_policy_retains_previous_callback_contributors(tmp_path: Path) -> None:
                 await policy.apply([], _asked("Later turn"), None)  # type: ignore[arg-type]
             assert posts == ["/v1/memory.search"]
             assert not bound.protected and not replacement.protected
-        finally:
-            await loom.transport.close()
 
     asyncio.run(go())
 
@@ -348,25 +383,22 @@ def test_policy_entry_binding_marked_during_authentication_stops_dispatch(tmp_pa
         return httpx.Response(200, json={"results": []})
 
     async def go() -> None:
-        loom = _protected_agent(original, respond)
-        policy = LoomRecallPolicy(loom)
-        loom.transport.session_protection = callback
+        async with _protected_agent(original, respond) as loom:
+            policy = LoomRecallPolicy(loom)
+            loom.transport.session_protection = callback
 
-        class RebindingAuth(httpx.Auth):
-            async def async_auth_flow(self, request: httpx.Request):
-                await asyncio.sleep(0)
-                callback.mark()
-                loom.transport.session_protection = replacement
-                yield request
+            class RebindingAuth(httpx.Auth):
+                async def async_auth_flow(self, request: httpx.Request):
+                    await asyncio.sleep(0)
+                    callback.mark()
+                    loom.transport.session_protection = replacement
+                    yield request
 
-        loom.transport._client.auth = RebindingAuth()
-        try:
+            loom.transport._client.auth = RebindingAuth()
             with pytest.raises(AutomaticCaptureSuppressed):
                 await policy.apply([], _asked("Guard this recall"), None)  # type: ignore[arg-type]
             assert posts == []
             assert not original.protected and not replacement.protected
-        finally:
-            await loom.transport.close()
 
     asyncio.run(go())
 
@@ -403,15 +435,14 @@ def test_policy_marked_recall_is_durable_before_native_prompt_and_blocks_next_ca
             return result
 
     async def go() -> None:
-        loom = _protected_agent(original, respond)
-        policy = ObservedPolicy(loom)
-        config = TrackingConfig(TestConfig("Recalled.", "Unexpected second model call."))
-        native = AG2Agent(
-            "assistant",
-            config=config,
-            middleware=[Middleware(AssemblerMiddleware, policies=[policy])],
-        )
-        try:
+        async with _protected_agent(original, respond) as loom:
+            policy = ObservedPolicy(loom)
+            config = TrackingConfig(TestConfig("Recalled.", "Unexpected second model call."))
+            native = AG2Agent(
+                "assistant",
+                config=config,
+                middleware=[Middleware(AssemblerMiddleware, policies=[policy])],
+            )
             await native.ask("Recall a preference")
             assert "private recalled content" in config.calls[0].prompt[-1]
             loom.transport.session_protection = replacement
@@ -419,8 +450,6 @@ def test_policy_marked_recall_is_durable_before_native_prompt_and_blocks_next_ca
                 await native.ask("Another automatic recall")
             assert posts == ["/v1/memory.search"] and len(config.calls) == 1
             assert not replacement.protected
-        finally:
-            await loom.transport.close()
 
     asyncio.run(go())
 
@@ -443,23 +472,20 @@ def test_policy_failed_durable_observation_withholds_native_prompt(
         return httpx.Response(200, json={"mirrored": True, "results": []})
 
     async def go() -> None:
-        loom = _protected_agent(bound, respond)
-        with observation_scope((broken,)):
-            policy = LoomRecallPolicy(loom)
-        monkeypatch.setattr(SessionProtection, "mark", fail_one)
-        config = TrackingConfig(TestConfig("Unexpected model call"))
-        native = AG2Agent(
-            "assistant",
-            config=config,
-            middleware=[Middleware(AssemblerMiddleware, policies=[policy])],
-        )
-        try:
+        async with _protected_agent(bound, respond) as loom:
+            with observation_scope((broken,)):
+                policy = LoomRecallPolicy(loom)
+            monkeypatch.setattr(SessionProtection, "mark", fail_one)
+            config = TrackingConfig(TestConfig("Unexpected model call"))
+            native = AG2Agent(
+                "assistant",
+                config=config,
+                middleware=[Middleware(AssemblerMiddleware, policies=[policy])],
+            )
             with pytest.raises(SessionProtectionUnavailable):
                 await native.ask("Withhold unprotected recall")
             assert config.calls == [] and posts == ["/v1/memory.search"]
             assert SessionProtection.open(bound.pointer()).protected
-        finally:
-            await loom.transport.close()
 
     asyncio.run(go())
 
@@ -474,14 +500,13 @@ def test_protected_family_still_allows_model_selected_tools(tmp_path: Path) -> N
         return httpx.Response(200, json={"mirrored": True, "results": []})
 
     async def go() -> None:
-        loom = _protected_agent(family, respond)
-        config = TrackingConfig(TestConfig(_recall_call({"query": "seat"}), "No match."))
-        native = AG2Agent("assistant", config=config, tools=loom_tools(loom, only=["loom_recall"]))
-        try:
+        async with _protected_agent(family, respond) as loom:
+            config = TrackingConfig(TestConfig(_recall_call({"query": "seat"}), "No match."))
+            native = AG2Agent(
+                "assistant", config=config, tools=loom_tools(loom, only=["loom_recall"])
+            )
             reply = await native.ask("Use the recall tool")
             assert await reply.content() == "No match."
             assert posts == ["/v1/memory.search"] and family.protected
-        finally:
-            await loom.transport.close()
 
     asyncio.run(go())
