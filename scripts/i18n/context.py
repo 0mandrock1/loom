@@ -191,6 +191,19 @@ def _file_target(target: str, source_path: str, files: frozenset[str], repo_url:
     return resolved if resolved in files else ""
 
 
+def _filename(text: str, target: str) -> str:
+    if not target:
+        return ""
+    parts = target.split("/")
+    for start in range(len(parts)):
+        name = "/".join(parts[start:])
+        if pattern((name,)).search(text):
+            return name
+    if parts[-1] == "README.md" and pattern(("README",)).search(text):
+        return "README"
+    return ""
+
+
 def protected(
     label: Label, source_path: str, *, files: frozenset[str] = frozenset(), repo_url: str = ""
 ) -> tuple[str, ...]:
@@ -212,11 +225,8 @@ def protected(
     ):
         atoms.extend(value[1:-1] for value in re.findall(_QUOTED, label.text))
     for text, target in label.links:
-        basename = posixpath.basename(_file_target(target, source_path, files, repo_url))
-        name = basename
-        if basename == "README.md" and not pattern((basename,)).search(text):
-            name = "README"
-        if name and pattern((name,)).search(text):
+        name = _filename(text, _file_target(target, source_path, files, repo_url))
+        if name:
             atoms.append(name)
     return tuple(dict.fromkeys(atoms))
 
