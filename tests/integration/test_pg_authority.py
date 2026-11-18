@@ -2913,6 +2913,8 @@ async def test_a_redaction_reads_a_live_claims_lease_and_leaves_a_parked_one_par
 
     ns = f"pg-{uuid.uuid4().hex[:8]}"
     first = (await call("memory.set", _set(ns, "k", "the token is hunter2"))).json()
+    # Publish the initial head before the next write can supersede it.
+    await _published(pg_conn, org)
     assert (await call("memory.set", _set(ns, "k", "the token was rotated"))).status_code == 200
     await _published(pg_conn, org)
     seq = await pg_conn.fetchval(
@@ -5453,6 +5455,8 @@ async def test_a_cleared_head_is_sent_from_its_head_row_and_a_cleared_older_vers
 
     ns = f"pg-{uuid.uuid4().hex[:8]}"
     assert (await call("memory.set", _set(ns, "k", "the first version"))).status_code == 200
+    # Publish the initial head before the next write can supersede it.
+    await _published(pg_conn, org)
     head = (await call("memory.set", _set(ns, "k", "the second version"))).json()
     await _published(pg_conn, org)
     await pg_conn.execute(
