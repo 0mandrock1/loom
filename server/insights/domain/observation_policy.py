@@ -6,8 +6,8 @@ neither policy names nor a filtered system-table catalog establishes visibility.
 
 from __future__ import annotations
 
-from sqlglot import Dialect
-from sqlglot.tokens import Token, TokenType
+import re
+from dataclasses import dataclass
 
 from server.insights.domain.analysis import (
     ANALYST_USER,
@@ -17,13 +17,50 @@ from server.insights.domain.analysis import (
 )
 
 _SYSTEM_SOURCES = frozenset({"processes", "tables", "constraints", "clusters", "row_policies"})
-_NAMES = frozenset({TokenType.VAR, TokenType.IDENTIFIER})
-_QUOTED = frozenset({TokenType.STRING, TokenType.IDENTIFIER})
+_NAMES = frozenset({"word", "identifier"})
+_TOKEN = re.compile(
+    r"(?P<space>\s+)|(?P<quoted>'(?:[^'\\]|\\.|'')*'|"
+    r'`(?:[^`\\]|\\.|``)*`|"(?:[^"\\]|\\.|"")*")'
+    r"|(?P<word>[^\W\d]\w*)|(?P<number>[0-9]+)|(?P<symbol>[^\s])"
+)
 
 
-def _words(tokens: list[Token], words: tuple[str, ...]) -> bool:
+@dataclass(frozen=True)
+class _Token:
+    kind: str
+    text: str
+
+
+def _tokens(statement: str) -> list[_Token]:
+    """Read only native policy framing; expressions stay opaque and never execute."""
+    result = []
+    for match in _TOKEN.finditer(statement):
+        kind, text = match.lastgroup, match.group()
+        if kind == "space":
+            continue
+        if kind == "quoted":
+            quote = text[0]
+            if quote == "'":
+                kind = "string"
+            else:
+                # Unknown identifier escapes must not misclassify a relevant target.
+                if "\\" in text:
+                    raise ValueError("unsupported identifier escape")
+                kind, text = "identifier", text[1:-1].replace(quote * 2, quote)
+        elif kind == "symbol":
+            if text not in ".()[]{}+-*/%=<>!,:|&^~" or statement.startswith(
+                ("--", "/*"), match.start()
+            ):
+                raise ValueError("unsupported native policy syntax")
+            kind = text
+        assert kind is not None
+        result.append(_Token(kind, text))
+    return result
+
+
+def _words(tokens: list[_Token], words: tuple[str, ...]) -> bool:
     return len(tokens) == len(words) and all(
-        token.token_type not in _QUOTED and token.text.upper() == word
+        token.kind == "word" and token.text.upper() == word
         for token, word in zip(tokens, words, strict=True)
     )
 
@@ -35,20 +72,19 @@ def _classify(statement: str, database: str) -> tuple[str, str]:
     pairing must also prove unrestricted access for every other user.
     """
     try:
-        tokens = Dialect.get_or_raise("clickhouse").tokenize(statement)
+        tokens = _tokens(statement)
         if (
             len(tokens) < 8
             or not _words(tokens[:3], ("CREATE", "ROW", "POLICY"))
-            or tokens[3].token_type not in _NAMES
+            or tokens[3].kind not in _NAMES
             or not _words(tokens[4:5], ("ON",))
-            or tokens[5].token_type not in _NAMES | {TokenType.STAR}
-            or tokens[6].token_type != TokenType.DOT
-            or tokens[7].token_type not in _NAMES | {TokenType.STAR}
-            or any(token.token_type == TokenType.SEMICOLON or token.comments for token in tokens)
+            or tokens[5].kind not in _NAMES | {"*"}
+            or tokens[6].kind != "."
+            or tokens[7].kind not in _NAMES | {"*"}
         ):
             return ("refuse", "")
         db, table = tokens[5], tokens[7]
-        db_wild, table_wild = db.token_type == TokenType.STAR, table.token_type == TokenType.STAR
+        db_wild, table_wild = db.kind == "*", table.kind == "*"
         relevant = (
             (db_wild or db.text == database)
             and (table_wild or table.text in {"agent_events", "agent_events_private"})
@@ -56,27 +92,30 @@ def _classify(statement: str, database: str) -> tuple[str, str]:
         if not relevant:
             return ("unrelated", "")
         tail = tokens[8:]
-        if not _words(tail[:5], ("AS", "PERMISSIVE", "FOR", "SELECT", "USING")):
+        # SHOW CREATE omits the default permissive clause.
+        if _words(tail[:2], ("AS", "PERMISSIVE")):
+            tail = tail[2:]
+        if not _words(tail[:3], ("FOR", "SELECT", "USING")):
             return ("refuse", "")
-        depth, separators = 0, []
-        for index, token in enumerate(tail[5:], 5):
-            if token.token_type in {TokenType.L_PAREN, TokenType.L_BRACKET, TokenType.L_BRACE}:
-                depth += 1
-            elif token.token_type in {TokenType.R_PAREN, TokenType.R_BRACKET, TokenType.R_BRACE}:
-                depth -= 1
-            elif depth == 0 and _words([token], ("TO",)):
+        opened, separators = [], []
+        closing = {")": "(", "]": "[", "}": "{"}
+        for index, token in enumerate(tail[3:], 3):
+            if token.kind in {"(", "[", "{"}:
+                opened.append(token.kind)
+            elif token.kind in closing:
+                if not opened or opened.pop() != closing[token.kind]:
+                    return ("refuse", "")
+            elif not opened and _words([token], ("TO",)):
                 separators.append(index)
-            if depth < 0:
-                return ("refuse", "")
-        if depth or len(separators) != 1:
+        if opened or len(separators) != 1:
             return ("refuse", "")
         split = separators[0]
-        expression, recipients = tail[5:split], tail[split + 1 :]
+        expression, recipients = tail[3:split], tail[split + 1 :]
         if not expression:
             return ("refuse", "")
         if (
             len(recipients) == 1
-            and recipients[0].token_type in _NAMES
+            and recipients[0].kind in _NAMES
             and recipients[0].text == ANALYST_USER
         ):
             if (
@@ -95,11 +134,11 @@ def _classify(statement: str, database: str) -> tuple[str, str]:
             and table.text in others_policy_tables()
             and tokens[3].text == OTHERS_POLICY_NAME
             and len(expression) == 1
-            and expression[0].token_type == TokenType.NUMBER
+            and expression[0].kind == "number"
             and expression[0].text == "1"
             and _words(recipients[:2], ("ALL", "EXCEPT"))
             and len(recipients) == 3
-            and recipients[2].token_type in _NAMES
+            and recipients[2].kind in _NAMES
             and recipients[2].text == ANALYST_USER
         )
         return ("others", table.text) if unrestricted else ("refuse", "")

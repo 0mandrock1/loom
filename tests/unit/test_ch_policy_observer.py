@@ -94,6 +94,8 @@ async def test_successful_bootstrap_and_policy_reads_never_recreate_or_redirect(
     assert len({call[1]["params"]["session_id"] for call in http.calls}) == 1
     assert http.calls[-1][1]["params"]["close_session"] == "1"
     assert all(call[1]["allow_redirects"] is False for call in http.calls)
+    assert all(call[1]["params"]["log_query_settings"] == "0" for call in http.calls)
+    assert all("log_query_parameters" not in call[1]["params"] for call in http.calls)
 
 
 @pytest.mark.parametrize(

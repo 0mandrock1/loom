@@ -11,7 +11,7 @@ import json
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
@@ -20,6 +20,10 @@ from server.core.ch_names import qualify
 
 # not a setting: ten seconds of proof plus room for bounded native cleanup.
 _SESSION_TTL_S = 15
+# not a setting: a request cannot outlive the ten-second authority proof.
+_REQUEST_TIMEOUT_S = 10
+# not a setting: all owned sessions close concurrently within one second.
+_CLOSE_TIMEOUT_S = 1
 # not a setting: a larger access catalog refuses instead of returning a partial proof.
 _BODY_BYTES = 4 * 1024 * 1024
 _PARAMETER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -77,7 +81,10 @@ class PolicyObserver:
         user: str,
         password: str,
         database: str,
-        guarded: Callable[[str, Callable[[], Awaitable[Any]]], Awaitable[Any]],
+        guarded: Callable[
+            [str, Callable[[], Awaitable[list[dict[str, Any]]]]],
+            Awaitable[list[dict[str, Any]]],
+        ],
         statement_settings: Callable[[str], dict[str, Any]],
     ) -> None:
         self.origin = origin
@@ -94,7 +101,7 @@ class PolicyObserver:
             auth=aiohttp.BasicAuth(user, password),
             cookie_jar=aiohttp.DummyCookieJar(),
             trust_env=False,
-            timeout=aiohttp.ClientTimeout(total=10),
+            timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT_S),
         )
 
     async def _post(
@@ -115,7 +122,7 @@ class PolicyObserver:
                 "send_logs_level": "none",
                 "log_queries_cut_to_length": "1",
                 "log_formatted_queries": "0",
-                "log_query_parameters": "0",
+                "log_query_settings": "0",
                 "additional_table_filters": "{}",
                 "additional_result_filter": "",
                 "limit": "0",
@@ -176,7 +183,7 @@ class PolicyObserver:
                     )
                 ):
                     raise ObservationUnavailable()
-                return result["data"]
+                return cast(list[dict[str, Any]], result["data"])
 
             return await self._guarded(sql, send)
         except asyncio.CancelledError:
@@ -252,7 +259,7 @@ class PolicyObserver:
         try:
             # Never create a session during cleanup, including an ambiguous bootstrap.
             # An unavailable native close leaves only the original bounded TTL.
-            async with asyncio.timeout(1):
+            async with asyncio.timeout(_CLOSE_TIMEOUT_S):
                 await self._post("SELECT 1 AS closed", closing=True)
         finally:
             self._failed = True

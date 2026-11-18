@@ -442,13 +442,12 @@ def test_guarded_apply_refusal_is_actionable_without_stdout(monkeypatch, capsys)
     )
 
 
-@pytest.mark.parametrize("path", ["rewrite"])
-def test_before_the_first_boot_migrates_both_paths_say_to_run_again(
-    monkeypatch: pytest.MonkeyPatch, path: str
+def test_rewrite_before_the_first_boot_says_to_run_again(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(app.store, "secrets_table_exists", _returns(False))
     with pytest.raises(RuntimeError, match="first boot has applied its migrations"):
-        asyncio.run(getattr(app, path)())
+        asyncio.run(app.rewrite())
 
 
 def test_guarded_apply_does_not_disclose_raw_policy_or_stack_text(monkeypatch, capsys):

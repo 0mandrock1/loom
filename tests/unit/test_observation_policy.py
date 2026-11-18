@@ -16,9 +16,12 @@ _OTHERS = (
 )
 
 
-def test_generated_event_pair_proves_observer_visibility():
-    assert observer_policies_allow((_SCOPE, _OTHERS), "loom")
-    assert observer_policies_allow((_OTHERS,), "loom")
+@pytest.mark.parametrize("clause", ["AS PERMISSIVE ", ""])
+def test_generated_event_pair_proves_observer_visibility(clause):
+    scope = _SCOPE.replace("AS PERMISSIVE ", clause)
+    others = _OTHERS.replace("AS PERMISSIVE ", clause)
+    assert observer_policies_allow((scope, others), "loom")
+    assert observer_policies_allow((others,), "loom")
     assert observer_policies_allow((), "loom")
 
 
@@ -68,3 +71,33 @@ def test_quoted_role_text_and_policy_expressions_cannot_fake_an_unrestricted_com
     fake = _OTHERS.replace("USING 1", "USING '1 TO ALL EXCEPT loom_analyst' = 'no'")
     assert not observer_policies_allow((_SCOPE, fake), "loom")
     assert not observer_policies_allow((_SCOPE, _OTHERS, _OTHERS), "loom")
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_a_restrictive_generated_policy_cannot_prove_visibility(index):
+    policies = [_SCOPE, _OTHERS]
+    policies[index] = policies[index].replace("AS PERMISSIVE", "AS RESTRICTIVE")
+    assert not observer_policies_allow(tuple(policies), "loom")
+
+
+def test_native_quoted_names_and_to_inside_a_literal_preserve_the_actual_recipient():
+    scope = _SCOPE.replace("loom.agent_events", "`loom`.`agent_events`").replace(
+        "mirror_marked = 0", "position('it\\'s TO service ([)]', 'TO') > 0"
+    )
+    others = _OTHERS.replace("loom.agent_events", '"loom"."agent_events"')
+    assert observer_policies_allow((scope, others), "loom")
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["1 /* hidden */", "1 -- hidden\n", "1 # hidden\n", "'unclosed", "([)]", "$tag$TO$tag$"],
+)
+def test_unknown_or_commented_native_policy_syntax_cannot_prove_visibility(expression):
+    assert not observer_policies_allow(
+        (_SCOPE.replace("mirror_marked = 0", expression), _OTHERS), "loom"
+    )
+
+
+def test_unsupported_quoted_target_escapes_refuse_instead_of_looking_unrelated():
+    escaped = _SCOPE.replace("loom.agent_events", r"`lo\om`.agent_events")
+    assert not observer_policies_allow((escaped, _OTHERS), "loom")

@@ -975,7 +975,9 @@ class CHClient:
             raise ObservationUnavailable()
         normalized = observer_origins(configuration, origins)
 
-        async def guarded(sql: str, send: Callable[[], Awaitable[Any]]) -> Any:
+        async def guarded(
+            sql: str, send: Callable[[], Awaitable[list[dict[str, Any]]]]
+        ) -> list[dict[str, Any]]:
             def unchanged() -> None:
                 if (
                     self.client is not owner
@@ -991,7 +993,7 @@ class CHClient:
             took = await self._acquire_slot("policy_observer")
             try:
                 unchanged()
-                result = await self._bounded("policy_observer", "read", send)
+                result: list[dict[str, Any]] = await self._bounded("policy_observer", "read", send)
                 unchanged()
                 return result
             finally:

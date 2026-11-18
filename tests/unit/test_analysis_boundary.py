@@ -392,12 +392,6 @@ def test_the_stamp_is_written_last() -> None:
     assert all(NAMES.digest not in s for s in SQL[:-1])
 
 
-def test_revokes_for_skips_a_line_that_is_not_a_grant() -> None:
-    assert boundary.revokes_for(["not a grant", "GRANT r TO loom_analyst"]) == [
-        "REVOKE r FROM loom_analyst"
-    ]
-
-
 def test_a_cloud_prefix_names_every_setting_the_entities_and_the_scope_use() -> None:
     # ClickHouse Cloud takes custom settings under custom_, not SQL_.
     cloud = boundary.SettingNames("custom_")

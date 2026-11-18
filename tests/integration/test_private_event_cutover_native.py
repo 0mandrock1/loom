@@ -14,6 +14,9 @@ import pytest_asyncio
 from server.core import ch as ch_module
 from server.core.ch import CHClient, as_analyst, query_tag, uncaptured
 from server.core.sql_literal import sql_string
+from server.insights.domain import analysis as boundary
+from server.insights.domain.observation_policy import observer_policies_allow
+from server.insights.store import analysis as analysis_store
 from server.insights.store import event_cutover
 
 pytestmark = pytest.mark.usefixtures("ch_target_required")
@@ -119,6 +122,49 @@ async def test_native_check_is_enforced_and_clean_storage_is_confirmed(world) ->
         )
     row = await world.client.query_one(f"SELECT count() AS n FROM {world.db}.agent_events")
     assert row and row["n"] == 0
+
+
+async def test_native_reprovisioning_accepts_installed_generated_event_policies(world) -> None:
+    # The running deployment owns this login; only policies on our private tables change.
+    assert await world.client.query_one(
+        "SELECT count() AS n FROM system.users WHERE name = {user:String}",
+        {"user": boundary.ANALYST_USER},
+    ) == {"n": 1}
+    prefix = await analysis_store.setting_prefix(ch=world.client)
+    assert prefix is not None
+    tables = ("agent_events", "agent_events_private")
+    statements = [
+        boundary.policy_sql(f"`{world.db}`", name, table, using, recipient)
+        for table in tables
+        for name, using, recipient in (
+            (boundary.OTHERS_POLICY_NAME, "1", f"ALL EXCEPT `{boundary.ANALYST_USER}`"),
+            (boundary.POLICY_NAME, "0", f"`{boundary.ANALYST_USER}`"),
+        )
+    ]
+    username = "cutover_grantee_" + uuid4().hex
+    try:
+        await world.client.execute(f"CREATE USER {username} IDENTIFIED WITH no_password")
+        statements.append(f"GRANT SELECT ON {world.db}.agent_events TO {username}")
+        await analysis_store.write_entities(
+            statements, names=boundary.SettingNames(prefix), ch=world.client
+        )
+        async with world.client.policy_observers() as channels:
+            catalog = tuple(await channels[0].policies())
+            installed = tuple(statement for statement in catalog if world.db in statement)
+            assert len(installed) == 4
+            assert observer_policies_allow(installed, world.db)
+        # The second grant proof observes the database's actual SHOW CREATE spelling.
+        await analysis_store.write_entities(
+            statements, names=boundary.SettingNames(prefix), ch=world.client
+        )
+        await event_cutover.confirm_ordinary_events(ch=world.client)
+    finally:
+        for table in tables:
+            for name in (boundary.POLICY_NAME, boundary.OTHERS_POLICY_NAME):
+                await world.client.execute(
+                    f"DROP ROW POLICY IF EXISTS `{name}` ON {world.db}.{table}"
+                )
+        await world.client.execute(f"DROP USER IF EXISTS {username}")
 
 
 @pytest.mark.parametrize("kind", ["missing", "wrong", "assume"])

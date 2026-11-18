@@ -162,7 +162,6 @@ async def _topology(ch: _CHClient, cluster: str) -> tuple[tuple[Any, ...], ...]:
 
 @dataclass(frozen=True)
 class _Writers:
-    cluster: str
     configured: str
     topology: tuple[tuple[Any, ...], ...]
     servers: frozenset[str]
@@ -214,7 +213,7 @@ async def _writers(ch: _CHClient) -> _Writers:
     local = await ch.query_all("SELECT toString(serverUUID()) AS server_uuid" + _LIVE)
     if len(local) != 1 or _uuid(local[0]["server_uuid"]) not in servers:
         raise EventCutoverUnavailable()
-    return _Writers(cluster, configured, topology, servers, _identities(rows))
+    return _Writers(configured, topology, servers, _identities(rows))
 
 
 @asynccontextmanager
