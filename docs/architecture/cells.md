@@ -716,7 +716,7 @@ so a thousand pods of eight workers ask up to 1,600 times a second. Each router 
 answers the route from its own read of the cell's row, made at most once per
 `LOOM_ROUTER_DIRECTORY_CACHE_S`, so the directory sees one read per replica per window; a
 failed read answers 503 for its window, so a down directory is asked no more often and still
-answers 503. A process with no heartbeat (a CLI, the workers child) asks on demand instead,
+answers 503. A process without the background router reader (a CLI, the workers child) asks on demand instead,
 at most once every `LOOM_TENANCY_MODE_CACHE_S`.
 
 The reader keeps the directory's last answer for the tenancy check too, as one of four:
