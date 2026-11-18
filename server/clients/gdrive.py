@@ -255,6 +255,7 @@ async def list_all(
     modified_after: str = "",
     fields: str = LISTED,
     pace_s: float = PAGE_PACE_S,
+    limit: int | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Every file of `mime_types` in any of `folder_ids`, oldest change first, or only
     those changed after `modified_after` (a `valid_stamp`), and whether the store
@@ -262,9 +263,12 @@ async def list_all(
     files: list[dict[str, Any]] = []
     whole = True
     for start in range(0, len(folder_ids), MAX_PARENTS):
+        if limit is not None and len(files) > limit:
+            break
         query = folder_query(folder_ids[start : start + MAX_PARENTS], mime_types)
+        bound: dict[str, Any] = {"limit": limit - len(files)} if limit is not None else {}
         found, complete = await list_query(
-            token, query, modified_after=modified_after, fields=fields, pace_s=pace_s
+            token, query, modified_after=modified_after, fields=fields, pace_s=pace_s, **bound
         )
         files.extend(found)
         whole = whole and complete

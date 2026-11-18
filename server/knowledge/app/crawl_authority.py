@@ -10,6 +10,7 @@ import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -29,6 +30,7 @@ from server.settings import settings
 
 _now = time.monotonic
 _T = TypeVar("_T")
+_CURRENT: ContextVar[Checkout | None] = ContextVar("crawl_checkout", default=None)
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,31 @@ class Bounds:
             or self.lease_wait_s < 0
         ):
             raise ValueError("crawl lease bounds refused")
+
+
+@dataclass(frozen=True)
+class Checkout:
+    authority: Authority
+    people: tuple[Person, ...]
+
+    async def validate(self) -> None:
+        await self.authority.validate()
+        for person in self.people:
+            await self.authority._person(person)
+
+    @asynccontextmanager
+    async def publication_guard(self) -> AsyncIterator[None]:
+        # Provider observations happen before local leases; no network runs under them.
+        await self.validate()
+        async with self.authority.publication_guard():
+            yield
+
+
+def current(source: KnowledgeSource) -> Checkout:
+    checkout = _CURRENT.get()
+    if checkout is None or scope(checkout.authority.source) != scope(source):
+        raise CredentialRefused("crawl checkout unavailable")
+    return checkout
 
 
 def scope(source: KnowledgeSource) -> source_registration.Scope:
@@ -150,6 +177,19 @@ class Authority:
 
     def __repr__(self) -> str:
         return "Authority(<redacted>)"
+
+    @asynccontextmanager
+    async def using(self, people: tuple[Person, ...]) -> AsyncIterator[None]:
+        if self._expansion is None or any(p not in self._expansion.people for p in people):
+            raise CredentialRefused("crawl person unavailable")
+        checkout = Checkout(self, people)
+        await checkout.validate()
+        marker = _CURRENT.set(checkout)
+        try:
+            yield
+            await checkout.validate()
+        finally:
+            _CURRENT.reset(marker)
 
     async def validate(self) -> None:
         if _now() >= self.deadline:

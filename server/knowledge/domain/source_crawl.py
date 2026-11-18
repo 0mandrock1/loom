@@ -155,11 +155,16 @@ class Union:
     """Absence is meaningful only after every admitted person's full listing finishes."""
 
     expansion: Expansion
+    maximum_files: int
     _done: set[str] = field(default_factory=set, init=False, repr=False)
     _files: dict[str, File] = field(default_factory=dict, init=False, repr=False)
 
     def __repr__(self) -> str:
         return "Union(<redacted>)"
+
+    def __post_init__(self) -> None:
+        if type(self.maximum_files) is not int or self.maximum_files <= 0:
+            raise ValueError("crawl file bound refused")
 
     def add(self, person: Person, files: list[dict[str, Any]], *, whole: bool) -> None:
         if person not in self.expansion.people or person.id in self._done or not whole:
@@ -192,6 +197,8 @@ class Union:
                 )
             else:
                 next_files[identifier] = File(identifier, dict(file), access, (person.id,))
+            if len(next_files) > self.maximum_files:
+                raise ValueError("crawl union exceeds its file bound")
         self._files = next_files
         self._done.add(person.id)
 

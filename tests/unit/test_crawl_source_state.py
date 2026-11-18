@@ -90,7 +90,7 @@ def _file(**changes: Any) -> dict[str, Any]:
 
 def test_one_person_absence_cannot_retire_another_persons_file() -> None:
     one, two = _people()
-    union = Union(Expansion("customer", (one, two), (), "exclusions"))
+    union = Union(Expansion("customer", (one, two), (), "exclusions"), 100)
     union.add(one, [_file(owners=[{"me": True, "emailAddress": one.email}])], whole=True)
     with pytest.raises(ValueError, match="incomplete"):
         union.complete()
@@ -102,7 +102,7 @@ def test_one_person_absence_cannot_retire_another_persons_file() -> None:
 
 def test_complete_union_uses_explicit_permissions_not_link_only_listing_as_person() -> None:
     one, two = _people()
-    union = Union(Expansion("customer", (one, two), (), "exclusions"))
+    union = Union(Expansion("customer", (one, two), (), "exclusions"), 100)
     union.add(
         one,
         [
@@ -127,7 +127,7 @@ def test_union_refuses_an_acl_observed_on_a_different_content_revision(
     change: dict[str, Any],
 ) -> None:
     one, two = _people()
-    union = Union(Expansion("customer", (one, two), (), "exclusions"))
+    union = Union(Expansion("customer", (one, two), (), "exclusions"), 100)
     union.add(one, [_file(permissions=[])], whole=True)
     with pytest.raises(ValueError, match="changed"):
         union.add(two, [_file(permissions=[], **change)], whole=True)
@@ -137,9 +137,19 @@ def test_union_refuses_an_acl_observed_on_a_different_content_revision(
 
 def test_truncated_listing_never_completes_or_publishes_a_partial_union() -> None:
     one, two = _people()
-    union = Union(Expansion("customer", (one, two), (), "exclusions"))
+    union = Union(Expansion("customer", (one, two), (), "exclusions"), 100)
     with pytest.raises(ValueError, match="incomplete"):
         union.add(one, [_file()], whole=False)
     union.add(two, [], whole=True)
+    with pytest.raises(ValueError, match="incomplete"):
+        union.complete()
+
+
+def test_global_file_bound_applies_to_the_union_not_each_person_separately() -> None:
+    one, two = _people()
+    union = Union(Expansion("customer", (one, two), (), "exclusions"), 1)
+    union.add(one, [_file(id="first")], whole=True)
+    with pytest.raises(ValueError, match="file bound"):
+        union.add(two, [_file(id="second")], whole=True)
     with pytest.raises(ValueError, match="incomplete"):
         union.complete()
