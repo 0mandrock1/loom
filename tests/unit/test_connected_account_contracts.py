@@ -141,7 +141,32 @@ async def test_account_lease_forwards_configured_ttl_and_wait_and_stop_bound(
     assert timeouts == [7.0]
     assert len(held) == 1 and held[0][0].startswith("connected-account:")
     assert held[0][1]["ttl_s"] == 41.0 and held[0][1]["wait_s"] == 1.25
-    assert not world.requests and world.rows == world.keeper == {}
+    assert not world.requests
+    assert set(world.rows) == {("team", "person", "gdrive")}
+    ended = world.rows[("team", "person", "gdrive")]
+    assert asdict(ended) == {
+        "org": "team",
+        "subject": "person",
+        "kind": "gdrive",
+        "connection_id": ended.connection_id,
+        "account_id": "",
+        "workspace_id": "",
+        "account_email_enc": "",
+        "credential_enc": "",
+        "scopes": (),
+        "active": False,
+        "refresh_id": "",
+        "connected_at": None,
+        "disconnected_at": ended.disconnected_at,
+        "version": ended.version,
+    }
+    assert ended.disconnected_at is not None and ended.version > 0
+    prefix, generation = ended.connection_id.split("/")
+    assert len(prefix) == len(generation) == 32 and generation.startswith("0")
+    assert set(prefix + generation) <= set("0123456789abcdef")
+    assert world.keeper == {
+        "connected-account-generation:" + prefix: (ended.connection_id, accounts._FENCE_EXPIRY)
+    }
 
 
 async def test_provider_revoke_uses_its_own_bound_after_local_stop(

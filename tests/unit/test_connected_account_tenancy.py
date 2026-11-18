@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -46,7 +47,7 @@ class _CellRows:
 
 
 @pytest.fixture
-def cell_rows(monkeypatch: pytest.MonkeyPatch) -> _CellRows:
+def cell_rows(world: _World, monkeypatch: pytest.MonkeyPatch) -> _CellRows:
     rows = _CellRows()
     monkeypatch.setattr(settings, "cell", "consent-cell")
     monkeypatch.setattr(tenancy, "_held", set())
@@ -55,9 +56,22 @@ def cell_rows(monkeypatch: pytest.MonkeyPatch) -> _CellRows:
     monkeypatch.setattr(tenancy, "_placing", {})
     monkeypatch.setattr(pg, "fetchval", rows.fetchval)
     monkeypatch.setattr(tenancy, "_place", rows.place)
-    monkeypatch.setattr(cell, "mode", lambda: "enforced")
-    monkeypatch.setattr(cell, "mine", lambda: {"configured_orgs": []})
-    monkeypatch.setattr(cell, "is_first", lambda: False)
+    monkeypatch.setattr(
+        cell,
+        "_view",
+        cell._View(
+            read_at=time.monotonic(),
+            first=(False, settings.cell),
+            mode="enforced",
+            current={
+                "v": cell.FINGERPRINT_VERSION,
+                "fields": cell.fingerprint(cell.deployment_id()),
+            },
+            has_tenancy=True,
+            marked=True,
+        ),
+    )
+    monkeypatch.setattr(cell, "_memo", None)
     return rows
 
 
