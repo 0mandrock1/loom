@@ -12,6 +12,7 @@ from urllib.parse import quote
 import pytest
 
 from scripts.docs_site import locales
+from scripts.docs_site.messages import COPY
 
 URL = "https://example.com/loom/"
 
@@ -110,9 +111,12 @@ def test_homepage_links_to_landings_without_claiming_equivalent_content(tmp_path
         site_url=URL,
     )
     locales.on_page_markdown("# Home", page, config, None)
-    assert page.meta["language_landings"] == [
-        {"lang": "ja", "name": "日本語", "url": URL + "ja/use-cases/"}
+    choices = page.meta["language_choices"]
+    assert [(item["lang"], item["url"]) for item in choices] == [
+        ("en", URL),
+        ("ja", URL + "ja/use-cases/"),
     ]
+    assert choices[1]["landing"] == "Page"
     assert page.meta["alternates"] == []
 
 
@@ -320,13 +324,13 @@ def test_markdown_aliases_warn_only_when_the_english_source_changes(
     paths = [site / uri, site / directory / "index.html.md"]
     if source == "use-cases/index.md":
         paths.append(site / "ja/use-cases.md")
-    notice = "The English source has changed since this machine translation."
+    notice = COPY["ja"]["stale_before"]
     english = "use-cases/" if source == "use-cases/index.md" else "getting-started/quickstart/"
     for path in paths:
         text = path.read_text()
         assert (notice in text) is stale
         if stale:
-            assert f"[English page]({URL}{english})" in text
+            assert f"[{COPY['ja']['english_page']}]({URL}{english})" in text
 
 
 def test_explicit_english_anchor_fallback_is_not_redirected_to_a_translation(tmp_path, monkeypatch):
@@ -372,7 +376,7 @@ def test_retained_machine_translation_survives_source_rename_until_dependency_cl
     )
     result = locales.on_page_markdown(path.read_text(), page, config, None)
     assert page.meta["alternates"] == []
-    assert "Its English source is no longer available." in result
+    assert COPY["ja"]["retained_before"] in result
     assert f"]({locales.BLOB}docs/{source})" not in result
     assert "# Retained page" in result and 'id="measured"' in result
     referring = {"language": "ja", "source": "use-cases/index.md"}
@@ -395,7 +399,7 @@ def test_retained_machine_translation_survives_source_rename_until_dependency_cl
         aliases.append(config.site_dir / "ja/use-cases.md")
     for alias in aliases:
         text = alias.read_text()
-        assert "Its English source is no longer available." in text
+        assert COPY["ja"]["retained_before"] in text
         assert f"]({locales.BLOB}docs/{source})" not in text
         assert "Read the [English page]" not in text
     path.unlink()
@@ -435,8 +439,9 @@ def test_home_and_use_case_indexes_keep_distinct_routes_and_aliases(
             assert [(a["lang"], a["url"]) for a in page.meta["alternates"]] == expected
     homepage = SimpleNamespace(file=SimpleNamespace(src_uri="index.md"), meta={})
     locales.on_page_markdown("# Home", homepage, config, None)
-    assert homepage.meta["language_landings"] == [
-        {"lang": language, "name": locales.LANGUAGES[language], "url": URL + language + "/"}
+    assert [(item["lang"], item["url"]) for item in homepage.meta["language_choices"]] == [
+        ("en", URL),
+        (language, URL + language + "/"),
     ]
     body = "<!-- stamp -->\n\n[home](../index.md#intro)"
     assert f"[home]({URL}{language}/#intro)" in locales.translated_markdown(
@@ -617,5 +622,105 @@ def test_encoded_english_source_banner_and_stale_alias_keep_source_url(tmp_path,
     for alias in (uri, locales.page_path("docs/" + uri) + "index.html.md"):
         output = (config.site_dir / alias).read_text()
         assert f"[English]({expected})" in output
-        assert f"Read the [English page]({expected})" in output
+        assert f"[{COPY['ja']['english_page']}]({expected})" in output
         assert f"> Source: {localized} (Markdown: {URL}{quote(uri)})" in output
+
+
+def _nav_page(uri: str, title: str):
+    return SimpleNamespace(
+        file=SimpleNamespace(src_uri=uri),
+        title=title,
+        url=locales.page_path("docs/" + uri),
+        is_page=True,
+        is_section=False,
+        active=False,
+        parent=None,
+        previous_page=None,
+        next_page=None,
+    )
+
+
+def test_navigation_keeps_locale_and_labels_missing_pages_without_shared_mutation(tmp_path):
+    a = _source(tmp_path, "use-cases/a.md")
+    _source(tmp_path, "use-cases/b.md")
+    _translation(tmp_path, "es", "use-cases/a.md", a)
+    path = tmp_path / "i18n/es/docs/use-cases/a.md"
+    path.write_text(path.read_text().replace("# Page", "# Memoria compartida"))
+    english_a, english_b = (
+        _nav_page("use-cases/a.md", "Memory"),
+        _nav_page("use-cases/b.md", "Code"),
+    )
+    spanish = _nav_page("es/use-cases/a.md", "Memoria compartida")
+    spanish.meta = {"language": "es"}
+    section = SimpleNamespace(
+        title="Use cases",
+        is_page=False,
+        is_section=True,
+        children=[english_a, english_b],
+        active=False,
+        parent=None,
+    )
+    english_a.parent = english_b.parent = section
+    nav = SimpleNamespace(items=[section], pages=[english_a, english_b], homepage=None)
+    config = SimpleNamespace(
+        extra={
+            "locale_pages": locales.translations(tmp_path),
+            "locale_nav_pages": {"es/use-cases/a.md": spanish},
+        }
+    )
+    context = {"page": spanish, "nav": nav}
+    locales.on_page_context(context, spanish, config, nav)
+    projected = context["nav"]
+    assert projected.items[0].title == "Casos de uso"
+    assert projected.pages[0].url == "es/use-cases/a/"
+    assert projected.pages[0].title == "Memoria compartida"
+    assert projected.pages[0].active is True
+    assert projected.pages[1].url == "use-cases/b/"
+    assert projected.pages[1].title == "Code (Inglés)"
+    assert context["locale_has_english_fallback"] is True
+    assert context["page"].next_page is projected.pages[1]
+    assert nav.items[0].title == "Use cases" and nav.items[0].active is False
+    assert english_a.parent is section and english_a.title == "Memory"
+    assert english_a.next_page is None and spanish.next_page is None
+    english = {"nav": nav}
+    english_a.meta = {"language": "en"}
+    assert locales.on_page_context(english, english_a, config, nav)["nav"] is nav
+
+
+def test_every_english_page_offers_available_languages_without_false_alternates(tmp_path):
+    _source(tmp_path, "other.md")
+    blob = _source(tmp_path, "getting-started/quickstart.md")
+    for language in locales.LANGUAGES:
+        _translation(tmp_path, language, "getting-started/quickstart.md", blob)
+    pages = locales.translations(tmp_path)
+    page = SimpleNamespace(file=SimpleNamespace(src_uri="other.md"), meta={})
+    config = SimpleNamespace(extra={"locale_pages": pages}, site_url=URL)
+    locales.on_page_markdown("# Other", page, config, None)
+    assert page.meta["alternates"] == []
+    assert {item["lang"] for item in page.meta["language_choices"]} == {"en", *locales.LANGUAGES}
+    assert [item["url"] for item in page.meta["language_choices"][1:]] == [
+        URL + language + "/getting-started/quickstart/" for language in locales.LANGUAGES
+    ]
+    assert all(item["landing"] == "Page" for item in page.meta["language_choices"][1:])
+
+
+@pytest.mark.parametrize("language", list(locales.LANGUAGES))
+def test_stale_notices_and_theme_language_follow_the_reader(tmp_path, monkeypatch, language):
+    source = "page.md"
+    blob = _source(tmp_path, source)
+    _translation(tmp_path, language, source, blob)
+    _source(tmp_path, source, "# Changed\n")
+    monkeypatch.setattr(locales, "ROOT", tmp_path)
+    pages = locales.translations(tmp_path)
+    page = SimpleNamespace(file=SimpleNamespace(src_uri=language + "/page.md"), meta={})
+    config = SimpleNamespace(
+        extra={"locale_pages": pages}, site_url=URL, site_dir=tmp_path / "site"
+    )
+    locales.on_page_markdown("# Page", page, config, None)
+    assert page.meta["theme_language"] == ("zh" if language == "zh-CN" else language)
+    assert page.meta["locale_ui"]["language"] != "Language"
+    locales.on_post_build(config)
+    body = (config.site_dir / language / "page.md").read_text()
+    assert COPY[language]["stale_before"] in body
+    assert f"[{COPY[language]['english_page']}]({URL}page/)" in body
+    assert "The English source has changed" not in body

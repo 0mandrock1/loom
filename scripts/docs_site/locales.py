@@ -8,6 +8,7 @@ import posixpath
 import re
 import sys
 from collections.abc import Iterable
+from copy import copy
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -16,7 +17,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.codegen.page_summary import page_summary  # noqa: E402
 from scripts.docs_site.hooks import _TOKEN, BLOB, _with_source  # noqa: E402
-from scripts.docs_site.paths import page_path  # noqa: E402
+from scripts.docs_site.messages import COPY, SECTION_TITLES  # noqa: E402
+from scripts.docs_site.paths import landing_sources, page_path  # noqa: E402
+from scripts.docs_site.video_labels import translated_video_labels  # noqa: E402
 
 LANGUAGES = {
     "zh-CN": "简体中文",
@@ -83,6 +86,7 @@ def on_files(files, config):
 
     pages = config.extra["locale_pages"] = translations(ROOT)
     for uri, entry in pages.items():
+        entry["title"] = page_summary(Path(entry["path"]))[0]
         files.append(
             File.generated(
                 config,
@@ -117,18 +121,127 @@ def alternates(source: str, pages: dict, site_url: str) -> list[dict[str, str]]:
 def language_landings(pages: dict, site_url: str) -> list[dict[str, str]]:
     landings = []
     for language, name in LANGUAGES.items():
-        for source in ("index.md", "use-cases/index.md"):
-            uri = localized_uri(language, source)
-            if uri in pages and not pages[uri]["obsolete"]:
-                landings.append(
-                    {
-                        "lang": language,
-                        "name": name,
-                        "url": site_url + quote(page_path(f"docs/{uri}")),
-                    }
-                )
-                break
+        uri = landing_uri(language, pages)
+        if uri:
+            landings.append(
+                {"lang": language, "name": name, "url": site_url + quote(page_path(f"docs/{uri}"))}
+            )
     return landings
+
+
+def landing_uri(language: str, pages: dict) -> str | None:
+    available = landing_sources(
+        uri.removeprefix(language + "/")
+        for uri, entry in pages.items()
+        if entry["language"] == language and not entry["obsolete"]
+    )
+    return localized_uri(language, available[0]) if available else None
+
+
+def language_choices(source: str, pages: dict, site_url: str) -> list[dict]:
+    """Offer an equivalent page or a named existing landing, never a missing URL."""
+    choices = [
+        {
+            "lang": "en",
+            "name": "English",
+            "url": site_url + quote(page_path(f"docs/{source}")),
+            "landing": "",
+        }
+    ]
+    for landing in language_landings(pages, site_url):
+        code, name = landing["lang"], landing["name"]
+        equivalent = localized_uri(code, source)
+        uri = (
+            equivalent
+            if equivalent in pages and not pages[equivalent]["obsolete"]
+            else landing_uri(code, pages)
+        )
+        if uri is None:
+            continue
+        entry = pages[uri]
+        choices.append(
+            {
+                "lang": code,
+                "name": name,
+                "url": site_url + quote(page_path(f"docs/{uri}")),
+                "landing": ""
+                if uri == equivalent
+                else entry.get("title") or page_summary(Path(entry["path"]))[0],
+            }
+        )
+    return choices
+
+
+def on_nav(nav, config, files):
+    config.extra["locale_nav_pages"] = {
+        file.src_uri: file.page for file in files if file.src_uri in config.extra["locale_pages"]
+    }
+    return nav
+
+
+def localized_navigation(nav, page, config):
+    """Project the shared English navigation without changing any shared node."""
+    language = page.meta["language"]
+    pages = config.extra["locale_pages"]
+    localized = config.extra["locale_nav_pages"]
+    projected = []
+    has_fallback = False
+
+    def item_view(item, parent=None):
+        nonlocal has_fallback
+        target = item
+        entry = None
+        if item.is_page:
+            uri = localized_uri(language, item.file.src_uri)
+            entry = pages.get(uri)
+            if entry and not entry["obsolete"]:
+                target = localized[uri]
+            else:
+                entry = None
+                has_fallback = True
+        view = copy(target)
+        view.parent = parent
+        if item.is_section:
+            view.children = [item_view(child, view) for child in item.children]
+            view.title = SECTION_TITLES[language].get(
+                item.title, f"{item.title} ({COPY[language]['english']})"
+            )
+            view.active = any(child.active for child in view.children)
+        elif item.is_page:
+            view.typeset = None
+            view.title = (
+                (entry.get("title") or page_summary(Path(entry["path"]))[0])
+                if entry
+                else f"{item.title} ({COPY[language]['english']})"
+            )
+            view.active = view.file.src_uri == page.file.src_uri
+            projected.append(view)
+        return view
+
+    result = copy(nav)
+    result.items = [item_view(item) for item in nav.items]
+    result.pages = projected
+    for index, item in enumerate(projected):
+        item.previous_page = projected[index - 1] if index else None
+        item.next_page = projected[index + 1] if index + 1 < len(projected) else None
+    home = landing_uri(language, pages)
+    if home:
+        result.homepage = localized[home]
+    return result, has_fallback
+
+
+def on_page_context(context, page, config, nav):
+    if page.meta.get("language", "en") == "en":
+        return context
+    projected, fallback = localized_navigation(nav, page, config)
+    context["nav"] = projected
+    context["locale_has_english_fallback"] = fallback
+    current = next(
+        (item for item in projected.pages if item.file.src_uri == page.file.src_uri), None
+    )
+    if current:
+        context["page"] = current
+    return context
 
 
 def _link_target(target: str, entry: dict, pages: dict, site_url: str, *, banner: bool) -> str:
@@ -173,11 +286,11 @@ def translated_markdown(markdown: str, entry: dict, pages: dict, site_url: str) 
             header, _, body = markdown.partition("\n")
             separator = "\n\n"
         header = header.split("\n", 1)[0]
+        ui = COPY[entry["language"]]
         body = (
-            '<p role="note" lang="en">This machine translation is retained. '
-            "Its English source is no longer available. "
-            f'See the <a href="{html.escape(site_url, quote=True)}">English documentation</a> '
-            f"for current instructions.</p>\n\n{body}"
+            f'<p role="note" lang="{entry["language"]}">{ui["retained_before"]}'
+            f'<a href="{html.escape(site_url, quote=True)}">{ui["english_documentation"]}</a>'
+            f"{ui['retained_after']}</p>\n\n{body}"
         )
 
     def rewrite(text: str, *, banner: bool) -> str:
@@ -201,10 +314,17 @@ def on_page_markdown(markdown, page, config, files):
     entry = pages.get(uri)
     source = entry["source"] if entry else uri
     page.meta["language"] = entry["language"] if entry else "en"
+    page.meta["locale_ui"] = COPY[page.meta["language"]]
+    page.meta["theme_language"] = {"zh-CN": "zh"}.get(page.meta["language"], page.meta["language"])
     page.meta["og_locale"] = _OG_LOCALES.get(page.meta["language"])
     page.meta["alternates"] = alternates(source, pages, config.site_url)
-    if uri == "index.md":
-        page.meta["language_landings"] = language_landings(pages, config.site_url)
+    choice_source = "index.md" if entry and entry["obsolete"] else source
+    choices = page.meta["language_choices"] = language_choices(
+        choice_source, pages, config.site_url
+    )
+    current_url = config.site_url + quote(page_path(f"docs/{uri}"))
+    for choice in choices:
+        choice["current"] = choice["url"] == current_url
     if not entry:
         return markdown
     page.edit_url = None
@@ -216,6 +336,8 @@ def on_page_markdown(markdown, page, config, files):
 
 def on_post_page(output, page, config):
     language = html.escape(page.meta.get("language", "en"), quote=True)
+    if language != "en":
+        output = translated_video_labels(output)
     return re.sub(r'(<html\b[^>]*\blang=")[^"]*(")', rf"\g<1>{language}\2", output, count=1)
 
 
@@ -228,9 +350,10 @@ def on_post_build(config):
         )
         if entry["stale"] and not entry["obsolete"]:
             source_url = config.site_url + quote(page_path(f"docs/{entry['source']}"))
+            ui = COPY[entry["language"]]
             body = (
-                "> The English source has changed since this machine translation. "
-                f"Read the [English page]({source_url}) for the current instructions.\n\n{body}"
+                f"> {ui['stale_before']}[{ui['english_page']}]({source_url})"
+                f"{ui['stale_after']}\n\n{body}"
             )
         text = _with_source(body, config.site_url, quote(uri))
         places = [site / uri, site / page_path(f"docs/{uri}") / "index.html.md"]

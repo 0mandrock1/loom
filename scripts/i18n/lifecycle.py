@@ -317,6 +317,9 @@ def retire_obsolete(codes: list[str] | None = None) -> tuple[int, int]:
         candidates -= blocked
     for path in sorted(candidates):
         (t.ROOT / path).unlink()
+    if candidates:
+        # Retained obsolete pages stay served until retirement removes their native landing.
+        t.write_language_lines(codes)
     return len(candidates), len(obsolete) - len(candidates)
 
 
