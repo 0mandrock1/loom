@@ -14,7 +14,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TypeVar
 
-from server.auth import source_registration
+from server.auth import person_erasure, scim, source_registration
 from server.clients import gdrive
 from server.clients import google_workspace as google
 from server.clients._checked_access import CheckedAccess
@@ -212,6 +212,7 @@ class Authority:
             raise TimeoutError("crawl deadline elapsed")
         async with asyncio.timeout_at(self.deadline):
             _shape(self.source)
+            await person_erasure.require_settled(ch=get_client())
             await self.approval.validate()
             await self.exclusions.version()
             with own_write_reads():
@@ -288,6 +289,9 @@ class Authority:
             raise CredentialRefused("crawl person unavailable")
         if await self.exclusions.contains(person):
             raise CredentialRefused("crawl person unavailable")
+        for address in person.addresses:
+            if await scim.deactivated(address):
+                raise CredentialRefused("crawl person unavailable")
         if self._directory_token is None or self._directory_token.deadline <= _now():
             self._directory_token = await google.delegated_token(
                 self._service_account(),

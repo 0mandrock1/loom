@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
-from server.knowledge.domain.access_list import UNREAD, AccessList, from_drive_permissions
+from server.knowledge.domain.access_list import (
+    UNREAD,
+    AccessList,
+    from_drive_permissions,
+    from_json,
+    to_json,
+)
 
 # The crawl's documented total-person and configured-selector wire ceiling.
 MAX_PEOPLE = 2000
@@ -137,6 +143,21 @@ def union_access(left: AccessList, right: AccessList) -> AccessList:
         domains=(*left.domains, *right.domains),
         anyone=left.anyone or right.anyone,
     )
+
+
+def without_people(raw: str, addresses: frozenset[str]) -> str:
+    """Erase exact contact entries without changing another person's valid ACL or text."""
+    if not isinstance(raw, str):
+        raise ValueError("crawl permission history is unreadable")
+    try:
+        parsed = from_json(raw)
+    except RecursionError:
+        return ""
+    if parsed.unread or parsed.owner:
+        # A crawl never has a connected owner; malformed historical JSON proves no grant.
+        return ""
+    kept = tuple(value for value in parsed.emails if value not in addresses)
+    return raw if kept == parsed.emails else to_json(replace(parsed, emails=kept))
 
 
 @dataclass(frozen=True, repr=False)

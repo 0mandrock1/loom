@@ -10,6 +10,7 @@ import httpx
 import jwt
 import pytest
 
+from server.auth import scim
 from server.clients._vendor import CredentialRefused, TooLarge, VendorError
 from server.knowledge.app.crawl_expansion import Limits, expand
 from server.knowledge.domain.source_crawl import Options, Person
@@ -17,6 +18,22 @@ from tests.unit.test_google_workspace import _http
 from tests.unit.test_google_workspace import account as account
 
 pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def scim_rows(monkeypatch: pytest.MonkeyPatch) -> set[str]:
+    ended: set[str] = set()
+
+    class Rows:
+        async def query_one(self, sql: str, *, params: dict[str, Any]):
+            assert sql == (
+                "SELECT 1 AS x FROM loom.scim_users FINAL WHERE id = {id:String} AND active = 0"
+            )
+            return {"x": 1} if params["id"] in ended else None
+
+    rows = Rows()
+    monkeypatch.setattr(scim, "get_client", lambda: rows)
+    return ended
 
 
 class _Standing:
@@ -110,6 +127,22 @@ async def _run(
         limits=limits or Limits(body_bytes=16384, member_pages=10, groups=10),
         deadline=time.monotonic() + 10,
     )
+
+
+async def test_current_scim_deletion_excludes_a_person_and_every_group_entry(
+    monkeypatch: pytest.MonkeyPatch, account: Any, scim_rows: set[str]
+) -> None:
+    directory = _Directory()
+    scim_rows.add(scim.user_id("alias@example.com"))
+    async with _http(monkeypatch, directory.answer):
+        result = await _run(
+            _options(("person", "one@example.com"), ("group", "team@example.com")),
+            account,
+            _Standing(),
+            _Exclusions(),
+        )
+    assert [person.id for person in result.people] == ["two"]
+    assert all("one@example.com" not in members for _, members in result.groups)
 
 
 async def test_complete_nested_groups_and_explicit_alias_share_stable_provider_identity(

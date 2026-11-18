@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Protocol
 
+from server.auth import scim
 from server.clients import gdrive
 from server.clients import google_workspace as google
 from server.clients._vendor import CredentialRefused, TooLarge, VendorError
@@ -134,6 +135,8 @@ class _Expansion:
         if old is not None and old != person:
             raise VendorError("crawl person changed")
         denied = await self.exclusions.contains(person)
+        for address in person.addresses:
+            denied = await scim.deactivated(address) or denied
         await self.guard()
         admitted = None if denied else person
         for spelling in (person.id, *person.addresses):

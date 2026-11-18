@@ -49,6 +49,9 @@ COLUMNS = (
     "active",
     "deleted",
     "subjects",
+    "crawl_erasure_enc",
+    "crawl_erasure_done",
+    "crawl_erasure_required",
     "created_at",
     "updated_at",
     "version",
@@ -276,7 +279,18 @@ async def delete(uid: str) -> bool:
             deleted = bool(row["deleted"])
             # A retry finishes a failed try. The addresses beside the email keep no one out.
             cleanup_row = row
-            row, _ = await _set_active(row, False, deleted=1, emails="[]")
+            try:
+                row = await _capture_person_erasure(row)
+            finally:
+                # Downstream capture can fail, but SCIM must still deactivate the identity.
+                row, _ = await _set_active(
+                    row,
+                    False,
+                    deleted=1,
+                    emails="[]",
+                    crawl_erasure_required=True,
+                    crawl_erasure_done=bool(deleted and row.get("crawl_erasure_done", False)),
+                )
     except BaseException:  # A failed or cancelled deactivation still fences its connections.
         if cleanup_row is not None:
             await _repair_failed_connections(cleanup_row, erase_owner=True)
@@ -351,6 +365,53 @@ async def _revoke_tokens(row: dict[str, Any], *, previous_subjects: Sequence[str
         respect_cutoff=True,
     )
     await service_accounts.revoke_created_by(row["subjects"], revoked_by=_BY)
+    if row["deleted"] or row.get("crawl_erasure_required", False):
+        await _finish_person_erasure(row)
+
+
+async def _capture_person_erasure(row: dict[str, Any]) -> dict[str, Any]:
+    from server.auth import person_erasure
+
+    if row.get("crawl_erasure_done", False) and row["deleted"]:
+        return row
+    encoded = str(row.get("crawl_erasure_enc", ""))
+    if encoded:
+        person_erasure.load(row["id"], encoded)
+        return row
+    if row["deleted"]:
+        # A historical tombstone cannot be joined to a newly reused email on retry.
+        raise person_erasure.unavailable()
+    encoded = await person_erasure.capture(row["id"], row["email"], await _subjects(row["email"]))
+    # Keep this local full row even when an acknowledged write loses its reply.
+    # The unconditional deactivation must not overwrite the captured proof with defaults.
+    row.update(crawl_erasure_enc=encoded, crawl_erasure_required=True, crawl_erasure_done=False)
+    await _write(row)
+    return row
+
+
+async def _finish_person_erasure(row: dict[str, Any]) -> None:
+    from server.auth import person_erasure
+
+    if row.get("crawl_erasure_done", False):
+        return
+    encoded = str(row.get("crawl_erasure_enc", ""))
+    await person_erasure.finish(row["id"], encoded)
+    async with _held(_user_lease(row["id"])):
+        current = await _row(row["id"])
+        if current is None:
+            raise person_erasure.unavailable()
+        if current.get("crawl_erasure_done", False) and not current.get("crawl_erasure_enc"):
+            return
+        if current.get("crawl_erasure_enc") != encoded:
+            raise person_erasure.unavailable()
+        await _write(
+            {
+                **current,
+                "crawl_erasure_enc": "",
+                "crawl_erasure_done": True,
+                "crawl_erasure_required": True,
+            }
+        )
 
 
 async def _repair_failed_connections(row: dict[str, Any], *, erase_owner: bool) -> None:
@@ -392,7 +453,14 @@ async def _set_active(
 
 async def _deactivate(row: dict[str, Any], **changes: Any) -> dict[str, Any]:
     while True:
-        new = {**row, **changes, "active": 0}
+        new = {
+            **row,
+            **changes,
+            "active": 0,
+            "crawl_erasure_required": bool(
+                row["deleted"] or row.get("crawl_erasure_required", False) or changes.get("deleted")
+            ),
+        }
         found = await _subjects(row["email"])
         known = set(row["subjects"])
         async with subject_leases([*known, *found]):
@@ -429,7 +497,12 @@ async def _converge_active(
     revokes outright of every subject the email reaches, whatever a failed
     request left. The cutoff is for the caller to wait out: what this call
     lifted, and for a reactivation (or its retry) the newest SCIM narrowed to."""
-    new = {**row, **changes, "active": 1}
+    new = {
+        **row,
+        **changes,
+        "active": 1,
+        "crawl_erasure_required": bool(row["deleted"] or row.get("crawl_erasure_required", False)),
+    }
     subjects = sorted(set(row["subjects"]) | set(await _subjects(row["email"])))
     rows = await revocation.scim_revocations(subjects)
     if not _outright(rows):  # nothing to lift, as on most pushes: no subject lease
@@ -614,6 +687,9 @@ async def _write(row: dict[str, Any]) -> None:
     ch = get_client()
     version = await next_version(ch, TABLE, {"id": row["id"]})
     entries = [e for e in emails_of(row) if normalized(e["value"])]
+    row.setdefault("crawl_erasure_enc", "")
+    row.setdefault("crawl_erasure_done", False)
+    row.setdefault("crawl_erasure_required", bool(row["deleted"]))
     row.update(
         addresses=[normalized(e["value"]) for e in entries],
         work_addresses=[normalized(e["value"]) for e in entries if normalized(e["type"]) == "work"],

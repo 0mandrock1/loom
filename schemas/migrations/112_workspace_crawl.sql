@@ -5,6 +5,10 @@ ALTER TABLE loom.knowledge_sources ADD COLUMN IF NOT EXISTS approval_enc String 
 ALTER TABLE loom.knowledge_sources ADD COLUMN IF NOT EXISTS crawl_generation String DEFAULT '';
 ALTER TABLE loom.knowledge_sources ADD COLUMN IF NOT EXISTS crawl_customer_id String DEFAULT '';
 ALTER TABLE loom.knowledge_sources ADD COLUMN IF NOT EXISTS crawl_credential_hash String DEFAULT '';
+-- A deletion records verified canonical identity before discarding its contact ties.
+ALTER TABLE loom.scim_users ADD COLUMN IF NOT EXISTS crawl_erasure_enc String DEFAULT '';
+ALTER TABLE loom.scim_users ADD COLUMN IF NOT EXISTS crawl_erasure_done Bool DEFAULT false;
+ALTER TABLE loom.scim_users ADD COLUMN IF NOT EXISTS crawl_erasure_required Bool DEFAULT false;
 
 -- One stable, sealed refusal key per org survives rotation of the deployment root.
 CREATE TABLE IF NOT EXISTS loom.knowledge_crawl_exclusion_keys

@@ -14,6 +14,7 @@ import httpx
 import jwt
 import pytest
 
+from server.auth import scim
 from server.auth import source_registration as registration
 from server.auth.jwt import verify_token
 from server.clients import gdrive
@@ -35,6 +36,7 @@ from tests.unit.test_google_workspace import account as account
 
 pytestmark = pytest.mark.asyncio
 _BOUNDS = crawl_authority.Bounds(crawl_expansion.Limits(16384, 10, 10), 60, 0)
+_NATIVE_SCIM_READ = scim.deactivated
 
 
 class _World(_AuthorityWorld):
@@ -46,6 +48,8 @@ class _World(_AuthorityWorld):
         self.provider_calls: list[httpx.Request] = []
         self.claims_sent: list[dict[str, Any]] = []
         self.storage_version = 0
+        self.person_erasure_pending = False
+        self.ended_people: set[str] = set()
         self.account = account
         self.customer = "workspace"
         self.person_email = "one@example.com"
@@ -53,6 +57,8 @@ class _World(_AuthorityWorld):
         self.after_native: Any = lambda: None
         monkeypatch.setattr(google, "get_client", lambda: http)
         monkeypatch.setattr(gdrive, "get_client", lambda: http)
+        monkeypatch.setattr(scim, "deactivated", _NATIVE_SCIM_READ)
+        monkeypatch.setattr(scim, "get_client", lambda: self)
         service = account[0]
         self.credential = json.dumps(
             {
@@ -82,7 +88,15 @@ class _World(_AuthorityWorld):
             created_by="audit-attribution-is-not-authority",
         )
 
-    async def query_one(self, query: str, params: dict[str, Any], **kwargs: Any):
+    async def query_one(self, query: str, params: dict[str, Any] | None = None, **kwargs: Any):
+        if query.startswith("SELECT 1 AS pending FROM loom.scim_users FINAL"):
+            assert params is None
+            return {"pending": 1} if self.person_erasure_pending else None
+        assert params is not None
+        if query.startswith("SELECT 1 AS x FROM loom.scim_users FINAL"):
+            assert set(params) == {"id"}
+            ended = self.ended_people | ({"person@example.com"} if self.scim_ended else set())
+            return {"x": 1} if params["id"] in {scim.user_id(email) for email in ended} else None
         if query.startswith("SELECT greatest(") and any(
             f"FROM {table} " in query for table in (exclusion_store.KEYS, exclusion_store.REFUSALS)
         ):
@@ -322,3 +336,31 @@ async def test_ordinary_credential_selection_never_falls_back_to_a_crawl_key(
     with pytest.raises(ValidationError):
         await source_ops.credential_for(crawl_world.source, deadline=time.monotonic() + 10)
     assert not crawl_world.provider_calls
+
+
+async def test_unfinished_person_erasure_refuses_before_unsealing_or_provider_work(
+    crawl_world: _World,
+) -> None:
+    from server.core.errors import BackendUnavailableError
+
+    crawl_world.person_erasure_pending = True
+    assert crawl_world.source is not None
+    # Even an unusable provider key is never reached before the pending-person gate.
+    crawl_world.source = dataclasses.replace(crawl_world.source, secret_enc="unreadable-key")
+    with pytest.raises(BackendUnavailableError, match="canonical-person cleanup"):
+        await crawl_authority.resolve(
+            crawl_world.source, deadline=time.monotonic() + 10, bounds=_BOUNDS
+        )
+    assert not crawl_world.provider_calls and not crawl_world.native_requests
+
+
+async def test_retained_native_checkout_stops_when_target_person_is_deactivated(
+    crawl_world: _World,
+) -> None:
+    authority, person = await _ready(crawl_world)
+    access = await authority.drive(person)
+    before = len(crawl_world.provider_calls)
+    crawl_world.ended_people.add(person.email)
+    with pytest.raises(CredentialRefused, match="person unavailable"):
+        await gdrive.file_meta(access, "file")
+    assert len(crawl_world.provider_calls) == before and not crawl_world.native_requests
