@@ -131,6 +131,7 @@ LOOM_CODE_REPOS_JSON='[
 | `scip_extra_producers`               | further compiler-tier producers over the same tree (a Python repository with a TypeScript frontend), each in its own checkout |
 | `git_extra_branches`                 | globs of other remote branches the shared mirror should carry                                                                 |
 | `github_token`                       | per-entry override of `LOOM_CODE_GITHUB_TOKEN`                                                                                |
+| `git_proxy_identity`                 | the user name its git presents to an operator's [git proxy](#git-through-a-forward-proxy); unset, the deployment's default    |
 
 Name a `git_remote` host in ASCII, as punycode for an internationalised name: a page
 add refuses any other, so the two spell a host alike.
@@ -557,6 +558,10 @@ download`, and git sends it only to URLs under the remote's owner
 (`https://host/owner/`; the whole host for a remote with no owner path). Inside the
 sandbox an `ssh` remote has no host SSH key: use an HTTPS remote with an access token.
 
+The sandbox's egress proxy connects to the remote itself and is not chained through an
+operator's proxy: a host that runs the sandbox runs no network git while
+`LOOM_CODE_GIT_PROXY_URL` is set ([git through a forward proxy](#git-through-a-forward-proxy)).
+
 **Which stacks run the sandbox.** The blue/green colours `redeploy.sh` deploys
 (`dev/docker-compose.colour.yml`) set the container options below. The other Compose
 files (`compose.yaml`, `dev/docker-compose.cloud.yml`) do not: an
@@ -730,6 +735,77 @@ restrict user namespaces, but they drop the whole profile.
 Each Go entry has its own module cache under `LOOM_CODE_SCIP_GO_MODCACHE`
 (`<root>/<org>/<namespace>`): `go` does not re-check the sums of modules already in its
 cache, so a cache one repository's job wrote is never another's.
+
+### Git through a forward proxy
+
+A deployment whose pods reach git remotes only through a forward proxy sets
+`LOOM_CODE_GIT_PROXY_URL`. Every network git of the code index then connects through
+that proxy: a mirror's clone, fetch and `ls-remote`, the `ls-remote` before an add, and
+a checkout's `git submodule update`, in the workers and in every serving process, which
+keep mirrors of their own. While the setting is set git never connects directly: a job
+that cannot go through the proxy is refused.
+
+| Setting                          | Meaning                                                                                             |
+| -------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `LOOM_CODE_GIT_PROXY_URL`        | the proxy, `http://host:port` or `https://host:port`: the port named, no credentials, path or query |
+| `LOOM_CODE_GIT_PROXY_TOKEN_FILE` | a file holding the proxy password, read again for every git job, so a rotated token is taken up     |
+| `LOOM_CODE_GIT_PROXY_CA_FILE`    | a PEM bundle git verifies TLS with through the proxy                                                |
+| `LOOM_CODE_GIT_PROXY_IDENTITY`   | the proxy user of an entry that names no `git_proxy_identity`                                       |
+
+The last three need the first, and a value that does not fit is refused when the
+settings load.
+
+**What the proxy receives.** Git opens `CONNECT <remote host>:443` with
+`Proxy-Authorization: Basic` on its first request: the user is the entry's identity, the
+password the file's content (empty without a file). No request comes without them. The
+entry's access token goes to the remote, inside the tunnel, never to the proxy. A proxy
+that terminates TLS for a remote can then decide, by the identity, which repository a
+job reaches and with which credential.
+
+**The identity.** An entry presents its own `git_proxy_identity`, else
+`LOOM_CODE_GIT_PROXY_IDENTITY`: letters, digits and `. _ ~ @ -`, at most 128 characters.
+An operator entry names it in `LOOM_CODE_REPOS_JSON`; an entry with a malformed one is
+skipped. `code.repo.add` and `code.repo.remote_branches` take it from a platform admin
+only. A branch added with `code.repo.add_branch` inherits it, and adding one to such an
+index takes a platform admin too. Branches of one repository share a mirror: the ingest
+pass fetches them in one negotiation only where remote, token and identity are the same,
+and each host's own fetch round fetches the mirror as its first entry.
+
+**The password.** It is in the environment of the one git process that uses it, read
+from the file for that job: not in an argument, a remote URL, a stored git config, a
+build's environment or a sandboxed job. Loom masks it in what git prints (as the file
+holds it, percent-encoded and in the header's base64 form) before that output is logged
+or recorded.
+
+**The CA bundle** is git's `http.sslCAInfo`, which replaces git's default roots for
+these jobs: it must hold every authority the remotes present through the proxy, the
+proxy's own for a remote whose TLS it terminates and the public roots for a remote it
+tunnels untouched. The certificate of an `https://` proxy itself is checked against
+git's default roots.
+
+**Refused jobs.** Each of these stops the job before any process starts, with a fixed
+reason that the entry's `fetch` tier, its stage and the mirror counts in `/v1/health`
+show:
+
+- the password file cannot be read or holds no token;
+- neither the entry nor `LOOM_CODE_GIT_PROXY_IDENTITY` names an identity;
+- the remote is not an `https://` URL: the proxy setting carries no ssh, and a
+  submodule with an ssh URL fails as a transport git does not allow;
+- the host runs repository jobs in the sandbox, whose egress proxy is not chained
+  through this one. `/v1/health` and `loom doctor` report `repo_git_proxy_sandboxed`:
+  use the proxy where repository jobs run as plain processes (_Without the sandbox_).
+
+A refusal by the proxy itself reads as kind `egress` on the tier
+([when a tier fails](#when-a-tier-fails)): a `407` means the proxy did not take the
+identity or the token, any other answer is the proxy's own rule for them.
+
+**What does not use it.** A compiler tier's dependency download (the TypeScript package
+install, the Go tier's `go mod download`) runs repository code, so it gets neither the
+proxy nor its password and connects as before. Loom's HTTP clients (the GitHub API for
+PR history and fork lookups, issuer keys, document sources) do not read these settings.
+
+[Kubernetes](./kubernetes.md#git-through-a-forward-proxy) shows the mounts for the
+token and the CA bundle.
 
 ### Mirror housekeeping
 

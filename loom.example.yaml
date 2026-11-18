@@ -1206,6 +1206,30 @@ settings:
   # Max PR heads fetched per shared mirror per ingest pass. [restart]
   # code_git_pr_head_batch: 200
 
+  # --- git through a forward proxy ---
+  # The code index's network git (clone, fetch, ls-remote, submodule update) through an
+  # operator's forward proxy (code/app/index/git_proxy.py). With the proxy set, such a
+  # git job connects through it or is refused: never directly.
+
+  # The proxy: `http://host:port` or `https://host:port`, the port named, with no
+  # credentials, path or query. Empty = git connects directly. [restart]
+  # code_git_proxy_url: ""
+
+  # File holding the proxy password, read again for every git job. Empty = no password;
+  # a file that cannot be read or is empty refuses the job. Needs code_git_proxy_url.
+  # [restart]
+  # code_git_proxy_token_file: ""
+
+  # PEM bundle git verifies TLS with through the proxy, in place of its default roots (a
+  # proxy that terminates TLS under its own authority). Needs code_git_proxy_url.
+  # [restart]
+  # code_git_proxy_ca_file: ""
+
+  # The proxy user of an entry that names no `git_proxy_identity`: letters, digits and
+  # `. _ ~ @ -`, at most 128. Empty = such an entry's git jobs are refused. Needs
+  # code_git_proxy_url. [restart]
+  # code_git_proxy_identity: ""
+
   # --- open-PR fill ---
 
   # Open-PR rows per pass whose head_sha / base_sha / files the PR-history worker fills

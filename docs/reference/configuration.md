@@ -339,6 +339,17 @@ Resource limits (rlimits) for each process of a sandboxed repository job (clone,
 | `LOOM_CODE_GIT_FETCH_PR_HEADS` | `bool` | `True` |  | The mirror carries `refs/pull/N/head` for every PR the ledger holds OPEN (refetched when the tip moves, never pruned), so pre-merge reads diff the PR's own head. Only open heads: fetching every PR head is too costly. Per-entry `git_fetch_pr_heads` overrides. Off = the overlay reports `head_not_in_mirror`. |
 | `LOOM_CODE_GIT_PR_HEAD_BATCH` | `int` | `200` |  | Max PR heads fetched per shared mirror per ingest pass. |
 
+### Git through a forward proxy
+
+The code index's network git (clone, fetch, ls-remote, submodule update) through an operator's forward proxy (code/app/index/git_proxy.py). With the proxy set, such a git job connects through it or is refused: never directly.
+
+| Variable | Type | Default | Live | Meaning |
+| --- | --- | --- | --- | --- |
+| `LOOM_CODE_GIT_PROXY_URL` | `str` | `''` |  | The proxy: `http://host:port` or `https://host:port`, the port named, with no credentials, path or query. Empty = git connects directly. |
+| `LOOM_CODE_GIT_PROXY_TOKEN_FILE` | `str` | `''` |  | File holding the proxy password, read again for every git job. Empty = no password; a file that cannot be read or is empty refuses the job. Needs code_git_proxy_url. |
+| `LOOM_CODE_GIT_PROXY_CA_FILE` | `str` | `''` |  | PEM bundle git verifies TLS with through the proxy, in place of its default roots (a proxy that terminates TLS under its own authority). Needs code_git_proxy_url. |
+| `LOOM_CODE_GIT_PROXY_IDENTITY` | `str` | `''` |  | The proxy user of an entry that names no `git_proxy_identity`: letters, digits and `. _ ~ @ -`, at most 128. Empty = such an entry's git jobs are refused. Needs code_git_proxy_url. |
+
 ### Open-PR fill
 
 | Variable | Type | Default | Live | Meaning |

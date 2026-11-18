@@ -73,6 +73,11 @@ Rules:
   with `REPO_EXISTS`; join an index instead. A branch of an operator-configured entry
   with no first index yet is refused with `REPO_NOT_INDEXED` until `loom code backfill`
   has run for it.
+- Where the deployment's git goes through a forward proxy, `code.repo.add` and
+  `code.repo.remote_branches` take a `git_proxy_identity`, the user name the
+  repository's git presents to that proxy, from a platform admin only. A branch
+  inherits it, so `code.repo.add_branch` on such an index takes a platform admin too
+  ([git through a forward proxy](../../operations/code-index-operations.md#git-through-a-forward-proxy)).
 - Admin grants flow between a repository's branches in one direction. The operator's
   entries pass their admins to every branch of the repository, and a branch added here
   passes its admins only to other standard branches added here. A restricted branch

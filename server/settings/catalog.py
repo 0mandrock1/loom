@@ -1062,6 +1062,55 @@ class CodeSettings(BaseModel):
     code_git_fetch_pr_heads: bool = True
     # Max PR heads fetched per shared mirror per ingest pass.
     code_git_pr_head_batch: int = 200
+    # The code index's network git (clone, fetch, ls-remote, submodule update) through
+    # an operator's forward proxy (code/app/index/git_proxy.py). With the proxy set, such
+    # a git job connects through it or is refused: never directly.
+    # --- git through a forward proxy ---
+    # The proxy: `http://host:port` or `https://host:port`, the port named, with no
+    # credentials, path or query. Empty = git connects directly.
+    code_git_proxy_url: str = ""
+    # File holding the proxy password, read again for every git job. Empty = no password;
+    # a file that cannot be read or is empty refuses the job. Needs code_git_proxy_url.
+    code_git_proxy_token_file: str = ""
+    # PEM bundle git verifies TLS with through the proxy, in place of its default roots
+    # (a proxy that terminates TLS under its own authority). Needs code_git_proxy_url.
+    code_git_proxy_ca_file: str = ""
+    # The proxy user of an entry that names no `git_proxy_identity`: letters, digits and
+    # `. _ ~ @ -`, at most 128. Empty = such an entry's git jobs are refused. Needs
+    # code_git_proxy_url.
+    code_git_proxy_identity: str = ""
+
+    @model_validator(mode="after")
+    def _check_git_proxy(self) -> CodeSettings:
+        """A proxy URL git cannot use, or a proxy setting without the proxy, fails at
+        load, not at the first fetch. The URL holds no credentials, so it is not a secret."""
+        url = self.code_git_proxy_url
+        if url:
+            parts = urlsplit(url)
+            if not is_http_url(url) or "@" in parts.netloc or parts.path not in ("", "/"):
+                raise ValueError(
+                    "LOOM_CODE_GIT_PROXY_URL must be http://host:port or https://host:port, "
+                    "with no credentials, path or query"
+                )
+            if parts.port is None:
+                # git's HTTP library would otherwise assume 1080 for an http proxy.
+                raise ValueError("LOOM_CODE_GIT_PROXY_URL must name the proxy's port")
+        identity = self.code_git_proxy_identity
+        needs_url = {
+            "LOOM_CODE_GIT_PROXY_TOKEN_FILE": self.code_git_proxy_token_file,
+            "LOOM_CODE_GIT_PROXY_CA_FILE": self.code_git_proxy_ca_file,
+            "LOOM_CODE_GIT_PROXY_IDENTITY": identity,
+        }
+        for variable, value in needs_url.items():
+            if value and not url:
+                raise ValueError(f"{variable} needs LOOM_CODE_GIT_PROXY_URL")
+        if identity and not GIT_PROXY_IDENTITY.fullmatch(identity):
+            raise ValueError(
+                "LOOM_CODE_GIT_PROXY_IDENTITY takes letters, digits and . _ ~ @ - only, "
+                "at most 128 characters"
+            )
+        return self
+
     # --- open-PR fill ---
     # Open-PR rows per pass whose head_sha / base_sha / files the PR-history
     # worker fills from the mirror; rows the mirror lacks fall back to GitHub
@@ -4466,6 +4515,9 @@ _HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 _HEADER_TEXT = re.compile(r"[A-Za-z0-9._~:@-]*")
 # A customer or feature name sent as a header value: the same characters, at least one.
 _HEADER_VALUE = re.compile(r"[A-Za-z0-9._~:@-]+")
+# The user name a repository's git presents to LOOM_CODE_GIT_PROXY_URL: those characters
+# without the colon, which would split the Basic pair it travels in.
+GIT_PROXY_IDENTITY = re.compile(r"[A-Za-z0-9._~@-]{1,128}")
 # What an identity header template names, each as `{name}` (server/llm/identity.py).
 IDENTITY_PLACEHOLDERS = ("org", "namespace", "agent", "tenant", "subject", "user_id", "email")
 IDENTITY_PLACEHOLDER = re.compile(r"\{(" + "|".join(IDENTITY_PLACEHOLDERS) + r")\}")
