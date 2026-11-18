@@ -108,7 +108,10 @@ def provider_fixture(image: str, root: Path) -> Path:
                             "retries": 20,
                         },
                     },
-                    "loom": {"depends_on": {"provider-smoke": {"condition": "service_healthy"}}},
+                    "loom": {
+                        "depends_on": {"provider-smoke": {"condition": "service_healthy"}},
+                        "environment": {"LOOM_CODE_INGEST_ENABLED": "true"},
+                    },
                 }
             }
         )
