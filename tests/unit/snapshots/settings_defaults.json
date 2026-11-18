@@ -562,6 +562,7 @@
  "knowledge_ingest_max_attempts": 5,
  "knowledge_ingest_max_chunks": 20000,
  "knowledge_ingest_max_pass_seconds": 900,
+ "knowledge_mirrored_sources_enabled": false,
  "knowledge_noise_filter": true,
  "knowledge_orphan_chunk_min_age_seconds": 3600,
  "knowledge_query_history_enabled": false,
