@@ -353,9 +353,6 @@ async def _write_restore(
     import server.memory.store as memory_repo
     from server.observability import audit
 
-    policy = await blacklist_guard.enforce_rows(
-        [{"org": input.org, "namespace": input.namespace, "value": existing.value}]
-    )
     new_version = version_over(existing)
     # The search row takes the same status: ranking reads its own copy.
     status = await _status_before_retirement(existing, ch=ch)
@@ -367,6 +364,7 @@ async def _write_restore(
         superseded_by="",
         invalid_at=None,
     )
+    policy = await blacklist_guard.enforce_rows([restore_row])
     # The conflict resolver honours the Undo by this record, so it is written first,
     # under the lock, and its failure fails the Undo: no restore it would not see. A
     # record whose restore then fails names a version no row holds.

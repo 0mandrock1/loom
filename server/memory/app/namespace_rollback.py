@@ -18,6 +18,7 @@ from server.memory.app import webhooks
 from server.memory.domain import rollback as svc
 from server.memory.domain.webhook_events import EventType
 from server.memory.store import pg_memory
+from server.memory.store.rows import stored_value_text
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ async def apply_rollback(
     # Check the complete reinstatement plan before its first batch writes. Each batch
     # still reads its heads afresh, and its commit holds this policy generation.
     values = [
-        {"org": org, "namespace": namespace, "value": historical.value}
+        {"org": org, "namespace": namespace, "value": stored_value_text(historical)}
         for historical, head in (
             await _reinstated(org, namespace, plan.reinstate, ch=ch) if plan.reinstate else []
         )

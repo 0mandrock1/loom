@@ -37,6 +37,28 @@ def guarded(monkeypatch, request):
     return policy
 
 
+@pytest.fixture(params=["substring", "stored_regex"])
+def copy_pattern(monkeypatch, guarded, request):
+    if request.param == "stored_regex":
+        pattern = r'^"blocked"$'
+        monkeypatch.setattr(
+            blacklist_guard,
+            "_cache",
+            [
+                blacklist_guard.BlacklistPattern(
+                    "p",
+                    "o",
+                    "n",
+                    pattern,
+                    "regex",
+                    "namespace",
+                    "",
+                    compiled=blacklist_guard.compile_regex(pattern),
+                )
+            ],
+        )
+
+
 def row(value="blocked", **kw):
     return MemoryRow(
         org="o",
@@ -76,7 +98,7 @@ async def test_plain_restore_refuses_before_memory_or_search_write(monkeypatch, 
     mirror.assert_not_awaited()
 
 
-async def test_undo_refuses_before_its_strict_audit_record(monkeypatch, guarded):
+async def test_undo_refuses_before_its_strict_audit_record(monkeypatch, guarded, copy_pattern):
     from server.observability import audit
 
     ledger = AsyncMock()
@@ -99,7 +121,9 @@ async def test_snapshot_checks_the_whole_batch_before_any_insert(monkeypatch, gu
     written.assert_not_awaited()
 
 
-async def test_rollback_checks_later_batches_before_writing_the_first(monkeypatch, guarded):
+async def test_rollback_checks_later_batches_before_writing_the_first(
+    monkeypatch, guarded, copy_pattern
+):
     monkeypatch.setattr(namespace_rollback, "_INSERT_BATCH", 1)
     historical = [row("allowed"), row()]
 
@@ -209,7 +233,6 @@ async def test_a_blocked_payload_does_not_create_namespace_or_grants(monkeypatch
     from server.identity.api.models import (
         NamespaceRestoreInput,
         NamespaceSnapshotOutput,
-        _SnapshotMemoryRow,
     )
     from server.identity.app import namespace_snapshot as namespaces
 
@@ -236,7 +259,7 @@ async def test_a_blocked_payload_does_not_create_namespace_or_grants(monkeypatch
         audit_tail_count=0,
         include_embeddings=False,
         memories=[
-            _SnapshotMemoryRow(**store.build_memory_version_row(row(value)))
+            namespaces.snapshot_memory_row(store.build_memory_version_row(row(value)))
             for value in ["allowed", "blocked"]
         ],
         types=[],
