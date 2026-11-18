@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 from argparse import Namespace
@@ -157,36 +158,35 @@ async def test_cancelled_acceptance_releases_backend_and_rolls_back_tenancy(upda
     make, local_conn, directory_conn, owned, _, local_dsn = update_stores
     backend_pid = local_conn.get_server_pid()
     before = await cell_update_pg.read(local_conn, "first")
-    blocker = await asyncpg.connect(local_dsn)
-    transaction = blocker.transaction()
-    await transaction.start()
-    task = None
-    observer = None
-    try:
-        observer = await asyncpg.connect(local_dsn)
-        await blocker.fetchrow("SELECT id FROM loom.cell_self FOR UPDATE")
-        task = asyncio.create_task(make().start(owned))
-        async with asyncio.timeout(4):
-            while not await observer.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 "
-                "AND wait_event_type='Lock' AND query LIKE 'UPDATE loom.cell_self%')",
-                backend_pid,
-            ):
-                assert not task.done()
-                await asyncio.sleep(0.005)
-        task.cancel("acceptance-stop")
-        with pytest.raises(asyncio.CancelledError, match="acceptance-stop"):
-            await asyncio.wait_for(task, timeout=4)
-        assert owned.closed and local_conn.is_closed()
-    finally:
-        if task is not None:
-            if not task.done():
-                task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        await transaction.rollback()
-        if observer is not None:
-            await observer.close()
-        await blocker.close()
+    async with contextlib.AsyncExitStack() as cleanup:
+        try:
+            blocker = await asyncpg.connect(local_dsn)
+            cleanup.push_async_callback(blocker.close)
+            transaction = blocker.transaction()
+            await transaction.start()
+            cleanup.push_async_callback(transaction.rollback)
+            observer = await asyncpg.connect(local_dsn)
+            cleanup.push_async_callback(observer.close)
+            await blocker.fetchrow("SELECT id FROM loom.cell_self FOR UPDATE")
+            task = asyncio.create_task(make().start(owned))
+            cleanup.push_async_callback(asyncio.gather, task, return_exceptions=True)
+            cleanup.callback(task.cancel)
+            async with asyncio.timeout(4):
+                while not await observer.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 "
+                    "AND wait_event_type='Lock' AND query LIKE 'UPDATE loom.cell_self%')",
+                    backend_pid,
+                ):
+                    assert not task.done()
+                    await asyncio.sleep(0.005)
+            task.cancel("acceptance-stop")
+            with pytest.raises(asyncio.CancelledError, match="acceptance-stop"):
+                await asyncio.wait_for(task, timeout=4)
+            assert owned.closed and local_conn.is_closed()
+        except BaseException:  # Every acquired resource must close before failure escapes.
+            with contextlib.suppress(BaseException):
+                await cleanup.aclose()
+            raise
     await _assert_widening_rolled_back(local_dsn, directory_conn, backend_pid, before)
 
 
@@ -336,43 +336,46 @@ async def test_delayed_actual_finish_cannot_release_after_backend_death_and_fres
         return await real_change(*args, **kwargs)
 
     monkeypatch.setattr(directory, "update_configuration", delayed)
-    pending = asyncio.create_task(make("finish").start(owned))
-    admin = await asyncpg.connect(dsn)
-    successor = await asyncpg.connect(dsn)
-    await directory._init(successor)
-    try:
-        await asyncio.wait_for(entered.wait(), 5)
-        old_generation = str(
-            await directory_conn.fetchval("SELECT mutation_generation FROM loom_router.cells")
-        )
-        await admin.execute("SELECT pg_terminate_backend($1)", local_conn.get_server_pid())
-        assert await successor.fetchval("SELECT pg_try_advisory_lock($1)", cell.ATTACH_LOCK_KEY)
-        fresh_owner = owner(successor)
-        await make().start(fresh_owner)
-        if aba:
-            await make("revert").start(fresh_owner)
+    async with contextlib.AsyncExitStack() as cleanup:
+        try:
+            pending = asyncio.create_task(make("finish").start(owned))
+            cleanup.push_async_callback(asyncio.gather, pending, return_exceptions=True)
+            cleanup.callback(pending.cancel)
+            cleanup.callback(resume.set)
+            admin = await asyncpg.connect(dsn)
+            cleanup.push_async_callback(admin.close)
+            successor = await asyncpg.connect(dsn)
+            cleanup.push_async_callback(successor.close)
+            await directory._init(successor)
+            await asyncio.wait_for(entered.wait(), 5)
+            old_generation = str(
+                await directory_conn.fetchval("SELECT mutation_generation FROM loom_router.cells")
+            )
+            await admin.execute("SELECT pg_terminate_backend($1)", local_conn.get_server_pid())
+            assert await successor.fetchval("SELECT pg_try_advisory_lock($1)", cell.ATTACH_LOCK_KEY)
+            fresh_owner = owner(successor)
             await make().start(fresh_owner)
-        assert old_generation != str(
-            await directory_conn.fetchval("SELECT mutation_generation FROM loom_router.cells")
-        )
-        assert (await cell_update_pg.read(successor, "first")).pending is not None
-        resume.set()
-        with pytest.raises(cell_control.Refused, match="generation|attach lock|lock session"):
-            await pending
-        stored = await directory_conn.fetchrow(
-            "SELECT current_fp,next_fp,placed FROM loom_router.cells"
-        )
-        assert json.loads(stored["current_fp"]) == value()
-        assert json.loads(stored["next_fp"]) == value("new", orgs=("permanent",))
-        assert stored["placed"] == 1
-        assert (await cell_update_pg.read(successor, "first")).pending is not None
-    finally:
-        resume.set()
-        if not pending.done():
-            pending.cancel()
-        await asyncio.gather(pending, return_exceptions=True)
-        await successor.close()
-        await admin.close()
+            if aba:
+                await make("revert").start(fresh_owner)
+                await make().start(fresh_owner)
+            assert old_generation != str(
+                await directory_conn.fetchval("SELECT mutation_generation FROM loom_router.cells")
+            )
+            assert (await cell_update_pg.read(successor, "first")).pending is not None
+            resume.set()
+            with pytest.raises(cell_control.Refused, match="generation|attach lock|lock session"):
+                await pending
+            stored = await directory_conn.fetchrow(
+                "SELECT current_fp,next_fp,placed FROM loom_router.cells"
+            )
+            assert json.loads(stored["current_fp"]) == value()
+            assert json.loads(stored["next_fp"]) == value("new", orgs=("permanent",))
+            assert stored["placed"] == 1
+            assert (await cell_update_pg.read(successor, "first")).pending is not None
+        except BaseException:  # Owned cleanup must preserve the original test failure.
+            with contextlib.suppress(BaseException):
+                await cleanup.aclose()
+            raise
 
 
 @pytest.mark.asyncio
@@ -409,64 +412,70 @@ async def test_update_uses_fresh_real_pg_ch_nonces_and_cleans_only_its_values(
     client = CHClient()
     await client.connect()
     with query_tag("test.cell_update.nonces"):
-        await client.execute("CREATE DATABASE {db:Identifier}", {"db": database})
-        try:
-            await client.execute(
-                "CREATE TABLE {db:Identifier}.locks (name String, holder String, "
-                "acquired_at DateTime64(3), renewed_at DateTime64(3), ttl_s UInt32, "
-                "build_commit String) ENGINE=KeeperMap({path:String}) PRIMARY KEY name",
-                {"db": database, "path": "/loom/test/" + database},
-            )
-            monkeypatch.setattr(
-                leases, "LOCK_RELEASE", leases.LOCK_RELEASE.replace(leases.LOCK_TABLE, table)
-            )
-            monkeypatch.setattr(leases, "LOCK_TABLE", table)
-            monkeypatch.setattr("server.core.ch.get_client", lambda: client)
-            monkeypatch.setattr(cell_update_probe, "post", REAL_POST)
-            monkeypatch.setattr(app.Router, "_stores_check", REAL_STORES_CHECK)
-            monkeypatch.setattr(cell_prepare, "_sleep", AsyncMock())
-            await directory_conn.execute(
-                "UPDATE loom_router.cells SET probe_url='http://probe',upstream_url='http://main'"
-            )
-            requests = []
-
-            async def network(request):
-                if request.url.host == "main":
-                    return httpx.Response(200, json={"deployment_id": "dep-first"})
-                requests.append(request)
-                actual = await cell_probe.nonces()
-                assert actual["postgres"] and actual["clickhouse"]
-                if proof == "busy" and len(requests) == 1:
-                    return httpx.Response(429, headers={"Retry-After": "1"})
-                return httpx.Response(
-                    200,
-                    json={
-                        "deployment_id": "dep-first",
-                        "bucket": {"name": "", "prefix": ""},
-                        "nonces": actual | ({"postgres": "old"} if proof == "wrong" else {}),
-                    },
+        async with contextlib.AsyncExitStack() as cleanup:
+            cleanup.push_async_callback(client.disconnect)
+            try:
+                await client.execute("CREATE DATABASE {db:Identifier}", {"db": database})
+                cleanup.push_async_callback(
+                    client.execute, "DROP DATABASE {db:Identifier} SYNC", {"db": database}
                 )
+                await client.execute(
+                    "CREATE TABLE {db:Identifier}.locks (name String, holder String, "
+                    "acquired_at DateTime64(3), renewed_at DateTime64(3), ttl_s UInt32, "
+                    "build_commit String) ENGINE=KeeperMap({path:String}) PRIMARY KEY name",
+                    {"db": database, "path": "/loom/test/" + database},
+                )
+                monkeypatch.setattr(
+                    leases, "LOCK_RELEASE", leases.LOCK_RELEASE.replace(leases.LOCK_TABLE, table)
+                )
+                monkeypatch.setattr(leases, "LOCK_TABLE", table)
+                monkeypatch.setattr("server.core.ch.get_client", lambda: client)
+                monkeypatch.setattr(cell_update_probe, "post", REAL_POST)
+                monkeypatch.setattr(app.Router, "_stores_check", REAL_STORES_CHECK)
+                monkeypatch.setattr(cell_prepare, "_sleep", AsyncMock())
+                await directory_conn.execute(
+                    "UPDATE loom_router.cells SET probe_url='http://probe',upstream_url='http://main'"
+                )
+                requests = []
 
-            router = app.Router(probe_transport=httpx.MockTransport(network))
-            run = make()
-            run.transport = httpx.ASGITransport(app=app.build_app(router))
-            run.ch, run.args.wait = client, 3
-            if proof == "wrong":
-                with pytest.raises(cell_prepare.Refused, match="does not read the stores"):
+                async def network(request):
+                    if request.url.host == "main":
+                        return httpx.Response(200, json={"deployment_id": "dep-first"})
+                    requests.append(request)
+                    actual = await cell_probe.nonces()
+                    assert actual["postgres"] and actual["clickhouse"]
+                    if proof == "busy" and len(requests) == 1:
+                        return httpx.Response(429, headers={"Retry-After": "1"})
+                    return httpx.Response(
+                        200,
+                        json={
+                            "deployment_id": "dep-first",
+                            "bucket": {"name": "", "prefix": ""},
+                            "nonces": actual | ({"postgres": "old"} if proof == "wrong" else {}),
+                        },
+                    )
+
+                router = app.Router(probe_transport=httpx.MockTransport(network))
+                run = make()
+                run.transport = httpx.ASGITransport(app=app.build_app(router))
+                run.ch, run.args.wait = client, 3
+                if proof == "wrong":
+                    with pytest.raises(cell_prepare.Refused, match="does not read the stores"):
+                        await run.start(owned)
+                    assert await directory_conn.fetchval(
+                        "SELECT next_fp IS NULL FROM loom_router.cells"
+                    )
+                    assert (await cell_update_pg.read(local_conn, "first")).pending is None
+                else:
                     await run.start(owned)
-                assert await directory_conn.fetchval(
-                    "SELECT next_fp IS NULL FROM loom_router.cells"
-                )
-                assert (await cell_update_pg.read(local_conn, "first")).pending is None
-            else:
-                await run.start(owned)
-                assert (await cell_update_pg.read(local_conn, "first")).pending is not None
-            assert len(requests) == (2 if proof == "busy" else 1)
-            assert await cell_probe.nonces() == {
-                "postgres": None,
-                "clickhouse": None,
-                "bucket": None,
-            }
-        finally:
-            await client.execute("DROP DATABASE {db:Identifier} SYNC", {"db": database})
-            await client.disconnect()
+                    assert (await cell_update_pg.read(local_conn, "first")).pending is not None
+                assert len(requests) == (2 if proof == "busy" else 1)
+                assert await cell_probe.nonces() == {
+                    "postgres": None,
+                    "clickhouse": None,
+                    "bucket": None,
+                }
+            except BaseException:  # Owned cleanup must not replace setup or body failure.
+                with contextlib.suppress(BaseException):
+                    await cleanup.aclose()
+                raise

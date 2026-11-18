@@ -110,8 +110,12 @@ def test_candidate_fits_a_live_placement_with_the_largest_org() -> None:
     from server.router.fingerprints import placement_refusal
     from server.router.limits import MAX_BODY_BYTES
 
-    value = _value(future="")
-    overhead = len(json.dumps({"org": "", "cell": "first", "fingerprint": value}))
+    deployment = "11111111-1111-4111-8111-111111111111"
+    value = _value(future="", deployment_id=deployment)
+    overhead = max(
+        len(json.dumps({"org": "", "cell": "first", "fingerprint": value})),
+        len(json.dumps({"org": "", "deployment_id": deployment, "fingerprint": value})),
+    )
     room = MAX_BODY_BYTES - overhead - 6 * cell.ORG_MAX_BYTES
     value["fields"]["future"] = "x" * room
     assert placement_refusal("first", "candidate", value) == ""
@@ -119,3 +123,61 @@ def test_candidate_fits_a_live_placement_with_the_largest_org() -> None:
     reason = placement_refusal("first", "candidate", value)
     assert "future" in reason
     assert "x" * 20 not in reason
+
+
+def test_live_size_cannot_admit_an_oversized_operator_placement() -> None:
+    import json
+
+    import httpx
+
+    from server.router.fingerprints import placement_refusal, readable
+    from server.router.limits import MAX_BODY_BYTES
+
+    deployment = "11111111-1111-4111-8111-111111111111"
+    value = _value(deployment_id=deployment, oidc_client_id="")
+    live = {"org": "", "cell": "a", "fingerprint": value}
+    room = MAX_BODY_BYTES - len(json.dumps(live)) - 6 * cell.ORG_MAX_BYTES
+    value["fields"]["oidc_client_id"] = "x" * room
+    org = "\x01" * cell.ORG_MAX_BYTES
+    assert cell.named_org(org) == org and readable(value)
+    live["org"] = org
+    operator = {"org": org, "deployment_id": deployment, "fingerprint": value}
+    assert (
+        len(httpx.Request("POST", "http://router.example.test", json=live).content)
+        <= MAX_BODY_BYTES
+    )
+    assert (
+        len(httpx.Request("POST", "http://router.example.test", json=operator).content)
+        > MAX_BODY_BYTES
+    )
+    assert "placement body" in placement_refusal("a", "candidate", value)
+
+
+@pytest.mark.parametrize(
+    "cell_name,deployment",
+    [("a", "11111111-1111-4111-8111-111111111111"), ("a" * 32, "d")],
+)
+def test_both_placement_envelopes_fit_the_accepted_boundary(cell_name, deployment) -> None:
+    import json
+
+    import httpx
+
+    from server.router.fingerprints import placement_refusal, readable
+    from server.router.limits import MAX_BODY_BYTES
+
+    value = _value(deployment_id=deployment, oidc_client_id="")
+    bodies = [
+        {"org": "", "cell": cell_name, "fingerprint": value},
+        {"org": "", "deployment_id": deployment, "fingerprint": value},
+    ]
+    room = MAX_BODY_BYTES - max(len(json.dumps(body)) for body in bodies) - 6 * cell.ORG_MAX_BYTES
+    value["fields"]["oidc_client_id"] = "x" * room
+    org = "\x01" * cell.ORG_MAX_BYTES
+    assert cell.named_org(org) == org and readable(value) and cell.NAME.fullmatch(cell_name)
+    for body in bodies:
+        body["org"] = org
+        assert (
+            len(httpx.Request("POST", "http://router.example.test", json=body).content)
+            <= MAX_BODY_BYTES
+        )
+    assert placement_refusal(cell_name, "candidate", value) == ""
