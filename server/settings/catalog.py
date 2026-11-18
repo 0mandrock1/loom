@@ -2330,6 +2330,29 @@ class KnowledgeSettings(BaseModel):
     document_extractor_max_artifact_bytes: int = Field(default=64 * 1024 * 1024, ge=1024)
 
     # ---- document sources ----
+    # OAuth client registrations for personal document connections. Empty disables
+    # the corresponding provider; credentials are never taken from a source row.
+    connect_gdrive_client_id: str = ""
+    connect_gdrive_client_secret: str = ""
+    connect_notion_client_id: str = ""
+    connect_notion_client_secret: str = ""
+    connect_linear_client_id: str = ""
+    connect_linear_client_secret: str = ""
+    # The operator has restricted the public integration to read-content capability.
+    # Its token response cannot prove this registration setting; false disables it.
+    connect_notion_read_content_only: bool = False
+    # Seconds for local connection stops, including their source retirement writes.
+    knowledge_connected_stop_timeout_s: float = Field(default=20.0, gt=0)
+    # Seconds for best-effort provider revocation after every local stop has committed.
+    knowledge_connected_revoke_timeout_s: float = Field(default=5.0, gt=0)
+    # The account-generation lease's lifetime and maximum admission wait in seconds.
+    # Provider exchanges and refreshes run outside this lease.
+    knowledge_connected_lease_ttl_s: float = Field(default=60.0, gt=0)
+    knowledge_connected_lease_wait_s: float = Field(default=5.0, ge=0)
+    # Maximum complete owner scan; exceeding it refuses instead of stopping a subset.
+    knowledge_connected_registry_scan_limit: int = Field(default=4096, ge=1)
+    # Registrations per page during root-secret resealing.
+    knowledge_connected_registry_page_size: int = Field(default=256, ge=1, le=4096)
     # Active document sources (knowledge.source.add) one namespace may register; an
     # add past it is refused with SOURCE_QUOTA.
     knowledge_sources_max_per_namespace: Annotated[int, LIVE] = Field(default=8, ge=1)

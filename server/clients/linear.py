@@ -28,6 +28,7 @@ from typing import Any
 
 import httpx
 
+from server.clients._checked_access import CheckedAccess, Credential
 from server.clients._http import get_client
 from server.clients._vendor import read_capped
 
@@ -124,9 +125,11 @@ def valid_id(value: str) -> bool:
     return bool(_ID_RE.fullmatch(value))
 
 
-def valid_key(api_key: str) -> bool:
+def valid_key(api_key: Credential) -> bool:
     """Whether `api_key` can be an API key: printable ASCII with no space, so it
     travels in a header unchanged."""
+    if isinstance(api_key, CheckedAccess):
+        return api_key.kind == "linear"
     return bool(_KEY_RE.fullmatch(api_key))
 
 
@@ -172,20 +175,29 @@ def _raise_for(status: int, body: Any, what: str) -> None:
 
 
 async def _query(
-    api_key: str, query: str, variables: dict[str, Any], what: str, *, max_bytes: int
+    api_key: Credential, query: str, variables: dict[str, Any], what: str, *, max_bytes: int
 ) -> dict[str, Any]:
     """The `data` of one GraphQL request, its answer read up to `max_bytes`."""
-    api_key = api_key.strip()  # a pasted key often ends in a newline
+    checked = api_key if isinstance(api_key, CheckedAccess) else None
+    if isinstance(api_key, str):
+        api_key = api_key.strip()  # a pasted key often ends in a newline
     if not valid_key(api_key):
         raise CredentialRefused(what, "not_an_api_key")
     try:
-        async with get_client().stream(
-            "POST",
-            _GRAPHQL_URL,
-            headers={"Authorization": api_key, "Content-Type": "application/json"},
-            json={"query": query, "variables": variables},
-        ) as resp:
-            raw = await read_capped(resp, max_bytes)
+        async with asyncio.timeout_at(checked.deadline if checked is not None else None):
+            authorization = (
+                await checked.authorization(_GRAPHQL_URL) if checked is not None else api_key
+            )
+            async with get_client().stream(
+                "POST",
+                _GRAPHQL_URL,
+                headers={"Authorization": authorization, "Content-Type": "application/json"},
+                json={"query": query, "variables": variables},
+                **({"follow_redirects": False} if checked is not None else {}),
+            ) as resp:
+                raw = await read_capped(resp, max_bytes)
+            if checked is not None:
+                await checked.check()
     except httpx.RequestError as e:
         raise LinearError(what, "unreachable") from e
     if raw is None:
@@ -202,7 +214,7 @@ async def _query(
 
 
 async def documents_page(
-    api_key: str, project_id: str, *, after: str = ""
+    api_key: Credential, project_id: str, *, after: str = ""
 ) -> tuple[list[dict[str, Any]], str]:
     """One page of a project's documents (id, title, updatedAt, url) and the cursor
     of the next page, '' after the last. NotFound when the tracker says the key
@@ -233,7 +245,7 @@ async def documents_page(
     return nodes, cursor
 
 
-async def organization_id(api_key: str) -> str:
+async def organization_id(api_key: Credential) -> str:
     """The credential's organization, for binding incoming notifications."""
     data = await _query(
         api_key, "query { organization { id } }", {}, "push identity", max_bytes=4096
@@ -245,7 +257,7 @@ async def organization_id(api_key: str) -> str:
     return value
 
 
-async def project_documents(api_key: str, project_id: str) -> list[dict[str, Any]]:
+async def project_documents(api_key: Credential, project_id: str) -> list[dict[str, Any]]:
     """Every document of a project, every page read and paced; a failure on any page
     raises."""
     found: list[dict[str, Any]] = []
@@ -258,7 +270,7 @@ async def project_documents(api_key: str, project_id: str) -> list[dict[str, Any
         await _sleep(PAGE_PACE_S)
 
 
-async def project_ids(api_key: str, slug_ids: list[str]) -> dict[str, str]:
+async def project_ids(api_key: Credential, slug_ids: list[str]) -> dict[str, str]:
     """{short id: project UUID} of the projects the key sees among `slug_ids`, the
     short ids a project's link carries; one the tracker does not answer for is
     left out. One page answers them: the ops bound a call well under it."""
@@ -292,7 +304,7 @@ def _checked(document_id: str) -> str:
     return document_id
 
 
-async def document(api_key: str, document_id: str, *, max_bytes: int) -> dict[str, Any]:
+async def document(api_key: Credential, document_id: str, *, max_bytes: int) -> dict[str, Any]:
     """One document's Markdown `content`, `updatedAt` and `url`, its answer read up to
     `max_bytes`; NotFound when the tracker says the key cannot see it."""
     what = f"document {document_id}"
@@ -306,7 +318,7 @@ async def document(api_key: str, document_id: str, *, max_bytes: int) -> dict[st
     return doc
 
 
-async def document_state(api_key: str, document_id: str) -> dict[str, Any]:
+async def document_state(api_key: Credential, document_id: str) -> dict[str, Any]:
     """A document's `trashed`, `archivedAt` and `project`; NotFound when the key
     cannot see it."""
     what = f"document {document_id}"

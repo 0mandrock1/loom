@@ -21,7 +21,7 @@ import hmac
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -165,6 +165,7 @@ async def create(
                 "created_at": datetime.now(UTC),
             }
         cutoff = None
+        previous_subjects = list(row["subjects"])
         if exists:
             # A provider retrying a create that failed or timed out finishes it,
             # waits out what is left of its cutoff, then gets its 409.
@@ -176,7 +177,7 @@ async def create(
             changes = {"user_name": user_name.strip(), "deleted": 0, "emails": json.dumps(emails)}
             row, cutoff = await _set_active(row, active, **changes)
     if not row["active"]:  # a retry too: it finishes what a failed try left
-        await _revoke_tokens(row)
+        await _revoke_tokens(row, previous_subjects=previous_subjects)
     await _wait_out(cutoff)
     if exists:
         raise Exists
@@ -199,6 +200,7 @@ async def update(
         row = await get(uid)
         if row is None:
             return None
+        previous_subjects = list(row["subjects"])
         if patched is not None:
             user_name, emails = patched(row)
         changes = {} if emails is None else {"emails": json.dumps(emails)}
@@ -211,7 +213,7 @@ async def update(
                 _note_another_name(uid, renamed, row["email"])
                 new, cutoff = await _set_active(row, active, user_name=renamed, **changes)
     if not new["active"]:  # a retry too: it finishes what a failed try left
-        await _revoke_tokens(new)
+        await _revoke_tokens(new, previous_subjects=previous_subjects)
     await _wait_out(cutoff)
     return new
 
@@ -243,10 +245,11 @@ async def delete(uid: str) -> bool:
         row = await _row(uid)
         if row is None:
             return False
+        previous_subjects = list(row["subjects"])
         deleted = bool(row["deleted"])
         # A retry finishes a failed try. The addresses beside the email keep no one out.
         row, _ = await _set_active(row, False, deleted=1, emails="[]")
-    await _revoke_tokens(row)
+    await _revoke_tokens(row, previous_subjects=previous_subjects)
     return not deleted
 
 
@@ -304,10 +307,13 @@ async def _row(uid: str) -> dict[str, Any] | None:
     return None if row is None else dict(row)
 
 
-async def _revoke_tokens(row: dict[str, Any]) -> None:
+async def _revoke_tokens(row: dict[str, Any], *, previous_subjects: Sequence[str] = ()) -> None:
     # Past the leases, as it may claim many token names. It lists revoked the
     # tokens the revocations kill and frees their names; one made after a
     # reactivation's or an operator's cutoff stays live.
+    from server.knowledge.app.connected_accounts import stop_subjects
+
+    await stop_subjects(sorted(set(row["subjects"]) | set(previous_subjects)))
     await service_accounts.revoke_created_by(row["subjects"], revoked_by=_BY)
 
 

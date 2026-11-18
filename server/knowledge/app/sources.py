@@ -103,6 +103,8 @@ def _now_iso() -> str:
 
 def credential_of(src: KnowledgeSource) -> str:
     """The source's credential, '' when it no longer opens."""
+    if src.credential_mode != "shared":
+        return ""  # A connected source never falls back to an ingestion credential.
     if src.secret_enc:
         return unseal(_SECRET_PURPOSE, src.secret_enc)
     return unseal(_CREDENTIAL_PURPOSE, src.credential_enc)

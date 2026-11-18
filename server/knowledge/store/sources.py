@@ -40,6 +40,7 @@ from server.knowledge.domain.sources import (
     state_key,
     stored_config,
 )
+from server.settings import settings
 
 TABLE = "loom.knowledge_sources"
 STATE_TABLE = "loom.code_index_state"
@@ -51,7 +52,8 @@ REVISIONS_PAGE = 10_000  # not a setting: a bound on one statement
 
 _COLUMNS = (
     "org, namespace, name, source_id, kind, source_kind, config_json, items_json, "
-    "credential_enc, secret_enc, access, created_by, active, pending_delete, created_at, "
+    "credential_enc, secret_enc, access, credential_mode, owner_subject, connection_id, "
+    "created_by, active, pending_delete, created_at, "
     "updated_at"
 )
 
@@ -82,6 +84,9 @@ def _source(row: dict[str, Any]) -> KnowledgeSource:
         credential_enc=str(row.get("credential_enc") or ""),
         secret_enc=str(row.get("secret_enc") or ""),
         access=str(row.get("access") or NAMESPACE_ACCESS),
+        credential_mode=str(row.get("credential_mode") or "shared"),
+        owner_subject=str(row.get("owner_subject") or ""),
+        connection_id=str(row.get("connection_id") or ""),
         created_by=str(row.get("created_by") or ""),
         active=bool(row.get("active")),
         pending_delete=bool(row.get("pending_delete")),
@@ -116,6 +121,25 @@ async def sources_in(
         params={"org": org, "names": namespaces},
     )
     return [(str(r["namespace"]), str(r["name"])) for r in rows]
+
+
+async def connected_sources(
+    org: str, subject: str, *, ch: _CHClient | None = None
+) -> list[KnowledgeSource]:
+    """Every owned source, including inactive rows whose cleanup may still be owed."""
+    rows = await (ch or _default_client()).query_all(
+        f"SELECT {_COLUMNS} FROM {TABLE} FINAL WHERE org = {{org:String}} "
+        "AND credential_mode = 'connected' AND owner_subject = {subject:String} "
+        "ORDER BY namespace, name LIMIT {limit:UInt64}",
+        params={
+            "org": org,
+            "subject": subject,
+            "limit": settings.knowledge_connected_registry_scan_limit + 1,
+        },
+    )
+    if len(rows) > settings.knowledge_connected_registry_scan_limit:
+        raise RuntimeError("connected_source_owner_bound")
+    return [_source(dict(row)) for row in rows]
 
 
 async def all_active_sources(*, ch: _CHClient | None = None) -> list[KnowledgeSource]:
@@ -224,6 +248,9 @@ async def insert_source(src: KnowledgeSource, *, ch: _CHClient | None = None) ->
         "credential_enc": src.credential_enc,
         "secret_enc": src.secret_enc,
         "access": src.access,
+        "credential_mode": src.credential_mode,
+        "owner_subject": src.owner_subject,
+        "connection_id": src.connection_id,
         "created_by": src.created_by,
         "active": src.active,
         "pending_delete": src.pending_delete,
