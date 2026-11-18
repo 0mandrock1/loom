@@ -74,7 +74,8 @@ TASK_COLS = (
 
 EVENT_COLS = (
     "org, inbox, namespace, task_id, seq, event, from_status, to_status, actor, "
-    "agent, from_subject, fence, version, reason, patch, note, ts"
+    "agent, from_subject, fence, version, reason, patch, note, ts, "
+    "user_id, session_id, source_class"
 )
 
 TASK_FIELDS: tuple[str, ...] = tuple(c.strip() for c in TASK_COLS.split(","))

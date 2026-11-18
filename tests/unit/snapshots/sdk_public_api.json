@@ -2680,7 +2680,8 @@
           "datasets",
           "window_chars",
           "max_answer_chars",
-          "max_windows"
+          "max_windows",
+          "user_id"
         ],
         "upload": [
           "data",
