@@ -3086,6 +3086,7 @@
           "memory_type",
           "tags",
           "entities",
+          "files",
           "user_id",
           "session_id",
           "run_id",

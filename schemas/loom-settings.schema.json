@@ -2149,10 +2149,20 @@
           "type": "boolean",
           "description": "Repositories added from the Repositories page (loom.code_repos) merge with the configured entries (`code_repos_json` and the scalar entry); a configured entry for a namespace a member added from the page is skipped. Off = the operator's JSON is the only source."
         },
+        "code_self_service_git_unsandboxed": {
+          "default": false,
+          "type": "boolean",
+          "description": "True lets a host without the sandbox add and fetch a self-service entry with a network remote: its git jobs (ls-remote, clone, fetch) run as plain processes and it gets no compiler tier. Refused at load without code_self_service_platform_admin_only, where a request can carry no principal (auth off, or mcp_auth_mode open), and with code_sandbox_required. False: such an entry needs the sandbox."
+        },
         "code_self_service_max_repos": {
           "default": 20,
           "type": "integer",
           "description": "Active self-service entries per org (branches count); past it the add refuses with a message."
+        },
+        "code_self_service_platform_admin_only": {
+          "default": false,
+          "type": "boolean",
+          "description": "True leaves code.repo.remote_branches, code.repo.add and code.repo.add_branch to platform admins: a token scoped to namespaces, or a trusted caller acting for another subject, is refused too. False: each op's own role decides."
         },
         "code_setting_control": {
           "default": "",
