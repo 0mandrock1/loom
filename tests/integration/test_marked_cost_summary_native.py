@@ -21,6 +21,7 @@ from server.insights.store import cost
 from server.observability.budget import budget_snapshot
 from server.observability.events import AgentEvent
 from server.operations.base import Role
+from tests.integration._event_fixtures import insert_event_rows
 from tests.integration._resources import unique_org
 
 pytestmark = pytest.mark.usefixtures("ch_target_required")
@@ -96,7 +97,8 @@ class CostWorld:
             "latency_ms": 13,
             "args": {},
         }
-        await self.client.insert(
+        await insert_event_rows(
+            self.client,
             f"{self.database}.agent_events",
             [
                 ordinary,
@@ -153,6 +155,9 @@ async def world(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[CostWorld]:
         attempted = True
         await client.execute(f"CREATE DATABASE {database} UUID '{database_uuid}' ENGINE = Atomic")
         await client.execute(f"CREATE TABLE {database}.agent_events AS loom.agent_events")
+        await client.execute(
+            f"CREATE TABLE {database}.agent_events_private AS loom.agent_events_private"
+        )
         await client.execute(
             f"CREATE TABLE {database}.agent_cost_rollup_daily AS loom.agent_cost_rollup_daily"
         )
