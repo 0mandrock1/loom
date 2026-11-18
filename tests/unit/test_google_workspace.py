@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 from server.clients import gdrive
 from server.clients import google_workspace as google
-from server.clients._vendor import CredentialRefused, TooLarge, VendorError
+from server.clients._vendor import CredentialRefused, RateLimited, TooLarge, VendorError
 
 pytestmark = pytest.mark.asyncio
 
@@ -220,6 +220,66 @@ async def test_grant_refusals_do_not_read_echoed_secrets_follow_or_retry(
     assert caught.value.status == status and body.closed and body.reads == 0
     assert len(calls) == 1
     assert all(secret not in str(caught.value) for secret in ("private", _SUBJECT, "untrusted"))
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        ({"errors": [{"reason": "userRateLimitExceeded"}]}, RateLimited),
+        ({"errors": [{"reason": "quotaExceeded"}]}, RateLimited),
+        ({"status": "RESOURCE_EXHAUSTED"}, RateLimited),
+        ({"errors": [{"reason": "forbidden"}]}, CredentialRefused),
+    ],
+)
+async def test_directory_forbidden_distinguishes_quota_from_credentials_without_error_echo(
+    monkeypatch: pytest.MonkeyPatch, error: dict[str, Any], expected: type[VendorError]
+) -> None:
+    body = _Body(json.dumps({"error": {**error, "message": "private-provider-body"}}).encode())
+    async with _http(monkeypatch, lambda request: httpx.Response(403, stream=body)) as calls:
+        with pytest.raises(expected) as caught:
+            await google.user(
+                _token(gdrive.ReadScope.DIRECTORY_USERS),
+                "123456",
+                customer_id="customer-one",
+                max_bytes=4096,
+            )
+    assert type(caught.value) is expected and caught.value.status == 403
+    assert len(calls) == 1 and body.reads == 1 and body.closed
+    assert all(value not in str(caught.value) for value in ("private", _ACCESS, _SUBJECT))
+
+
+@pytest.mark.parametrize("raw", [b"not-json", b'{"error":{"errors":12}}', b'{"error":{}}'])
+async def test_ambiguous_directory_forbidden_does_not_claim_credential_revocation(
+    monkeypatch: pytest.MonkeyPatch, raw: bytes
+) -> None:
+    body = _Body(raw)
+    async with _http(monkeypatch, lambda request: httpx.Response(403, stream=body)) as calls:
+        with pytest.raises(VendorError) as caught:
+            await google.user(
+                _token(gdrive.ReadScope.DIRECTORY_USERS),
+                "123456",
+                customer_id="customer-one",
+                max_bytes=4096,
+            )
+    assert type(caught.value) is VendorError and caught.value.status == 403
+    assert len(calls) == 1 and body.reads == 1 and body.closed
+    assert raw.decode() not in str(caught.value)
+
+
+async def test_directory_error_body_bound_stops_reading_and_closes_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = _Body(b"x" * 8, b"x" * 9, b"private-must-not-be-read")
+    async with _http(monkeypatch, lambda request: httpx.Response(403, stream=body)) as calls:
+        with pytest.raises(TooLarge) as caught:
+            await google.user(
+                _token(gdrive.ReadScope.DIRECTORY_USERS),
+                "123456",
+                customer_id="customer-one",
+                max_bytes=16,
+            )
+    assert caught.value.status == 403 and "private" not in str(caught.value)
+    assert len(calls) == 1 and body.reads == 2 and body.closed
 
 
 @pytest.mark.parametrize(
@@ -495,11 +555,13 @@ async def test_invalid_bounds_scope_and_path_make_no_http_call(
     assert calls == []
 
 
+@pytest.mark.parametrize("status", [200, 403])
 async def test_cancellation_closes_the_owned_stream_and_propagates(
     monkeypatch: pytest.MonkeyPatch,
+    status: int,
 ) -> None:
     body = _WaitingBody()
-    async with _http(monkeypatch, lambda request: httpx.Response(200, stream=body)) as calls:
+    async with _http(monkeypatch, lambda request: httpx.Response(status, stream=body)) as calls:
         task = asyncio.create_task(
             google.user(
                 _token(gdrive.ReadScope.DIRECTORY_USERS),
@@ -515,11 +577,13 @@ async def test_cancellation_closes_the_owned_stream_and_propagates(
     assert len(calls) == 1 and body.closed
 
 
+@pytest.mark.parametrize("status", [200, 403])
 async def test_absolute_deadline_covers_stream_body_and_closes_it(
     monkeypatch: pytest.MonkeyPatch,
+    status: int,
 ) -> None:
     body = _WaitingBody()
-    async with _http(monkeypatch, lambda request: httpx.Response(200, stream=body)) as calls:
+    async with _http(monkeypatch, lambda request: httpx.Response(status, stream=body)) as calls:
         with pytest.raises(TimeoutError):
             await google.user(
                 _token(gdrive.ReadScope.DIRECTORY_USERS, deadline=time.monotonic() + 0.1),

@@ -95,6 +95,39 @@ class DelegatedToken:
         raise TypeError("a delegated token cannot be copied or serialized")
 
 
+async def _directory_forbidden(response: httpx.Response, max_bytes: int, deadline: float) -> None:
+    """Classify bounded reasons without retaining an echoed provider error in the message."""
+    raw = await read_capped(response, max_bytes)
+    _remaining(deadline)
+    if raw is None:
+        raise TooLarge("delegated response exceeds its byte bound", status=403)
+    try:
+        value = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise VendorError("delegated read unavailable", status=403) from None
+    error = value.get("error") if isinstance(value, dict) else None
+    if not isinstance(error, dict):
+        raise VendorError("delegated read unavailable", status=403)
+    entries = error.get("errors")
+    reasons = (
+        [
+            entry["reason"]
+            for entry in entries
+            if isinstance(entry, dict) and isinstance(entry.get("reason"), str) and entry["reason"]
+        ]
+        if isinstance(entries, list)
+        else []
+    )
+    status = error.get("status")
+    if isinstance(status, str) and status:
+        reasons.append(status)
+    if not reasons:
+        # An unreadable quota response is not evidence of a revoked credential.
+        raise VendorError("delegated read unavailable", status=403)
+    classified = httpx.Response(403, json={"error": {"errors": [{"reason": r} for r in reasons]}})
+    raise_for_status(classified, "delegated read")
+
+
 async def _request(
     method: Literal["GET", "POST"],
     url: str,
@@ -120,6 +153,8 @@ async def _request(
             ) as response:
                 status = response.status_code
                 if status != 200:
+                    if status == 403 and url.startswith(_DIRECTORY + "/"):
+                        await _directory_forbidden(response, max_bytes, deadline)
                     if status == 400 and url == _TOKEN_URL:
                         raise CredentialRefused("delegated read refused", status=status)
                     raise_for_status(httpx.Response(status), "delegated read")
