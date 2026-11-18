@@ -290,8 +290,8 @@ _CLASSIFIED = {
     ),
     "server/memory/app/search/key_match.py:_run_key_match_pool._rows_for_ns": (
         0,
-        (("input.org", "ns", "1"),),
-        (("query_all", None), ("query_all", ("input.org", "ns", "1"))),
+        (("input.org", "ns", "0 if component_only else 1"),),
+        (("query_all", None), ("query_all", ("input.org", "ns", "0 if component_only else 1"))),
         (("server/memory/app/search/sql.py:key_match_sql", 1),),
     ),
     "server/memory/app/search/sql.py:anchor_pool_sql": (2, (), (), ()),

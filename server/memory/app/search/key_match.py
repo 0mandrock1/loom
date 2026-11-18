@@ -337,7 +337,7 @@ async def _run_key_match_pool(ctx: SearchContext) -> None:
                     return ns, [], True
                 sql = key_match_sql(" AND ".join(where))
             try:
-                with vector_work(input.org, ns):
+                with vector_work(input.org, ns, 0 if component_only else 1):
                     return ns, await _ch.query_all(sql, params=params), False
             except VectorCapacityError:
                 raise
