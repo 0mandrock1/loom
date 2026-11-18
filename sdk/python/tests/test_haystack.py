@@ -314,11 +314,28 @@ class _SDKWire:
             self.documents[fields["source_uri"]] = json.loads(
                 base64.b64decode(fields["original_bytes_b64"])
             )
-            return httpx.Response(200, json={"mirrored": self.mirrored})
+            return httpx.Response(
+                200,
+                json={
+                    "doc_id": "11111111-1111-4111-8111-111111111111",
+                    "chunks_created": 1,
+                    "chunks_superseded": 0,
+                    "embedding_model": "test-model",
+                    "embedding_dim": 2,
+                },
+            )
         assert path == "/v1/knowledge.bulk_delete"
         for uri in fields["source_uris"]:
             self.documents.pop(uri, None)
-        return httpx.Response(200, json={"mirrored": self.mirrored})
+        return httpx.Response(
+            200,
+            json={
+                "deleted": [
+                    {"source_uri": uri, "chunks_tombstoned": 1} for uri in fields["source_uris"]
+                ],
+                "total_chunks_tombstoned": len(fields["source_uris"]),
+            },
+        )
 
     def assert_closed(self):
         assert self.clients
@@ -385,7 +402,7 @@ def test_native_pipeline_preserves_retained_suppression_as_its_primary_cause(wir
     pipeline.add_component("recall", LoomRetriever(db))
     original.mark()
     with producer.automatic(), pytest.raises(PipelineRuntimeError) as caught:
-        pipeline.run({"recall": {"query": "seat"}}, snapshot_callback=lambda *_: None)
+        pipeline.run({"recall": {"query": "seat"}})
     assert isinstance(caught.value.__cause__, AutomaticCaptureSuppressed)
     assert wire.requests == []
     assert not producer.protected
@@ -559,7 +576,7 @@ def test_explicit_native_document_operations_keep_ownership_and_retained_observe
     document = _document()
     wire.seed(db, document)
     protected.mark()
-    wire.mirrored = True
+    wire.mirrored = operation in ("filter", "retrieve")
     if operation == "write":
         assert DocumentWriter(db, policy=DuplicatePolicy.OVERWRITE).run(documents=[document]) == {
             "documents_written": 1,
@@ -582,7 +599,8 @@ def test_explicit_native_document_operations_keep_ownership_and_retained_observe
         assert found[0].content == document.content
         assert found[0].blob.data == b"native-bytes"
         assert found[0].meta == document.meta
-    assert observer.protected and protected.protected
+    assert observer.protected is (operation in ("filter", "retrieve"))
+    assert protected.protected
     wire.assert_closed()
 
 
