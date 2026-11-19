@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,7 +27,7 @@ def _identity(pid: int) -> tuple[int, int, str] | None:
         if fields[0] == "Z":
             return None
         return Path(f"/proc/{pid}").stat().st_uid, int(fields[1]), fields[19]
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         if Path("/proc").exists():
             return None
     result = subprocess.run(
@@ -190,3 +191,19 @@ class TestInstallerInterrupt(unittest.TestCase):
         script += "status=0\nbounded 1 sh -c 'exit 7' || status=$?\nexit \"$status\"\n"
         result = subprocess.run(["sh", "-c", script], capture_output=True, timeout=3, check=False)
         self.assertEqual(result.returncode, 7, result.stderr)
+
+
+class TestProcessIdentity(unittest.TestCase):
+    def test_process_exit_during_stat_read_is_absent(self) -> None:
+        with (
+            patch.object(Path, "read_text", side_effect=ProcessLookupError),
+            patch.object(Path, "exists", return_value=True),
+        ):
+            self.assertIsNone(_identity(os.getpid()))
+
+    def test_permission_error_is_not_treated_as_process_exit(self) -> None:
+        with (
+            patch.object(Path, "read_text", side_effect=PermissionError),
+            self.assertRaises(PermissionError),
+        ):
+            _identity(os.getpid())
