@@ -484,3 +484,218 @@ def test_similarity_normalizes_only_raw_inputs(monkeypatch, left, right, expecte
     assert owner.entity_similarity(left, right) == expected
     # The compact filter receives values already normalized above.
     assert calls == [left, right]
+
+
+def _frozen_raw_entity_similarity(left, right):
+    from difflib import SequenceMatcher
+
+    from server.memory.domain.graph_quality import canonical_entity_text
+
+    left = canonical_entity_text(left)
+    right = canonical_entity_text(right)
+    if not left or not right:
+        return 0.0
+    if left == right:
+        return 1.0
+    compact_left = "".join(char for char in left if char.isalnum())
+    compact_right = "".join(char for char in right if char.isalnum())
+    return float(
+        max(
+            [
+                SequenceMatcher(None, left, right).ratio(),
+                SequenceMatcher(None, compact_left, compact_right).ratio()
+                if compact_left and compact_right
+                else 0.0,
+            ]
+        )
+    )
+
+
+def _frozen_raw_entity_decision(
+    mention_text, candidates, *, min_score=0.95, max_entropy=0.55, min_gap=0.02
+):
+    from server.memory.app import entity_resolution as owner
+    from server.memory.domain.graph_quality import canonical_entity_text
+
+    mention = canonical_entity_text(mention_text)
+    if not mention:
+        return owner.EntityResolutionDecision("", "", 0.0, "empty")
+    raw = [candidate[0] if isinstance(candidate, tuple) else candidate for candidate in candidates]
+    unique = sorted({canonical_entity_text(candidate) for candidate in raw if candidate})
+    if mention in unique:
+        return owner.EntityResolutionDecision(mention, mention, 1.0, "exact")
+    scored = sorted(
+        ((candidate, _frozen_raw_entity_similarity(mention, candidate)) for candidate in unique),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if not scored:
+        return owner.EntityResolutionDecision(mention, mention, 1.0, "self")
+    best, best_score = scored[0]
+    second = scored[1][1] if len(scored) > 1 else 0.0
+    entropy = owner.normalized_entropy([score for _, score in scored if score >= min_score])
+    if (
+        best_score >= min_score
+        and best_score - second >= min_gap
+        and entropy <= max_entropy
+        and not owner._short_name_mismatch(mention, best)
+    ):
+        return owner.EntityResolutionDecision(mention, best, best_score, "fuzzy")
+    return owner.EntityResolutionDecision(mention, mention, 1.0, "self")
+
+
+@pytest.mark.parametrize("shape", ["prepared", "tuples", "raw"])
+def test_prepared_scoring_reuses_pair_surfaces_and_preserves_ratio_order(monkeypatch, shape):
+    from difflib import SequenceMatcher
+
+    from server.memory.app import entity_resolution as owner
+
+    raw = ["northwindai", "north-wind-ai"]
+    prepared = owner._prepare_candidates(raw)
+    assert len(prepared) == 2
+    assert all(len(candidate) == 4 for candidate in prepared)
+    expected = _frozen_raw_entity_decision("Northwind AI", raw)
+    assert expected == owner.EntityResolutionDecision("northwind ai", "northwind ai", 1.0, "self")
+    candidates = raw if shape == "raw" else list(prepared) if shape == "tuples" else prepared
+    normalize = owner.canonical_entity_text
+    normalizations, ratios = [], []
+
+    def counted_normalize(value):
+        normalizations.append(value)
+        return normalize(value)
+
+    def observed_ratio(*args, **kwargs):
+        ratios.append((args[1], args[2]))
+        return SequenceMatcher(*args, **kwargs)
+
+    monkeypatch.setattr(owner, "canonical_entity_text", counted_normalize)
+    monkeypatch.setattr(owner, "SequenceMatcher", observed_ratio)
+    assert owner.choose_canonical_candidate("Northwind AI", candidates) == expected
+    # Both compact-equal candidates must still be scored, in stable canonical order.
+    assert ratios == [
+        surface
+        for canonical, compact, _length, _compact_length in prepared
+        for surface in (("northwind ai", canonical), ("northwindai", compact))
+    ]
+    # Mention parsing/compacting and raw candidate preparation remain unchanged;
+    # scoring must not normalize either already prepared surface again.
+    assert normalizations == ["Northwind AI", *(raw if shape == "raw" else []), "northwind ai"]
+
+
+@pytest.mark.parametrize("shape", ["prepared", "tuples", "raw"])
+@pytest.mark.parametrize(
+    ("mention", "raw"),
+    [
+        ("Northwind AI", ["northwindai", "unrelated product"]),
+        ("Northwind AI", ["northwindai", "north-wind-ai"]),
+        ("naomi alderman", ["naomi alderdman"]),
+        ("qin dynasty", ["qing dynasty"]),
+        ("white water rafting", ["whitewater rafting"]),
+        ("ＴＯＫＹＯ cloud", ["tokyo cloud"]),
+        ("...", ["---"]),
+        ("ClickHouse", [" CLICKHOUSE "]),
+        ("novel entity", []),
+    ],
+)
+def test_prepared_decision_matches_independent_raw_scorer(shape, mention, raw):
+    from server.memory.app import entity_resolution as owner
+
+    prepared = owner._prepare_candidates(raw)
+    candidates = raw if shape == "raw" else list(prepared) if shape == "tuples" else prepared
+    assert owner.choose_canonical_candidate(mention, candidates) == _frozen_raw_entity_decision(
+        mention, raw
+    )
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("commit:ABC123s", "commit:abc123s"),
+        ("Aster’s service", "aster-service"),
+        ("cafe\u0301 cluster", "cafécluster"),
+    ],
+)
+def test_generic_similarity_keeps_raw_normalization_contract(monkeypatch, left, right):
+    from server.memory.app import entity_resolution as owner
+
+    expected = _frozen_raw_entity_similarity(left, right)
+    normalize = owner.canonical_entity_text
+    calls = []
+
+    def counted(value):
+        calls.append(value)
+        return normalize(value)
+
+    monkeypatch.setattr(owner, "canonical_entity_text", counted)
+    assert owner.entity_similarity(left, right) == expected
+    assert calls == [left, right]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("self_evidence", [0, 2], ids=["redirect", "attested-fuzzy"])
+async def test_prepared_scoring_preserves_complete_resolver_rows(monkeypatch, self_evidence):
+    from copy import deepcopy
+    from datetime import datetime
+
+    from server.core.ch_writes import committed_insert_settings
+    from server.memory.app import entity_resolution as owner
+
+    created, now = datetime(2024, 1, 2), datetime(2025, 1, 2)
+    rows = [
+        {
+            "mention_text": "northwindai",
+            "canonical_text": "northwindai",
+            "confidence": 1.0,
+            "evidence_count": self_evidence,
+            "created_at": created,
+        },
+        {
+            "mention_text": "previous alias",
+            "canonical_text": "northwindai",
+            "confidence": 0.8,
+            "evidence_count": 3,
+            "created_at": created,
+        },
+    ]
+    before = deepcopy(rows)
+    actual, reference = StubCH(), StubCH()
+    actual.query_all_returns.append(rows)
+    reference.query_all_returns.append(deepcopy(rows))
+    monkeypatch.setattr(owner, "naive_utc_now", lambda: now)
+    args = dict(org="clickhouse", namespace="private-agent", entity_texts=["Northwind AI"])
+    resolved = await owner.resolve_entities_for_write(actual, **args)
+    with monkeypatch.context() as control:
+        control.setattr(owner, "choose_canonical_candidate", _frozen_raw_entity_decision)
+        control.setattr(owner, "entity_similarity", _frozen_raw_entity_similarity)
+        expected = await owner.resolve_entities_for_write(reference, **args)
+    assert resolved == expected
+    assert actual.insert_calls == reference.insert_calls
+    assert actual.query_all_calls == reference.query_all_calls
+    assert actual.query_all_calls[0][1] == {"org": "clickhouse", "ns": "private-agent", "lim": 5000}
+    canonical = "northwind ai" if self_evidence == 0 else "northwindai"
+    assert resolved == {"northwind ai": canonical}
+    table, inserted, settings = actual.insert_calls[0]
+    assert table == "loom.entity_canonical_map" and settings == committed_insert_settings()
+    assert len(inserted) == (3 if self_evidence == 0 else 1)
+    assert inserted[0] == {
+        "org": "clickhouse",
+        "namespace": "private-agent",
+        "mention_text": "northwind ai",
+        "canonical_text": canonical,
+        "confidence": 1.0,
+        "strategy": "self" if self_evidence == 0 else "fuzzy",
+        "evidence_count": 1,
+        "created_at": now,
+        "updated_at": now,
+        "tombstoned_at": None,
+    }
+    assert all(set(row) == set(inserted[0]) for row in inserted)
+    assert all(
+        row["org"] == "clickhouse" and row["namespace"] == "private-agent" for row in inserted
+    )
+    assert all(row["updated_at"] == now and row["tombstoned_at"] is None for row in inserted)
+    if self_evidence == 0:
+        assert [row["created_at"] for row in inserted[1:]] == [created, created]
+        assert [row["evidence_count"] for row in inserted[1:]] == [0, 3]
+        assert all(row["canonical_text"] == canonical for row in inserted[1:])
+    assert rows == before

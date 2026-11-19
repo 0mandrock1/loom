@@ -53,6 +53,11 @@ def entity_similarity(a: str, b: str) -> float:
         return 1.0
     compact_a = "".join(char for char in a_canon if char.isalnum())
     compact_b = "".join(char for char in b_canon if char.isalnum())
+    return _prepared_similarity(a_canon, b_canon, compact_a, compact_b)
+
+
+def _prepared_similarity(a_canon: str, b_canon: str, compact_a: str, compact_b: str) -> float:
+    """Score unequal, nonempty canonical names with their already prepared compact forms."""
     ratios = [
         SequenceMatcher(None, a_canon, b_canon).ratio(),
         SequenceMatcher(None, compact_a, compact_b).ratio() if compact_a and compact_b else 0.0,
@@ -309,7 +314,10 @@ def choose_canonical_candidate(
     # (see the note above), so this decides exactly what the full scan would.
     scored = sorted(
         (
-            (prepared[i][0], entity_similarity(mention, prepared[i][0]))
+            (
+                prepared[i][0],
+                _prepared_similarity(mention, prepared[i][0], m_compact, prepared[i][1]),
+            )
             for i in _blocked_positions(prepared, m_len, m_clen, min_score)
             if prepared[i][0] != mention
             and _overlap_admits(prepared, i, m_len, m_clen, m_chars, m_cchars, min_score)
