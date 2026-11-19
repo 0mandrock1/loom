@@ -86,6 +86,9 @@ tests and approvals. Offering a tool does not guarantee the model uses it.
 
 Every use case, and when another tool fits better: [use cases](./docs/use-cases/index.md).
 
+Read [Choosing memory for a software factory](https://github.com/ClickHouse/loom/discussions/939)
+for memory architecture choices, data ownership and operating responsibilities.
+
 Loom is not an in-process library for one agent's short-lived memory, nor an agent
 framework. [When Loom does not fit](./docs/getting-started/overview.md#when-it-does-not-fit)
 
@@ -269,7 +272,7 @@ tokens in **Settings → Tokens**. Cursor and other MCP clients, and
 | Integration                                                                                                                                                                                                                                                                                   | What it connects                                                              |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | [Claude Code](./docs/features/integrations/claude-code.md), [Codex](./docs/features/integrations/codex.md), [Cursor](./docs/features/integrations/cursor.md) and [other MCP clients](./docs/features/integrations/mcp-clients.md) ([all integrations](./docs/features/integrations/index.md)) | Memory and code intelligence in your existing agent workflow.                 |
-| [Python](./docs/reference/python-sdk.md), [TypeScript](./docs/reference/typescript-sdk.md), [Rust](./sdk/rust/README.md) and [HTTP](./docs/reference/operations.md)                                                                                                                           | Your own agents and applications.                                             |
+| [Python](./docs/reference/python-sdk.md), [TypeScript](./docs/reference/typescript-sdk.md), [Rust](./sdk/rust/README.md), [Go](./sdk/go/README.md) and [HTTP](./docs/reference/operations.md)                                                                                                 | Your own agents and applications.                                             |
 | [Langfuse](./docs/features/integrations/langfuse.md)                                                                                                                                                                                                                                          | Request traces, model costs, retrieval scores and prompt-version attribution. |
 | [ClickStack / HyperDX](./docs/features/integrations/clickstack.md)                                                                                                                                                                                                                            | OpenTelemetry traces, logs and metrics in ClickHouse.                         |
 
