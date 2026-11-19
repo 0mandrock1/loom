@@ -90,7 +90,7 @@ class CodeSearchInput(_CodeIdentity, _ResultLessons):
     # a body via code.symbol when one card wins.
     # None = the deployment default (settings.code_search_bodies_default).
     bodies: Literal["auto", "none"] | None = None
-    # Chunk-kind prior override for A/B: None = the served "flat" table; "default" /
+    # Chunk-kind prior override: None = code_search_kind_prior; "default" /
     # "flat" pick a table, "structural" applies only the phrasing rule, "off" disables.
     kind_prior: Literal["off", "default", "flat", "structural"] | None = Field(
         default=None, json_schema_extra=MCP_HIDDEN
@@ -281,7 +281,8 @@ class CodeSearchOutput(_LessonsOut):
     # {ns: {ms, results, abstain, route, commit, trace_run_id}}, dropped: [ns...]}.
     # Empty (and off the wire) unless the request named several namespaces.
     fanout: dict[str, Any] = Field(default_factory=dict)
-    # e.g. "lexical only until embeddings finish (41% embedded)" while the namespace's
+    # Retrieval availability warning, or e.g. "lexical only until embeddings finish
+    # (41% embedded)" while the namespace's
     # vector leg covers less than LOOM_CODE_READY_EMBED_COVERAGE of its chunks (a first
     # index still embedding, a backfill without --embed); "" otherwise.
     note: str = ""
@@ -291,11 +292,11 @@ class CodeSearchOutput(_LessonsOut):
     legs_timed_out: list[str] = Field(default_factory=list)
     # "partial" when a leg timed out or a content leg failed; off the wire otherwise.
     epistemic: Literal["", "partial"] = ""
-    # `deadline_ms` cut something (a leg, rerank, a late stage): the page is the best
-    # found in the budget, and `partial_reason` names what did not finish. Off the wire
+    # A deadline or failed retrieval leg limited this page, and `partial_reason`
+    # names what did not finish. Off the wire
     # otherwise.
     partial: bool = False
-    # What the deadline cut, as `deadline N ms: <stage>; <stage>`; off the wire otherwise.
+    # The failed retrieval legs or deadline-limited stages; off the wire otherwise.
     partial_reason: str = ""
 
 
@@ -328,6 +329,14 @@ class CodeAskInput(_CodeIdentity):
 class CodeAskOutput(BaseModel):
     # The grounded answer text; "" on an abstain or when synthesize=false.
     answer: str = ""
+    # True when retrieval or provider limits prevent a complete response.
+    partial: bool = False
+    # Sanitized reason for an incomplete response; empty when complete.
+    partial_reason: str = ""
+    # Caller-facing warning about missing retrieval or synthesis.
+    note: str = ""
+    # Synthesis self-assessment, not verified correctness; empty on cached answers.
+    coverage: Literal["", "full", "partial", "none"] = ""
     # The units the answer used (or was shown when none is cited): {path, start_line,
     # end_line, symbol, unit_id} each; the retrieved units when synthesize=false.
     citations: list[dict[str, Any]] = Field(default_factory=list)
