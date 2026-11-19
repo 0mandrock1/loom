@@ -37,6 +37,8 @@
 
 Loom is an open-source, self-hosted MCP server that gives your agents long-term, shared
 memory: what one agent learns in a session, the next agent or tool can find.
+In an authenticated team deployment, each agent uses a token scoped to namespaces and
+read or write roles. [Check shared memory and denied access](./docs/getting-started/connect-a-coding-agent.md#share-a-team-namespace-with-separate-credentials).
 
 Agents connect through MCP, HTTP, Python or TypeScript. Self-host with Docker or
 [on Kubernetes with the Helm chart](./docs/operations/kubernetes.md); agent context and
