@@ -142,7 +142,7 @@ async def test_model_metadata_cannot_replace_the_bound_identity() -> None:
         await agent.close()
 
 
-@pytest.mark.parametrize("user_id", [None, "", "-", "  "])
+@pytest.mark.parametrize("user_id", [None, "", "-", "  ", " user ", "\u001fuser"])
 async def test_key_correction_cannot_widen_an_unnamed_user_scope(user_id: str | None) -> None:
     agent, calls = _agent({})
     try:

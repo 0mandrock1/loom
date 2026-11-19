@@ -22,6 +22,7 @@ import type { OpInput } from "./client.js";
 import { CODE_TOOL_SPEC, type CodeOp, codeRequest, fitCodeResult } from "./code-tools.js";
 import { LoomError } from "./errors.js";
 import type { MemorySearchOutput } from "./generated/ops.js";
+import { hasIdentityWhitespace } from "./whitespace.js";
 
 const MEMORY_INSUFFICIENT = JSON.stringify({
   insufficient: true,
@@ -297,7 +298,7 @@ export class AgentTools {
     this.maxResultChars = opts.maxResultChars ?? 8_000;
     if (
       opts.only?.includes("loom_update") &&
-      (typeof scope.userId !== "string" || !scope.userId.trim() || scope.userId.trim() === "-")
+      (typeof scope.userId !== "string" || !scope.userId || scope.userId === "-" || hasIdentityWhitespace(scope.userId))
     )
       throw new LoomError("loom_update requires an application-bound named userId");
     if (opts.only?.includes("loom_code_lookup") && opts.codeNamespace === undefined)

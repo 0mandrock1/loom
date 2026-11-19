@@ -252,9 +252,10 @@ What an agent framework holds between turns:
   claiming a code link was resolved. `only=["loom_recall", "loom_update"]`
   opts into correction of an existing key. This optional tool requires an explicit
   named `user_id`; `None`, an empty name and `"-"` refuse before a request because
-  they mean all users to the key-update operation. A correction keeps the configured
-  namespace and user scope, resolves the key across writing agents and sessions,
-  and preserves ambiguity and hash-precondition refusals. The default six tools
+  they mean all users to the key-update operation. Names with surrounding whitespace
+  also refuse rather than resolve under a different identity. A correction keeps
+  the configured namespace and user scope, resolves the key across writing agents
+  and sessions, and preserves ambiguity and hash-precondition refusals. The default six tools
   do not include `loom_update`.
 - `bot.run_scope(goal=...)` is an `async with` block that begins a run, stamps
   its `run_id` on the writes inside and labels the reads with it (the

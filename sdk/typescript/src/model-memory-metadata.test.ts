@@ -86,7 +86,7 @@ describe("model memory metadata", () => {
     });
   });
 
-  it.each([undefined, "", "-", "  "])("refuses an unnamed correction scope: %j", (userId) => {
+  it.each([undefined, "", "-", "  ", " user ", "\u001fuser"])("refuses an unnamed correction scope: %j", (userId) => {
     const { agent, calls } = setup({});
     expect(() => agent.tools({ userId }, { only: ["loom_update"] })).toThrow("application-bound named userId");
     expect(calls).toEqual([]);
