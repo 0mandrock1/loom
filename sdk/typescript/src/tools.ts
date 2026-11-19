@@ -296,11 +296,7 @@ export class AgentTools {
     opts: AgentToolsOptions = {},
   ) {
     this.maxResultChars = opts.maxResultChars ?? 8_000;
-    if (
-      opts.only?.includes("loom_update") &&
-      (typeof scope.userId !== "string" || !scope.userId || scope.userId === "-" || hasIdentityWhitespace(scope.userId))
-    )
-      throw new LoomError("loom_update requires an application-bound named userId");
+    if (opts.only?.includes("loom_update")) namedCorrectionUserId(scope.userId);
     if (opts.only?.includes("loom_code_lookup") && opts.codeNamespace === undefined)
       throw new LoomError("loom_code_lookup requires codeNamespace");
     if (opts.codeNamespace !== undefined) {
@@ -341,7 +337,13 @@ export class AgentTools {
       const raw = parseArgs(args);
       const extra = Object.keys(raw).filter((key) => !Object.hasOwn(CODE_TOOL_SPEC.parameters.properties, key));
       if (extra.length) throw new LoomError(`unexpected code tool arguments: ${extra.sort().join(", ")}`);
-      const { op, body } = codeRequest(checkArgs(CODE_TOOL_SPEC, raw));
+      const checked = checkArgs(CODE_TOOL_SPEC, raw);
+      const depth = optInt(checked, "depth");
+      const { op, body } = codeRequest({
+        kind: text(checked, "kind"),
+        target: text(checked, "target"),
+        ...(depth !== undefined ? { depth } : {}),
+      });
       const input = { ...this.agent.identity(this.scope), ...body, namespace: this.codeNamespace } as OpInput<CodeOp>;
       const response = await this.agent.client.callWithResponse(op, input);
       return fitCodeResult(
@@ -357,8 +359,10 @@ export class AgentTools {
     const out = await this.run(spec.name, checkArgs(spec, args));
     if (name === "loom_remember" || name === "loom_recall" || name === "loom_update")
       return this.fitMemoryResult(out as Record<string, unknown>);
-    const text = typeof out === "string" ? out : JSON.stringify(out);
-    return text.length > this.maxResultChars ? `${text.slice(0, this.maxResultChars)}…[truncated]` : text;
+    const resultText = typeof out === "string" ? out : JSON.stringify(out);
+    return resultText.length > this.maxResultChars
+      ? `${resultText.slice(0, this.maxResultChars)}…[truncated]`
+      : resultText;
   }
 
   /** Keep whole evidence and disclose when even the metadata cannot fit. */
@@ -396,11 +400,15 @@ export class AgentTools {
         };
       }
       case "loom_update": {
+        const userId = namedCorrectionUserId(this.scope.userId);
         const expected = optText(a, "if_match_sha256");
         return this.agent.client.call("memory.update", {
-          ...this.agent.identity(this.scope),
+          org: this.agent.org,
+          namespace: this.agent.namespace,
           agent: "*",
+          user_id: userId,
           session_id: "-",
+          run_id: this.scope.runId ?? "-",
           memory_key: text(a, "memory_key"),
           value: text(a, "value"),
           ...(expected ? { if_match_sha256: expected } : {}),
@@ -455,6 +463,12 @@ export class AgentTools {
       }
     }
   }
+}
+
+function namedCorrectionUserId(value: unknown): string {
+  if (typeof value !== "string" || !value || value === "-" || hasIdentityWhitespace(value))
+    throw new LoomError("loom_update requires an application-bound named userId");
+  return value;
 }
 
 /** A tool call's arguments after `checkArgs`: only the properties given, each of its declared type. */

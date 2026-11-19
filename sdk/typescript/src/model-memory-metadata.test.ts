@@ -67,7 +67,10 @@ describe("model memory metadata", () => {
     const { agent, calls } = setup(receipt);
     expect(agent.tools().definitions()).toHaveLength(6);
     expect(agent.tools().has("loom_update")).toBe(false);
-    const tools = agent.tools({ userId: "user-one", sessionId: "new-session" }, { only: ["loom_update"] });
+    const tools = agent.tools(
+      { userId: "user-one", sessionId: "new-session", runId: "run-one" },
+      { only: ["loom_update"] },
+    );
     expect(
       JSON.parse(await tools.execute("loom_update", { memory_key: "k", value: "v", if_match_sha256: "old" })),
     ).toEqual(receipt);
@@ -79,11 +82,33 @@ describe("model memory metadata", () => {
         agent: "*",
         user_id: "user-one",
         session_id: "-",
+        run_id: "run-one",
         memory_key: "k",
         value: "v",
         if_match_sha256: "old",
       },
     });
+  });
+
+  it("refuses a correction if its bound scope becomes unnamed before execution", async () => {
+    const { agent, calls } = setup({});
+    const scope = { userId: "user-one" };
+    const tools = agent.tools(scope, { only: ["loom_update"] });
+    scope.userId = "-";
+    await expect(tools.execute("loom_update", { memory_key: "k", value: "v" })).rejects.toThrow(
+      "application-bound named userId",
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it.each([
+    { kind: ["symbol"], target: "pkg.fn" },
+    { kind: "symbol", target: ["pkg.fn"] },
+    { kind: "callers", target: "pkg.fn", depth: [1] },
+  ])("keeps metadata arrays out of scalar code arguments: %j", async (args) => {
+    const { agent, calls } = setup({});
+    await expect(agent.tools({}, { codeNamespace: "code-repo" }).execute("loom_code_lookup", args)).rejects.toThrow();
+    expect(calls).toEqual([]);
   });
 
   it.each([undefined, "", "-", "  ", " user ", "\u001fuser"])("refuses an unnamed correction scope: %j", (userId) => {
