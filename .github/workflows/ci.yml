@@ -1247,3 +1247,43 @@ jobs:
           uv pip list --python /tmp/sdk-venv/bin/python
       - name: Smoke-test the installed wheel
         run: /tmp/sdk-venv/bin/python scripts/gates/sdk_wheel_smoke.py dist/*.whl
+
+  langflow-extension:
+    needs: validate-ref
+    name: Langflow extension wheel (py ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Build the SDK and extension distributions
+        run: |
+          uv build sdk/python --out-dir "$RUNNER_TEMP/langflow-sdk-dist"
+          uv build integrations/langflow --out-dir "$RUNNER_TEMP/langflow-extension-dist"
+          mkdir "$RUNNER_TEMP/langflow-sdist"
+          tar -xzf "$RUNNER_TEMP"/langflow-extension-dist/*.tar.gz -C "$RUNNER_TEMP/langflow-sdist"
+          uv build "$RUNNER_TEMP"/langflow-sdist/* --wheel --out-dir "$RUNNER_TEMP/langflow-rebuilt-dist"
+      - name: Install and discover the extension outside the checkout
+        run: |
+          uv venv --python "$(command -v python)" "$RUNNER_TEMP/langflow-extension-venv"
+          uv pip install --python "$RUNNER_TEMP/langflow-extension-venv/bin/python" \
+            "$RUNNER_TEMP"/langflow-sdk-dist/*.whl \
+            "$RUNNER_TEMP"/langflow-rebuilt-dist/*.whl "lfx==1.13.3"
+          uv pip check --python "$RUNNER_TEMP/langflow-extension-venv/bin/python"
+          cd "$RUNNER_TEMP"
+          env -u PYTHONPATH "$RUNNER_TEMP/langflow-extension-venv/bin/python" -I \
+            "$GITHUB_WORKSPACE/scripts/gates/langflow_extension_smoke.py" \
+            "$GITHUB_WORKSPACE" "$RUNNER_TEMP/langflow-extension-dist" \
+            "$RUNNER_TEMP/langflow-rebuilt-dist" \
+            "$RUNNER_TEMP/langflow-sdk-dist"
