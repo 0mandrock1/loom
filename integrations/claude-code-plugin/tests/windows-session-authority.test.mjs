@@ -39,6 +39,63 @@ function witnessEnv() {
   };
 }
 
+// Retain only protocol phases and observer timing when a real witness exits early.
+function nativePhaseTrail(child) {
+  const started = performance.now();
+  const phases = new Set([
+    "entry",
+    "encoding-new",
+    "encoding-created",
+    "encoding-input",
+    "encoding-output",
+    "startup",
+    "bootstrap",
+    "worker-bootstrap",
+    "guardian-deadline",
+    "native-job",
+    "native-timer",
+    "worker-start",
+    "worker-assign",
+    "compiler-private",
+    "compiler-identity",
+    "compiler-path",
+    "compiler-security",
+    "compiler-parents",
+    "compiler-directory",
+    "compiler-receipt",
+    "compile",
+    "request",
+    "native-op",
+    "cleanup",
+    "worker-exit",
+    "helper-exit",
+  ]);
+  const frames = [];
+  let pending = "";
+  let rejected = 0;
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    pending += chunk;
+    if (pending.length > 1024) {
+      pending = "";
+      rejected = Math.min(1024, rejected + 1);
+      return;
+    }
+    let end;
+    while ((end = pending.indexOf("\n")) !== -1) {
+      const line = pending.slice(0, end).replace(/\r$/, "");
+      pending = pending.slice(end + 1);
+      const match = /^LSP1:([a-z-]+):(-?[0-9]{1,10})$/.exec(line);
+      const code = match ? Number(match[2]) : NaN;
+      if (match && phases.has(match[1]) && Number.isSafeInteger(code) && code >= -2147483648 && code <= 2147483647) {
+        if (frames.length === 24) frames.shift();
+        frames.push({ phase: match[1], code, observerMs: Math.min(60000, Math.round(performance.now() - started)) });
+      } else rejected = Math.min(1024, rejected + 1);
+    }
+  });
+  return () => JSON.stringify({ frames, rejected });
+}
+
 function exactProcesses(identities, kill = false) {
   const source = String.raw`
     $ErrorActionPreference = 'Stop'
@@ -129,6 +186,7 @@ if (process.platform === "win32") {
         env: witnessEnv(),
       },
     );
+    const phases = nativePhaseTrail(witness);
     witness.stdin.end();
     const exited = new Promise((resolve) => witness.once("exit", resolve));
     let child;
@@ -136,9 +194,9 @@ if (process.platform === "win32") {
     try {
       child = await new Promise((resolve, reject) => {
         let output = "";
-        startupTimer = setTimeout(() => reject(new Error("job witness did not start")), 2000);
+        startupTimer = setTimeout(() => reject(new Error(`job witness did not start: ${phases()}`)), 2000);
         witness.once("error", reject);
-        witness.once("exit", () => reject(new Error("job witness exited before announcing its child")));
+        witness.once("exit", () => reject(new Error(`job witness exited before announcing its child: ${phases()}`)));
         witness.stdout.on("data", (chunk) => {
           output += chunk.toString("utf8");
           if (output.includes("\n")) {
@@ -201,15 +259,16 @@ if (process.platform === "win32") {
       windowsHide: true,
       env: environment,
     });
+    const phases = nativePhaseTrail(caller);
     const exited = new Promise((resolve) => caller.once("exit", resolve));
     let receipt;
     let timer;
     try {
       receipt = await new Promise((resolve, reject) => {
         let output = "";
-        timer = setTimeout(() => reject(new Error("real compiler witness did not start")), 2000);
+        timer = setTimeout(() => reject(new Error(`real compiler witness did not start: ${phases()}`)), 2000);
         caller.once("error", reject);
-        caller.once("exit", () => reject(new Error("Node caller exited before compiler announcement")));
+        caller.once("exit", () => reject(new Error(`Node caller exited before compiler announcement: ${phases()}`)));
         caller.stdout.on("data", (chunk) => {
           output += chunk.toString("utf8");
           if (output.includes("\n")) {
