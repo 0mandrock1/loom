@@ -240,6 +240,20 @@ def tier_outcome(result: TierResult, **extra: Any) -> dict[str, Any]:
     }
 
 
+def _checkout_git_path(checkout: Path, flag: str) -> Path | None:
+    """Resolve Git's path without inherited repository or worktree overrides."""
+    from server.code.app.index.gitrepo import auth_env
+
+    probe = subprocess.run(
+        ["git", "-C", str(checkout), "rev-parse", flag],
+        capture_output=True,
+        text=True,
+        env=auth_env(),
+        timeout=settings.code_git_timeout_s,
+    )
+    return Path(probe.stdout.removesuffix("\n")).resolve() if probe.returncode == 0 else None
+
+
 def _prepare_checkout(checkout: Path) -> str | None:
     """Initialize only empty directories; an existing tree must own its Git root."""
     from server.code.app.index.gitrepo import auth_env
@@ -266,18 +280,11 @@ def _prepare_checkout(checkout: Path) -> str | None:
             if init.returncode:
                 return f"git init: {init.stderr.strip()}"
         metadata = checkout / ".git"
-        if metadata.is_file() or metadata.is_symlink() or (metadata / "commondir").exists():
+        if metadata.is_symlink() or not metadata.is_dir() or (metadata / "commondir").exists():
             return "compiler checkout needs a standalone .git directory; use a separate empty path"
-        probe = subprocess.run(
-            ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            env=auth_env(),
-            timeout=settings.code_git_timeout_s,
-        )
-        if probe.returncode:
-            return "not a Git working tree"
-        if Path(probe.stdout.removesuffix("\n")).resolve() != checkout.resolve():
+        if _checkout_git_path(checkout, "--absolute-git-dir") != metadata.resolve():
+            return "Git metadata does not match the checkout's local .git directory"
+        if _checkout_git_path(checkout, "--show-toplevel") != checkout.resolve():
             return "not the root of its Git working tree"
     except OSError as e:
         return f"checkout unavailable: {e}"

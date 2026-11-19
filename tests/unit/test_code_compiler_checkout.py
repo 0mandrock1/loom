@@ -170,6 +170,43 @@ def test_external_git_metadata_is_refused_without_changing_it(tmp_path: Path, sh
     } == before
 
 
+@pytest.mark.parametrize("local_metadata", [False, True], ids=["missing-local", "invalid-local"])
+def test_ancestor_worktree_configuration_never_supplies_checkout_metadata(
+    tmp_path: Path, local_metadata: bool
+) -> None:
+    from server.code.app.index.gitrepo import auth_env
+
+    bare = _bare_repo(tmp_path)
+    ancestor = tmp_path / "ancestor"
+    subprocess.run(["git", "init", "-q", str(ancestor)], check=True)
+    checkout = ancestor / "checkout"
+    checkout.mkdir()
+    (checkout / "keep.py").write_text("keep = True\n")
+    subprocess.run(
+        ["git", "-C", str(ancestor), "config", "core.worktree", str(checkout)], check=True
+    )
+    if local_metadata:
+        (checkout / ".git").mkdir()
+    else:
+        probe = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
+            env=auth_env(),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert Path(probe.stdout.removesuffix("\n")).resolve() == checkout.resolve()
+    cfg = repo_config(git_dir=str(bare), scip_checkout_dir=str(checkout), scip_producer="python")
+    before = {p.relative_to(ancestor): p.read_bytes() for p in ancestor.rglob("*") if p.is_file()}
+
+    _actual, _bare, missing = resolve_checkout(cfg, "python")
+
+    assert missing is not None
+    assert {
+        p.relative_to(ancestor): p.read_bytes() for p in ancestor.rglob("*") if p.is_file()
+    } == before
+
+
 @pytest.mark.parametrize("existing", [False, True])
 def test_checkout_git_commands_have_a_timeout_and_report_expiry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: bool

@@ -25,7 +25,10 @@ def _value(value: Any) -> Any:
 
 
 @pytest.mark.parametrize("round_read", [False, True])
-async def test_large_symbol_keys_round_trip_every_column(round_read: bool) -> None:
+@pytest.mark.parametrize(
+    "large_name", ["型\\'" * 40_000, "型" * 720_000], ids=["quoted-multibyte", "many-parts"]
+)
+async def test_large_symbol_keys_round_trip_every_column(round_read: bool, large_name: str) -> None:
     org, namespace = unique_org("code-reconciliation"), "code-parameters"
     stamp = naive_utc_now().replace(microsecond=0)
     rows = [
@@ -45,7 +48,7 @@ async def test_large_symbol_keys_round_trip_every_column(round_read: bool) -> No
             indexed_commit="a" * 40,
             created_at=stamp,
         )
-        for i, name in enumerate(["型\\'" * 40_000, "small"])
+        for i, name in enumerate([large_name, "small"])
     ]
     client = CHClient()
     with query_tag("integration.code_reconciliation"):
