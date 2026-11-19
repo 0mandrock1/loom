@@ -212,6 +212,23 @@ def final_failure(failure, monitor_error):
     return failure or monitor_error
 
 
+def wait_fixture_ready(client, url, seconds, *, now=time.monotonic, pause=time.sleep):
+    end = now() + seconds
+    observations = []
+    while now() < end:
+        try:
+            status = client.get(url).status_code
+        except httpx.TransportError as error:
+            observations.append({"error_type": type(error).__name__})
+        else:
+            observations.append({"status": status})
+            require(status not in (401, 403), "Fixture readiness permission refused")
+            if status == 200:
+                return observations
+        pause(1)
+    raise RuntimeError("Owned fixture readiness failed: " + json.dumps(observations[-3:]))
+
+
 class Runtime:
     def __init__(self):
         require(
@@ -804,31 +821,21 @@ class Runtime:
         self.persist()
         self.command(args + [self.ch_image])
         self.capture_ch()
+        self.phase = "clickhouse-readiness"
         with httpx.Client(timeout=3, trust_env=False) as client:
-            end = time.monotonic() + 80
-            while time.monotonic() < end:
-                try:
-                    if client.get("http://127.0.0.1:18471/ping").status_code == 200:
-                        break
-                except httpx.ConnectError:
-                    pass
-                time.sleep(1)
-            else:
-                raise RuntimeError("Owned ClickHouse readiness failed")
+            self.record(
+                "clickhouse-readiness.json",
+                wait_fixture_ready(client, "http://127.0.0.1:18471/ping", 80),
+            )
+        self.phase = "loom-migrations"
         self.command([sys.executable, "-m", "server.core.schema.migrate"], timeout=300)
         self.loom_pid = self.launch(["sh", "scripts/serve.sh"], logged=True).pid
+        self.phase = "loom-readiness"
         with httpx.Client(timeout=5, trust_env=False) as client:
-            end = time.monotonic() + 120
-            while time.monotonic() < end:
-                try:
-                    response = client.get(self.env["LOOM_BASE_URL"] + "/v1/health")
-                    if response.status_code == 200:
-                        break
-                except httpx.ConnectError:
-                    pass
-                time.sleep(1)
-            else:
-                raise RuntimeError("Owned auth-on Loom readiness failed")
+            self.record(
+                "loom-readiness.json",
+                wait_fixture_ready(client, self.env["LOOM_BASE_URL"] + "/v1/health", 120),
+            )
             require(
                 client.get(self.env["LOOM_BASE_URL"] + "/v1/me/service_accounts").status_code
                 == 401,
@@ -1311,7 +1318,10 @@ def main():
         require(runtime.monitor_error is None, "Resource monitor failed")
     except Exception as error:  # noqa: BLE001 — Record a bounded failure before owned cleanup.
         failure = runtime.redact(error)
-        runtime.record("failure.json", {"phase": runtime.phase, "error": failure})
+        runtime.record(
+            "failure.json",
+            {"phase": runtime.phase, "error_type": type(error).__name__, "error": failure},
+        )
     finally:
         try:
             runtime.cleanup()

@@ -6,11 +6,51 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from zipfile import ZipInfo
 
+import httpx
+
 from scripts.gates import dify_application_scenario as scenario
 from scripts.gates import dify_application_smoke as smoke
+from tests.unit.clock_fake import ManualClock
 
 
 class DifyApplicationGuards(unittest.TestCase):
+    def test_starting_fixture_can_reset_before_healthy_within_same_budget(self):
+        client = Mock()
+        client.get.side_effect = [
+            httpx.ReadError("reset"),
+            httpx.Response(503),
+            httpx.Response(200),
+        ]
+        clock = ManualClock()
+        result = smoke.wait_fixture_ready(
+            client, "http://127.0.0.1/ping", 3, now=clock.monotonic, pause=clock.sleep
+        )
+        self.assertEqual(result, [{"error_type": "ReadError"}, {"status": 503}, {"status": 200}])
+        self.assertEqual(clock.t, 2)
+        self.assertEqual(client.get.call_count, 3)
+
+    def test_persistent_fixture_reset_exhausts_original_readiness_budget(self):
+        client = Mock()
+        client.get.side_effect = httpx.ReadError("reset")
+        clock = ManualClock()
+        with self.assertRaisesRegex(RuntimeError, "readiness failed.*ReadError"):
+            smoke.wait_fixture_ready(
+                client, "http://127.0.0.1/ping", 2, now=clock.monotonic, pause=clock.sleep
+            )
+        self.assertEqual(clock.t, 2)
+        self.assertEqual(client.get.call_count, 2)
+
+    def test_fixture_permission_refusal_is_terminal_without_another_poll(self):
+        client = Mock()
+        client.get.return_value = httpx.Response(403)
+        clock = ManualClock()
+        with self.assertRaisesRegex(RuntimeError, "permission refused"):
+            smoke.wait_fixture_ready(
+                client, "http://127.0.0.1/ping", 2, now=clock.monotonic, pause=clock.sleep
+            )
+        self.assertEqual(client.get.call_count, 1)
+        self.assertEqual(clock.t, 0)
+
     def test_credentials_stay_in_memory_and_are_redacted_without_stdout(self):
         runtime = smoke.Runtime.__new__(smoke.Runtime)
         runtime.secrets = []
