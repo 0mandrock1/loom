@@ -5,19 +5,30 @@ $lib = [IO.Path]::GetFullPath([IO.Path]::Combine($PSScriptRoot, '..', 'lib'))
 . ([IO.Path]::Combine($lib, 'windows-compiler-job.ps1'))
 . ([IO.Path]::Combine($lib, 'windows-session-protection.ps1')) -DefinitionsOnly
 $native = New-LoomBootstrapApi
-$receipt = [IO.Path]::Combine($env:LOOM_PRIVATE_COMPILER_BASE, $env:LOOM_PRIVATE_COMPILATION_ID, 'witness.json')
-$script:announced = $false
-Invoke-LoomGuardedWorker $native ([IO.Path]::Combine($PSScriptRoot, 'windows-compiler-witness.ps1')) {
-    [void](Invoke-LoomCompilerScope $native $true $null)
-} {
-    param($worker)
-    if (-not $script:announced -and [IO.File]::Exists($receipt)) {
-        $r = [IO.File]::ReadAllText($receipt) | ConvertFrom-Json
-        $guardian = [Diagnostics.Process]::GetCurrentProcess()
-        $r | Add-Member -NotePropertyName guardian -NotePropertyValue @{ pid = $guardian.Id; started = $guardian.StartTime.ToUniversalTime().Ticks.ToString() }
-        $r | Add-Member -NotePropertyName worker -NotePropertyValue @{ pid = $worker.Id; started = $worker.StartTime.ToUniversalTime().Ticks.ToString() }
-        [Console]::Out.WriteLine((ConvertTo-Json -Compress -Depth 4 $r))
-        [Console]::Out.Flush()
-        $script:announced = $true
-    }
+Invoke-LoomGuardedCompiler $native {
+    param($compilerNative, $compilerJob, $compilerDeadline, $directory)
+    $pipeName = 'loom-compiler-' + $env:LOOM_PRIVATE_COMPILATION_ID
+    $pipe = [IO.Pipes.NamedPipeServerStream]::new($pipeName, [IO.Pipes.PipeDirection]::Out, 1,
+        [IO.Pipes.PipeTransmissionMode]::Byte, [IO.Pipes.PipeOptions]::Asynchronous)
+    try {
+        $connected = $pipe.BeginWaitForConnection($null, $null)
+        $state = @{ Announced = $false }
+        Invoke-LoomCompilerProcess $compilerNative $compilerJob $compilerDeadline $directory (
+            '/noconfig /target:library /out:witness.dll @"\\.\pipe\' + $pipeName + '"') {
+            param($compilerHandle, $compilerPid)
+            if (-not $state.Announced -and $connected.IsCompleted) {
+                $pipe.EndWaitForConnection($connected)
+                if ($compilerNative::WaitForSingleObject($compilerHandle, 0) -ne 258) { throw 'Unavailable' }
+                $compiler = [Diagnostics.Process]::GetProcessById($compilerPid)
+                try {
+                    $guardian = [Diagnostics.Process]::GetCurrentProcess()
+                    $receipt = @{ pid = $compilerPid; started = $compiler.StartTime.ToUniversalTime().Ticks.ToString();
+                        directory = $directory; guardian = @{ pid = $guardian.Id; started = $guardian.StartTime.ToUniversalTime().Ticks.ToString() } }
+                    [Console]::Out.WriteLine((ConvertTo-Json -Compress -Depth 4 $receipt))
+                    [Console]::Out.Flush()
+                    $state.Announced = $true
+                } finally { $compiler.Dispose() }
+            }
+        }
+    } finally { $pipe.Dispose() }
 }

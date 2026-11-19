@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { performance } from "node:perf_hooks";
 import { cachePathFor } from "../lib/repo-scope.mjs";
 import { batchKind } from "../lib/shunt-ledger.mjs";
 import { protectSession, sessionIsProtected } from "../lib/session-protection.mjs";
@@ -67,7 +68,19 @@ function seed(root, { asOf = FAR_BEHIND, existingSessions = [] } = {}) {
   return tmp;
 }
 
-function runHook(payload, { tmp, url = "http://127.0.0.1:9", env = {} }) {
+function recordFixtureEvent(observation, event, details = {}) {
+  if (!observation || observation.events.length >= 32) return;
+  observation.events.push({ event, elapsedMs: Math.round(performance.now() - observation.startedAt), ...details });
+}
+
+function observedFailure(error, observation) {
+  error.message += `; shunt fixture observation ${JSON.stringify(observation.events)}`;
+  return error;
+}
+
+function runHook(payload, { tmp, url = "http://127.0.0.1:9", env = {}, observation }) {
+  const startedAt = performance.now();
+  const childNumber = observation ? ++observation.children : 0;
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [HOOK, "PreToolUse"], {
       env: hostEnv({
@@ -85,7 +98,13 @@ function runHook(payload, { tmp, url = "http://127.0.0.1:9", env = {} }) {
     child.stdout.on("data", (c) => {
       out += c;
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
+      recordFixtureEvent(observation, "hook-close", {
+        child: childNumber,
+        code: Number.isInteger(code) && code >= -2147483648 && code <= 2147483647 ? code : null,
+        signal: typeof signal === "string" && /^SIG[A-Z0-9]{1,12}$/.test(signal) ? signal : null,
+        childElapsedMs: Math.round(performance.now() - startedAt),
+      });
       let log = "";
       try {
         log = fs.readFileSync(logPath(tmp), "utf8");
@@ -107,12 +126,16 @@ function runHook(payload, { tmp, url = "http://127.0.0.1:9", env = {} }) {
 
 async function withServer(answers, fn) {
   const seen = [];
+  const observation = { startedAt: performance.now(), children: 0, requests: 0, events: [] };
   const server = http.createServer((req, res) => {
+    const request = ++observation.requests;
+    res.once("finish", () => recordFixtureEvent(observation, "response-finish", { request }));
     let raw = "";
     req.on("data", (c) => {
       raw += c;
     });
     req.on("end", () => {
+      recordFixtureEvent(observation, "request-end", { request });
       seen.push({ url: req.url, body: raw ? JSON.parse(raw) : {} });
       res.setHeader("content-type", "application/json");
       const answer = answers[req.url];
@@ -121,7 +144,7 @@ async function withServer(answers, fn) {
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   try {
-    return await fn(`http://127.0.0.1:${server.address().port}`, seen);
+    return await fn(`http://127.0.0.1:${server.address().port}`, seen, observation);
   } finally {
     server.close();
   }
@@ -517,48 +540,58 @@ test("a marked aggregate response protects every producer and retains both unack
   const rootB = establishFixtureSession(tmp, "B");
   fs.writeFileSync(cachePathFor(other, tmp), fs.readFileSync(cachePathFor(dir, tmp)));
   try {
-    await withServer({ "/v1/code.outcome": { mirrored: true } }, async (url, seen) => {
-      const a = await runHook({ ...readOf(dir, "src/a.cpp"), session_id: "A" }, { tmp, url, env: reporting });
-      assert.equal(a.deny, null);
-      const queuedA = pendingPath(tmp, url, "A");
-      const beforeA = fs.readFileSync(queuedA, "utf8");
-      assert.equal(outcomes(seen).length, 0);
-      assert.equal(sessionIsProtected(rootA), false);
-      assert.equal(sessionIsProtected(rootB), false);
-      const b = await runHook({ ...readOf(other, "src/b.cpp"), session_id: "B" }, { tmp, url, env: reporting });
-      assert.ok(b.deny);
-      await settle();
-      assert.equal(outcomes(seen).length, 1, "the first marked answer suppresses the aggregate's second body");
-      assert.equal(outcomes(seen)[0].body.action, "shunt_hit");
-      assert.equal(sessionIsProtected(rootA), true);
-      assert.equal(sessionIsProtected(rootB), true);
-      assert.equal(fs.existsSync(queuedA), false);
-      assert.equal(fs.existsSync(pendingPath(tmp, url, "B")), false);
-      const claims = fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-"));
-      assert.equal(claims.length, 2, "claiming moves evidence; a marked answer does not acknowledge it");
-      const retained = claims.map((name) => fs.readFileSync(path.join(tmp, name), "utf8"));
-      assert.ok(retained.includes(beforeA), "producer A's exact queued bytes remain in its claim");
-      const rows = retained.flatMap((text) =>
-        text
-          .trimEnd()
-          .split("\n")
-          .map((line) => JSON.parse(line)),
-      );
-      assert.equal(rows.length, 2);
-      const rowA = rows.find((row) =>
-        row.protectionRoots.some((root) => root.base === rootA.base && root.id === rootA.id),
-      );
-      const rowB = rows.find((row) =>
-        row.protectionRoots.some((root) => root.base === rootB.base && root.id === rootB.id),
-      );
-      assert.ok(rowA && rowB, "both actual producer roots stay attached to their evidence");
-      assert.match(rowA.line, /\tpass\tRead\t.*\tmodified\tsrc\/a\.cpp\t/);
-      assert.match(rowB.line, /\thit\tRead\t.*\tsrc\/b\.cpp\t/);
-      const scopePrefix = `loom-${batchKind({ serverUrl: url, token: "t", org: "o", namespace: "code-x" })}-`;
-      assert.deepEqual(
-        fs.readdirSync(tmp).filter((name) => name.startsWith(scopePrefix) && name.endsWith(".log.control")),
-        [],
-      );
+    await withServer({ "/v1/code.outcome": { mirrored: true } }, async (url, seen, observation) => {
+      try {
+        const a = await runHook(
+          { ...readOf(dir, "src/a.cpp"), session_id: "A" },
+          { tmp, url, env: reporting, observation },
+        );
+        assert.equal(a.deny, null);
+        const queuedA = pendingPath(tmp, url, "A");
+        const beforeA = fs.readFileSync(queuedA, "utf8");
+        assert.equal(outcomes(seen).length, 0);
+        assert.equal(sessionIsProtected(rootA), false);
+        assert.equal(sessionIsProtected(rootB), false);
+        const b = await runHook(
+          { ...readOf(other, "src/b.cpp"), session_id: "B" },
+          { tmp, url, env: reporting, observation },
+        );
+        assert.ok(b.deny);
+        await settle();
+        assert.equal(outcomes(seen).length, 1, "the first marked answer suppresses the aggregate's second body");
+        assert.equal(outcomes(seen)[0].body.action, "shunt_hit");
+        assert.equal(sessionIsProtected(rootA), true);
+        assert.equal(sessionIsProtected(rootB), true);
+        assert.equal(fs.existsSync(queuedA), false);
+        assert.equal(fs.existsSync(pendingPath(tmp, url, "B")), false);
+        const claims = fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-"));
+        assert.equal(claims.length, 2, "claiming moves evidence; a marked answer does not acknowledge it");
+        const retained = claims.map((name) => fs.readFileSync(path.join(tmp, name), "utf8"));
+        assert.ok(retained.includes(beforeA), "producer A's exact queued bytes remain in its claim");
+        const rows = retained.flatMap((text) =>
+          text
+            .trimEnd()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+        );
+        assert.equal(rows.length, 2);
+        const rowA = rows.find((row) =>
+          row.protectionRoots.some((root) => root.base === rootA.base && root.id === rootA.id),
+        );
+        const rowB = rows.find((row) =>
+          row.protectionRoots.some((root) => root.base === rootB.base && root.id === rootB.id),
+        );
+        assert.ok(rowA && rowB, "both actual producer roots stay attached to their evidence");
+        assert.match(rowA.line, /\tpass\tRead\t.*\tmodified\tsrc\/a\.cpp\t/);
+        assert.match(rowB.line, /\thit\tRead\t.*\tsrc\/b\.cpp\t/);
+        const scopePrefix = `loom-${batchKind({ serverUrl: url, token: "t", org: "o", namespace: "code-x" })}-`;
+        assert.deepEqual(
+          fs.readdirSync(tmp).filter((name) => name.startsWith(scopePrefix) && name.endsWith(".log.control")),
+          [],
+        );
+      } catch (error) {
+        throw observedFailure(error, observation);
+      }
     });
   } finally {
     for (const owned of [tmp, dir, other]) fs.rmSync(owned, { recursive: true, force: true });
@@ -569,23 +602,30 @@ test("an unattributed batch in the same protected scope stays untouched while a 
   const { dir } = checkout({ "src/b.cpp": BIG });
   const tmp = seed(dir, { existingSessions: ["B"] });
   try {
-    await withServer({}, async (url, seen) => {
-      const unattributed = pendingPath(tmp, url, "unknown-producer");
-      fs.writeFileSync(unattributed, plantedBatch, { mode: 0o600 });
-      const before = fs.readFileSync(unattributed);
-      const b = await runHook({ ...readOf(dir, "src/b.cpp"), session_id: "B" }, { tmp, url, env: reporting });
-      assert.ok(b.deny);
-      await settle();
-      assert.equal(outcomes(seen).length, 1);
-      assert.equal(outcomes(seen)[0].body.action, "shunt_hit");
-      assert.ok(outcomes(seen)[0].body.spans.some((span) => span.startsWith("src/b.cpp:")));
-      assert.equal(carriesPlanted(seen), false);
-      assert.deepEqual(fs.readFileSync(unattributed), before, "a matching filename cannot supply producer authority");
-      assert.equal(fs.existsSync(pendingPath(tmp, url, "B")), false);
-      assert.deepEqual(
-        fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-")),
-        [],
-      );
+    await withServer({}, async (url, seen, observation) => {
+      try {
+        const unattributed = pendingPath(tmp, url, "unknown-producer");
+        fs.writeFileSync(unattributed, plantedBatch, { mode: 0o600 });
+        const before = fs.readFileSync(unattributed);
+        const b = await runHook(
+          { ...readOf(dir, "src/b.cpp"), session_id: "B" },
+          { tmp, url, env: reporting, observation },
+        );
+        assert.ok(b.deny);
+        await settle();
+        assert.equal(outcomes(seen).length, 1);
+        assert.equal(outcomes(seen)[0].body.action, "shunt_hit");
+        assert.ok(outcomes(seen)[0].body.spans.some((span) => span.startsWith("src/b.cpp:")));
+        assert.equal(carriesPlanted(seen), false);
+        assert.deepEqual(fs.readFileSync(unattributed), before, "a matching filename cannot supply producer authority");
+        assert.equal(fs.existsSync(pendingPath(tmp, url, "B")), false);
+        assert.deepEqual(
+          fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-")),
+          [],
+        );
+      } catch (error) {
+        throw observedFailure(error, observation);
+      }
     });
   } finally {
     for (const owned of [tmp, dir]) fs.rmSync(owned, { recursive: true, force: true });

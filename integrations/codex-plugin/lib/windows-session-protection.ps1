@@ -1,5 +1,5 @@
 # Durable session records use one native operation per helper invocation.
-param([switch]$CleanupCompilation, [switch]$Worker, [switch]$DefinitionsOnly)
+param([switch]$CleanupCompilation, [switch]$DefinitionsOnly)
 $ErrorActionPreference = 'Stop'
 # Fixed ASCII diagnostics precede cmdlet and encoding initialization.
 $loomDiagnosticStream = [Console]::OpenStandardError()
@@ -25,7 +25,7 @@ function Write-LoomProtectionPhase([string]$phase, [int]$code = 0) {
         [Console]::Error.Flush()
     } catch { $script:loomProtectionDiagnosticFailed = $true }
 }
-function Invoke-LoomCompilerScope([type]$native, [bool]$CleanupCompilation, [scriptblock]$Operation) {
+function Invoke-LoomCompilerScope([type]$native, [bool]$CleanupCompilation, [scriptblock]$Operation, [scriptblock]$BeforeCleanup = $null) {
 $held = [System.Collections.Generic.List[System.IntPtr]]::new()
 $compileDirectory = $null
 $compilerHandleStart = -1
@@ -154,6 +154,7 @@ try {
     Write-LoomProtectionPhase $script:loomProtectionPhase ([int]$_.Exception.HResult)
     $succeeded = $false
 } finally {
+    if ($null -ne $BeforeCleanup) { & $BeforeCleanup }
     Write-LoomProtectionPhase 'cleanup'
     if ($compilerHandleStart -ge 0) {
         for ($i = $held.Count - 1; $i -ge $compilerHandleStart; $i--) {
@@ -182,20 +183,31 @@ if (-not $succeeded) { throw 'Unavailable' }
 return $result
 }
 
-function Invoke-LoomRecordOperation([string]$compileDirectory) {
-    # Compile fixed code before reading any session request.
+function Invoke-LoomCompileRecords([type]$native, [IntPtr]$job, [long]$deadline, [string]$directory) {
     Write-LoomProtectionPhase 'compile'
     $source = [IO.File]::ReadAllText([IO.Path]::Combine($PSScriptRoot, 'windows-private-records.cs'))
-    $parameters = [System.CodeDom.Compiler.CompilerParameters]::new()
-    $parameters.GenerateInMemory = $true
-    $parameters.IncludeDebugInformation = $false
-    $parameters.TreatWarningsAsErrors = $true
-    $parameters.CompilerOptions = '/optimize+'
-    $parameters.TempFiles = [System.CodeDom.Compiler.TempFileCollection]::new($compileDirectory, $false)
-    [void]$parameters.ReferencedAssemblies.Add('System.dll')
-    [void]$parameters.ReferencedAssemblies.Add('System.Core.dll')
-    Microsoft.PowerShell.Utility\Add-Type -TypeDefinition $source -Language CSharp -CompilerParameters $parameters -ErrorAction Stop | Out-Null
+    [IO.File]::WriteAllText([IO.Path]::Combine($directory, 'records.cs'), $source, [Text.UTF8Encoding]::new($true))
+    # Fixed names under the exclusive, pinned invocation directory. No request
+    # value reaches the compiler or its response file.
+    if ($directory.Contains('"') -or $directory.Contains("`r") -or $directory.Contains("`n")) { throw 'Unavailable' }
+    $runtime = [Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
+    if ($runtime.Contains('"') -or $runtime.Contains("`r") -or $runtime.Contains("`n")) { throw 'Unavailable' }
+    $options = @('/target:library', '/optimize+', '/warnaserror+', '/debug-', '/nostdlib+',
+        ('/reference:"' + [IO.Path]::Combine($runtime, 'mscorlib.dll') + '"'),
+        ('/reference:"' + [IO.Path]::Combine($runtime, 'System.dll') + '"'),
+        ('/reference:"' + [IO.Path]::Combine($runtime, 'System.Core.dll') + '"'),
+        ('/out:"' + [IO.Path]::Combine($directory, 'records.dll') + '"'),
+        ('"' + [IO.Path]::Combine($directory, 'records.cs') + '"'))
+    [IO.File]::WriteAllLines([IO.Path]::Combine($directory, 'compile.rsp'), $options, [Text.UTF8Encoding]::new($true))
+    Invoke-LoomCompilerProcess $native $job $deadline $directory ('/noconfig @"' + [IO.Path]::Combine($directory, 'compile.rsp') + '"')
+    Stop-LoomCompilerJob $native $job
+    if ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge $deadline) { throw 'Unavailable' }
+    # Byte loading avoids locking the owned DLL during exact cleanup. Resolve
+    # the authority type from THIS assembly, never an ambient type-name cache.
+    return [Reflection.Assembly]::Load([IO.File]::ReadAllBytes([IO.Path]::Combine($directory, 'records.dll')))
+}
 
+function Invoke-LoomRecordOperation([Reflection.Assembly]$assembly) {
     Write-LoomProtectionPhase 'request'
     $buffer = [char[]]::new(4097)
     $count = 0
@@ -218,7 +230,8 @@ function Invoke-LoomRecordOperation([string]$compileDirectory) {
     if ((($request.PSObject.Properties.Name | Sort-Object) -join ',') -ne $expectedKeys) { throw 'Unavailable' }
     if ($request.base -isnot [string] -or $request.base.Length -gt 2048 -or -not [IO.Path]::IsPathRooted($request.base)) { throw 'Unavailable' }
     Write-LoomProtectionPhase 'native-op'
-    $store = [WindowsPrivateRecords]::new($request.base)
+    $recordType = $assembly.GetType('WindowsPrivateRecords', $true, $false)
+    $store = [Activator]::CreateInstance($recordType, [object[]]@($request.base))
     $result = switch ($request.op) {
         'create' { $store.CreateRoot() }
         'inspect' { $store.IsProtected($request.id) }
@@ -234,22 +247,24 @@ if ($DefinitionsOnly) { return }
 try {
     Write-LoomProtectionPhase 'startup'
     if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { throw 'Unavailable' }
-    if ($Worker -and [Console]::In.ReadLine() -cne $env:LOOM_PRIVATE_COMPILATION_ID) { throw 'Unavailable' }
     . ([IO.Path]::Combine($PSScriptRoot, 'windows-native-bootstrap.ps1'))
     . ([IO.Path]::Combine($PSScriptRoot, 'windows-compiler-job.ps1'))
-    Write-LoomProtectionPhase $(if ($Worker) { 'worker-bootstrap' } else { 'bootstrap' })
+    Write-LoomProtectionPhase 'bootstrap'
     $native = New-LoomBootstrapApi
-    if ($Worker) {
-        $result = Invoke-LoomCompilerScope $native $false ${function:Invoke-LoomRecordOperation}
-        [Console]::Out.Write((ConvertTo-Json -Compress -Depth 4 -InputObject @{ ok = $true; value = $result }))
-    } elseif ($CleanupCompilation) {
+    if ($CleanupCompilation) {
         [void](Start-LoomGuardianDeadline $native)
         [void](Invoke-LoomCompilerScope $native $true $null)
         [Console]::Out.Write('{"ok":true,"value":null}')
     } else {
-        Invoke-LoomGuardedWorker $native $PSCommandPath {
-            [void](Invoke-LoomCompilerScope $native $true $null)
+        $compiled = Invoke-LoomGuardedCompiler $native {
+            param($compilerNative, $compilerJob, $compilerDeadline, $directory)
+            Invoke-LoomCompileRecords $compilerNative $compilerJob $compilerDeadline $directory
         }
+        # Compilation descendants and owned files are already gone. Preserve
+        # the original earlier native-operation cutoff on this same self-job.
+        Start-LoomNativeTimer $native 'StopJob' $compiled.Guardian.Job ($compiled.Guardian.Deadline - 150)
+        $result = Invoke-LoomRecordOperation $compiled.Value
+        [Console]::Out.Write((ConvertTo-Json -Compress -Depth 4 -InputObject @{ ok = $true; value = $result }))
     }
     Write-LoomProtectionPhase 'helper-exit' 0
     if ($script:loomProtectionDiagnosticFailed) { throw 'Unavailable' }

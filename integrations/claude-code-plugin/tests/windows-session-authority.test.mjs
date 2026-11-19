@@ -281,30 +281,31 @@ if (process.platform === "win32") {
         });
       });
       clearTimeout(timer);
-      for (const identity of [receipt, receipt.worker, receipt.guardian]) {
+      for (const identity of [receipt, receipt.guardian]) {
         assert.ok(Number.isInteger(identity.pid) && identity.pid > 0);
         assert.equal(typeof identity.started, "string");
       }
+      assert.notEqual(receipt.guardian.pid, receipt.pid, "guardian and real compiler must be distinct processes");
       assert.equal(
         receipt.directory,
         path.join(environment.LOOM_PRIVATE_COMPILER_BASE, environment.LOOM_PRIVATE_COMPILATION_ID),
       );
       assert.equal(fs.existsSync(receipt.directory), true);
       assert.deepEqual(
-        exactProcesses([receipt.guardian, receipt.worker, receipt]).sort((a, b) => a - b),
-        [receipt.guardian.pid, receipt.worker.pid, receipt.pid].sort((a, b) => a - b),
+        exactProcesses([receipt.guardian, receipt]).sort((a, b) => a - b),
+        [receipt.guardian.pid, receipt.pid].sort((a, b) => a - b),
       );
       assert.equal(caller.kill("SIGKILL"), true);
       await exited;
       // This wait observes the existing 1500ms primary deadline; it does not
-      // provide a timer to either surviving PowerShell process.
+      // provide a timer to the surviving guardian.
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      assert.deepEqual(exactProcesses([receipt.guardian, receipt.worker, receipt]), []);
+      assert.deepEqual(exactProcesses([receipt.guardian, receipt]), []);
       assert.equal(fs.existsSync(receipt.directory), false, "owned compiler directory survived parent death");
     } finally {
       clearTimeout(timer);
       if (caller.exitCode === null && caller.signalCode === null) caller.kill("SIGKILL");
-      if (receipt) exactProcesses([receipt.guardian, receipt.worker, receipt], true);
+      if (receipt) exactProcesses([receipt.guardian, receipt], true);
     }
   });
 

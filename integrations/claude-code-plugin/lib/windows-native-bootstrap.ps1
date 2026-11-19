@@ -49,6 +49,13 @@ function New-LoomBootstrapApi {
     Add-Native 'TerminateJobObject' 'kernel32.dll' ([bool]) ([type[]]@([IntPtr], [uint32]))
     Add-Native 'WaitForSingleObject' 'kernel32.dll' ([uint32]) ([type[]]@([IntPtr], [uint32]))
     Add-Native 'QueryInformationJobObject' 'kernel32.dll' ([bool]) ([type[]]@([IntPtr], [int], [IntPtr], [uint32], [IntPtr]))
+    Add-Native 'InitializeProcThreadAttributeList' 'kernel32.dll' ([bool]) ([type[]]@([IntPtr], [int], [uint32], $refPointer))
+    Add-Native 'UpdateProcThreadAttribute' 'kernel32.dll' ([bool]) ([type[]]@([IntPtr], [uint32], [IntPtr], [IntPtr], [IntPtr], [IntPtr], [IntPtr]))
+    Add-Native 'DeleteProcThreadAttributeList' 'kernel32.dll' ([void]) ([type[]]@([IntPtr]))
+    Add-Native 'CreateProcessW' 'kernel32.dll' ([bool]) ([type[]]@([string], [Text.StringBuilder], [IntPtr], [IntPtr], [bool], [uint32], [IntPtr], [string], [IntPtr], [IntPtr]))
+    Add-Native 'ResumeThread' 'kernel32.dll' ([uint32]) ([type[]]@([IntPtr]))
+    Add-Native 'TerminateProcess' 'kernel32.dll' ([bool]) ([type[]]@([IntPtr], [uint32]))
+    Add-Native 'GetExitCodeProcess' 'kernel32.dll' ([bool]) ([type[]]@([IntPtr], [uint32].MakeByRefType()))
     Add-Native 'CreateTimerQueueTimer' 'kernel32.dll' ([bool]) ([type[]]@($refPointer, [IntPtr], [IntPtr], [IntPtr], [uint32], [uint32], [uint32]))
         $method = $builder.DefineMethod('StopJob', [System.Reflection.MethodAttributes]'Public, Static',
             [void], [type[]]@([IntPtr], [byte]))
