@@ -73,8 +73,7 @@ def summary(result: dict[str, Any]) -> dict[str, Any]:
     fact, section = result["fact"], result["document_section"]
     return {
         "fact_found": bool(fact.get("found")),
-        "section_found": bool(section.get("found"))
-        and section.get("section_content") is not None,
+        "section_found": bool(section.get("found")) and section.get("section_content") is not None,
         "fact_fields_returned": [k for k in FACT_FIELDS if k in fact],
         "section_fields_returned": [
             k for k in ("source_uri", "section_content", "section_chunk_idxs") if k in section
