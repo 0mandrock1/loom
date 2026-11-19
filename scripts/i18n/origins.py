@@ -105,6 +105,9 @@ def _terminal_append(historical, current, units, sources, positions) -> bool:
     suffix = after[len(before) :]
     if not suffix.endswith("\n") or not (before.endswith("\n\n") or suffix.startswith("\n")):
         return False
+    # Site attributes may use braces inline or without a colon.
+    if any(brace in suffix for brace in "{}"):
+        return False
     # Indentation can continue a site-extension list even outside CommonMark's list.
     if any(line.strip() and line != line.lstrip() for line in suffix.splitlines()):
         return False
@@ -133,7 +136,7 @@ def _terminal_append(historical, current, units, sources, positions) -> bool:
     ):
         return False
     if chunks._site_lists(suffix, []) or any(
-        line.lstrip().startswith(("!!!", "???", "{:")) for line in suffix.splitlines()
+        line.lstrip().startswith(("!!!", "???")) for line in suffix.splitlines()
     ):
         return False
     heading_lines = next(

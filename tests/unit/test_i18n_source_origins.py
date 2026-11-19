@@ -493,6 +493,20 @@ def test_terminal_append_refuses_a_site_ordered_list_continuation():
     assert plan.conflicts and not plan.units
 
 
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "\nAdded paragraph.\n{ .class }\n",
+        "\nAdded **paragraph**{:.class}.\n",
+        "\nAdded **paragraph**{.class}.\n",
+        "\nAdded paragraph }.\n",
+    ],
+)
+def test_terminal_append_refuses_brace_marked_text(suffix):
+    plan = _plan(_case(RAW + suffix))
+    assert plan.conflicts and not plan.units
+
+
 @pytest.mark.parametrize("fits", [False, True])
 def test_terminal_counterpart_keeps_the_exact_utf8_bound(fits):
     case = _case(RAW + "\nAppended 界.\n")

@@ -73,8 +73,10 @@ boundary refuses; the planner does not assign that text to a neighbouring reques
 A terminal append can extend the final original whole when both raw and prepared old
 containers are exact proper prefixes of their current containers. The final original
 must already own the last heading section and end at historical EOF. Only closed,
-unindented ordinary paragraphs under that heading may be appended; new headings, lists, tables, code blocks,
-HTML, reference definitions and ambiguous site-extension or language-bar context refuse.
+unindented, brace-free ordinary paragraphs under that heading may be appended. Added
+headings, lists, tables, code blocks, HTML, reference definitions and ambiguous
+site-extension or language-bar context refuse. Braces refuse even in literal prose
+because site attributes can appear inline or without a colon.
 Existing block content, every earlier cut and every original separator retain their
 proof. This terminal ownership proof maps only the final end to current EOF, including
 when historical EOF has repeated blank lines; it never relaxes an interior origin.
