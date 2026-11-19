@@ -320,7 +320,7 @@ if (process.platform === "win32") {
     const { root, directory } = fresh();
     assert.equal(sessionIsProtected(root), false);
     bindProtectionAlias(root, "claude-code", "actual-family");
-    const [alias] = fs.readdirSync(path.join(root.base, "aliases"));
+    const [alias] = fs.readdirSync(path.join(root.base, "aliases")).filter((name) => name.endsWith(".json"));
     for (const file of [
       root.base,
       directory,
@@ -328,6 +328,7 @@ if (process.platform === "win32") {
       path.join(directory, "state"),
       path.join(root.base, "aliases"),
       path.join(root.base, "aliases", alias),
+      path.join(root.base, "aliases", alias.replace(/\.json$/, ".claim")),
     ]) {
       const observed = acl("observe", file);
       assert.equal(observed.owner, observed.current);
@@ -343,7 +344,7 @@ if (process.platform === "win32") {
     bindProtectionAlias(root, "codex", "formatting");
     const manifest = path.join(directory, "root.json");
     fs.writeFileSync(manifest, JSON.stringify({ id: root.id, version: 1 }, null, 2));
-    const [aliasName] = fs.readdirSync(path.join(root.base, "aliases"));
+    const [aliasName] = fs.readdirSync(path.join(root.base, "aliases")).filter((name) => name.endsWith(".json"));
     const alias = path.join(root.base, "aliases", aliasName);
     const saved = JSON.parse(fs.readFileSync(alias, "utf8"));
     fs.writeFileSync(alias, JSON.stringify({ root: saved.root, identity: saved.identity, version: 1 }, null, 2));
@@ -385,7 +386,7 @@ if (process.platform === "win32") {
   test("a non-JSON alias cannot select an otherwise clean real root", () => {
     const { root, directory } = fresh();
     bindProtectionAlias(root, "claude-code", "bad-alias-json");
-    const [name] = fs.readdirSync(path.join(root.base, "aliases"));
+    const [name] = fs.readdirSync(path.join(root.base, "aliases")).filter((name) => name.endsWith(".json"));
     const alias = path.join(root.base, "aliases", name);
     const record = JSON.parse(fs.readFileSync(alias, "utf8"));
     const source = `{version:1,identity:'${record.identity}',root:'${root.id}'}`;

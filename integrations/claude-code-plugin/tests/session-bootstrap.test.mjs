@@ -165,18 +165,14 @@ for (const host of ["codex", "claude-code"]) {
     assert.deepEqual(findProtectionAlias(host, identity, { base }), root);
     assert.equal(sessionIsProtected(root), false);
     assert.deepEqual(roots(base), [root.id]);
-    assert.deepEqual(
-      fs.readdirSync(path.join(base, "aliases")).sort(),
-      process.platform === "win32"
-        ? [keyFor(identity, host) + ".json"]
-        : [keyFor(identity, host) + ".claim", keyFor(identity, host) + ".json"],
-    );
-    if (process.platform !== "win32") {
-      const marker = fs.lstatSync(path.join(base, "aliases", keyFor(identity, host) + ".claim"));
-      assert.equal(marker.isFile(), true);
-      assert.equal(marker.size, 0);
-      assert.equal(marker.mode & 0o077, 0);
-    }
+    assert.deepEqual(fs.readdirSync(path.join(base, "aliases")).sort(), [
+      keyFor(identity, host) + ".claim",
+      keyFor(identity, host) + ".json",
+    ]);
+    const marker = fs.lstatSync(path.join(base, "aliases", keyFor(identity, host) + ".claim"));
+    assert.equal(marker.isFile(), true);
+    assert.equal(marker.size, 0);
+    if (process.platform !== "win32") assert.equal(marker.mode & 0o077, 0);
   });
 
   test(`${host} concurrent startup entries establish the same immutable family`, async () => {
@@ -206,6 +202,39 @@ for (const host of ["codex", "claude-code"]) {
     assert.deepEqual(findProtectionAlias(host, identity, { base }), root);
     assert.deepEqual(fs.readFileSync(path.join(base, root.id, "state")), state);
     assert.deepEqual(roots(base), [root.id]);
+  });
+
+  test(`${host} startup refuses a lost alias without replacing its protected family`, () => {
+    const { directory, base } = home();
+    runEntry(directory, "first", event, host);
+    const root = readMain(directory, "first");
+    assert.deepEqual(establishProtectionAlias(host, identity, { base }), root);
+    protectSession(root);
+    assert.equal(sessionIsProtected(root), true);
+    const aliases = path.join(base, "aliases");
+    const alias = path.join(aliases, keyFor(identity, host) + ".json");
+    const claim = path.join(aliases, keyFor(identity, host) + ".claim");
+    const receipt = fs.lstatSync(claim, { bigint: true });
+    const claimBytes = fs.readFileSync(claim);
+    const state = path.join(base, root.id, "state");
+    const manifest = path.join(base, root.id, "root.json");
+    const stateBytes = fs.readFileSync(state);
+    const manifestBytes = fs.readFileSync(manifest);
+    fs.unlinkSync(alias);
+    runEntry(directory, "again", event, host);
+    assert.equal(fs.existsSync(path.join(directory, "again.main")), false);
+    assert.equal(fs.existsSync(path.join(directory, "again.sends")), false);
+    assert.throws(() => establishProtectionAlias(host, identity, { base }), SessionProtectionUnavailable);
+    assert.equal(fs.existsSync(alias), false);
+    assert.deepEqual(fs.readdirSync(aliases), [path.basename(claim)]);
+    assert.deepEqual(roots(base), [root.id]);
+    assert.equal(sessionIsProtected(root), true);
+    assert.deepEqual(fs.readFileSync(state), stateBytes);
+    assert.deepEqual(fs.readFileSync(manifest), manifestBytes);
+    assert.deepEqual(fs.readFileSync(claim), claimBytes);
+    const retained = fs.lstatSync(claim, { bigint: true });
+    assert.equal(retained.dev, receipt.dev);
+    assert.equal(retained.ino, receipt.ino);
   });
 }
 

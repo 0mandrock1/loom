@@ -15,7 +15,6 @@ public sealed class WindowsPrivateRecords
 {
     const uint READ_CONTROL = 0x20000, READ_ATTRIBUTES = 0x80;
     const uint GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000;
-    const uint DELETE = 0x00010000;
     const uint OPEN_EXISTING = 3, CREATE_NEW = 1;
     const uint OPEN_REPARSE = 0x00200000, BACKUP_SEMANTICS = 0x02000000;
     const uint WRITE_THROUGH = 0x80000000, NORMAL = 0x80;
@@ -35,8 +34,6 @@ public sealed class WindowsPrivateRecords
         public System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write;
         public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
     }
-    [StructLayout(LayoutKind.Sequential)]
-    struct FileDispositionInformation { public byte DeleteFile; }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
     static extern SafeFileHandle CreateFileW(string p, uint access, uint share, ref SecurityAttributes sa,
@@ -57,9 +54,6 @@ public sealed class WindowsPrivateRecords
     static extern bool SetFilePointerEx(SafeFileHandle h, long offset, out long position, uint origin);
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool FlushFileBuffers(SafeFileHandle h);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    static extern bool SetFileInformationByHandle(SafeFileHandle h, int kind,
-        ref FileDispositionInformation data, uint length);
     [DllImport("kernel32.dll")]
     static extern IntPtr GetCurrentProcess();
     [DllImport("advapi32.dll", SetLastError = true)]
@@ -301,7 +295,7 @@ public sealed class WindowsPrivateRecords
                 IntPtr allocation;
                 SecurityAttributes sa = Attributes(out allocation);
                 try {
-                    claim = CreateFileW(claimFile, GENERIC_READ | GENERIC_WRITE | READ_CONTROL | READ_ATTRIBUTES | DELETE,
+                    claim = CreateFileW(claimFile, GENERIC_READ | GENERIC_WRITE | READ_CONTROL | READ_ATTRIBUTES,
                         0, ref sa, CREATE_NEW, NORMAL | OPEN_REPARSE | WRITE_THROUGH, IntPtr.Zero);
                     if (!claim.IsInvalid) {
                         try { Check(claim, false, true); Require(FlushFileBuffers(claim)); }
@@ -331,11 +325,8 @@ public sealed class WindowsPrivateRecords
             try {
                 if (claim != null) {
                     try {
+                        // A retained claim prevents a new root if its alias is lost.
                         Check(claim, false, true);
-                        FileDispositionInformation disposition = new FileDispositionInformation { DeleteFile = 1 };
-                        // Delete this receipt's handle, never a pathname replacement.
-                        Require(SetFileInformationByHandle(claim, 4, ref disposition,
-                            (uint)Marshal.SizeOf(typeof(FileDispositionInformation))));
                     } finally { claim.Dispose(); }
                 }
             } finally { CloseDirectories(held); }
