@@ -28,10 +28,7 @@
     "longDescription": "Loom gives Codex a memory that outlives the session and is shared with every other agent on the team: decisions, preferences and corrections are captured by lifecycle hooks with no model call, a budgeted primer is loaded at session start, and in a loom-indexed repository the code tools answer structure questions with line-accurate units instead of whole files.",
     "developerName": "ClickHouse",
     "category": "Developer Tools",
-    "capabilities": [
-      "Read",
-      "Write"
-    ],
+    "capabilities": ["Read", "Write"],
     "websiteURL": "https://clickhouse.github.io/loom/features/integrations/codex/",
     "defaultPrompt": [
       "What did we decide about this repository last week?",

@@ -102,6 +102,7 @@ const REPLIES = WIRE.responses;
 async function contractFixture(t, replies = REPLIES) {
   const dir = checkout();
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "loom-query-tmp-")));
+  establishFixtureSession(tmp, "contract");
   fs.writeFileSync(
     cachePathFor(dir, tmp),
     JSON.stringify({
