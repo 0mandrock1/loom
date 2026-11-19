@@ -73,6 +73,10 @@
       "category": "scope",
       "reason": "Sends repository routing, namespace identity or fixed listing limits; no prompt, transcript or changed-file payload."
     },
+    "integrations/cline/loom-cline.mjs:<dynamic>:bbbf0875994af204d9c7:1": {
+      "category": "delivery",
+      "reason": "Guarded Cline repository forwarding retains the enclosing family before and after code.repos/code.index_status requests."
+    },
     "integrations/codex-plugin/hooks/loom-code-shunt.mjs:code.repos:983653c27b6d99198a73:1": {
       "category": "scope",
       "reason": "Sends repository routing, namespace identity or fixed listing limits; no prompt, transcript or changed-file payload."
@@ -368,6 +372,7 @@
     "integrations/claude-code-plugin/lib/session-brief.mjs": "0db8037ad3fd15de3dd525d3763674549186495dbe0c66dc7ae7b2bef3cab898",
     "integrations/claude-code-plugin/lib/session-start.mjs": "3c265d690c4d859b4ad40ad41d635412423fe6bd049d91e1381ce79be24eb9d4",
     "integrations/claude-code-plugin/lib/task-inbox.mjs": "33fbb1040e9b6db936928a66e4b90555a556220415f4e6394f6d2cd67821dcfc",
+    "integrations/cline/loom-cline.mjs": "80d3a62c2c64ca9571b98c714e3879d7c4808c1acc13220d3aa0608dbdb3b304",
     "integrations/codex-plugin/hooks/loom-code-shunt.mjs": "5b88db1c1a9b33b68d33a612825dd192b9082a64aa0d7b8eda189ddea5ec5c1c",
     "integrations/codex-plugin/hooks/loom-flush.mjs": "7260f0fc257a03398230f8c09105445d0a941a54d22a03c11ede5cd8a14ff11b",
     "integrations/codex-plugin/hooks/loom-namespace-health.mjs": "bbef4979b8606df851e77a86687b7d3c88b84de8bdfc6f88d9ff5c3bc2d5203c",
