@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -35,16 +36,12 @@ class _BoundedCH:
         if "keys" in params:
             keys = set(params["keys"])
             return [row for row in rows if (row["qualified_name"], row["symbol_id"]) in keys]
-        if any(name.startswith("reconcile_") for name in params):
-            assert "(qualified_name, symbol_id) = (" in sql
-            values = []
-            for column in ("qualified_name", "symbol_id"):
-                parts = sorted(
-                    (int(name.rsplit("_", 1)[1]), bytes.fromhex(value))
-                    for name, value in params.items()
-                    if name.startswith(f"reconcile_{column}_")
-                )
-                values.append(b"".join(part for _, part in parts).decode())
+        if "(qualified_name, symbol_id) = (" in sql:
+            refs = re.findall(r"unhex\(\{(\w+):String\}\)", sql)
+            parts = [bytes.fromhex(params[name]) for name in refs]
+            # Canonical symbol ids fit one field. The preceding name parts keep
+            # expression order, including inside nested concatenations.
+            values = [b"".join(parts[:-1]).decode(), parts[-1].decode()]
             return [
                 row for row in rows if (row["qualified_name"], row["symbol_id"]) == tuple(values)
             ]
@@ -80,7 +77,9 @@ async def test_symbol_reconciliation_reads_every_long_name_with_default_http_lim
 @pytest.mark.asyncio
 @pytest.mark.parametrize("round_read", [False, True])
 @pytest.mark.parametrize(
-    "name", ["型" * 50_000, "型\\'" * 40_000], ids=["multibyte", "quoted-multibyte"]
+    "name",
+    ["型" * 50_000, "型\\'" * 40_000, "型" * 720_000],
+    ids=["multibyte", "quoted-multibyte", "many-parts"],
 )
 async def test_an_oversized_single_symbol_key_is_read_in_full(round_read: bool, name: str) -> None:
     rows = [
@@ -96,9 +95,25 @@ async def test_an_oversized_single_symbol_key_is_read_in_full(round_read: bool, 
         actual = await repo.live_symbols_for_path("o", "n", "main.py", "scip")
 
     assert actual == rows
-    assert any("reconcile_qualified_name_0" in call for call in ch.calls)
+    assert any("concat(" in sql and "unhex(" in sql for sql in ch.sql)
     assert all(name not in sql for sql in ch.sql)
     assert all(call["tier"] == "scip" for call in ch.calls)
+    assert all(_max_arguments(sql) <= 64 for sql in ch.sql)
+    assert all(len(sql.encode()) < 256 * 1024 for sql in ch.sql)
+
+
+def _max_arguments(sql: str) -> int:
+    counts: list[int] = []
+    maximum = 0
+    for char in sql:
+        if char == "(":
+            counts.append(1)
+        elif char == "," and counts:
+            counts[-1] += 1
+        elif char == ")":
+            maximum = max(maximum, counts.pop())
+    assert not counts
+    return maximum
 
 
 @pytest.mark.asyncio

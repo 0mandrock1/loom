@@ -24,6 +24,14 @@ from server.code.store.index.symbol_rank import (
 from server.core.ch_params import FIELD_BYTES, chunks
 
 
+def _concat_key_parts(refs: list[str]) -> str:
+    """Keep each concatenation small even for a name spanning thousands of fields."""
+    while len(refs) > 1:
+        groups = [refs[i : i + 64] for i in range(0, len(refs), 64)]
+        refs = [f"concat({', '.join(group)})" if len(group) > 1 else group[0] for group in groups]
+    return refs[0]
+
+
 def _reconcile_key_match(keys: list[tuple[str, str]]) -> tuple[str, dict[str, Any]]:
     """Keep a large single key exact without putting it in one HTTP form field."""
     if len(keys) != 1 or len(format_bind_value(keys).encode()) <= FIELD_BYTES:
@@ -33,14 +41,14 @@ def _reconcile_key_match(keys: list[tuple[str, str]]) -> tuple[str, dict[str, An
     # Hex parts can split a UTF-8 sequence: concat restores its exact bytes before
     # the String comparison. Quotes still fit inside the field budget.
     part_bytes = FIELD_BYTES // 2 - 1
-    for column, value in zip(("qualified_name", "symbol_id"), keys[0], strict=True):
+    for column, value in enumerate(keys[0]):
         raw = value.encode()
         refs: list[str] = []
         for i in range(0, max(1, len(raw)), part_bytes):
-            name = f"reconcile_{column}_{i // part_bytes}"
+            name = f"rk{column}_{i // part_bytes}"
             params[name] = raw[i : i + part_bytes].hex()
             refs.append(f"unhex({{{name}:String}})")
-        columns.append(f"concat({', '.join(refs)})" if len(refs) > 1 else refs[0])
+        columns.append(_concat_key_parts(refs))
     return f"(qualified_name, symbol_id) = ({', '.join(columns)})", params
 
 
