@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, test } from "node:test";
+import { hostEnv } from "./host-env.mjs";
 
 import { bindHookProtection } from "../lib/hook-protection.mjs";
 import {
@@ -29,14 +30,13 @@ afterEach(() => {
 });
 const payload = (source = "startup") => ({ session_id: "known", hook_event_name: "SessionStart", source });
 
-if (process.platform === "win32" || typeof process.getuid !== "function") {
-  test("unavailable platform authority never binds a native hook", () => {
-    assert.throws(
-      () => bindHookProtection(payload(), { host: "codex", event: "SessionStart" }),
-      SessionProtectionUnavailable,
-    );
-  });
-} else {
+test("an unbound hook identity never acquires a new family", () => {
+  assert.throws(
+    () => bindHookProtection(payload(), { host: "codex", event: "SessionStart" }),
+    SessionProtectionUnavailable,
+  );
+});
+{
   test("canonical existing alias reopens the same family without creating state", () => {
     const { base, root } = fixture();
     bindProtectionAlias(root, "codex", "known");
@@ -171,7 +171,7 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
         process.execPath,
         ["--input-type=module", "-e", code, "hook-entry.mjs", "PostToolUse", "claude-code"],
         {
-          env: { PATH: process.env.PATH, HOME: directory, USERPROFILE: directory },
+          env: hostEnv({ PATH: process.env.PATH, HOME: directory }),
           input: JSON.stringify({ session_id: "known", hook_event_name: "PostToolUse", tool_response: response }),
           encoding: "utf8",
           timeout: 5000,

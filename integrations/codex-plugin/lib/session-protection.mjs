@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { readPrivateFile } from "./tmp-state.mjs";
+import { windowsSessionProtection } from "./windows-session-protection.mjs";
 
 const ROOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const VERSION = 1;
@@ -76,6 +77,9 @@ function durableCreate(file, value) {
 export function createProtectionRoot({ base = defaultBase() } = {}) {
   try {
     if (!path.isAbsolute(base)) throw new SessionProtectionUnavailable();
+    if (process.platform === "win32") {
+      return Object.freeze({ base, id: windowsSessionProtection("create", { base }) });
+    }
     fs.mkdirSync(base, { recursive: true, mode: 0o700 });
     privateDirectory(base);
     const root = Object.freeze({ base, id: crypto.randomUUID() });
@@ -94,6 +98,7 @@ export function createProtectionRoot({ base = defaultBase() } = {}) {
 /** Unknown, damaged or inaccessible state suppresses automatic sends. */
 export function sessionIsProtected(root) {
   try {
+    if (process.platform === "win32") return windowsSessionProtection("inspect", root);
     const directory = location(root);
     return privateText(path.join(directory, "state")) !== "0\n";
   } catch {
@@ -104,6 +109,10 @@ export function sessionIsProtected(root) {
 /** Complete this durable write before exposing a mirrored response to its caller. */
 export function protectSession(root) {
   try {
+    if (process.platform === "win32") {
+      windowsSessionProtection("protect", root);
+      return;
+    }
     const directory = location(root);
     // A missing record is unknown, never a clean session. Append-only state
     // also turns a partial write into protection rather than a false absence.
@@ -167,6 +176,10 @@ function readAlias(file, key) {
 /** Bind only a verified host identity; an existing alias can never choose a new root. */
 export function bindProtectionAlias(root, host, identity) {
   try {
+    if (process.platform === "win32") {
+      windowsSessionProtection("bind", { ...root, key: aliasKey(host, identity) });
+      return;
+    }
     location(root);
     const key = aliasKey(host, identity);
     const directory = aliasDirectory(root.base, true);
@@ -194,6 +207,10 @@ export function bindProtectionAlias(root, host, identity) {
 export function findProtectionAlias(host, identity, { base = defaultBase() } = {}) {
   try {
     const key = aliasKey(host, identity);
+    if (process.platform === "win32") {
+      const id = windowsSessionProtection("find", { base, key });
+      return id === null ? undefined : Object.freeze({ base, id });
+    }
     let id;
     try {
       const directory = aliasDirectory(base);

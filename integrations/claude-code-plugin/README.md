@@ -36,6 +36,12 @@ containing only `sessionId` stays silent. The hooks do not create an independent
 native session family or declare protection for direct MCP responses. Native
 session creation and private-content publication remain unqualified.
 
+On Windows, the local authority uses the process token owner and protected
+owner-only access controls on NTFS. A bounded helper checks record handles and
+contains its compiler children. Unsupported storage or unverifiable authority
+stays silent. Native execution, startup timing and failure cleanup remain
+unqualified.
+
 ## Data handling
 
 The hooks and scripts send data only to the Loom server the plugin is configured

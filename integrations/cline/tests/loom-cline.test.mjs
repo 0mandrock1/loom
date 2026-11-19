@@ -1,4 +1,5 @@
 // loom-cline: Cline payloads onto the plugin's hook scripts, mostly with the scripts faked.
+import "../../claude-code-plugin/tests/temp-home.mjs";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -9,6 +10,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { establishFixtureSession } from "../../claude-code-plugin/tests/established-session.mjs";
+import { hostEnv } from "../../claude-code-plugin/tests/host-env.mjs";
 import { recalledDataBlock } from "../../claude-code-plugin/lib/prompt-recall.mjs";
 import { recordingPrimerLine } from "../../claude-code-plugin/lib/recording.mjs";
 import { readSessionState, sessionStatePath } from "../../claude-code-plugin/lib/tmp-state.mjs";
@@ -58,6 +60,7 @@ for (const k of Object.keys(process.env)) {
   if (k.startsWith("LOOM_") || k.startsWith("CLAUDE_PLUGIN_OPTION_")) delete process.env[k];
 }
 process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), "loom-cline-home-"));
+if (process.platform === "win32") process.env.USERPROFILE = process.env.HOME;
 test.after(() => {
   fs.rmSync(process.env.HOME, { recursive: true, force: true });
   for (const k of Object.keys(process.env)) delete process.env[k];
@@ -239,7 +242,10 @@ test("a read of two files marks both shown in the plugin's file-context state", 
   for (const k of Object.keys(process.env)) {
     if (k.startsWith("LOOM_") || k.startsWith("CLAUDE_PLUGIN_OPTION_")) delete process.env[k];
   }
-  Object.assign(process.env, { HOME: tmp, TMPDIR: tmp, LOOM_BASE_URL: "http://127.0.0.1:9", LOOM_API_KEY: "x" });
+  Object.assign(
+    process.env,
+    hostEnv({ HOME: tmp, TMPDIR: tmp, LOOM_BASE_URL: "http://127.0.0.1:9", LOOM_API_KEY: "x" }),
+  );
   try {
     establishFixtureSession(tmp, "conv_two", "cline");
     const files = JSON.stringify([{ path: "a.py" }, { path: "b.py" }]);
@@ -329,12 +335,12 @@ test("with no token the adapter sends nothing, signs no machine up and caches no
       preToolUse: { toolName: "read_files", parameters: { files } },
     };
     const child = spawn(process.execPath, [path.join(HERE, "..", "loom-cline.mjs"), "PreToolUse"], {
-      env: {
+      env: hostEnv({
         PATH: process.env.PATH,
         HOME: tmp,
         TMPDIR: tmp,
         LOOM_BASE_URL: `http://127.0.0.1:${server.address().port}`,
-      },
+      }),
     });
     let out = "";
     child.stdout.on("data", (c) => {
@@ -364,7 +370,7 @@ test("an event script runs the adapter through loom-node and keeps the prompt", 
   establishTask("conv_hook", tmp);
   const r = spawnSync("/bin/sh", [path.join(dir, "hooks", "UserPromptSubmit")], {
     input: JSON.stringify({ ...ROOT, taskId: "conv_hook", userPromptSubmit: { prompt: "fix the cache" } }),
-    env: { PATH: "/usr/bin:/bin", LOOM_CLINE_DIR: dir, LOOM_NODE: process.execPath, HOME: tmp, TMPDIR: tmp },
+    env: hostEnv({ PATH: "/usr/bin:/bin", LOOM_CLINE_DIR: dir, LOOM_NODE: process.execPath, HOME: tmp, TMPDIR: tmp }),
     encoding: "utf8",
     timeout: 30000,
   });
@@ -391,7 +397,7 @@ test("an event script runs through a LOOM_CLINE_DIR that is a symlink", () => {
   fs.symlinkSync(path.join(HERE, ".."), link);
   const r = spawnSync("/bin/sh", [path.join(link, "hooks", "UserPromptSubmit")], {
     input: JSON.stringify({ ...ROOT, taskId: "conv_link", userPromptSubmit: { prompt: "fix the cache" } }),
-    env: { PATH: "/usr/bin:/bin", LOOM_CLINE_DIR: link, LOOM_NODE: process.execPath, HOME: tmp, TMPDIR: tmp },
+    env: hostEnv({ PATH: "/usr/bin:/bin", LOOM_CLINE_DIR: link, LOOM_NODE: process.execPath, HOME: tmp, TMPDIR: tmp }),
     encoding: "utf8",
     timeout: 30000,
   });
@@ -445,7 +451,13 @@ test("against an unreachable server the adapter adds only the primer's static no
   const files = JSON.stringify([{ path: "./a.py" }]);
   const r = spawnSync(process.execPath, [path.join(HERE, "..", "loom-cline.mjs"), "PreToolUse"], {
     input: JSON.stringify({ ...ROOT, preToolUse: { toolName: "read_files", parameters: { files } } }),
-    env: { PATH: process.env.PATH, HOME: tmp, LOOM_BASE_URL: "http://127.0.0.1:9", LOOM_API_KEY: "x", TMPDIR: tmp },
+    env: hostEnv({
+      PATH: process.env.PATH,
+      HOME: tmp,
+      LOOM_BASE_URL: "http://127.0.0.1:9",
+      LOOM_API_KEY: "x",
+      TMPDIR: tmp,
+    }),
     encoding: "utf8",
     timeout: 30000,
   });
@@ -460,7 +472,13 @@ test("against an unreachable server the adapter adds only the primer's static no
   assert.equal(readSessionState("cline-protected", ROOT.taskId, { tmp }).primed, true);
   const again = spawnSync(process.execPath, [path.join(HERE, "..", "loom-cline.mjs"), "PreToolUse"], {
     input: JSON.stringify({ ...ROOT, preToolUse: { toolName: "submit" } }),
-    env: { PATH: process.env.PATH, HOME: tmp, LOOM_BASE_URL: "http://127.0.0.1:9", LOOM_API_KEY: "x", TMPDIR: tmp },
+    env: hostEnv({
+      PATH: process.env.PATH,
+      HOME: tmp,
+      LOOM_BASE_URL: "http://127.0.0.1:9",
+      LOOM_API_KEY: "x",
+      TMPDIR: tmp,
+    }),
     encoding: "utf8",
     timeout: 30000,
   });
@@ -472,7 +490,13 @@ test("an event script answers and exits 0 when loom-node finds no Node 18+", () 
   const tmp = tmpDir();
   const r = spawnSync("/bin/sh", [path.join(dir, "hooks", "PreToolUse")], {
     input: JSON.stringify(ROOT),
-    env: { PATH: "/usr/bin:/bin", LOOM_CLINE_DIR: dir, LOOM_NODE: "/nonexistent/node", HOME: tmp, TMPDIR: tmp },
+    env: hostEnv({
+      PATH: "/usr/bin:/bin",
+      LOOM_CLINE_DIR: dir,
+      LOOM_NODE: "/nonexistent/node",
+      HOME: tmp,
+      TMPDIR: tmp,
+    }),
     encoding: "utf8",
     timeout: 30000,
   });
@@ -511,7 +535,7 @@ test("unknown and numeric task identities cannot keep prompts or start automatic
   establishTask("123", cliHome);
   const child = spawnSync(process.execPath, [path.join(HERE, "..", "loom-cline.mjs"), "UserPromptSubmit"], {
     input: JSON.stringify({ ...ROOT, taskId: 123, userPromptSubmit: { prompt: "must not be stored" } }),
-    env: { PATH: process.env.PATH, HOME: cliHome, TMPDIR: cliHome },
+    env: hostEnv({ PATH: process.env.PATH, HOME: cliHome, TMPDIR: cliHome }),
     encoding: "utf8",
     timeout: 30000,
   });

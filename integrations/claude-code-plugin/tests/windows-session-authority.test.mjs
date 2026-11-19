@@ -1,0 +1,356 @@
+import "./temp-home.mjs";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import crypto from "node:crypto";
+import os from "node:os";
+import path from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { afterEach, test } from "node:test";
+import {
+  bindProtectionAlias,
+  createProtectionRoot,
+  protectionForAlias,
+  protectSession,
+  sessionIsProtected,
+  SessionProtectionUnavailable,
+} from "../lib/session-protection.mjs";
+
+const owned = new Set();
+afterEach(() => {
+  for (const directory of owned) fs.rmSync(directory, { recursive: true, force: true });
+  owned.clear();
+});
+function fresh() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "loom-windows-authority-"));
+  owned.add(directory);
+  const root = createProtectionRoot({ base: path.join(directory, "private") });
+  return { root, directory: path.join(root.base, root.id) };
+}
+
+function witnessEnv() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "loom-windows-lifetime-"));
+  owned.add(directory);
+  return {
+    ...process.env,
+    LOOM_PRIVATE_COMPILER_BASE: path.join(directory, "compiler"),
+    LOOM_PRIVATE_COMPILATION_ID: crypto.randomBytes(16).toString("hex"),
+    LOOM_PRIVATE_DEADLINE_UTC: String(Date.now() + 1500),
+  };
+}
+
+function exactProcesses(identities, kill = false) {
+  const source = String.raw`
+    $ErrorActionPreference = 'Stop'
+    $r = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $live = @()
+    foreach ($identity in $r.identities) {
+      try {
+        $p = [Diagnostics.Process]::GetProcessById([int]$identity.pid)
+        if (-not $p.HasExited -and $p.StartTime.ToUniversalTime().Ticks.ToString() -eq $identity.started) {
+          $live += [int]$identity.pid
+          if ($r.kill) { $p.Kill(); [void]$p.WaitForExit(500) }
+        }
+      } catch [ArgumentException] {} catch [InvalidOperationException] {}
+    }
+    ConvertTo-Json -Compress -InputObject @($live)
+  `;
+  const result = spawnSync(
+    path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", source],
+    {
+      input: JSON.stringify({ identities, kill }),
+      encoding: "utf8",
+      timeout: 2000,
+      maxBuffer: 1024,
+    },
+  );
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+// An independent observer uses real Windows access-control objects. This
+// changes actual test-owned DACLs; it does not replace provider observations.
+function acl(operation, file) {
+  const source = String.raw`
+    $ErrorActionPreference = 'Stop'
+    $r = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $item = Get-Item -LiteralPath $r.file -Force
+    $acl = $item.GetAccessControl()
+    if ($r.operation -eq 'broaden') {
+      $world = New-Object Security.Principal.SecurityIdentifier('S-1-1-0')
+      $rule = New-Object Security.AccessControl.FileSystemAccessRule($world, [Security.AccessControl.FileSystemRights]::Read, [Security.AccessControl.AccessControlType]::Allow)
+      $acl.AddAccessRule($rule)
+      $item.SetAccessControl($acl)
+    } elseif ($r.operation -eq 'unprotect') {
+      $acl.SetAccessRuleProtection($false, $true)
+      $item.SetAccessControl($acl)
+    } elseif ($r.operation -ne 'observe') { throw 'Unexpected operation' }
+    $acl = $item.GetAccessControl()
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    @{
+      owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+      current = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+      protected = $acl.AreAccessRulesProtected
+      rules = @($rules | ForEach-Object { @{ sid = $_.IdentityReference.Value; rights = [int]$_.FileSystemRights; inherited = $_.IsInherited; kind = $_.AccessControlType.ToString() } })
+    } | ConvertTo-Json -Compress -Depth 4
+  `;
+  const child = spawnSync(
+    path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", source],
+    {
+      input: JSON.stringify({ operation, file }),
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 4096,
+    },
+  );
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 0, child.stderr);
+  return JSON.parse(child.stdout);
+}
+
+if (process.platform === "win32") {
+  test("forced helper termination also terminates a real child in its compiler job", { timeout: 5000 }, async () => {
+    const powershell = path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const witness = spawn(
+      powershell,
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        fileURLToPath(new URL("./windows-job-witness.ps1", import.meta.url)),
+      ],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        env: witnessEnv(),
+      },
+    );
+    witness.stdin.end();
+    const exited = new Promise((resolve) => witness.once("exit", resolve));
+    let child;
+    let startupTimer;
+    try {
+      child = await new Promise((resolve, reject) => {
+        let output = "";
+        startupTimer = setTimeout(() => reject(new Error("job witness did not start")), 2000);
+        witness.once("error", reject);
+        witness.once("exit", () => reject(new Error("job witness exited before announcing its child")));
+        witness.stdout.on("data", (chunk) => {
+          output += chunk.toString("utf8");
+          if (output.includes("\n")) {
+            try {
+              resolve(JSON.parse(output.trim()));
+            } catch (error) {
+              reject(error);
+            }
+          }
+        });
+      });
+      clearTimeout(startupTimer);
+      assert.ok(Number.isInteger(child.pid) && child.pid > 0);
+      assert.equal(typeof child.started, "string");
+      assert.equal(witness.kill("SIGKILL"), true);
+      await exited;
+      let alive = true;
+      const until = performance.now() + 500;
+      while (alive && performance.now() < until) {
+        try {
+          process.kill(child.pid, 0);
+        } catch (error) {
+          if (error.code === "ESRCH") alive = false;
+          else throw error;
+        }
+        if (alive) await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(alive, false, "compiler-job child survived helper termination");
+    } finally {
+      clearTimeout(startupTimer);
+      if (witness.exitCode === null && witness.signalCode === null) witness.kill("SIGKILL");
+      // On a failing witness, clean only the exact announced PID+start time.
+      // The assertion above remains a failure even if this cleanup succeeds.
+      if (child) {
+        const cleanupSource = String.raw`
+          $ErrorActionPreference = 'Stop'
+          $r = [Console]::In.ReadToEnd() | ConvertFrom-Json
+          try { $p = [Diagnostics.Process]::GetProcessById([int]$r.pid) }
+          catch [ArgumentException] { exit 0 }
+          if ($p.StartTime.ToUniversalTime().Ticks.ToString() -eq $r.started) { $p.Kill(); [void]$p.WaitForExit(1000) }
+        `;
+        const cleanup = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", cleanupSource], {
+          input: JSON.stringify(child),
+          encoding: "utf8",
+          timeout: 2000,
+          maxBuffer: 1024,
+        });
+        assert.equal(cleanup.error, undefined);
+        assert.equal(cleanup.status, 0, cleanup.stderr);
+      }
+    }
+  });
+
+  test("native deadlines stop helper and real compiler after Node-parent death and clean their owned directory", {
+    timeout: 5000,
+  }, async () => {
+    const environment = witnessEnv();
+    const caller = spawn(process.execPath, [fileURLToPath(new URL("./windows-job-parent.mjs", import.meta.url))], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      env: environment,
+    });
+    const exited = new Promise((resolve) => caller.once("exit", resolve));
+    let receipt;
+    let timer;
+    try {
+      receipt = await new Promise((resolve, reject) => {
+        let output = "";
+        timer = setTimeout(() => reject(new Error("real compiler witness did not start")), 2000);
+        caller.once("error", reject);
+        caller.once("exit", () => reject(new Error("Node caller exited before compiler announcement")));
+        caller.stdout.on("data", (chunk) => {
+          output += chunk.toString("utf8");
+          if (output.includes("\n")) {
+            try {
+              resolve(JSON.parse(output.trim()));
+            } catch (error) {
+              reject(error);
+            }
+          }
+        });
+      });
+      clearTimeout(timer);
+      for (const identity of [receipt, receipt.worker, receipt.guardian]) {
+        assert.ok(Number.isInteger(identity.pid) && identity.pid > 0);
+        assert.equal(typeof identity.started, "string");
+      }
+      assert.equal(
+        receipt.directory,
+        path.join(environment.LOOM_PRIVATE_COMPILER_BASE, environment.LOOM_PRIVATE_COMPILATION_ID),
+      );
+      assert.equal(fs.existsSync(receipt.directory), true);
+      assert.deepEqual(
+        exactProcesses([receipt.guardian, receipt.worker, receipt]).sort((a, b) => a - b),
+        [receipt.guardian.pid, receipt.worker.pid, receipt.pid].sort((a, b) => a - b),
+      );
+      assert.equal(caller.kill("SIGKILL"), true);
+      await exited;
+      // This wait observes the existing 1500ms primary deadline; it does not
+      // provide a timer to either surviving PowerShell process.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      assert.deepEqual(exactProcesses([receipt.guardian, receipt.worker, receipt]), []);
+      assert.equal(fs.existsSync(receipt.directory), false, "owned compiler directory survived parent death");
+    } finally {
+      clearTimeout(timer);
+      if (caller.exitCode === null && caller.signalCode === null) caller.kill("SIGKILL");
+      if (receipt) exactProcesses([receipt.guardian, receipt.worker, receipt], true);
+    }
+  });
+
+  test("real Windows creation has token owner and one protected owner DACL", () => {
+    const { root, directory } = fresh();
+    assert.equal(sessionIsProtected(root), false);
+    bindProtectionAlias(root, "claude-code", "actual-family");
+    const [alias] = fs.readdirSync(path.join(root.base, "aliases"));
+    for (const file of [
+      root.base,
+      directory,
+      path.join(directory, "root.json"),
+      path.join(directory, "state"),
+      path.join(root.base, "aliases"),
+      path.join(root.base, "aliases", alias),
+    ]) {
+      const observed = acl("observe", file);
+      assert.equal(observed.owner, observed.current);
+      assert.equal(observed.protected, true);
+      assert.deepEqual(observed.rules, [{ sid: observed.current, rights: 0x1f01ff, inherited: false, kind: "Allow" }]);
+    }
+    protectSession(root);
+    assert.equal(sessionIsProtected(protectionForAlias("claude-code", "actual-family", { base: root.base })), true);
+  });
+
+  test("equivalent exact-key manifest and alias serializations remain usable", () => {
+    const { root, directory } = fresh();
+    bindProtectionAlias(root, "codex", "formatting");
+    const manifest = path.join(directory, "root.json");
+    fs.writeFileSync(manifest, JSON.stringify({ id: root.id, version: 1 }, null, 2));
+    const [aliasName] = fs.readdirSync(path.join(root.base, "aliases"));
+    const alias = path.join(root.base, "aliases", aliasName);
+    const saved = JSON.parse(fs.readFileSync(alias, "utf8"));
+    fs.writeFileSync(alias, JSON.stringify({ root: saved.root, identity: saved.identity, version: 1 }, null, 2));
+    assert.equal(sessionIsProtected(root), false);
+    bindProtectionAlias(root, "codex", "formatting");
+    protectSession(protectionForAlias("codex", "formatting", { base: root.base }));
+    assert.equal(sessionIsProtected(root), true);
+  });
+
+  test("strict JSON keeps valid escaped keys, duplicate keys and numeric spellings", () => {
+    const { root, directory } = fresh();
+    const source = `{"version":{"overwritten":[null,true,[],{"x":1}]},"\\u0069d":"${root.id}","version":9,"version":1e0}`;
+    assert.deepEqual(JSON.parse(source), { id: root.id, version: 1 });
+    fs.writeFileSync(path.join(directory, "root.json"), source);
+    assert.equal(sessionIsProtected(root), false);
+    bindProtectionAlias(root, "claude-code", "strict-valid");
+    protectSession(protectionForAlias("claude-code", "strict-valid", { base: root.base }));
+    assert.equal(sessionIsProtected(root), true);
+  });
+
+  for (const malformed of [
+    (id) => `{id:'${id}',version:1}`,
+    (id) => `{"id":"${id}","version":01}`,
+    (id) => `{"id":"${id}","version":1,}`,
+    (id) => `{"id":"${id}",/*comment*/"version":1}`,
+  ]) {
+    test("non-JSON manifests cannot confirm clean authority", () => {
+      const { root, directory } = fresh();
+      const source = malformed(root.id);
+      assert.throws(() => JSON.parse(source), SyntaxError);
+      fs.writeFileSync(path.join(directory, "root.json"), source);
+      assert.equal(sessionIsProtected(root), true);
+      assert.throws(() => bindProtectionAlias(root, "claude-code", "bad-json"), SessionProtectionUnavailable);
+      assert.throws(() => protectSession(root), SessionProtectionUnavailable);
+      assert.equal(fs.readFileSync(path.join(directory, "state"), "utf8"), "0\n");
+    });
+  }
+
+  test("a non-JSON alias cannot select an otherwise clean real root", () => {
+    const { root, directory } = fresh();
+    bindProtectionAlias(root, "claude-code", "bad-alias-json");
+    const [name] = fs.readdirSync(path.join(root.base, "aliases"));
+    const alias = path.join(root.base, "aliases", name);
+    const record = JSON.parse(fs.readFileSync(alias, "utf8"));
+    const source = `{version:1,identity:'${record.identity}',root:'${root.id}'}`;
+    assert.throws(() => JSON.parse(source), SyntaxError);
+    fs.writeFileSync(alias, source);
+    assert.throws(
+      () => protectionForAlias("claude-code", "bad-alias-json", { base: root.base }),
+      SessionProtectionUnavailable,
+    );
+    assert.throws(() => bindProtectionAlias(root, "claude-code", "bad-alias-json"), SessionProtectionUnavailable);
+    assert.equal(fs.readFileSync(path.join(directory, "state"), "utf8"), "0\n");
+  });
+
+  for (const operation of ["broaden", "unprotect"]) {
+    test(`an actual ${operation} DACL is refused without changing state`, () => {
+      const { root, directory } = fresh();
+      const state = path.join(directory, "state");
+      acl(operation, state);
+      assert.equal(sessionIsProtected(root), true);
+      assert.throws(() => protectSession(root), SessionProtectionUnavailable);
+      assert.equal(fs.readFileSync(state, "utf8"), "0\n");
+    });
+  }
+
+  test("a real directory junction cannot substitute a different root", () => {
+    const { root, directory } = fresh();
+    const other = createProtectionRoot({ base: root.base });
+    fs.rmSync(directory, { recursive: true });
+    fs.symlinkSync(path.join(root.base, other.id), directory, "junction");
+    assert.equal(sessionIsProtected(root), true);
+    assert.throws(() => protectSession(root), SessionProtectionUnavailable);
+    assert.equal(sessionIsProtected(other), false);
+    fs.unlinkSync(directory);
+  });
+}

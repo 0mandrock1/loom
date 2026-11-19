@@ -17,8 +17,9 @@ import {
 
 const owned = new Set();
 function fixture() {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "loom-flush-protection-"));
-  owned.add(directory);
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "loom-flush-protection-"));
+  owned.add(parent);
+  const directory = process.platform === "win32" ? path.join(parent, "private") : parent;
   return { directory, root: createProtectionRoot({ base: directory }) };
 }
 afterEach(() => {
@@ -38,18 +39,14 @@ function cursor() {
   };
 }
 
-if (process.platform === "win32" || typeof process.getuid !== "function") {
-  test("automatic contexts refuse unavailable native capsule authority", () => {
-    let ran = false;
-    withAutomaticSessionProtection(
-      { base: path.resolve("missing"), id: "00000000-0000-0000-0000-000000000000" },
-      () => {
-        ran = true;
-      },
-    );
-    assert.equal(ran, false);
+test("automatic contexts refuse missing protection roots", () => {
+  let ran = false;
+  withAutomaticSessionProtection({ base: path.resolve("missing"), id: "00000000-0000-0000-0000-000000000000" }, () => {
+    ran = true;
   });
-} else {
+  assert.equal(ran, false);
+});
+{
   test("unknown and protected producers leave no queued content or child", () => {
     const { directory, root } = fixture();
     const before = fs.readdirSync(directory);

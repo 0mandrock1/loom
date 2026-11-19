@@ -15,8 +15,9 @@ import {
 
 const owned = new Set();
 function fixture() {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "loom-response-test-"));
-  owned.add(base);
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "loom-response-test-"));
+  owned.add(parent);
+  const base = process.platform === "win32" ? path.join(parent, "private") : parent;
   const root = createProtectionRoot({ base });
   return { root, base };
 }
@@ -27,18 +28,14 @@ afterEach(() => {
 
 const response = (body) => async () => ({ status: 200, json: async () => body });
 
-if (process.platform === "win32" || typeof process.getuid !== "function") {
-  test("automatic contexts refuse unavailable native capsule authority", () => {
-    let ran = false;
-    withAutomaticSessionProtection(
-      { base: path.resolve("missing"), id: "00000000-0000-0000-0000-000000000000" },
-      () => {
-        ran = true;
-      },
-    );
-    assert.equal(ran, false);
+test("automatic contexts refuse missing protection roots", () => {
+  let ran = false;
+  withAutomaticSessionProtection({ base: path.resolve("missing"), id: "00000000-0000-0000-0000-000000000000" }, () => {
+    ran = true;
   });
-} else {
+  assert.equal(ran, false);
+});
+{
   test("a marked automatic response protects every contributor before withholding its body", async () => {
     const { root, base } = fixture();
     const contributor = createProtectionRoot({ base });
