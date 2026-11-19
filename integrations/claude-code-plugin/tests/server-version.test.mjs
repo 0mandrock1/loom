@@ -1,6 +1,7 @@
 // The minimum server version: the SemVer comparison, the one warning line,
 // and the SessionStart hook printing it only for an older server.
 import "./temp-home.mjs";
+import { establishFixtureSession } from "./established-session.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -90,6 +91,7 @@ async function fakeLoom(health) {
 
 function session(url, extraEnv = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "loom-minver-")));
+  establishFixtureSession(dir, "server-version-session");
   return new Promise((resolve) => {
     const started = Date.now();
     const child = spawn(process.execPath, [HOOK, "SessionStart"], {
@@ -112,7 +114,7 @@ function session(url, extraEnv = {}) {
       fs.rmSync(dir, { recursive: true, force: true });
       resolve({ code, stdout, stderr, ms: Date.now() - started });
     });
-    child.stdin.end("{}");
+    child.stdin.end(JSON.stringify({ session_id: "server-version-session" }));
   });
 }
 

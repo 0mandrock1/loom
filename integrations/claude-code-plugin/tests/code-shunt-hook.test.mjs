@@ -3,6 +3,7 @@
 // seeded in the shared cache (no code.repos call), the hook run as Claude
 // Code runs it, and a local server only where a call is expected.
 import "./temp-home.mjs";
+import { establishFixtureSession } from "./established-session.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -13,6 +14,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { cachePathFor } from "../lib/repo-scope.mjs";
 import { batchKind } from "../lib/shunt-ledger.mjs";
+import { protectSession, sessionIsProtected } from "../lib/session-protection.mjs";
 import { sessionStatePath, tmpStatePath } from "../lib/tmp-state.mjs";
 import { hostEnv } from "./host-env.mjs";
 
@@ -45,7 +47,7 @@ function checkout(files) {
 
 /** A fresh TMPDIR holding the repo entry the session-start primer would have
  *  written. */
-function seed(root, { asOf = FAR_BEHIND } = {}) {
+function seed(root, { asOf = FAR_BEHIND, existingSessions = [] } = {}) {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "loom-shunt-tmp-")));
   fs.writeFileSync(
     cachePathFor(root, tmp),
@@ -61,6 +63,7 @@ function seed(root, { asOf = FAR_BEHIND } = {}) {
       fetchedAt: "",
     }),
   );
+  for (const sessionId of existingSessions) establishFixtureSession(tmp, sessionId);
   return tmp;
 }
 
@@ -126,7 +129,7 @@ const readOf = (dir, rel) => ({
 
 test("a checkout far behind the index is still shunted", async () => {
   const { dir } = checkout({ "src/a.cpp": BIG });
-  const r = await runHook(readOf(dir, "src/a.cpp"), { tmp: seed(dir) });
+  const r = await runHook(readOf(dir, "src/a.cpp"), { tmp: seed(dir, { existingSessions: ["e2e"] }) });
   assert.match(
     r.deny,
     /^loom-code-shunt: src\/a\.cpp is 900 lines and is in loom's code index \(as of 0123456789ab\)\./,
@@ -137,7 +140,7 @@ test("a checkout far behind the index is still shunted", async () => {
 test("local_first stands the shunt down entirely, even when HEAD is the indexed commit", async () => {
   const { dir, head } = checkout({ "src/a.cpp": BIG });
   for (const env of [{ LOOM_CODE_LOCAL_FIRST: "on" }, { CLAUDE_PLUGIN_OPTION_LOCAL_FIRST: "true" }]) {
-    const tmp = seed(dir, { asOf: head });
+    const tmp = seed(dir, { asOf: head, existingSessions: ["e2e"] });
     const r = await runHook(readOf(dir, "src/a.cpp"), { tmp, env });
     assert.equal(r.deny, null);
     assert.equal(r.log, "", "no decision at all");
@@ -152,7 +155,7 @@ test("local_first stands the shunt down entirely, even when HEAD is the indexed 
 test("a modified file still passes: the index cannot describe uncommitted edits", async () => {
   const { dir } = checkout({ "src/a.cpp": BIG });
   fs.appendFileSync(path.join(dir, "src/a.cpp"), "// mine\n");
-  const r = await runHook(readOf(dir, "src/a.cpp"), { tmp: seed(dir) });
+  const r = await runHook(readOf(dir, "src/a.cpp"), { tmp: seed(dir, { existingSessions: ["e2e"] }) });
   assert.equal(r.deny, null);
   assert.match(r.log, /\tpass\tRead\t\d+\t\tmodified\t/);
 });
@@ -166,7 +169,7 @@ test("a tree-wide grep for matching lines runs: it costs less than its redirect"
       cwd: dir,
       session_id: "e2e",
     },
-    { tmp: seed(dir) },
+    { tmp: seed(dir, { existingSessions: ["e2e"] }) },
   );
   assert.equal(r.deny, null);
   assert.match(r.log, /\tpass\tGrep\t\d+\t\ttree_content_grep\t/);
@@ -182,7 +185,7 @@ test("a tree-wide grep that lists files (Claude Code's default) passes", async (
         cwd: dir,
         session_id: `e2e-${output_mode}`,
       },
-      { tmp: seed(dir) },
+      { tmp: seed(dir, { existingSessions: [`e2e-${output_mode}`] }) },
     );
     assert.equal(r.deny, null, String(output_mode));
     assert.match(r.log, /\tpass\tGrep\t\d+\t\tfile_list_grep\t/);
@@ -196,7 +199,7 @@ test("a one-file grep asking for line numbers or context runs as content", async
     const tool_input = { pattern: "busy_timeout|max_data_size", path: file, ...flags };
     const r = await runHook(
       { tool_name: "Grep", tool_input, cwd: dir, session_id: `lines-${Object.keys(flags)[0]}` },
-      { tmp: seed(dir) },
+      { tmp: seed(dir, { existingSessions: [`lines-${Object.keys(flags)[0]}`] }) },
     );
     assert.equal(r.deny, null);
     assert.deepEqual(r.updatedInput, { ...tool_input, output_mode: "content" });
@@ -207,7 +210,10 @@ test("a one-file grep asking for line numbers or context runs as content", async
     { pattern: "busy_timeout", path: file, "-n": true, output_mode: "count" },
     { pattern: "busy_timeout", path: path.join(dir, "src"), "-n": true },
   ]) {
-    const r = await runHook({ tool_name: "Grep", tool_input, cwd: dir, session_id: "lines-no" }, { tmp: seed(dir) });
+    const r = await runHook(
+      { tool_name: "Grep", tool_input, cwd: dir, session_id: "lines-no" },
+      { tmp: seed(dir, { existingSessions: ["lines-no"] }) },
+    );
     assert.equal(r.updatedInput, null, JSON.stringify(tool_input));
   }
 });
@@ -234,7 +240,7 @@ test("a symbol grep is answered by the index; a named file you modified gets its
     cwd: dir,
     session_id: "e2e",
   };
-  const r = await withServer(answers, (url) => runHook(cmd, { tmp: seed(dir), url }));
+  const r = await withServer(answers, (url) => runHook(cmd, { tmp: seed(dir, { existingSessions: ["e2e"] }), url }));
   assert.match(
     r.deny,
     /Index answer: DB::MergeTreeData::renameTempPartAndAdd is defined at src\/a\.cpp:7327-7344 \(code-x @ 012345678, scip tier\)\./,
@@ -248,7 +254,7 @@ test("a symbol grep is answered by the index; a named file you modified gets its
 
 test("a chained Bash read is judged segment by segment; the first deny wins", async () => {
   const { dir } = checkout({ "src/a.cpp": BIG, "src/small.cpp": "int x;\n" });
-  const tmp = seed(dir);
+  const tmp = seed(dir, { existingSessions: ["e2e"] });
   const bash = (command) => ({ tool_name: "Bash", tool_input: { command }, cwd: dir, session_id: "e2e" });
   // As a Git Bash command names it on Windows: forward slashes.
   const cdDir = dir.replace(/\\/g, "/");
@@ -258,7 +264,9 @@ test("a chained Bash read is judged segment by segment; the first deny wins", as
   assert.equal(lines.length, 2, "the small read passed and was counted, the big one denied");
   assert.match(lines[0], /\tpass\tBash:cat\t.*\tsrc\/small\.cpp\t/);
   assert.match(lines[1], /\thit\tBash:cat\t/);
-  const p = await runHook(bash("cd src && sed -n '1,40p' a.cpp; echo ---"), { tmp: seed(dir) });
+  const p = await runHook(bash("cd src && sed -n '1,40p' a.cpp; echo ---"), {
+    tmp: seed(dir, { existingSessions: ["e2e"] }),
+  });
   assert.equal(p.deny, null, "a ranged read passes (no read cap set)");
   assert.match(p.log, /\tpass\tBash:sed\t.*targeted_span\tsrc\/a\.cpp\t1\t40/);
 });
@@ -266,7 +274,7 @@ test("a chained Bash read is judged segment by segment; the first deny wins", as
 // The hook's pending batch for the seeded repository (o/code-x), the server at
 // `url`, runHook's token and a session.
 const pendingPath = (tmp, url, session = "e2e", namespace = "code-x") =>
-  sessionStatePath(batchKind({ serverUrl: url, token: "t", org: "o", namespace }), session, { ext: ".log", tmp });
+  sessionStatePath(batchKind({ serverUrl: url, token: "t", org: "o", namespace }), session, { ext: ".log.control", tmp });
 const reporting = { LOOM_SHUNT_REPORT: "on", LOOM_SHUNT_READ_CAP: "200" };
 const rangedRead = (dir) => ({
   ...readOf(dir, "src/a.cpp"),
@@ -280,7 +288,7 @@ const posix = process.platform !== "win32";
 
 test("a deny claims the pending batch, posts it as code.outcome and removes it", async () => {
   const { dir } = checkout({ "src/a.cpp": BIG });
-  const tmp = seed(dir);
+  const tmp = seed(dir, { existingSessions: ["e2e"] });
   await withServer({}, async (url, seen) => {
     const r = await runHook(readOf(dir, "src/a.cpp"), { tmp, url, env: reporting });
     assert.ok(r.deny);
@@ -299,7 +307,7 @@ test("a deny claims the pending batch, posts it as code.outcome and removes it",
 
 test("the read cap denies a file twice per session, then passes it as cap_spent", async () => {
   const { dir } = checkout({ "src/a.cpp": BIG });
-  const tmp = seed(dir);
+  const tmp = seed(dir, { existingSessions: ["e2e"] });
   const env = { LOOM_SHUNT_READ_CAP: "200" };
   for (let i = 0; i < 2; i++) assert.ok((await runHook(rangedRead(dir), { tmp, env })).deny, `denial ${i + 1}`);
   const third = await runHook(rangedRead(dir), { tmp, env });
@@ -311,7 +319,7 @@ test("symlinks planted at the shunt's tmp files are not followed and cannot lock
   skip: !posix,
 }, async () => {
   const { dir } = checkout({ "src/a.cpp": BIG });
-  const tmp = seed(dir);
+  const tmp = seed(dir, { existingSessions: ["e2e"] });
   const planted = {};
   const victims = {};
   await withServer({}, async (url, seen) => {
@@ -341,7 +349,7 @@ test("symlinks planted at the shunt's tmp files are not followed and cannot lock
 
 test("a hard link planted at the pending batch is neither posted nor truncated", { skip: !posix }, async () => {
   const { dir } = checkout({ "src/a.cpp": BIG });
-  const tmp = seed(dir);
+  const tmp = seed(dir, { existingSessions: ["e2e"] });
   const victim = path.join(tmp, "victim-log");
   fs.writeFileSync(victim, plantedBatch);
   await withServer({}, async (url, seen) => {
@@ -357,7 +365,7 @@ test("a flush also posts the batch another session left behind", async () => {
   const { dir } = checkout({ "src/a.cpp": BIG });
   fs.appendFileSync(path.join(dir, "src/a.cpp"), "// mine\n");
   const { dir: other } = checkout({ "src/a.cpp": BIG });
-  const tmp = seed(dir);
+  const tmp = seed(dir, { existingSessions: ["A", "B"] });
   fs.writeFileSync(cachePathFor(other, tmp), fs.readFileSync(cachePathFor(dir, tmp)));
   await withServer({}, async (url, seen) => {
     const a = await runHook({ ...readOf(dir, "src/a.cpp"), session_id: "A" }, { tmp, url, env: reporting });
@@ -380,7 +388,7 @@ test("a flush also posts the batch another session left behind", async () => {
 
 test("a flush leaves another reporting scope's batch alone", async () => {
   const { dir } = checkout({ "src/a.cpp": BIG });
-  const tmp = seed(dir);
+  const tmp = seed(dir, { existingSessions: ["e2e"] });
   await withServer({}, async (url, seen) => {
     // Another repository's batch, and one this repository's lines would go to under another server.
     const others = [pendingPath(tmp, url, "X", "code-other"), pendingPath(tmp, "http://127.0.0.1:9", "Y")];
@@ -402,7 +410,7 @@ const plantCap = (tmp, session = "e2e") => {
 
 test("a symbol grep whose budget cannot be written passes as budget_unrecorded", { skip: !posix }, async () => {
   const { dir } = checkout({ "src/a.h": "bool renameTempPartAndAdd(\n", "src/a.cpp": "// def\n" });
-  const tmp = seed(dir);
+  const tmp = seed(dir, { existingSessions: ["e2e"] });
   const victim = plantCap(tmp);
   const cmd = {
     tool_name: "Bash",
@@ -420,7 +428,7 @@ test("an answered tracker search whose budget cannot be written passes as budget
   skip: !posix,
 }, async () => {
   const { dir } = checkout({ "src/a.cpp": "// x\n" });
-  const tmp = seed(dir);
+  const tmp = seed(dir, { existingSessions: ["e2e"] });
   const victim = plantCap(tmp);
   const cmd = {
     tool_name: "Bash",
@@ -444,9 +452,122 @@ test("an answered tracker search whose budget cannot be written passes as budget
 
 test("an over-cap read whose budget cannot be written passes as budget_unrecorded", { skip: !posix }, async () => {
   const { dir } = checkout({ "src/a.cpp": BIG });
-  const tmp = seed(dir);
+  const tmp = seed(dir, { existingSessions: ["e2e"] });
   plantCap(tmp);
   const r = await runHook(rangedRead(dir), { tmp, env: { LOOM_SHUNT_READ_CAP: "200" } });
   assert.equal(r.deny, null);
   assert.match(r.log, /\tpass\tRead\t\d+\t\tbudget_unrecorded\t/);
+});
+
+
+test("a producer protected after queuing keeps its bytes while an unrelated clean hit posts", async () => {
+  const { dir } = checkout({ "src/a.cpp": BIG });
+  fs.appendFileSync(path.join(dir, "src/a.cpp"), "// private producer change\n");
+  const { dir: other } = checkout({ "src/b.cpp": BIG });
+  const tmp = seed(dir, { existingSessions: ["A", "B"] });
+  const rootA = establishFixtureSession(tmp, "A");
+  const rootB = establishFixtureSession(tmp, "B");
+  fs.writeFileSync(cachePathFor(other, tmp), fs.readFileSync(cachePathFor(dir, tmp)));
+  try {
+    await withServer({}, async (url, seen) => {
+      const a = await runHook({ ...readOf(dir, "src/a.cpp"), session_id: "A" }, { tmp, url, env: reporting });
+      assert.equal(a.deny, null);
+      const queuedA = pendingPath(tmp, url, "A");
+      const before = fs.readFileSync(queuedA);
+      assert.ok(before.length > 0);
+      assert.equal(outcomes(seen).length, 0);
+      protectSession(rootA);
+      assert.equal(sessionIsProtected(rootA), true);
+      assert.equal(sessionIsProtected(rootB), false);
+      const b = await runHook({ ...readOf(other, "src/b.cpp"), session_id: "B" }, { tmp, url, env: reporting });
+      assert.ok(b.deny);
+      await settle();
+      assert.equal(outcomes(seen).length, 1, "the clean producer's own hit is sent");
+      assert.equal(outcomes(seen)[0].body.action, "shunt_hit");
+      assert.ok(outcomes(seen)[0].body.spans.some((span) => span.startsWith("src/b.cpp:")));
+      assert.equal(JSON.stringify(outcomes(seen)).includes("src/a.cpp"), false);
+      assert.equal(outcomes(seen).some((entry) => entry.body.source === "modified"), false);
+      assert.deepEqual(fs.readFileSync(queuedA), before, "protected evidence is neither claimed nor changed");
+      assert.equal(fs.existsSync(pendingPath(tmp, url, "B")), false);
+      assert.equal(sessionIsProtected(rootB), false);
+    });
+  } finally {
+    for (const owned of [tmp, dir, other]) fs.rmSync(owned, { recursive: true, force: true });
+  }
+});
+
+test("a marked aggregate response protects every producer and retains both unacknowledged claims", async () => {
+  const { dir } = checkout({ "src/a.cpp": BIG });
+  fs.appendFileSync(path.join(dir, "src/a.cpp"), "// producer change\n");
+  const { dir: other } = checkout({ "src/b.cpp": BIG });
+  const tmp = seed(dir, { existingSessions: ["A", "B"] });
+  const rootA = establishFixtureSession(tmp, "A");
+  const rootB = establishFixtureSession(tmp, "B");
+  fs.writeFileSync(cachePathFor(other, tmp), fs.readFileSync(cachePathFor(dir, tmp)));
+  try {
+    await withServer({ "/v1/code.outcome": { mirrored: true } }, async (url, seen) => {
+      const a = await runHook({ ...readOf(dir, "src/a.cpp"), session_id: "A" }, { tmp, url, env: reporting });
+      assert.equal(a.deny, null);
+      const queuedA = pendingPath(tmp, url, "A");
+      const beforeA = fs.readFileSync(queuedA, "utf8");
+      assert.equal(outcomes(seen).length, 0);
+      assert.equal(sessionIsProtected(rootA), false);
+      assert.equal(sessionIsProtected(rootB), false);
+      const b = await runHook({ ...readOf(other, "src/b.cpp"), session_id: "B" }, { tmp, url, env: reporting });
+      assert.ok(b.deny);
+      await settle();
+      assert.equal(outcomes(seen).length, 1, "the first marked answer suppresses the aggregate's second body");
+      assert.equal(outcomes(seen)[0].body.action, "shunt_hit");
+      assert.equal(sessionIsProtected(rootA), true);
+      assert.equal(sessionIsProtected(rootB), true);
+      assert.equal(fs.existsSync(queuedA), false);
+      assert.equal(fs.existsSync(pendingPath(tmp, url, "B")), false);
+      const claims = fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-"));
+      assert.equal(claims.length, 2, "claiming moves evidence; a marked answer does not acknowledge it");
+      const retained = claims.map((name) => fs.readFileSync(path.join(tmp, name), "utf8"));
+      assert.ok(retained.includes(beforeA), "producer A's exact queued bytes remain in its claim");
+      const rows = retained.flatMap((text) => text.trimEnd().split("\n").map((line) => JSON.parse(line)));
+      assert.equal(rows.length, 2);
+      const rowA = rows.find((row) =>
+        row.protectionRoots.some((root) => root.base === rootA.base && root.id === rootA.id),
+      );
+      const rowB = rows.find((row) =>
+        row.protectionRoots.some((root) => root.base === rootB.base && root.id === rootB.id),
+      );
+      assert.ok(rowA && rowB, "both actual producer roots stay attached to their evidence");
+      assert.match(rowA.line, /\tpass\tRead\t.*\tmodified\tsrc\/a\.cpp\t/);
+      assert.match(rowB.line, /\thit\tRead\t.*\tsrc\/b\.cpp\t/);
+      const scopePrefix = `loom-${batchKind({ serverUrl: url, token: "t", org: "o", namespace: "code-x" })}-`;
+      assert.deepEqual(
+        fs.readdirSync(tmp).filter((name) => name.startsWith(scopePrefix) && name.endsWith(".log.control")),
+        [],
+      );
+    });
+  } finally {
+    for (const owned of [tmp, dir, other]) fs.rmSync(owned, { recursive: true, force: true });
+  }
+});
+
+test("an unattributed batch in the same protected scope stays untouched while a clean hit posts", async () => {
+  const { dir } = checkout({ "src/b.cpp": BIG });
+  const tmp = seed(dir, { existingSessions: ["B"] });
+  try {
+    await withServer({}, async (url, seen) => {
+      const unattributed = pendingPath(tmp, url, "unknown-producer");
+      fs.writeFileSync(unattributed, plantedBatch, { mode: 0o600 });
+      const before = fs.readFileSync(unattributed);
+      const b = await runHook({ ...readOf(dir, "src/b.cpp"), session_id: "B" }, { tmp, url, env: reporting });
+      assert.ok(b.deny);
+      await settle();
+      assert.equal(outcomes(seen).length, 1);
+      assert.equal(outcomes(seen)[0].body.action, "shunt_hit");
+      assert.ok(outcomes(seen)[0].body.spans.some((span) => span.startsWith("src/b.cpp:")));
+      assert.equal(carriesPlanted(seen), false);
+      assert.deepEqual(fs.readFileSync(unattributed), before, "a matching filename cannot supply producer authority");
+      assert.equal(fs.existsSync(pendingPath(tmp, url, "B")), false);
+      assert.deepEqual(fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-")), []);
+    });
+  } finally {
+    for (const owned of [tmp, dir]) fs.rmSync(owned, { recursive: true, force: true });
+  }
 });

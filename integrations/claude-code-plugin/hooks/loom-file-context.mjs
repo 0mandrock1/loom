@@ -25,6 +25,7 @@ import {
   gitToplevel,
   postBounded,
   readStdinJson,
+  runHookMain,
   resolveScope,
   resolveServerUrl,
   resolveToken,
@@ -98,4 +99,4 @@ async function main() {
   scheduleExit(0);
 }
 
-main().catch(() => scheduleExit(0));
+runHookMain(main);

@@ -22,6 +22,12 @@ What you get once it is installed:
 - **Blast radius, file context, test gate, working memory, run ledger** — as
   in the Claude Code plugin; the README there documents every knob.
 
+Automatic hooks require an existing binding to an unprotected session family. An
+unknown, damaged or protected family stays silent, including automatic signup
+and the session primer. The hooks do not create an independent native session
+family or declare protection for direct MCP responses. Native session creation
+and private-content publication remain unqualified.
+
 ## Data handling
 
 The hooks send prompts, tool inputs and outputs, file paths, repository identity,
@@ -36,8 +42,11 @@ The plugin runs Node.js, Git and grep locally, keeps credentials and state under
 `~/.loom/`, and writes temporary state that can contain prompt and reply text.
 The test gate chooses a Python interpreter without starting it. At session start
 the plugin tries to remove most temporary state untouched for a day; it can
-remain longer, especially when no new session starts. Queued writes and the
-shunt log have different retention rules. The `loom-status` skill can install Node.js after
+remain longer, especially when no new session starts. Pending and claimed shunt
+reports retain their producer privacy roots and are excluded from the current
+plugin's cleanup; failed claims are not replayed automatically. Older plugin
+versions can still expire older-format files. Queued writes and the shunt log
+have different retention rules. The `loom-status` skill can install Node.js after
 you agree, and `improve-loom-for-my-repo` searches public issues and asks before
 filing a report. The full
 [data-handling disclosure](https://clickhouse.github.io/loom/features/integrations/claude-code/#data-handling)
@@ -80,8 +89,8 @@ server URL is fixed in `.mcp.json` and `plugin-defaults.json`
 | Hooks run through `$SHELL -lc`, and through `cmd.exe` on Windows                                               | Each hook starts through `bin/loom-node`, which finds Node 18+ when PATH has none; on Windows `commandWindows` runs `node` from the system PATH; it needs Codex 0.131 or later, as an earlier build runs the `sh` command through `cmd.exe` and fails.   |
 | Run ids                                                                                                        | `cx-<session_id>` (Claude Code: `cc-<session_id>`); session memories carry `source:codex`; hook-written rows default to agent `codex`.                                                                                                                   |
 
-Everything else — the environment knobs, the safety model (fire-and-forget,
-hard-bounded, fail-open), the project scoping, the skills — is documented
+Everything else — the environment knobs, request bounds, project scoping and
+skills — is documented
 once, in the [Claude Code plugin README](https://github.com/ClickHouse/loom/tree/main/integrations/claude-code-plugin).
 
 ## Skills

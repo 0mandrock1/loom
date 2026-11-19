@@ -4,6 +4,7 @@
 // Every case exits 0 within its bound and says nothing, or only what local
 // policy decides without the server.
 import "./temp-home.mjs";
+import { establishFixtureSession } from "./established-session.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -35,8 +36,10 @@ function checkout() {
   return dir;
 }
 
-function freshTmp() {
-  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "loom-failopen-tmp-")));
+function freshTmp(existingSessions = []) {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "loom-failopen-tmp-")));
+  for (const sessionId of existingSessions) establishFixtureSession(tmp, sessionId);
+  return tmp;
 }
 
 function seedIndexed(root, tmp) {
@@ -50,7 +53,14 @@ function seedIndexed(root, tmp) {
 function run(hook, stdin, { tmp, url = REFUSED, token = "t", env = {} }) {
   return new Promise((resolve) => {
     const started = Date.now();
-    const child = spawn(process.execPath, [path.join(HOOKS, hook), "X"], {
+    const event = {
+      "loom-code-shunt.mjs": "PreToolUse",
+      "loom-file-context.mjs": "PreToolUse",
+      "loom-blast-radius.mjs": "PostToolUse",
+      "loom-test-gate.mjs": "Stop",
+      "loom-validate-gate.mjs": "Stop",
+    }[hook];
+    const child = spawn(process.execPath, [path.join(HOOKS, hook), event], {
       env: hostEnv({
         PATH: process.env.PATH,
         HOME: tmp,
@@ -138,7 +148,7 @@ test("malformed, empty and non-object stdin: every code hook exits 0 and prints 
 test("no token: nothing is asked of the server and nothing is printed", async () => {
   const dir = checkout();
   await withServer(200, async (url, seen) => {
-    const tmp = freshTmp();
+    const tmp = freshTmp(["s"]);
     const read = {
       tool_name: "Read",
       tool_input: { file_path: path.join(dir, "src/a.cpp") },
@@ -168,7 +178,7 @@ test("no token: nothing is asked of the server and nothing is printed", async ()
 
 test("shunt: a refused connection with no cached entry passes and is retried soon, not cached as not-indexed", async () => {
   const dir = checkout();
-  const tmp = freshTmp();
+  const tmp = freshTmp(["s"]);
   const r = await run(
     "loom-code-shunt.mjs",
     { tool_name: "Read", tool_input: { file_path: path.join(dir, "src/a.cpp") }, cwd: dir, session_id: "s" },
@@ -184,7 +194,7 @@ test("shunt: a refused connection with no cached entry passes and is retried soo
 test("shunt: a 401 from the repository lookup passes the call and records it unresolved", async () => {
   const dir = checkout();
   await withServer(401, async (url, seen) => {
-    const tmp = freshTmp();
+    const tmp = freshTmp(["s"]);
     const r = await run(
       "loom-code-shunt.mjs",
       { tool_name: "Read", tool_input: { file_path: path.join(dir, "src/a.cpp") }, cwd: dir, session_id: "s" },
@@ -200,7 +210,7 @@ test("shunt: a 401 from the repository lookup passes the call and records it unr
 test("shunt: a server that never answers holds the call no longer than the lookup bound", async () => {
   const dir = checkout();
   await withServer(null, async (url) => {
-    const tmp = freshTmp();
+    const tmp = freshTmp(["s"]);
     const r = await run(
       "loom-code-shunt.mjs",
       { tool_name: "Read", tool_input: { file_path: path.join(dir, "src/a.cpp") }, cwd: dir, session_id: "s" },
@@ -215,7 +225,7 @@ test("shunt: a server that never answers holds the call no longer than the looku
 test("shunt: an indexed entry decides locally; a symbol grep whose answer hangs keeps the plain redirect", async () => {
   const dir = checkout();
   await withServer(null, async (url, seen, arrived) => {
-    const tmp = freshTmp();
+    const tmp = freshTmp(["s"]);
     seedIndexed(dir, tmp);
     const r = await run(
       "loom-code-shunt.mjs",
@@ -249,7 +259,7 @@ test("shunt: an indexed entry decides locally; a symbol grep whose answer hangs 
 });
 
 test("shunt: outside a git checkout, or a tool it does not judge, nothing happens", async () => {
-  const tmp = freshTmp();
+  const tmp = freshTmp(["s"]);
   const r = await run(
     "loom-code-shunt.mjs",
     { tool_name: "Read", tool_input: { file_path: path.join(tmp, "x") }, cwd: tmp, session_id: "s" },
@@ -263,10 +273,10 @@ test("shunt: outside a git checkout, or a tool it does not judge, nothing happen
 });
 
 /** A dirty indexed checkout and a transcript whose Edit named the file. */
-function dirtySession() {
+function dirtySession(existingSessions) {
   const dir = checkout();
   fs.appendFileSync(path.join(dir, "src/a.cpp"), "int g() { return 1; }\n");
-  const tmp = freshTmp();
+  const tmp = freshTmp(existingSessions);
   seedIndexed(dir, tmp);
   const transcript = path.join(tmp, "t.jsonl");
   fs.writeFileSync(
@@ -292,7 +302,7 @@ test("Stop gates: 401 and a hanging server both let the stop through", async () 
         // A request can fail before the server observes it; require a witnessed run.
         let r;
         for (let attempt = 0; attempt < 3; attempt++) {
-          const { dir, tmp, transcript } = dirtySession();
+          const { dir, tmp, transcript } = dirtySession(["s"]);
           arrived.delete(op);
           r = await run(
             hook,
@@ -319,7 +329,7 @@ test("Stop gates: 401 and a hanging server both let the stop through", async () 
 test("Stop gates: a Stop the gate itself caused never blocks again", async () => {
   await withServer(200, async (url, seen) => {
     for (const hook of ["loom-test-gate.mjs", "loom-validate-gate.mjs"]) {
-      const { dir, tmp, transcript } = dirtySession();
+      const { dir, tmp, transcript } = dirtySession(["s"]);
       const r = await run(
         hook,
         { cwd: dir, session_id: "s", transcript_path: transcript, stop_hook_active: true },
@@ -342,7 +352,7 @@ test("blast radius and file context: 401 and a hanging server add nothing to the
         // A request can fail before the server observes it; require a witnessed run.
         let r;
         for (let attempt = 0; attempt < 3; attempt++) {
-          const { dir, tmp } = dirtySession();
+          const { dir, tmp } = dirtySession([`s-${hook}-${attempt}`]);
           const edit = {
             tool_name: "Edit",
             tool_input: { file_path: path.join(dir, "src/a.cpp") },
@@ -373,7 +383,7 @@ test("blast radius and file context: 401 and a hanging server add nothing to the
 test("shunt: the whole hook ends by its deadline even when one answer is slower than it", async () => {
   const dir = checkout();
   await withServer(null, async (url, seen) => {
-    const tmp = freshTmp();
+    const tmp = freshTmp(["s"]);
     seedIndexed(dir, tmp);
     const r = await run(
       "loom-code-shunt.mjs",
@@ -389,7 +399,7 @@ test("shunt: the whole hook ends by its deadline even when one answer is slower 
 
 test("shunt: a tracker search reaches tracker.duplicate_check redacted", async () => {
   const dir = checkout();
-  const tmp = freshTmp();
+  const tmp = freshTmp(["s"]);
   seedIndexed(dir, tmp);
   const bodies = await withCapturingServer(async (url) => {
     const command = 'gh issue list --search "login fails password=hunter2"';
@@ -405,7 +415,7 @@ test("shunt: a tracker search reaches tracker.duplicate_check redacted", async (
 });
 
 test("blast radius and test gate: only the diff's paths and hunk headers reach the server", async () => {
-  const { dir, tmp, transcript } = dirtySession();
+  const { dir, tmp, transcript } = dirtySession(["s"]);
   fs.appendFileSync(path.join(dir, "src/a.cpp"), 'const char* api_key = "s3cr3t-value";\n');
   // a second change three lines above the first: two hunks unless they are merged
   const src = path.join(dir, "src/a.cpp");
@@ -454,7 +464,7 @@ test("blast radius and test gate: only the diff's paths and hunk headers reach t
 });
 
 test("blast radius: a change with no path or range for the server sends nothing", async () => {
-  const { dir, tmp } = dirtySession();
+  const { dir, tmp } = dirtySession(["s"]);
   execFileSync("git", ["checkout", "-q", "--", "src/a.cpp"], { cwd: dir });
   fs.chmodSync(path.join(dir, "src/a.cpp"), 0o755);
   const bodies = await withCapturingServer(async (url) => {

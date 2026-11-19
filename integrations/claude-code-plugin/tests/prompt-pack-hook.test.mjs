@@ -3,6 +3,7 @@
 // never fails silently on its own code (a missing import once made every
 // prompt throw inside runHookMain, which swallows the error).
 import "./temp-home.mjs";
+import { establishFixtureSession } from "./established-session.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -50,6 +51,7 @@ test("on, in an indexed checkout: one code.search, the pointers injected, no hoo
     cachePathFor(dir, tmp),
     JSON.stringify({ ts: Date.now(), indexed: true, org: "o", namespace: "code-x", repo: "x/y", prefixes: [] }),
   );
+  establishFixtureSession(tmp, "s");
   const seen = [];
   const server = http.createServer((req, res) => {
     let body = "";
