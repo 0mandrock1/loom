@@ -53,40 +53,37 @@ can charge for calls. Source connectors need their own configuration and credent
 connecting an MCP client does not turn them on.
 
 1. [Connect an MCP client](../features/integrations/mcp-clients.md) with a Loom token
-   that has the `viewer` role on the document namespace. In that client, call
-   `loom_op` with the following arguments, replacing the organization and namespace
-   with your authorized scope:
+   that has the `viewer` role on the document namespace. Limit the token's grants to
+   the namespaces you intend to search. In that client, call `loom_search` directly
+   with these arguments:
 
    ```json
    {
-     "op": "knowledge.search",
-     "arguments": {
-       "org": "your-org",
-       "namespace": "your-documents",
-       "namespace_scope": "this",
-       "query": "What checks are required before deploying a service?",
-       "top_k": 3,
-       "rerank": "none"
-     }
+     "query": "What checks are required before deploying a service?",
+     "top_k": 3
    }
    ```
 
-2. Inspect each entry in `results`. Read its `content` before using it to support an
-   answer. Keep its `source_uri`, `revision`, `section_path` and `chunk_idx` with the
-   passage so the citation identifies what was retrieved. `source_uri` is a document
+   The server selects the authorized search scope. This unified search can return
+   memory and conversation results as well as document passages; the request does
+   not disable the deployment's configured reranker.
+
+2. Inspect each entry in `structuredContent.knowledge.results`. Read its `content`
+   before using it to support an answer. Keep its returned `source_uri`, `revision`
+   and any `section` or `locator` with the passage. `source_uri` is a document
    identifier, not necessarily a URL the reader can open.
-3. Use `locator` when it supplies a source location, such as a PDF page range. It can
-   be null, `section_path` can be empty, and older chunks can have `revision: 0`.
+3. Use `locator` when it supplies a source location, such as a PDF page range.
+   Location fields can be absent, and older chunks can have `revision: 0`.
    Report missing location information rather than inventing page or line numbers.
    Check extracted passages against the original document, especially tables and scans.
 4. Have the agent quote the supporting passage and cite its source beside each claim.
-   An empty result or a passage that does not answer the question is grounds to
-   abstain. `knowledge.search` returns passages; it does not generate an answer or
-   verify that a passage supports the agent's conclusion. Access to stored passages
-   also does not grant access to an external source's original file.
+   An empty document result or a passage that does not answer the question is grounds
+   to abstain. `loom_search` returns retrieved information; it does not generate an
+   answer or verify that a passage supports the agent's conclusion. Access to stored
+   passages also does not grant access to an external source's original file.
 
 The request above is an example to run against your own indexed documents, not a
-captured search result. See the [search contract](../reference/operations/knowledge.md#knowledgesearch)
-for the other request and response fields.
+captured search result. See the [unified search contract](../features/unified-search.md#loom_search)
+for the other request fields and result sections.
 
 Some ops on this page are marked experimental on the [status page](../reference/status.md).
