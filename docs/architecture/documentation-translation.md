@@ -84,8 +84,8 @@ The enlarged whole is changed input with the same original reference and current
 only. An already completed current input still requires its own origin and normal reuse
 eligibility. No added request, new historical slot or old-assistant replay is inferred.
 All whole counterparts and their original separators must cover the complete current
-container. Consumers must supply the authenticated raw sources even when every old
-whole remains a substring of the current container.
+container. For this terminal extension, consumers must supply the authenticated raw
+sources even when every old whole remains a substring of the current container.
 Ambiguous origins, reordered retained lines, incomplete originals and unsafe current
 parser cuts refuse. This proof is conservative: a replacement can still refuse when
 its text also occurs elsewhere and prevents unique ordered correspondence.
