@@ -78,6 +78,13 @@ before relying on the deployment for team work.
    memories each run relied on and close the run once, following the [run and procedure reporting rules](autonomous-agents.md#check-one-agent-task).
    Keep failed checks and unresolved questions with the handoff.
 
+The [Python software-factory reference](https://github.com/ClickHouse/loom/tree/main/sdk/python/examples#software_factory_memorypy)
+implements this evidence handoff with separate implementation and review credentials.
+Start with its indexed public repository and review-inbox setup. It compares the served
+function body and reports operation receipts; it does not generate a patch, decide whether
+a lesson is true or run code review. The example documents cleanup limits and supplies
+no captured live output.
+
 ## Start
 
 [Integrate Loom into an agent](../guides/agent-integration.md) covers the identity each
