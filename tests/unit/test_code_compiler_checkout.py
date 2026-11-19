@@ -1,7 +1,8 @@
-"""Compiler-tier working trees: created when missing, except an operator's scip-clang one."""
+"""Compiler checkout initialization and metadata refusal through worker housekeeping."""
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 
@@ -205,6 +206,94 @@ def test_ancestor_worktree_configuration_never_supplies_checkout_metadata(
     assert {
         p.relative_to(ancestor): p.read_bytes() for p in ancestor.rglob("*") if p.is_file()
     } == before
+
+
+@pytest.mark.parametrize("producer", ["python", "go"])
+@pytest.mark.parametrize("shared", [False, True], ids=["symlink", "commondir"])
+def test_worker_checkout_refusal_prevents_gc_and_preserves_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, producer: str, shared: bool
+) -> None:
+    import importlib
+    from unittest.mock import AsyncMock
+
+    from server.code.app.index import compiler_tier, mirrors
+    from server.code.domain.index import repos
+    from server.code.store import index
+    from server.settings import settings
+    from server.workers import pass_context
+
+    worker_module = "scip_py_delta" if producer == "python" else "scip_go_delta"
+    worker = importlib.import_module(f"server.code.workers.{worker_module}")
+    bare = _bare_repo(tmp_path)
+    checkout = tmp_path / "checkout"
+    subprocess.run(["git", "clone", "-q", str(bare), str(checkout)], check=True)
+    if shared:
+        metadata = checkout / ".git"
+        (metadata / "commondir").write_text(str(bare) + "\n")
+    else:
+        metadata = tmp_path / "external-metadata"
+        (checkout / ".git").rename(metadata)
+        (checkout / ".git").symlink_to(metadata, target_is_directory=True)
+    sentinel = metadata / "keep.txt"
+    sentinel.write_bytes(b"keep metadata content\n")
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    cfg = repo_config(git_dir=str(bare), scip_checkout_dir=str(checkout), scip_producer=producer)
+    repo = AsyncMock()
+    repo.get_state.side_effect = lambda _org, _ns, key: "a" * 40 if key == "git_head" else ""
+    monkeypatch.setattr(index, "CodeRepo", lambda: repo)
+    monkeypatch.setattr(repos, "configured_repos", lambda: [cfg])
+    monkeypatch.setattr(compiler_tier, "worker_owns", AsyncMock(return_value=True))
+    monkeypatch.setattr(settings, "code_mirror_gc_interval_h", 1.0)
+    # Exercise the real marker path while forbidding a repack on the test host.
+    monkeypatch.setattr(settings, "code_mirror_gc_margin_gb", 1e9)
+    original_gc = mirrors.gc_if_due
+    gc_calls: list[str] = []
+
+    async def observe_gc(git_dir: str) -> None:
+        gc_calls.append(git_dir)
+        await original_gc(git_dir)
+
+    monkeypatch.setattr(mirrors, "gc_if_due", observe_gc)
+    pass_context.begin("checkout-refusal")
+    try:
+        result = asyncio.run(worker.run_pass())
+    finally:
+        pass_context.clear()
+
+    assert result.errors == [] and result.deltas_applied == 0
+    assert len(result.skipped) == 1 and "standalone .git directory" in result.skipped[0]
+    after = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert (gc_calls, (metadata / "loom-gc-at").exists(), after == before) == ([], False, True)
+    assert sentinel.read_bytes() == b"keep metadata content\n"
+    repo.set_state.assert_not_awaited()
+
+
+@pytest.mark.parametrize("layout", ["missing", "empty", "standalone"])
+def test_checkout_gc_never_initializes_a_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layout: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from server.code.app.index import compiler_tier, mirrors
+
+    bare = _bare_repo(tmp_path)
+    checkout = tmp_path / "checkout"
+    if layout == "standalone":
+        subprocess.run(["git", "clone", "-q", str(bare), str(checkout)], check=True)
+    elif layout == "empty":
+        checkout.mkdir()
+    cfg = repo_config(git_dir=str(bare), scip_checkout_dir=str(checkout), scip_producer="python")
+    gc = AsyncMock()
+    monkeypatch.setattr(mirrors, "gc_if_due", gc)
+
+    asyncio.run(compiler_tier._gc_checkout(cfg, "python"))
+
+    if layout == "standalone":
+        gc.assert_awaited_once_with(str(checkout / ".git"))
+    else:
+        gc.assert_not_awaited()
+        assert not (checkout / ".git").exists()
+        assert checkout.exists() is (layout == "empty")
 
 
 @pytest.mark.parametrize("existing", [False, True])

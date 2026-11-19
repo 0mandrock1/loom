@@ -156,9 +156,10 @@ async def _gc_checkout(cfg: RepoConfig, producer: str) -> None:
 
     from server.code.app.index.mirrors import gc_if_due
 
-    git_dir = Path(checkout_for(cfg, producer)) / ".git"
+    checkout = Path(checkout_for(cfg, producer))
+    git_dir = checkout / ".git"
     try:
-        if await asyncio.to_thread(git_dir.is_dir):
+        if await asyncio.to_thread(_checkout_metadata_error, checkout) is None:
             await gc_if_due(str(git_dir))
     except Exception as e:  # noqa: BLE001 — housekeeping never fails the tier: a pass not due records nothing to clear it
         logger.warning(
@@ -254,6 +255,18 @@ def _checkout_git_path(checkout: Path, flag: str) -> Path | None:
     return Path(probe.stdout.removesuffix("\n")).resolve() if probe.returncode == 0 else None
 
 
+def _checkout_metadata_error(checkout: Path) -> str | None:
+    """Validate local Git metadata without creating or changing any directory."""
+    metadata = checkout / ".git"
+    if metadata.is_symlink() or not metadata.is_dir() or (metadata / "commondir").exists():
+        return "compiler checkout needs a standalone .git directory; use a separate empty path"
+    if _checkout_git_path(checkout, "--absolute-git-dir") != metadata.resolve():
+        return "Git metadata does not match the checkout's local .git directory"
+    if _checkout_git_path(checkout, "--show-toplevel") != checkout.resolve():
+        return "not the root of its Git working tree"
+    return None
+
+
 def _prepare_checkout(checkout: Path) -> str | None:
     """Initialize only empty directories; an existing tree must own its Git root."""
     from server.code.app.index.gitrepo import auth_env
@@ -279,18 +292,11 @@ def _prepare_checkout(checkout: Path) -> str | None:
             )
             if init.returncode:
                 return f"git init: {init.stderr.strip()}"
-        metadata = checkout / ".git"
-        if metadata.is_symlink() or not metadata.is_dir() or (metadata / "commondir").exists():
-            return "compiler checkout needs a standalone .git directory; use a separate empty path"
-        if _checkout_git_path(checkout, "--absolute-git-dir") != metadata.resolve():
-            return "Git metadata does not match the checkout's local .git directory"
-        if _checkout_git_path(checkout, "--show-toplevel") != checkout.resolve():
-            return "not the root of its Git working tree"
+        return _checkout_metadata_error(checkout)
     except OSError as e:
         return f"checkout unavailable: {e}"
     except subprocess.TimeoutExpired:
         return "checkout Git command timed out"
-    return None
 
 
 def resolve_checkout(cfg: RepoConfig, producer: str) -> tuple[Path, Path, str | None]:
