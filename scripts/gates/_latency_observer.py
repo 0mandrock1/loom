@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import json
@@ -9,7 +10,7 @@ import math
 import os
 import time
 from contextvars import ContextVar
-from functools import wraps
+from functools import partial, wraps
 from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
@@ -33,6 +34,7 @@ _PATHS = {
     "http_sha256": "server/transport/http.py",
     "main_sha256": "server/main.py",
     "request_tail_sha256": "server/core/request_tail.py",
+    "namespace_write_marks_sha256": "server/core/namespace_write_marks.py",
 }
 _FIELDS = {
     "pid",
@@ -41,6 +43,10 @@ _FIELDS = {
     "body_delivered_ms",
     "response_start_ms",
     "endpoint_start_ms",
+    "tail_key_step_start_ms",
+    "tail_key_step_duration_ms",
+    "tail_key_done_at_entry",
+    "tail_key_done_at_return",
     *(
         name + suffix
         for _, name in (*_STAGES, *_TAIL_STAGES)
@@ -91,6 +97,42 @@ def _timed(name: str, function: Any) -> Any:
             finish(record, started)
 
     return synchronous
+
+
+def _key_step_timed(function: Any, timeout_s: float) -> Any:
+    @wraps(function)
+    async def observed(*args: Any, **kwargs: Any) -> Any:
+        record = _current.get()
+        if record is None:
+            return await function(*args, **kwargs)
+        # This is the exact callback shape produced by _land_key_before_answer.
+        # Unrecognized shapes remain unknown, rather than being labelled as keys.
+        step = args[2] if len(args) == 3 and not kwargs else None
+        tasks = step.args[0] if type(step) is partial and len(step.args) == 1 else None
+        task = tasks[0] if type(tasks) is list and len(tasks) == 1 else None
+        if (
+            type(step) is not partial
+            or step.func is not asyncio.wait
+            or set(step.keywords) != {"timeout"}
+            or type(step.keywords["timeout"]) is not float
+            or step.keywords["timeout"] != timeout_s
+            or type(task) is not asyncio.Task
+            or task.get_name() != "loom-write-key"
+        ):
+            return await function(*args, **kwargs)
+        started = time.perf_counter()
+        done_at_entry = int(task.done())
+        try:
+            return await function(*args, **kwargs)
+        finally:
+            # The ordinary step may also yield for required work. This interval
+            # is its wall time, not a measurement of native query time.
+            record["tail_key_step_start_ms"] = (started - record["asgi_monotonic_s"]) * 1000
+            record["tail_key_step_duration_ms"] = (time.perf_counter() - started) * 1000
+            record["tail_key_done_at_entry"] = done_at_entry
+            record["tail_key_done_at_return"] = int(task.done())
+
+    return observed
 
 
 class _ObservedApp:
@@ -153,22 +195,29 @@ def create_app() -> _ObservedApp:
         ("server.transport.http", _PATHS["http_sha256"]),
         ("server.main", _PATHS["main_sha256"]),
         ("server.core.request_tail", _PATHS["request_tail_sha256"]),
+        ("server.core.namespace_write_marks", _PATHS["namespace_write_marks_sha256"]),
     ):
         spec = find_spec(module)
         if spec is None or spec.origin is None or Path(spec.origin).resolve() != tree / relative:
             raise RuntimeError("latency observer resolved a server outside its arm")
     http, main = import_module("server.transport.http"), import_module("server.main")
     request_tail = import_module("server.core.request_tail")
+    namespace_write_marks = import_module("server.core.namespace_write_marks")
     if (
         Path(http.__file__).resolve() != tree / _PATHS["http_sha256"]
         or Path(main.__file__).resolve() != tree / _PATHS["main_sha256"]
         or Path(request_tail.__file__).resolve() != tree / _PATHS["request_tail_sha256"]
+        or Path(namespace_write_marks.__file__).resolve()
+        != tree / _PATHS["namespace_write_marks_sha256"]
     ):
         raise RuntimeError("latency observer imported a server outside its arm")
     for attribute, name in _STAGES:
         setattr(http, attribute, _timed(name, getattr(http, attribute)))
     for attribute, name in _TAIL_STAGES:
         setattr(request_tail, attribute, _timed(name, getattr(request_tail, attribute)))
+    request_tail._ordinary_step = _key_step_timed(
+        request_tail._ordinary_step, namespace_write_marks.KEY_WAIT_S
+    )
     return _ObservedApp(main.app, source_hashes(tree))
 
 
@@ -183,6 +232,10 @@ def parse_metadata(raw: str, expected: dict[str, str]) -> dict[str, Any]:
     for key, value in record.items():
         if key in _PATHS:
             continue
+        if key in ("tail_key_done_at_entry", "tail_key_done_at_return") and (
+            type(value) is not int or value not in (0, 1)
+        ):
+            raise ValueError("latency stage metadata has an invalid completion state")
         if (
             isinstance(value, bool)
             or not isinstance(value, int | float)

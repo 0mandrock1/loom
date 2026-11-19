@@ -591,6 +591,7 @@ async def test_stage_asgi_metadata_is_bounded_private_and_does_not_change_respon
         "main_sha256": "a" * 64,
         "http_sha256": "b" * 64,
         "request_tail_sha256": "c" * 64,
+        "namespace_write_marks_sha256": "d" * 64,
     }
     request = {"type": "http.request", "body": b"private argument", "more_body": False}
     body = {"type": "http.response.body", "body": b"complete private response"}
@@ -637,6 +638,7 @@ def test_stage_metadata_refuses_untrusted_fields_numbers_and_sources(change):
         "main_sha256": "a" * 64,
         "http_sha256": "b" * 64,
         "request_tail_sha256": "c" * 64,
+        "namespace_write_marks_sha256": "d" * 64,
     }
     record = {
         **sources,
@@ -669,6 +671,7 @@ def test_stage_factory_checks_arm_origins_before_importing_server(
         "server.transport.http": "server/transport/http.py",
         "server.main": "server/main.py",
         "server.core.request_tail": "server/core/request_tail.py",
+        "server.core.namespace_write_marks": "server/core/namespace_write_marks.py",
     }
     for relative in paths.values():
         path = tmp_path / relative
@@ -683,6 +686,7 @@ def test_stage_factory_checks_arm_origins_before_importing_server(
         __file__=str(tmp_path / paths["server.core.request_tail"]),
         settle=lambda *args, **kwargs: None,
         _publication_barrier=lambda *args, **kwargs: None,
+        _ordinary_step=lambda *args, **kwargs: None,
     )
     imports, specs = [], []
 
@@ -700,6 +704,9 @@ def test_stage_factory_checks_arm_origins_before_importing_server(
             "server.transport.http": http,
             "server.main": main,
             "server.core.request_tail": request_tail,
+            "server.core.namespace_write_marks": SimpleNamespace(
+                __file__=str(tmp_path / paths["server.core.namespace_write_marks"]), KEY_WAIT_S=1.0
+            ),
         }[name]
 
     monkeypatch.chdir(tmp_path)
@@ -712,7 +719,12 @@ def test_stage_factory_checks_arm_origins_before_importing_server(
     else:
         wrapped = observer.create_app()
         assert wrapped.app is app and wrapped.sources == observer.source_hashes(tmp_path)
-        assert imports == ["server.transport.http", "server.main", "server.core.request_tail"]
+        assert imports == [
+            "server.transport.http",
+            "server.main",
+            "server.core.request_tail",
+            "server.core.namespace_write_marks",
+        ]
 
 
 @pytest.mark.parametrize("observed", [False, True])
@@ -726,6 +738,7 @@ def test_stage_profile_keeps_exact_arm_pythonpath_and_ordinary_launch(
         "server/main.py",
         "server/transport/http.py",
         "server/core/request_tail.py",
+        "server/core/namespace_write_marks.py",
     ):
         path = tree / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -810,6 +823,7 @@ def test_stage_client_metadata_does_not_change_closed_timing_or_complete_result(
         "main_sha256": "a" * 64,
         "http_sha256": "b" * 64,
         "request_tail_sha256": "c" * 64,
+        "namespace_write_marks_sha256": "d" * 64,
     }
     state.server.stage_observer = True
     state.server.stage_sources = sources
@@ -930,6 +944,7 @@ def tail_observer_arm(monkeypatch, tmp_path):
         "server.transport.http": "server/transport/http.py",
         "server.main": "server/main.py",
         "server.core.request_tail": "server/core/request_tail.py",
+        "server.core.namespace_write_marks": "server/core/namespace_write_marks.py",
     }
     for relative in paths.values():
         path = tmp_path / relative
@@ -939,11 +954,17 @@ def tail_observer_arm(monkeypatch, tmp_path):
     for attribute, _name in observer._STAGES:
         setattr(http, attribute, lambda *args, **kwargs: None)
     main = SimpleNamespace(__file__=str(tmp_path / paths["server.main"]), app=None)
-    tail = SimpleNamespace(__file__=str(tmp_path / paths["server.core.request_tail"]))
+    tail = SimpleNamespace(
+        __file__=str(tmp_path / paths["server.core.request_tail"]),
+        _ordinary_step=lambda *args, **kwargs: None,
+    )
     modules = {
         "server.transport.http": http,
         "server.main": main,
         "server.core.request_tail": tail,
+        "server.core.namespace_write_marks": SimpleNamespace(
+            __file__=str(tmp_path / paths["server.core.namespace_write_marks"]), KEY_WAIT_S=1.0
+        ),
     }
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
@@ -1171,3 +1192,346 @@ def test_tail_stage_factory_refuses_wrong_tail_origin_before_wrapping(tail_obser
         arm.install(app, settle, publication)
     assert arm.tail.settle is settle and arm.tail._publication_barrier is publication
     assert observed == []
+
+
+@pytest.fixture
+def key_step_observer_arm(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from scripts.gates import _latency_observer as observer
+    from server.core import request_tail
+    from tests.unit.clock_fake import ManualClock
+
+    clock = ManualClock(t=10)
+    monkeypatch.setattr(observer.time, "perf_counter", clock.monotonic)
+    monkeypatch.setattr(observer.time, "time_ns", lambda: 100)
+    paths = {
+        "server": "server/__init__.py",
+        "server.transport.http": "server/transport/http.py",
+        "server.main": "server/main.py",
+        "server.core.request_tail": "server/core/request_tail.py",
+        "server.core.namespace_write_marks": "server/core/namespace_write_marks.py",
+    }
+    for relative in paths.values():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# This arm's source.\n")
+    http = SimpleNamespace(__file__=str(tmp_path / paths["server.transport.http"]))
+    for attribute, _name in observer._STAGES:
+        setattr(http, attribute, lambda *args, **kwargs: None)
+    main = SimpleNamespace(__file__=str(tmp_path / paths["server.main"]), app=None)
+    tail = SimpleNamespace(__file__=str(tmp_path / paths["server.core.request_tail"]))
+    marks = SimpleNamespace(
+        __file__=str(tmp_path / paths["server.core.namespace_write_marks"]), KEY_WAIT_S=1.0
+    )
+    modules = {
+        "server.transport.http": http,
+        "server.main": main,
+        "server.core.request_tail": tail,
+        "server.core.namespace_write_marks": marks,
+    }
+    monkeypatch.chdir(tmp_path)
+    # Both the original and proposed factories resolve their own known modules.
+    monkeypatch.setattr(
+        observer, "find_spec", lambda name: SimpleNamespace(origin=str(tmp_path / paths[name]))
+    )
+    monkeypatch.setattr(observer, "import_module", lambda name: modules[name])
+
+    async def noop(*args, **kwargs):
+        return None
+
+    def install(app, ordinary):
+        main.app = app
+        tail.settle = tail._publication_barrier = noop
+        tail._ordinary_step = ordinary
+        return observer.create_app()
+
+    return SimpleNamespace(
+        observer=observer,
+        clock=clock,
+        tail=tail,
+        marks=marks,
+        real_ordinary=request_tail._ordinary_step,
+        install=install,
+        tree=tmp_path,
+    )
+
+
+@pytest.mark.parametrize("completed", [False, True])
+async def test_key_step_header_observes_real_wait_and_done_state(key_step_observer_arm, completed):
+    import asyncio
+    from functools import partial
+    from types import SimpleNamespace
+
+    arm = key_step_observer_arm
+    calls, sent = [], []
+    answer, tag = object(), "private-key-tag"
+    tail = SimpleNamespace(has_required=False)
+
+    async def child():
+        arm.clock.advance(0.012)
+        return answer
+
+    task = asyncio.create_task(child(), name="loom-write-key")
+    if completed:
+        assert await task is answer
+    step = partial(asyncio.wait, [task], timeout=1.0)
+
+    async def ordinary(*args, **kwargs):
+        calls.append((args, kwargs))
+        assert await arm.real_ordinary(*args, **kwargs) is None
+        arm.clock.advance(0.003)
+        return answer
+
+    async def app(scope, receive, send):
+        assert await arm.tail._ordinary_step(tail, tag, step) is answer
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        return answer
+
+    async def send(message):
+        sent.append(message)
+
+    wrapped = arm.install(app, ordinary)
+    assert await wrapped({"type": "http"}, None, send) is answer
+    assert calls == [((tail, tag, step), {})] and task.done() and not task.cancelled()
+    raw = sent[0]["headers"][-1][1]
+    metadata = arm.observer.parse_metadata(raw.decode(), wrapped.sources)
+    # Old observer reaches this successful response, then lacks these fields.
+    assert metadata["tail_key_step_duration_ms"] == pytest.approx(3 if completed else 15)
+    assert metadata["tail_key_step_start_ms"] == pytest.approx(0)
+    assert metadata["tail_key_done_at_entry"] == int(completed)
+    assert metadata["tail_key_done_at_return"] == 1
+    assert (
+        metadata["namespace_write_marks_sha256"] == wrapped.sources["namespace_write_marks_sha256"]
+    )
+    assert b"private" not in raw and b"loom-write-key" not in raw and len(raw) <= 4096
+    assert arm.observer._current.get() is None
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_key_step_observation_preserves_exact_error_and_pending_child(
+    key_step_observer_arm, cancelled
+):
+    import asyncio
+    from functools import partial
+    from types import SimpleNamespace
+
+    arm = key_step_observer_arm
+    answer = object()
+    gate = asyncio.Event()
+    records, calls, sent = [], [], []
+    error = asyncio.CancelledError("owned cancel") if cancelled else RuntimeError("private")
+
+    async def child():
+        await gate.wait()
+        return answer
+
+    task = asyncio.create_task(child(), name="loom-write-key")
+    step = partial(asyncio.wait, [task], timeout=1.0)
+    tail = SimpleNamespace(has_required=False)
+
+    async def ordinary(*args, **kwargs):
+        calls.append((args, kwargs))
+        records.append(arm.observer._current.get())
+        arm.clock.advance(0.004)
+        raise error
+
+    async def app(scope, receive, send):
+        await arm.tail._ordinary_step(tail, "private", step)
+
+    async def send(message):
+        sent.append(message)
+
+    wrapped = arm.install(app, ordinary)
+    try:
+        with pytest.raises(type(error)) as caught:
+            await wrapped({"type": "http"}, None, send)
+        assert caught.value is error and calls == [((tail, "private", step), {})]
+        assert not task.done() and sent == [] and arm.observer._current.get() is None
+        assert records[0]["tail_key_step_duration_ms"] == pytest.approx(4)
+        assert records[0]["tail_key_done_at_entry"] == 0
+        assert records[0]["tail_key_done_at_return"] == 0
+    finally:
+        gate.set()
+        assert await task is answer
+
+
+async def test_key_step_sequential_calls_and_later_cleanup_do_not_rewrite_header(
+    key_step_observer_arm,
+):
+    import asyncio
+    from functools import partial
+    from types import SimpleNamespace
+
+    arm = key_step_observer_arm
+    tail = SimpleNamespace(has_required=False)
+    calls, sent, records = [], [], []
+
+    async def child():
+        return None
+
+    task = asyncio.create_task(child(), name="loom-write-key")
+    await task
+    step = partial(asyncio.wait, [task], timeout=1.0)
+
+    async def ordinary(*args, **kwargs):
+        calls.append((args, kwargs))
+        await arm.real_ordinary(*args, **kwargs)
+        arm.clock.advance(0.002 * len(calls))
+
+    async def app(scope, receive, send):
+        await arm.tail._ordinary_step(tail, "private", step)
+        await arm.tail._ordinary_step(tail, "private", step)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await arm.tail._ordinary_step(tail, "private", step)
+        records.append(dict(arm.observer._current.get()))
+
+    async def send(message):
+        sent.append(message)
+
+    wrapped = arm.install(app, ordinary)
+    await wrapped({"type": "http"}, None, send)
+    raw = sent[0]["headers"][-1][1]
+    metadata = arm.observer.parse_metadata(raw.decode(), wrapped.sources)
+    assert metadata["tail_key_step_start_ms"] == pytest.approx(2)
+    assert metadata["tail_key_step_duration_ms"] == pytest.approx(4)
+    assert metadata["response_start_ms"] == pytest.approx(6)
+    assert records[0]["tail_key_step_start_ms"] == pytest.approx(6)
+    assert records[0]["tail_key_step_duration_ms"] == pytest.approx(6)
+    assert sent[0]["headers"][-1][1] == raw and len(calls) == 3
+    # Outside an observed request the same function only delegates.
+    await arm.tail._ordinary_step(tail, "private", step)
+    assert len(calls) == 4 and arm.observer._current.get() is None
+
+
+@pytest.mark.parametrize("ineligible", ["name", "timeout", "keyword", "function"])
+async def test_key_step_unrecognized_callbacks_keep_ordinary_behavior(
+    key_step_observer_arm, ineligible
+):
+    import asyncio
+    from functools import partial
+    from types import SimpleNamespace
+
+    arm = key_step_observer_arm
+    tail = SimpleNamespace(has_required=False)
+    calls, sent = [], []
+    answer = object()
+
+    async def child():
+        return answer
+
+    task = asyncio.create_task(child(), name="other" if ineligible == "name" else "loom-write-key")
+    assert await task is answer
+    step = partial(asyncio.wait, [task], timeout=0.5 if ineligible == "timeout" else 1.0)
+    if ineligible == "keyword":
+        step = partial(asyncio.wait, fs=[task], timeout=1.0)
+    elif ineligible == "function":
+        step = child
+
+    async def ordinary(*args, **kwargs):
+        calls.append((args, kwargs))
+        await arm.real_ordinary(*args, **kwargs)
+        return answer
+
+    async def app(scope, receive, send):
+        assert await arm.tail._ordinary_step(tail, "private", step) is answer
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+
+    async def send(message):
+        sent.append(message)
+
+    wrapped = arm.install(app, ordinary)
+    await wrapped({"type": "http"}, None, send)
+    metadata = arm.observer.parse_metadata(sent[0]["headers"][-1][1].decode(), wrapped.sources)
+    assert calls == [((tail, "private", step), {})]
+    assert not any(key.startswith("tail_key_") for key in metadata)
+    assert task.done() and not task.cancelled()
+
+
+@pytest.mark.parametrize("value", [True, False, 0.0, 1.0, 2, -1])
+def test_key_step_metadata_done_state_requires_integer_zero_or_one(key_step_observer_arm, value):
+    import json
+
+    arm = key_step_observer_arm
+    sources = arm.observer.source_hashes(arm.tree)
+    record = {
+        **sources,
+        "pid": 1,
+        "asgi_unix_ns": 1,
+        "asgi_monotonic_s": 1,
+        "response_start_ms": 1,
+        "tail_key_done_at_entry": value,
+    }
+    with pytest.raises(ValueError):
+        arm.observer.parse_metadata(json.dumps(record), sources)
+
+
+async def test_key_step_bounded_wait_does_not_complete_or_cancel_pending_child(
+    key_step_observer_arm, monkeypatch
+):
+    import asyncio
+    from functools import partial
+    from types import SimpleNamespace
+
+    arm = key_step_observer_arm
+    gate = asyncio.Event()
+    calls, sent = [], []
+
+    async def child():
+        await gate.wait()
+
+    task = asyncio.create_task(child(), name="loom-write-key")
+
+    async def bounded_wait(tasks, **options):
+        assert options == {"timeout": 1.0}
+        timeout = options["timeout"]
+        calls.append((tasks, timeout))
+        assert tasks == [task] and timeout == 1.0 and not task.done()
+        arm.clock.advance(0.008)
+        return set(), {task}
+
+    monkeypatch.setattr(asyncio, "wait", bounded_wait)
+    step = partial(asyncio.wait, [task], timeout=1.0)
+    tail = SimpleNamespace(has_required=False)
+
+    async def app(scope, receive, send):
+        assert await arm.tail._ordinary_step(tail, "private", step) is None
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+
+    async def send(message):
+        sent.append(message)
+
+    wrapped = arm.install(app, arm.real_ordinary)
+    try:
+        await wrapped({"type": "http"}, None, send)
+        metadata = arm.observer.parse_metadata(sent[0]["headers"][-1][1].decode(), wrapped.sources)
+        assert metadata["tail_key_step_duration_ms"] == pytest.approx(8)
+        assert metadata["tail_key_done_at_entry"] == metadata["tail_key_done_at_return"] == 0
+        assert calls == [([task], 1.0)] and not task.done() and not task.cancelled()
+    finally:
+        gate.set()
+        await task
+
+
+@pytest.mark.parametrize("before_import", [False, True])
+def test_key_step_defining_source_origin_is_verified(
+    key_step_observer_arm, monkeypatch, before_import
+):
+    from types import SimpleNamespace
+
+    arm = key_step_observer_arm
+    original = arm.observer.find_spec
+    if before_import:
+        monkeypatch.setattr(
+            arm.observer,
+            "find_spec",
+            lambda name: (
+                SimpleNamespace(origin=str(arm.tree / "wrong.py"))
+                if name == "server.core.namespace_write_marks"
+                else original(name)
+            ),
+        )
+    else:
+        arm.marks.__file__ = str(arm.tree / "wrong.py")
+    with pytest.raises(RuntimeError, match="outside its arm"):
+        arm.install(None, lambda *args, **kwargs: None)
