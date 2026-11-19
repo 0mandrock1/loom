@@ -310,6 +310,7 @@ async def test_additive_final_permission_renewal_is_bounded_without_failing_the_
     clock, active = renewal_clock
     original = search.run_checked_search
     entered = []
+    cancelled = []
     cleaned = []
 
     async def run(request, plan):
@@ -324,6 +325,9 @@ async def test_additive_final_permission_renewal_is_bounded_without_failing_the_
                     clock.advance(0.005)
                     scope.reschedule(asyncio.get_running_loop().time())
                     await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.append("repo")
+                    raise
                 finally:
                     cleaned.append("extra proof drained")
 
@@ -337,6 +341,7 @@ async def test_additive_final_permission_renewal_is_bounded_without_failing_the_
     )
     assert [h.source_uri for h in out.results] == ["private:home"]
     assert entered == ["repo"]
+    assert cancelled == ["repo"]
     assert cleaned == ["extra proof drained"]
     assert not children["home"].lost and "check:home" in events
 
