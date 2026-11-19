@@ -114,10 +114,14 @@ try {
     $parts = $compilerBase.Substring($root.Length).Split([char]'\')
     for ($i = 0; $i -lt $parts.Length; $i++) {
         $current = [IO.Path]::Combine($current, $parts[$i])
-        if (-not $CleanupCompilation) { New-PrivateDirectory $current $true }
-        if (-not (Pin-Directory $current ($i -eq $parts.Length - 1) $CleanupCompilation)) {
-            $missing = $true
-            break
+        if (-not (Pin-Directory $current ($i -eq $parts.Length - 1) $true)) {
+            if ($CleanupCompilation) {
+                $missing = $true
+                break
+            }
+            # Existing ancestors need no directory creation or descriptor copy.
+            New-PrivateDirectory $current $true
+            [void](Pin-Directory $current ($i -eq $parts.Length - 1))
         }
     }
     $candidate = [IO.Path]::Combine($compilerBase, $compilationId)
