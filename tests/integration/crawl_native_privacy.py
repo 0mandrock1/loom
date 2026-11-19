@@ -267,15 +267,15 @@ async def registered_crawl(
     set_query_tag("test.crawl_native_privacy.registration")
     org, subjects = identities["org"], identities["subjects"]
     admin = _bearer(subjects["admin"], org, ["*"], "org_admin")
-    for namespace in ("crawl-documents", "other-documents"):
+    for namespace in ("col-crawl-documents", "col-other-documents"):
         response = await _post(
             native_app, admin, "collection.create", {"org": org, "namespace": namespace}
         )
         assert response.status_code == 200, response.text
     for who, namespace in (
-        ("a", "crawl-documents"),
-        ("b", "crawl-documents"),
-        ("c", "other-documents"),
+        ("a", "col-crawl-documents"),
+        ("b", "col-crawl-documents"),
+        ("c", "col-other-documents"),
     ):
         response = await _post(
             native_app,
@@ -290,7 +290,7 @@ async def registered_crawl(
         "knowledge.source.add",
         {
             "org": org,
-            "namespace": "crawl-documents",
+            "namespace": "col-crawl-documents",
             "name": "private-documents",
             "kind": "gdrive",
             "credential_mode": "crawl",
@@ -308,7 +308,7 @@ async def registered_crawl(
         native_app,
         admin,
         "knowledge.source.sync_now",
-        {"org": org, "namespace": "crawl-documents", "name": "private-documents"},
+        {"org": org, "namespace": "col-crawl-documents", "name": "private-documents"},
     )
     assert response.status_code == 200, response.text
 
@@ -345,7 +345,7 @@ async def published_crawl(
         "SELECT toString(source_id) AS source_id, crawl_generation "
         "FROM loom.knowledge_sources FINAL WHERE org = {org:String} "
         "AND namespace = {ns:String} AND name = {name:String} LIMIT 1",
-        params={"org": org, "ns": "crawl-documents", "name": "private-documents"},
+        params={"org": org, "ns": "col-crawl-documents", "name": "private-documents"},
     )
     assert source is not None and source["crawl_generation"]
 
@@ -375,10 +375,10 @@ async def test_native_crawl_canary_obeys_document_acl_and_tenant_scope(
     org, subjects = identities["org"], identities["subjects"]
     query = {
         "org": org,
-        "namespace": "crawl-documents",
+        "namespace": "col-crawl-documents",
         "query": "quarterly renewal plan scope owners release readiness",
     }
-    allowed = _bearer(subjects["a"], org, ["crawl-documents"], "viewer")
+    allowed = _bearer(subjects["a"], org, ["col-crawl-documents"], "viewer")
 
     async def admitted() -> bool:
         assert not provider["unexpected"], provider["unexpected"]
@@ -387,14 +387,14 @@ async def test_native_crawl_canary_obeys_document_acl_and_tenant_scope(
         return provider["canary"] in result.text
 
     assert await eventually(admitted, max_wait=30, description="authorized HTTP canary")
-    denied = _bearer(subjects["b"], org, ["crawl-documents"], "viewer")
+    denied = _bearer(subjects["b"], org, ["col-crawl-documents"], "viewer")
     response = await _post(native_app, denied, "knowledge.search", query)
     assert response.status_code == 200, response.text
     assert provider["canary"] not in response.text
     # C has a document ACL entry but only another namespace's grant. A's other-org
     # identity also has a matching contact, so the document ACL alone cannot deny it.
     for bearer in (
-        _bearer(subjects["c"], org, ["other-documents"], "viewer"),
+        _bearer(subjects["c"], org, ["col-other-documents"], "viewer"),
         _bearer(subjects["a"], identities["other_org"], ["*"], "viewer"),
     ):
         response = await _post(native_app, bearer, "knowledge.search", query)
