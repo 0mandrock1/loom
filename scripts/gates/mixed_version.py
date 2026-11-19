@@ -75,6 +75,7 @@ from bench.scale_load import (  # noqa: E402
     committed_latency_rows,
     latency_observations,
 )
+from scripts.gates._latency_observer import HEADER, parse_metadata, source_hashes  # noqa: E402
 from server.core.sql_literal import sql_string  # noqa: E402
 from server.insights.domain import analysis as boundary  # noqa: E402
 
@@ -233,9 +234,13 @@ class Server:
         *,
         ranking_neutral: bool = False,
         web_workers: int = 1,
+        stage_observer: bool = False,
     ) -> None:
         assert web_workers in (1, 2)
         self.web_workers = web_workers
+        assert not stage_observer or web_workers == 2
+        self.stage_observer = stage_observer
+        self.stage_sources = source_hashes(tree) if stage_observer else {}
         self.name, self.tree, self.ch_port = name, tree, ch_port
         self.port = _free_port()
         self.url = f"http://127.0.0.1:{self.port}"
@@ -281,9 +286,17 @@ class Server:
     def start(self) -> None:
         if self.web_workers != 1:
             (self.log.parent / (self.name + ".runtime")).mkdir(mode=0o700, exist_ok=True)
+        target = ["server.main:app"]
+        if self.stage_observer:
+            target = [
+                "_latency_observer:create_app",
+                "--factory",
+                "--app-dir",
+                str(ROOT / "scripts" / "gates"),
+            ]
         out = self.log.open("ab")
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "server.main:app"]
+            [sys.executable, "-m", "uvicorn", *target]
             + ["--host", "127.0.0.1", "--port", str(self.port)]
             + (["--workers", str(self.web_workers)] if self.web_workers != 1 else []),
             cwd=self.tree,
@@ -404,6 +417,10 @@ class Server:
                     r.headers.get("Server-Timing", ""),
                 ):
                     observation[f"server_{name}_ms"] = float(duration)
+                if self.stage_observer:
+                    observation["server_stages"] = parse_metadata(
+                        r.headers.get(HEADER, ""), self.stage_sources
+                    )
             except Exception as error:  # noqa: BLE001 — timing metadata cannot change the response
                 observation["timing_error"] = type(error).__name__
         if r.status_code != 200:
@@ -519,6 +536,7 @@ class Scenario:
                     self.owned_logs,
                     ranking_neutral=True,
                     web_workers=2,
+                    stage_observer=True,
                 )
                 for i in range(2)
             ]

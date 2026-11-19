@@ -432,3 +432,314 @@ def test_malformed_timing_metadata_cannot_replace_the_complete_response(latency_
     assert not {"request_id", "server_app_ms", "server_ch_ms"} & sample.keys()
     assert sample.get("timing_error") == ("AttributeError" if broken else None)
     assert len(state.closed) == len(state.calls) == 1
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("failure", ["none", "error", "cancel"])
+async def test_stage_wrappers_delegate_exact_arguments_results_and_errors(asynchronous, failure):
+    import asyncio
+
+    from scripts.gates import _latency_observer as observer
+
+    marker, answer = object(), object()
+    error = (
+        asyncio.CancelledError("owned cancellation")
+        if failure == "cancel"
+        else RuntimeError("private")
+    )
+    calls = []
+
+    def target(*args, **kwargs):
+        calls.append((args, kwargs))
+        if failure != "none":
+            raise error
+        return answer
+
+    async def async_target(*args, **kwargs):
+        return target(*args, **kwargs)
+
+    record = {"asgi_monotonic_s": observer.time.perf_counter()}
+    token = observer._current.set(record)
+    try:
+        wrapped = observer._timed("auth", async_target if asynchronous else target)
+        if failure != "none":
+            with pytest.raises(type(error)) as caught:
+                if asynchronous:
+                    await wrapped(marker, key=marker)
+                else:
+                    wrapped(marker, key=marker)
+            assert caught.value is error
+        else:
+            result = (
+                await wrapped(marker, key=marker) if asynchronous else wrapped(marker, key=marker)
+            )
+            assert result is answer
+        assert calls == [((marker,), {"key": marker})]
+        assert record["auth_duration_ms"] >= 0
+        assert record["auth_start_ms"] >= 0
+        assert len(record) == 3
+    finally:
+        observer._current.reset(token)
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_stage_asgi_delegates_body_errors_and_cancellation_without_leaking_context(cancelled):
+    import asyncio
+
+    from scripts.gates import _latency_observer as observer
+
+    error = asyncio.CancelledError("owned cancellation") if cancelled else RuntimeError("private")
+    original = {"type": "http.request", "body": b"private body", "more_body": False}
+    receives, sends = [], []
+
+    async def receive():
+        receives.append(True)
+        return original
+
+    async def send(message):
+        sends.append(message)
+
+    async def app(scope, receive, send):
+        assert await receive() is original
+        raise error
+
+    wrapped = observer._ObservedApp(app, {})
+    with pytest.raises(type(error)) as caught:
+        await wrapped({"type": "http"}, receive, send)
+    assert caught.value is error
+    assert receives == [True] and sends == []
+    assert observer._current.get() is None
+
+
+async def test_stage_asgi_metadata_is_bounded_private_and_does_not_change_response(monkeypatch):
+    import json
+
+    from scripts.gates import _latency_observer as observer
+    from tests.unit.clock_fake import ManualClock
+
+    clock = ManualClock(t=10)
+    monkeypatch.setattr(observer.time, "perf_counter", clock.monotonic)
+    monkeypatch.setattr(observer.time, "time_ns", lambda: 100)
+    sources = {"main_sha256": "a" * 64, "http_sha256": "b" * 64}
+    request = {"type": "http.request", "body": b"private argument", "more_body": False}
+    body = {"type": "http.response.body", "body": b"complete private response"}
+    headers = [(b"set-cookie", b"private cookie")]
+    messages = []
+
+    async def receive():
+        return request
+
+    async def send(message):
+        messages.append(message)
+
+    async def handler(value):
+        assert value is request
+        clock.advance(0.003)
+        return body
+
+    async def app(scope, receive, send):
+        assert await receive() is request
+        result = await observer._timed("handler", handler)(request)
+        await send({"type": "http.response.start", "status": 200, "headers": headers})
+        await send(result)
+
+    await observer._ObservedApp(app, sources)({"type": "http"}, receive, send)
+    assert messages[0]["status"] == 200
+    assert messages[0]["headers"][:-1] == headers
+    name, raw = messages[0]["headers"][-1]
+    assert name == observer.HEADER.lower().encode() and len(raw) <= 4096
+    metadata = observer.parse_metadata(raw.decode(), sources)
+    assert metadata["handler_duration_ms"] == pytest.approx(3)
+    assert metadata["body_delivered_ms"] == 0
+    assert metadata["pid"] > 0
+    assert "private" not in json.dumps(metadata)
+    assert messages[1] is body and observer._current.get() is None
+
+
+@pytest.mark.parametrize("change", ["unknown", "nonfinite", "source", "oversize"])
+def test_stage_metadata_refuses_untrusted_fields_numbers_and_sources(change):
+    import json
+
+    from scripts.gates import _latency_observer as observer
+
+    sources = {"main_sha256": "a" * 64, "http_sha256": "b" * 64}
+    record = {
+        **sources,
+        "pid": 123,
+        "asgi_unix_ns": 1,
+        "asgi_monotonic_s": 1,
+        "response_start_ms": 1,
+    }
+    if change == "unknown":
+        record["private_argument"] = "private"
+    elif change == "nonfinite":
+        record["auth_duration_ms"] = float("nan")
+    elif change == "source":
+        record["main_sha256"] = "c" * 64
+    raw = json.dumps(record) if change != "oversize" else " " * 4097
+    with pytest.raises(ValueError):
+        observer.parse_metadata(raw, sources)
+
+
+@pytest.mark.parametrize("wrong_origin", [False, True])
+def test_stage_factory_checks_arm_origins_before_importing_server(
+    monkeypatch, tmp_path, wrong_origin
+):
+    from types import SimpleNamespace
+
+    from scripts.gates import _latency_observer as observer
+
+    paths = {
+        "server": "server/__init__.py",
+        "server.transport.http": "server/transport/http.py",
+        "server.main": "server/main.py",
+    }
+    for relative in paths.values():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# This arm's source.\n")
+    http = SimpleNamespace(__file__=str(tmp_path / paths["server.transport.http"]))
+    for attribute, _name in observer._STAGES:
+        setattr(http, attribute, lambda *args, **kwargs: None)
+    app = object()
+    main = SimpleNamespace(__file__=str(tmp_path / paths["server.main"]), app=app)
+    imports, specs = [], []
+
+    def find_spec(name):
+        specs.append(name)
+        path = tmp_path / paths[name]
+        if wrong_origin and name == "server":
+            path = tmp_path / "wrong" / "__init__.py"
+        return SimpleNamespace(origin=str(path))
+
+    def import_module(name):
+        assert specs == list(paths)
+        imports.append(name)
+        return http if name == "server.transport.http" else main
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(observer, "find_spec", find_spec)
+    monkeypatch.setattr(observer, "import_module", import_module)
+    if wrong_origin:
+        with pytest.raises(RuntimeError, match="resolved a server outside"):
+            observer.create_app()
+        assert imports == []
+    else:
+        wrapped = observer.create_app()
+        assert wrapped.app is app and wrapped.sources == observer.source_hashes(tmp_path)
+        assert imports == ["server.transport.http", "server.main"]
+
+
+@pytest.mark.parametrize("observed", [False, True])
+def test_stage_profile_keeps_exact_arm_pythonpath_and_ordinary_launch(
+    monkeypatch, tmp_path, observed
+):
+    from types import SimpleNamespace
+
+    tree = tmp_path / "arm"
+    for relative in ("server/main.py", "server/transport/http.py"):
+        path = tree / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# This arm's source.\n")
+    calls = []
+    monkeypatch.setattr(mixed_version, "_free_port", lambda: 18080)
+    monkeypatch.setattr(
+        mixed_version.subprocess,
+        "Popen",
+        lambda command, **kw: calls.append((command, kw)) or SimpleNamespace(poll=lambda: None),
+    )
+    monkeypatch.setattr(
+        mixed_version.httpx, "get", lambda *a, **kw: SimpleNamespace(status_code=200)
+    )
+    server = mixed_version.Server(
+        "latency-test", tree, 18123, tmp_path, web_workers=2, stage_observer=observed
+    )
+    server.start()
+    command, options = calls[0]
+    assert options["cwd"] == tree and options["env"]["PYTHONPATH"] == str(tree)
+    assert command[:3] == [mixed_version.sys.executable, "-m", "uvicorn"]
+    target = (
+        [
+            "_latency_observer:create_app",
+            "--factory",
+            "--app-dir",
+            str(mixed_version.ROOT / "scripts" / "gates"),
+        ]
+        if observed
+        else ["server.main:app"]
+    )
+    assert command[3:] == target + ["--host", "127.0.0.1", "--port", "18080", "--workers", "2"]
+    options["stdout"].close()
+
+
+async def test_stage_wrapper_delegates_non_http_scopes_without_observation():
+    from scripts.gates import _latency_observer as observer
+
+    scope, receive, send, answer = {"type": "lifespan"}, object(), object(), object()
+
+    async def app(actual_scope, actual_receive, actual_send):
+        assert (actual_scope, actual_receive, actual_send) == (scope, receive, send)
+        assert observer._current.get() is None
+        return answer
+
+    assert await observer._ObservedApp(app, {})(scope, receive, send) is answer
+
+
+async def test_stage_encoding_failure_keeps_original_response(monkeypatch):
+    from scripts.gates import _latency_observer as observer
+
+    start = {"type": "http.response.start", "status": 200, "headers": []}
+    body = {"type": "http.response.body", "body": b"complete response"}
+    sent = []
+
+    async def app(scope, receive, send):
+        await send(start)
+        await send(body)
+
+    async def send(message):
+        sent.append(message)
+
+    def refused(*args, **kwargs):
+        raise ValueError("encoding unavailable")
+
+    monkeypatch.setattr(observer.json, "dumps", refused)
+    await observer._ObservedApp(app, {})({"type": "http"}, None, send)
+    assert sent[0] is start and sent[1] is body
+    assert observer._current.get() is None
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_stage_client_metadata_does_not_change_closed_timing_or_complete_result(
+    latency_transport, malformed
+):
+    import json
+
+    from scripts.gates import _latency_observer as observer
+
+    state = latency_transport
+    sources = {"main_sha256": "a" * 64, "http_sha256": "b" * 64}
+    state.server.stage_observer = True
+    state.server.stage_sources = sources
+    state.response.headers[observer.HEADER] = (
+        "invalid"
+        if malformed
+        else json.dumps(
+            {
+                **sources,
+                "pid": 123,
+                "asgi_unix_ns": 1,
+                "asgi_monotonic_s": 1,
+                "response_start_ms": 1,
+            }
+        )
+    )
+    sample = {}
+    assert state.server.call("fixture-token", "memory.search", {}, observation=sample) == state.body
+    assert sample["elapsed_ms"] == pytest.approx(28)
+    assert sample["request_id"] == "from-response"
+    assert (sample["status"], sample["error"]) == (200, "")
+    assert len(state.calls) == len(state.clients) == len(state.closed) == 1
+    if malformed:
+        assert "server_stages" not in sample and sample["timing_error"] == "JSONDecodeError"
+    else:
+        assert sample["server_stages"]["pid"] == 123
