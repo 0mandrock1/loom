@@ -129,6 +129,13 @@ a personal primary sign-in session.
 page without OAuth parameters. API clients receive the JSON callback result unless
 their HTTP `Accept` header prefers `text/html` over `application/json`.
 
+`loom connect google`, `loom connect notion` and `loom connect linear` print the
+server's dashboard link for your account. They use the session from `loom login`;
+`--profile` selects another session and `--server` selects a server. Open the link,
+sign in to the dashboard as the intended account owner, and choose Connect or Reconnect.
+Consent completes in that browser. `google` selects the `gdrive` source kind. The command
+does not wait for consent or report that the account is connected.
+
 On the dashboard, an opened repository on the Repositories page shows its sources under
 Sources, and the Library's **Sources** button, in the header's actions and counting them
 (its icon alone on a phone), opens the sources of the shared namespace or collection in
