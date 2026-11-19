@@ -124,6 +124,21 @@ def validate_archive_members(members):
     )
 
 
+def image_volume_mounts(service_name, service, image):
+    covered = {mount["target"] for mount in service.get("volumes", [])}
+    missing = sorted(set(image.get("Config", {}).get("Volumes") or {}) - covered)
+    mounts, volumes = [], {}
+    for index, target in enumerate(missing):
+        require(
+            target.startswith("/") and target != "/" and ".." not in Path(target).parts,
+            "Image volume target is invalid",
+        )
+        name = f"image-{service_name}-{index}"
+        mounts.append({"type": "volume", "source": name, "target": target})
+        volumes[name] = {}
+    return mounts, volumes
+
+
 def read_session(pid):
     snapshot = {}
     for item in Path("/proc").iterdir():
@@ -312,7 +327,6 @@ class Runtime:
 
     def secret(self, value):
         self.secrets.append(value)
-        print("::add-mask::" + value, flush=True)
         return value
 
     def redact(self, value):
@@ -602,14 +616,14 @@ class Runtime:
         require(sorted(published) == [17881, 17882, 17883], "Unexpected published port")
         self.phase = "official-image-pull"
         self.compose("pull", timeout=600)
-        override = {"services": {}}
+        override = {"services": {}, "volumes": {}}
         for name, service in self.cfg["services"].items():
             (image,) = self.docker_json("image", "inspect", service["image"])
-            covered = {mount["target"] for mount in service.get("volumes", [])}
+            mounts, volumes = image_volume_mounts(name, service, image)
             require(
-                not (set(image.get("Config", {}).get("Volumes") or {}) - covered),
-                "Unreviewed anonymous image volume",
+                not (volumes.keys() & self.cfg.get("volumes", {}).keys()), "Volume name collision"
             )
+            override["volumes"].update(volumes)
             self.expected_images[name] = image["Id"]
             cap = (
                 2 * GIB
@@ -619,7 +633,18 @@ class Runtime:
                 else GIB // 2
             )
             override["services"][name] = {"image": image["Id"], "mem_limit": cap, "cpus": 1.0}
+            if mounts:
+                override["services"][name]["volumes"] = mounts
         (self.path / "docker/task-resource.override.json").write_text(json.dumps(override))
+        self.cfg = json.loads(self.compose("config", "--format", "json").stdout)
+        for name, service in self.cfg["services"].items():
+            (image,) = self.docker_json("image", "inspect", service["image"])
+            covered = {mount["target"] for mount in service.get("volumes", [])}
+            require(image["Id"] == self.expected_images[name], "Pinned image changed")
+            require(
+                not (set(image.get("Config", {}).get("Volumes") or {}) - covered),
+                "Unreviewed anonymous image volume",
+            )
         self.record("platform-caps.json", override)
         self.created = True
         self.persist()

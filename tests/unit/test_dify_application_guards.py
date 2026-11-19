@@ -11,6 +11,44 @@ from scripts.gates import dify_application_smoke as smoke
 
 
 class DifyApplicationGuards(unittest.TestCase):
+    def test_credentials_stay_in_memory_and_are_redacted_without_stdout(self):
+        runtime = smoke.Runtime.__new__(smoke.Runtime)
+        runtime.secrets = []
+        with patch("builtins.print") as output:
+            self.assertEqual(runtime.secret("test-credential"), "test-credential")
+        output.assert_not_called()
+        self.assertEqual(runtime.redact("value=test-credential"), "value=[REDACTED]")
+
+    def test_uncovered_image_volume_gets_explicit_owned_compose_volume(self):
+        service = {"volumes": [{"target": "/var/lib/postgresql/data/pgdata"}]}
+        image = {"Config": {"Volumes": {"/var/lib/postgresql/data": {}}}}
+        mounts, volumes = smoke.image_volume_mounts("db_postgres", service, image)
+        self.assertEqual(
+            mounts,
+            [
+                {
+                    "type": "volume",
+                    "source": "image-db_postgres-0",
+                    "target": "/var/lib/postgresql/data",
+                }
+            ],
+        )
+        self.assertEqual(volumes, {"image-db_postgres-0": {}})
+        self.assertEqual(service["volumes"], [{"target": "/var/lib/postgresql/data/pgdata"}])
+
+    def test_covered_image_volume_needs_no_extra_mount(self):
+        service = {"volumes": [{"target": "/data"}]}
+        image = {"Config": {"Volumes": {"/data": {}}}}
+        self.assertEqual(smoke.image_volume_mounts("redis", service, image), ([], {}))
+
+    def test_invalid_image_volume_target_refuses(self):
+        for target in ("/", "relative", "/data/../foreign"):
+            with (
+                self.subTest(target=target),
+                self.assertRaisesRegex(RuntimeError, "target is invalid"),
+            ):
+                smoke.image_volume_mounts("service", {}, {"Config": {"Volumes": {target: {}}}})
+
     def test_init_password_respects_pinned_schema(self):
         for _ in range(8):
             password = smoke.initial_password()
