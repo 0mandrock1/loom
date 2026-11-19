@@ -9,6 +9,8 @@ review. Install `clickhouse-loom` and configure `LOOM_BASE_URL` and `LOOM_API_KE
 a deployment where your credential can read both records. Supply the fact's owning
 agent, user and session identity; omitted user/session values are `-`. Both records
 must be in the selected namespace. No source connector is configured by this example.
+The command rejects anonymous agent names and stops before reading the document if
+the returned fact's agent, user or session is missing or differs from the selection.
 
 ```bash
 python sdk/python/examples/fact_document_evidence.py \
@@ -38,7 +40,8 @@ fact, document_section = pair["fact"], pair["document_section"]
 ```
 
 The returned `fact["value"]` is the saved claim; `fact` also retains returned
-`version`, `status`, `actor`, `source_class`, `source_trace` and `source_resource_id`
+`agent`, `user_id`, `session_id`, `version`, `status`, `actor`, `source_class`,
+`source_trace` and `source_resource_id`
 fields. `document_section["section_content"]` is the selected section's assembled
 chunk text, with `source_uri` and `section_chunk_idxs` identifying its source. Compare
 the claim with that passage privately; CLI output contains only presence and field

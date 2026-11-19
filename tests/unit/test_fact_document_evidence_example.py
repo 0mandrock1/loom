@@ -21,6 +21,9 @@ SPEC.loader.exec_module(example)
 
 FACT = {
     "found": True,
+    "agent": "fixture-writer",
+    "user_id": "fixture-user",
+    "session_id": "fixture-session",
     "value": "Synthetic claim for offline contract checks",
     "version": 4,
     "status": "active",
@@ -117,7 +120,11 @@ async def test_missing_data_does_not_acquire_support(server: Any, missing: str) 
         replies["knowledge.outline"]["section_content"] = None
         replies["knowledge.outline"]["section_chunk_idxs"] = []
     else:
-        replies["memory.get"] = {"found": True, "value": "claim"}
+        replies["memory.get"] = {
+            "found": True,
+            "value": "claim",
+            **{field: FACT[field] for field in ("agent", "user_id", "session_id")},
+        }
     result = await example.run(args())
     assert result["support"] == "not_evaluated"
     report = example.summary(result)
@@ -125,6 +132,31 @@ async def test_missing_data_does_not_acquire_support(server: Any, missing: str) 
     assert report["section_found"] is (missing not in ("document", "section"))
     if missing == "optional_fields":
         assert "source_resource_id" not in result["fact"]
+
+
+@pytest.mark.parametrize("field", ["agent", "user_id", "session_id"])
+@pytest.mark.parametrize("missing", [False, True])
+async def test_unverifiable_identity_stops_before_document_read(
+    server: Any, field: str, missing: bool
+) -> None:
+    requests, replies = server
+    if missing:
+        del replies["memory.get"][field]
+    else:
+        replies["memory.get"][field] = "different-owner"
+    with pytest.raises(ValueError, match="selected identity"):
+        await example.run(args())
+    assert [request.url.path for request in requests] == ["/v1/memory.get"]
+
+
+@pytest.mark.parametrize("agent", ["", "-", "*"])
+async def test_anonymous_agent_selection_fails_before_requests(server: Any, agent: str) -> None:
+    requests, _ = server
+    selection = args()
+    selection.agent = agent
+    with pytest.raises(ValueError, match="explicit owning agent"):
+        await example.run(selection)
+    assert requests == []
 
 
 async def test_empty_section_fails_before_requests(server: Any) -> None:

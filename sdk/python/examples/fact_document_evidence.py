@@ -16,6 +16,9 @@ from loom import Agent
 from loom.errors import LoomError
 
 FACT_FIELDS = (
+    "agent",
+    "user_id",
+    "session_id",
     "value",
     "version",
     "status",
@@ -44,6 +47,11 @@ async def read_pair(
         session_id=session_id,
         fields=list(FACT_FIELDS),
     )
+    expected = bot.identity(user_id=user_id, session_id=session_id)
+    if fact is not None and any(
+        fact.get(field) != expected[field] for field in ("agent", "user_id", "session_id")
+    ):
+        raise ValueError("Returned fact does not match the selected identity")
     passage = await bot.knowledge.outline(
         source_uri, section_path=section_path, include_children=False
     )
@@ -95,6 +103,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         retry={"max_attempts": 1},
         timeout_s=20,
     ) as bot:
+        if bot.agent != args.agent:
+            raise ValueError("Select an explicit owning agent name")
         return await read_pair(
             bot,
             memory_key=args.memory_key,
