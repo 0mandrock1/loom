@@ -67,9 +67,23 @@ Historical raw lines that still occur in the current source must retain their or
 and multiplicity. A line absent from the current source can change inside a whole
 counterpart only when each endpoint's neighbouring lines remain present and have unique
 monotone origins. Earliest and latest embeddings of retained lines must agree at every
-endpoint. Replacing an endpoint line or inserting text at a unit or separator boundary
-refuses; the planner does not assign that text to a neighbouring request. All whole
-counterparts and their original separators must cover the complete current container.
+endpoint. Replacing an endpoint line or inserting text at an interior unit or separator
+boundary refuses; the planner does not assign that text to a neighbouring request.
+
+A terminal append can extend the final original whole when both raw and prepared old
+containers are exact proper prefixes of their current containers. The final original
+must already own the last heading section and end at historical EOF. Only closed,
+unindented ordinary paragraphs under that heading may be appended; new headings, lists, tables, code blocks,
+HTML, reference definitions and ambiguous site-extension or language-bar context refuse.
+Existing block content, every earlier cut and every original separator retain their
+proof. This terminal ownership proof maps only the final end to current EOF, including
+when historical EOF has repeated blank lines; it never relaxes an interior origin.
+The enlarged whole is changed input with the same original reference and current USER
+only. An already completed current input still requires its own origin and normal reuse
+eligibility. No added request, new historical slot or old-assistant replay is inferred.
+All whole counterparts and their original separators must cover the complete current
+container. Consumers must supply the authenticated raw sources even when every old
+whole remains a substring of the current container.
 Ambiguous origins, reordered retained lines, incomplete originals and unsafe current
 parser cuts refuse. This proof is conservative: a replacement can still refuse when
 its text also occurs elsewhere and prevents unique ordered correspondence.
