@@ -190,7 +190,7 @@ and [search scope](../unified-search.md#which-namespaces-it-reads).
 
 Search for the symbol name and the behavior it implements, then inspect
 `structuredContent.knowledge.results`: the MCP text summary quotes only an excerpt.
-Preserve the returned `source_uri`, `section`, nonzero `revision` and any `locator` when
+Preserve the returned `source_uri`, `section`, `revision` and any `locator` when
 citing the passage. A knowledge revision is not a Git commit. Repository tags group
 ordinary synced documents for retrieval; they do not create symbol edges or grant access.
 A retrieved passage that names a symbol still needs an explicit code lookup and a human
