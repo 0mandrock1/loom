@@ -39,20 +39,29 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
     assert.equal(ran, false);
   });
 } else {
-  test("a marked response is durable before return and stops the next automatic operation", async () => {
-    const { root } = fixture();
+  test("a marked automatic response protects every contributor before withholding its body", async () => {
+    const { root, base } = fixture();
+    const contributor = createProtectionRoot({ base });
+    const rendered = [];
     let sends = 0;
     const fetchImpl = async () => {
       sends++;
       return { status: 200, json: async () => ({ mirrored: true, answer: "private answer" }) };
     };
-    await withAutomaticSessionProtection(root, async () => {
-      const first = await requestJson("http://server/v1/context.pack", { fetchImpl });
-      assert.equal(first.body.answer, "private answer");
-      assert.equal(sessionIsProtected(root), true);
-      const later = await requestJson("http://other/v1/code.repos", { fetchImpl, token: "other-token" });
-      assert.deepEqual(later, { status: 0, body: null, suppressed: true });
-    });
+    await withAutomaticSessionProtection(root, () =>
+      withAutomaticSessionProtection(contributor, async () => {
+        const first = await requestJson("http://server/v1/context.pack", { fetchImpl });
+        if (first.body) rendered.push(first.body.answer);
+        assert.deepEqual(rendered, []);
+        assert.equal(first.status, 0);
+        assert.equal(first.body, null);
+        assert.equal(first.error, "Session protection state could not be confirmed");
+        assert.equal(sessionIsProtected(root), true);
+        assert.equal(sessionIsProtected(contributor), true);
+        const later = await requestJson("http://other/v1/code.repos", { fetchImpl, token: "other-token" });
+        assert.deepEqual(later, { status: 0, body: null, suppressed: true });
+      }),
+    );
     assert.equal(sends, 1);
     const explicit = await withSessionProtection(root, () =>
       requestJson("http://other/v1/memory.set", { fetchImpl: response({ version: 2 }) }),
@@ -75,7 +84,7 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
     });
   }
 
-  test("a marked JSON-RPC error is observed before its consumer and blocks the next automatic send", async () => {
+  test("a marked JSON-RPC error is withheld before its automatic consumer and blocks the next send", async () => {
     const { root } = fixture();
     const body = { jsonrpc: "2.0", id: 7, error: { code: -32000, data: { mirrored: true, code: "REFUSED" } } };
     let sends = 0;
@@ -86,8 +95,9 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
           return { status: 403, json: async () => body };
         },
       });
-      assert.equal(reply.status, 403);
-      assert.equal(reply.body, body);
+      assert.equal(reply.status, 0);
+      assert.equal(reply.body, null);
+      assert.equal(reply.error, "Session protection state could not be confirmed");
       assert.equal(sessionIsProtected(root), true);
       const later = await requestJson("http://server/v1/code.repos", {
         fetchImpl: async () => {
@@ -98,6 +108,50 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
       assert.deepEqual(later, { status: 0, body: null, suppressed: true });
     });
     assert.equal(sends, 1);
+  });
+
+  test("a clean automatic response remains available to its consumer", async () => {
+    const { root } = fixture();
+    const body = { answer: "ordinary" };
+    const reply = await withAutomaticSessionProtection(root, () =>
+      requestJson("http://server/v1/context.pack", { fetchImpl: response(body) }),
+    );
+    assert.equal(reply.status, 200);
+    assert.equal(reply.body, body);
+    assert.equal(sessionIsProtected(root), false);
+  });
+
+  test("an explicit marked response remains available after durable observation", async () => {
+    const { root } = fixture();
+    const body = { mirrored: true, answer: "explicit private answer" };
+    const reply = await withSessionProtection(root, () =>
+      requestJson("http://server/v1/context.pack", { fetchImpl: response(body) }),
+    );
+    assert.equal(reply.status, 200);
+    assert.equal(reply.body, body);
+    assert.equal(sessionIsProtected(root), true);
+  });
+
+  test("protection during response decoding withholds even an unmarked automatic body", async () => {
+    const { root } = fixture();
+    const rendered = [];
+    await withAutomaticSessionProtection(root, async () => {
+      const reply = await requestJson("http://server/v1/context.pack", {
+        fetchImpl: async () => ({
+          status: 200,
+          json: async () => {
+            protectSession(root);
+            return { answer: "unconfirmed" };
+          },
+        }),
+      });
+      if (reply.body) rendered.push(reply.body.answer);
+      assert.deepEqual(rendered, []);
+      assert.equal(reply.status, 0);
+      assert.equal(reply.body, null);
+      assert.equal(reply.error, "Session protection state could not be confirmed");
+      assert.equal(sessionIsProtected(root), true);
+    });
   });
 
   test("model arguments do not become response envelopes or choose protection identity", () => {

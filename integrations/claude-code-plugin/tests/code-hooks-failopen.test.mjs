@@ -15,6 +15,8 @@ import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { cachePathFor } from "../lib/repo-scope.mjs";
 import { hostEnv } from "./host-env.mjs";
+import { protectSession, sessionIsProtected } from "../lib/session-protection.mjs";
+import { sessionStatePath, writeSessionState } from "../lib/tmp-state.mjs";
 
 const HOOKS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "hooks");
 const BIG = Array.from({ length: 400 }, (_, i) => `int f${i}() { return ${i}; }`).join("\n") + "\n";
@@ -481,3 +483,72 @@ test("blast radius: a change with no path or range for the server sends nothing"
     [],
   );
 });
+
+for (const mode of ["ordinary", "mirrored", "late-sibling-mark"]) {
+  test(`file context ${mode} guards acknowledgment and output after its lookup`, async () => {
+    const dir = checkout();
+    const tmp = freshTmp();
+    let server;
+    try {
+      const sessionId = `file-context-${mode}`;
+      const root = establishFixtureSession(tmp, sessionId);
+      const statePath = sessionStatePath("file-context", sessionId, { tmp });
+      writeSessionState("file-context", sessionId, { seen: { "prior.cpp": Date.now() } }, { tmp });
+      const before = fs.readFileSync(statePath);
+      const seen = [];
+      server = http.createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+          seen.push(req.url);
+          if (req.url !== "/v1/memory.for_file") {
+            res.writeHead(500).end("{}");
+            return;
+          }
+          // The actual hook has dispatched and is waiting for this response.
+          if (mode === "late-sibling-mark") protectSession(root);
+          res.setHeader("content-type", "application/json");
+          res.end(
+            JSON.stringify({
+              total: 1,
+              rendered: mode === "ordinary" ? "ORDINARY FILE RULE" : "PRIVATE FILE RULE",
+              mirrored: mode === "mirrored",
+            }),
+          );
+        });
+      });
+      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const answer = await run(
+        "loom-file-context.mjs",
+        {
+          tool_name: "Edit",
+          tool_input: { file_path: path.join(dir, "src/a.cpp") },
+          cwd: dir,
+          session_id: sessionId,
+        },
+        { tmp, url: `http://127.0.0.1:${server.address().port}` },
+      );
+      assert.equal(answer.code, 0, answer.err);
+      assert.equal(answer.err, "");
+      assert.deepEqual(seen, ["/v1/memory.for_file"]);
+      if (mode === "ordinary") {
+        const context = JSON.parse(answer.out).hookSpecificOutput.additionalContext;
+        assert.match(context, /ORDINARY FILE RULE/);
+        const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+        assert.equal(typeof state.seen["src/a.cpp"], "number");
+        assert.notDeepEqual(fs.readFileSync(statePath), before);
+        assert.equal(sessionIsProtected(root), false);
+      } else {
+        assert.equal(answer.out, "");
+        assert.deepEqual(fs.readFileSync(statePath), before);
+        assert.equal(sessionIsProtected(root), true);
+      }
+    } finally {
+      if (server) {
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}

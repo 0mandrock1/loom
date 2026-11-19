@@ -766,6 +766,7 @@ export async function requestJson(
     if (protection) {
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) refuseSessionResponse(protection.roots);
       observeSessionResponses(protection.roots, parsed);
+      if (protection.automatic && automaticSessionIsProtected()) throw new SessionProtectionUnavailable();
     }
     return { status: res.status, body: parsed };
   } catch (e) {

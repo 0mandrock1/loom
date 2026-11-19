@@ -41,6 +41,7 @@ import {
   teamRulesNamespace,
 } from "../lib/file-context.mjs";
 import { readCache } from "../lib/repo-scope.mjs";
+import { automaticSessionIsProtected } from "../lib/session-response.mjs";
 import { readSessionState, writeSessionState } from "../lib/tmp-state.mjs";
 
 const ENABLED = envSwitch("LOOM_FILE_CONTEXT", true);
@@ -88,6 +89,7 @@ async function main() {
     post: postBounded,
     bound: { token, serverUrl: resolveServerUrl() },
   });
+  if (automaticSessionIsProtected()) return;
   // Record the lookup whether or not it hit: an empty answer is also an answer
   // for this session.
   writeSessionState("file-context", payload.session_id, decision.cache);
