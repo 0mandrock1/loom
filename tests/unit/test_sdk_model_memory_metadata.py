@@ -109,7 +109,7 @@ async def test_update_ambiguity_is_not_retried_as_a_new_fact() -> None:
     agent, calls = _agent({"detail": {"code": "AMBIGUOUS_KEY", "message": "narrow the key"}}, 409)
     try:
         with pytest.raises(LoomError):
-            await agent.tools(only=["loom_update"]).execute(
+            await agent.tools(only=["loom_update"], user_id="bound-user").execute(
                 "loom_update", {"memory_key": "k", "value": "v"}
             )
         assert len(calls) == 1
@@ -138,5 +138,16 @@ async def test_model_metadata_cannot_replace_the_bound_identity() -> None:
         assert calls[0][1]["user_id"] == "bound-user"
         assert "files" not in calls[0][1]
         assert "source_resource_id" not in calls[0][1]
+    finally:
+        await agent.close()
+
+
+@pytest.mark.parametrize("user_id", [None, "", "-", "  "])
+async def test_key_correction_cannot_widen_an_unnamed_user_scope(user_id: str | None) -> None:
+    agent, calls = _agent({})
+    try:
+        with pytest.raises(LoomError, match="application-bound named user_id"):
+            agent.tools(only=["loom_update"], user_id=user_id)
+        assert calls == []
     finally:
         await agent.close()

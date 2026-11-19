@@ -307,6 +307,10 @@ class AgentTools:
             "run_id": run_id,
         }
         keep = set(only) if only is not None else None
+        if keep and "loom_update" in keep and (
+            not isinstance(user_id, str) or not user_id.strip() or user_id.strip() == "-"
+        ):
+            raise LoomError("loom_update requires an application-bound named user_id")
         if keep and "loom_code_lookup" in keep and code_namespace is None:
             raise LoomError("loom_code_lookup requires code_namespace")
         if code_namespace is not None:
