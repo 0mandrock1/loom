@@ -1,7 +1,7 @@
 param([switch]$Worker)
 $ErrorActionPreference = 'Stop'
-[Console]::InputEncoding = New-Object Text.UTF8Encoding($false)
-[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 if (-not $Worker -or [Console]::In.ReadLine() -cne $env:LOOM_PRIVATE_COMPILATION_ID) { throw 'Unavailable' }
 $lib = [IO.Path]::GetFullPath([IO.Path]::Combine($PSScriptRoot, '..', 'lib'))
 . ([IO.Path]::Combine($lib, 'windows-native-bootstrap.ps1'))
@@ -10,9 +10,9 @@ $native = New-LoomBootstrapApi
 Invoke-LoomCompilerScope $native $false {
     param($directory)
     $pipeName = 'loom-compiler-' + $env:LOOM_PRIVATE_COMPILATION_ID
-    $pipe = New-Object IO.Pipes.NamedPipeServerStream($pipeName, [IO.Pipes.PipeDirection]::Out)
+    $pipe = [IO.Pipes.NamedPipeServerStream]::new($pipeName, [IO.Pipes.PipeDirection]::Out)
     try {
-        $start = New-Object Diagnostics.ProcessStartInfo
+        $start = [Diagnostics.ProcessStartInfo]::new()
         $start.FileName = [IO.Path]::Combine([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory(), 'csc.exe')
         $start.Arguments = '/noconfig /target:library /out:"' + [IO.Path]::Combine($directory, 'witness.dll') + '" @"\\.\pipe\' + $pipeName + '"'
         $start.UseShellExecute = $false

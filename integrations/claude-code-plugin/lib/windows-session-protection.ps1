@@ -8,13 +8,13 @@ $loomDiagnosticStream.Flush()
 $ProgressPreference = 'SilentlyContinue'
 $loomDiagnosticStream.Write([byte[]](76, 83, 80, 49, 58, 101, 110, 99, 111, 100, 105, 110, 103, 45, 110, 101, 119, 58, 48, 10), 0, 20)
 $loomDiagnosticStream.Flush()
-$loomInputEncoding = New-Object Text.UTF8Encoding($false)
+$loomInputEncoding = [Text.UTF8Encoding]::new($false)
 $loomDiagnosticStream.Write([byte[]](76, 83, 80, 49, 58, 101, 110, 99, 111, 100, 105, 110, 103, 45, 99, 114, 101, 97, 116, 101, 100, 58, 48, 10), 0, 24)
 $loomDiagnosticStream.Flush()
 [Console]::InputEncoding = $loomInputEncoding
 $loomDiagnosticStream.Write([byte[]](76, 83, 80, 49, 58, 101, 110, 99, 111, 100, 105, 110, 103, 45, 105, 110, 112, 117, 116, 58, 48, 10), 0, 22)
 $loomDiagnosticStream.Flush()
-[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $loomDiagnosticStream.Write([byte[]](76, 83, 80, 49, 58, 101, 110, 99, 111, 100, 105, 110, 103, 45, 111, 117, 116, 112, 117, 116, 58, 48, 10), 0, 23)
 $loomDiagnosticStream.Flush()
 function Write-LoomProtectionPhase([string]$phase, [int]$code = 0) {
@@ -26,7 +26,7 @@ function Write-LoomProtectionPhase([string]$phase, [int]$code = 0) {
     } catch { $script:loomProtectionDiagnosticFailed = $true }
 }
 function Invoke-LoomCompilerScope([type]$native, [bool]$CleanupCompilation, [scriptblock]$Operation) {
-$held = New-Object 'System.Collections.Generic.List[System.IntPtr]'
+$held = [System.Collections.Generic.List[System.IntPtr]]::new()
 $compileDirectory = $null
 $compilerHandleStart = -1
 $result = $null
@@ -59,9 +59,9 @@ try {
             if ($owner -eq [IntPtr]::Zero -or $dacl -eq [IntPtr]::Zero -or $sd -eq [IntPtr]::Zero) { throw 'Unavailable' }
             $length = $native::GetSecurityDescriptorLength($sd)
             if ($length -lt 1 -or $length -gt 65536) { throw 'Unavailable' }
-            $bytes = New-Object byte[] $length
+            $bytes = [byte[]]::new($length)
             [Runtime.InteropServices.Marshal]::Copy($sd, $bytes, 0, $length)
-            $actual = New-Object System.Security.AccessControl.RawSecurityDescriptor($bytes, 0)
+            $actual = [System.Security.AccessControl.RawSecurityDescriptor]::new($bytes, 0)
             if (-not $sid.Equals($actual.Owner) -or ($actual.ControlFlags -band 0x1004) -ne 0x1004 -or $null -eq $actual.DiscretionaryAcl -or $actual.DiscretionaryAcl.Count -ne 1) { throw 'Unavailable' }
             $ace = $actual.DiscretionaryAcl[0]
             if ($ace -isnot [System.Security.AccessControl.CommonAce] -or $ace.IsCallback -or $ace.AceQualifier -ne [System.Security.AccessControl.AceQualifier]::AccessAllowed -or $ace.AceFlags -ne 3 -or $ace.AccessMask -ne 0x1f01ff -or -not $sid.Equals($ace.SecurityIdentifier)) { throw 'Unavailable' }
@@ -95,13 +95,13 @@ try {
     if ($compilationId -notmatch '^[0-9a-f]{32}$') { throw 'Unavailable' }
     $root = [IO.Path]::GetPathRoot($compilerBase)
     if ($root -notmatch '^[A-Za-z]:\\$') { throw 'Unavailable' }
-    $security = New-Object System.Security.AccessControl.DirectorySecurity
+    $security = [System.Security.AccessControl.DirectorySecurity]::new()
     $security.SetOwner($sid)
     $security.SetAccessRuleProtection($true, $false)
     # Compiler-created files must inherit owner-only authority themselves;
     # directory traversal checks may be bypassed by SeChangeNotifyPrivilege.
     $inherit = [System.Security.AccessControl.InheritanceFlags]'ObjectInherit, ContainerInherit'
-    $security.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid,
+    $security.AddAccessRule(([System.Security.AccessControl.FileSystemAccessRule]::new($sid,
         [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit,
         [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
     [void](Pin-Directory $root $false)
@@ -176,18 +176,18 @@ function Invoke-LoomRecordOperation([string]$compileDirectory) {
     # Compile fixed code before reading any session request.
     Write-LoomProtectionPhase 'compile'
     $source = [IO.File]::ReadAllText([IO.Path]::Combine($PSScriptRoot, 'windows-private-records.cs'))
-    $parameters = New-Object System.CodeDom.Compiler.CompilerParameters
+    $parameters = [System.CodeDom.Compiler.CompilerParameters]::new()
     $parameters.GenerateInMemory = $true
     $parameters.IncludeDebugInformation = $false
     $parameters.TreatWarningsAsErrors = $true
     $parameters.CompilerOptions = '/optimize+'
-    $parameters.TempFiles = New-Object System.CodeDom.Compiler.TempFileCollection($compileDirectory, $false)
+    $parameters.TempFiles = [System.CodeDom.Compiler.TempFileCollection]::new($compileDirectory, $false)
     [void]$parameters.ReferencedAssemblies.Add('System.dll')
     [void]$parameters.ReferencedAssemblies.Add('System.Core.dll')
     Microsoft.PowerShell.Utility\Add-Type -TypeDefinition $source -Language CSharp -CompilerParameters $parameters -ErrorAction Stop | Out-Null
 
     Write-LoomProtectionPhase 'request'
-    $buffer = New-Object char[] 4097
+    $buffer = [char[]]::new(4097)
     $count = 0
     while ($count -lt $buffer.Length) {
         $read = [Console]::In.Read($buffer, $count, $buffer.Length - $count)
@@ -195,7 +195,7 @@ function Invoke-LoomRecordOperation([string]$compileDirectory) {
         $count += $read
     }
     if ($count -gt 4096) { throw 'Unavailable' }
-    $request = Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject (New-Object string($buffer, 0, $count)) -ErrorAction Stop
+    $request = Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject ([string]::new($buffer, 0, $count)) -ErrorAction Stop
     $expectedKeys = switch ($request.op) {
         'create' { 'base,op' }
         'inspect' { 'base,id,op' }
@@ -207,7 +207,7 @@ function Invoke-LoomRecordOperation([string]$compileDirectory) {
     if ((($request.PSObject.Properties.Name | Sort-Object) -join ',') -ne $expectedKeys) { throw 'Unavailable' }
     if ($request.base -isnot [string] -or $request.base.Length -gt 2048 -or -not [IO.Path]::IsPathRooted($request.base)) { throw 'Unavailable' }
     Write-LoomProtectionPhase 'native-op'
-    $store = New-Object WindowsPrivateRecords($request.base)
+    $store = [WindowsPrivateRecords]::new($request.base)
     $result = switch ($request.op) {
         'create' { $store.CreateRoot() }
         'inspect' { $store.IsProtected($request.id) }

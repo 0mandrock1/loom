@@ -1,6 +1,6 @@
 # Native timer callbacks contain emitted IL only; they need no PowerShell
 # runspace, managed timer, Node event loop or compiler to stop a blocked worker.
-$script:loomTimerRoots = New-Object 'System.Collections.Generic.List[System.Delegate]'
+$script:loomTimerRoots = [System.Collections.Generic.List[System.Delegate]]::new()
 function Start-LoomNativeTimer([type]$native, [string]$method, [IntPtr]$context, [uint32]$milliseconds) {
     Write-LoomProtectionPhase 'native-timer'
     $callbackType = $native.Assembly.GetType('LoomNativeTimerCallback', $true)
@@ -48,7 +48,7 @@ function New-LoomCompilerJob([type]$native) {
     $size = if ([IntPtr]::Size -eq 8) { 144 } else { 112 }
     $limits = [Runtime.InteropServices.Marshal]::AllocHGlobal($size)
     try {
-        [Runtime.InteropServices.Marshal]::Copy((New-Object byte[] $size), 0, $limits, $size)
+        [Runtime.InteropServices.Marshal]::Copy(([byte[]]::new($size)), 0, $limits, $size)
         [Runtime.InteropServices.Marshal]::WriteInt32($limits, 16, 0x2000)
         if (-not $native::SetInformationJobObject($handle, 9, $limits, $size)) {
             $nativeCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
@@ -78,8 +78,8 @@ function Receive-LoomWorkerPhases($state, [bool]$finish = $false) {
 }
 
 function Invoke-LoomGuardedWorker([type]$native, [string]$workerScript, [scriptblock]$cleanup, [scriptblock]$observe = $null) {
-    [Console]::InputEncoding = New-Object Text.UTF8Encoding($false)
-    [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+    [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
     $clock, $budget = Start-LoomGuardianDeadline $native
     if ($budget -le 150) { throw 'Unavailable' }
     $job = New-LoomCompilerJob $native
@@ -93,7 +93,7 @@ function Invoke-LoomGuardedWorker([type]$native, [string]$workerScript, [scriptb
     $workerPhases = $null
     $exitObserved = $false
     try {
-        $inputBuffer = New-Object char[] 4097
+        $inputBuffer = [char[]]::new(4097)
         $length = 0
         while ($length -lt $inputBuffer.Length) {
             $read = [Console]::In.Read($inputBuffer, $length, $inputBuffer.Length - $length)
@@ -101,7 +101,7 @@ function Invoke-LoomGuardedWorker([type]$native, [string]$workerScript, [scriptb
             $length += $read
         }
         if ($length -gt 4096) { throw 'Unavailable' }
-        $start = New-Object Diagnostics.ProcessStartInfo
+        $start = [Diagnostics.ProcessStartInfo]::new()
         $start.FileName = [IO.Path]::Combine($PSHOME, 'powershell.exe')
         # Script paths are fixed plugin/test assets, never request values.
         if ($workerScript.Contains('"')) { throw 'Unavailable' }

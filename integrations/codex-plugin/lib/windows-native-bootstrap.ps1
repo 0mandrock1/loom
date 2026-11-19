@@ -1,11 +1,11 @@
 # Fixed P/Invoke declarations needed before source compilation can begin.
 function New-LoomBootstrapApi {
-    $assemblyName = New-Object System.Reflection.AssemblyName('LoomPrivateCompilerBootstrap')
+    $assemblyName = [System.Reflection.AssemblyName]::new('LoomPrivateCompilerBootstrap')
     $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly($assemblyName, [System.Reflection.Emit.AssemblyBuilderAccess]::Run)
     $module = $assembly.DefineDynamicModule($assemblyName.Name)
     $callback = $module.DefineType('LoomNativeTimerCallback', [System.Reflection.TypeAttributes]'Public, Sealed', [MulticastDelegate])
     $callingConvention = [Runtime.InteropServices.UnmanagedFunctionPointerAttribute].GetConstructor([type[]]@([Runtime.InteropServices.CallingConvention]))
-    $callback.SetCustomAttribute((New-Object Reflection.Emit.CustomAttributeBuilder($callingConvention,
+    $callback.SetCustomAttribute(([Reflection.Emit.CustomAttributeBuilder]::new($callingConvention,
         [object[]]@([Runtime.InteropServices.CallingConvention]::Winapi))))
     $constructor = $callback.DefineConstructor([System.Reflection.MethodAttributes]'Public, HideBySig, RTSpecialName',
         [System.Reflection.CallingConventions]::Standard, [type[]]@([object], [IntPtr]))
@@ -28,7 +28,7 @@ function New-LoomBootstrapApi {
             [System.Runtime.InteropServices.DllImportAttribute].GetField('CharSet'),
             [System.Runtime.InteropServices.DllImportAttribute].GetField('ExactSpelling'),
             [System.Runtime.InteropServices.DllImportAttribute].GetField('CallingConvention'))
-        $attribute = New-Object System.Reflection.Emit.CustomAttributeBuilder($constructor, [object[]]@($dll),
+        $attribute = [System.Reflection.Emit.CustomAttributeBuilder]::new($constructor, [object[]]@($dll),
             $fields, [object[]]@($true, [System.Runtime.InteropServices.CharSet]::Unicode, $true,
                 [System.Runtime.InteropServices.CallingConvention]::Winapi))
         $method.SetCustomAttribute($attribute)
