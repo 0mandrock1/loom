@@ -795,6 +795,33 @@ jobs:
           echo "auth-on control plane never became healthy"
           tail -100 server-auth.log
           exit 1
+      - name: Install the native Pipecat client in a private target
+        id: pipecat_client
+        if: matrix.part == 'isolation' && !cancelled() && steps.auth_on.outcome == 'success'
+        run: >-
+          uv pip install --python "$PWD/.venv/bin/python"
+          --target "$RUNNER_TEMP/loom-pipecat-native" './sdk/python[pipecat]'
+      - name: Native Pipecat text example (auth on)
+        id: pipecat_demo
+        if: >-
+          matrix.part == 'isolation' && !cancelled()
+          && steps.pipecat_client.outcome == 'success'
+        timeout-minutes: 5
+        env:
+          LOOM_AUTH_REQUIRED: "true"
+          LOOM_BASE_URL: http://localhost:7778
+          PYTHONPATH: ${{ runner.temp }}/loom-pipecat-native
+          LOOM_PIPECAT_EVIDENCE: ${{ runner.temp }}/pipecat-native-demo.json
+        run: pytest -q tests/integration/_pipecat_demo_ci.py
+      - name: Upload native Pipecat qualification receipt
+        if: >-
+          always() && matrix.part == 'isolation'
+          && steps.pipecat_demo.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pipecat-native-demo
+          path: ${{ runner.temp }}/pipecat-native-demo.json
+          if-no-files-found: error
       - name: pytest isolation gates (auth on)
         if: matrix.part == 'isolation' && !cancelled() && steps.auth_on.outcome == 'success'
         env:
