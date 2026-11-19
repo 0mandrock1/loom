@@ -15,6 +15,8 @@ const cleanupReserveMs = 500;
 const failureDiagnostics = new WeakMap();
 const phases = new Set([
   "entry",
+  "encoding-new",
+  "encoding-created",
   "encoding-input",
   "encoding-output",
   "startup",
