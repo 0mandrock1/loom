@@ -129,6 +129,7 @@ async function withServer(answers, fn) {
   const observation = { startedAt: performance.now(), children: 0, requests: 0, events: [] };
   const server = http.createServer((req, res) => {
     const request = ++observation.requests;
+    recordFixtureEvent(observation, "request-open", { request });
     res.once("finish", () => recordFixtureEvent(observation, "response-finish", { request }));
     let raw = "";
     req.on("data", (c) => {
@@ -624,6 +625,19 @@ test("an unattributed batch in the same protected scope stays untouched while a 
           [],
         );
       } catch (error) {
+        try {
+          const pending = pendingPath(tmp, url, "B");
+          const pendingExists = fs.existsSync(pending);
+          recordFixtureEvent(observation, "queue-snapshot", {
+            bPendingExists: pendingExists,
+            bPendingBytes: pendingExists ? fs.statSync(pending).size : 0,
+            ownedClaimCount: fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-"))
+              .length,
+            unattributedFileExists: fs.existsSync(pendingPath(tmp, url, "unknown-producer")),
+          });
+        } catch {
+          recordFixtureEvent(observation, "snapshot-unavailable");
+        }
         throw observedFailure(error, observation);
       }
     });

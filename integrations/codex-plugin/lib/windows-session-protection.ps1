@@ -18,7 +18,7 @@ $loomDiagnosticStream.Flush()
 $loomDiagnosticStream.Write([byte[]](76, 83, 80, 49, 58, 101, 110, 99, 111, 100, 105, 110, 103, 45, 111, 117, 116, 112, 117, 116, 58, 48, 10), 0, 23)
 $loomDiagnosticStream.Flush()
 function Write-LoomProtectionPhase([string]$phase, [int]$code = 0) {
-    if ($phase -cnotin @('entry', 'encoding-new', 'encoding-created', 'encoding-input', 'encoding-output', 'startup', 'bootstrap', 'worker-bootstrap', 'guardian-deadline', 'native-job', 'native-timer', 'worker-start', 'worker-assign', 'compiler-private', 'compiler-identity', 'compiler-path', 'compiler-security', 'compiler-parents', 'compiler-directory', 'compiler-receipt', 'compiler-environment', 'compiler-launch', 'compile', 'request', 'native-op', 'cleanup', 'worker-exit', 'helper-exit')) { throw 'Unavailable' }
+    if ($phase -cnotin @('entry', 'encoding-new', 'encoding-created', 'encoding-input', 'encoding-output', 'startup', 'bootstrap', 'worker-bootstrap', 'guardian-deadline', 'native-job', 'native-timer', 'worker-start', 'worker-assign', 'compiler-private', 'compiler-identity', 'compiler-path', 'compiler-security', 'compiler-parents', 'compiler-directory', 'compiler-receipt', 'compiler-environment', 'compiler-launch', 'compile', 'request', 'request-parse', 'request-keys', 'native-op', 'record-construct', 'record-dispatch', 'output-encode', 'cleanup', 'worker-exit', 'helper-exit')) { throw 'Unavailable' }
     if ($phase -cnotin @('worker-exit', 'helper-exit')) { $script:loomProtectionPhase = $phase }
     try {
         [Console]::Error.WriteLine('LSP1:' + $phase + ':' + $code.ToString([Globalization.CultureInfo]::InvariantCulture))
@@ -217,7 +217,9 @@ function Invoke-LoomRecordOperation([Reflection.Assembly]$assembly) {
         $count += $read
     }
     if ($count -gt 4096) { throw 'Unavailable' }
+    Write-LoomProtectionPhase 'request-parse'
     $request = Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject ([string]::new($buffer, 0, $count)) -ErrorAction Stop
+    Write-LoomProtectionPhase 'request-keys'
     $expectedKeys = switch ($request.op) {
         'create' { 'base,op' }
         'inspect' { 'base,id,op' }
@@ -231,7 +233,9 @@ function Invoke-LoomRecordOperation([Reflection.Assembly]$assembly) {
     if ($request.base -isnot [string] -or $request.base.Length -gt 2048 -or -not [IO.Path]::IsPathRooted($request.base)) { throw 'Unavailable' }
     Write-LoomProtectionPhase 'native-op'
     $recordType = $assembly.GetType('WindowsPrivateRecords', $true, $false)
+    Write-LoomProtectionPhase 'record-construct'
     $store = [Activator]::CreateInstance($recordType, [object[]]@($request.base))
+    Write-LoomProtectionPhase 'record-dispatch'
     $result = switch ($request.op) {
         'create' { $store.CreateRoot() }
         'inspect' { $store.IsProtected($request.id) }
@@ -264,6 +268,7 @@ try {
         # the original earlier native-operation cutoff on this same self-job.
         Start-LoomNativeTimer $native 'StopJob' $compiled.Guardian.Job ($compiled.Guardian.Deadline - 150)
         $result = Invoke-LoomRecordOperation $compiled.Value
+        Write-LoomProtectionPhase 'output-encode'
         [Console]::Out.Write((ConvertTo-Json -Compress -Depth 4 -InputObject @{ ok = $true; value = $result }))
     }
     Write-LoomProtectionPhase 'helper-exit' 0

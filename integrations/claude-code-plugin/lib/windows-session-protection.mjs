@@ -38,7 +38,12 @@ const phases = new Set([
   "compiler-launch",
   "compile",
   "request",
+  "request-parse",
+  "request-keys",
   "native-op",
+  "record-construct",
+  "record-dispatch",
+  "output-encode",
   "cleanup",
   "protocol",
 ]);
