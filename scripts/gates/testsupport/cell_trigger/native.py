@@ -441,7 +441,8 @@ async def verify_pages(conn, ch, context, workload, codec, native_hash):
                 or dict(host=socket.gethostname(), pid=workload.driver["pid"]),
             )
             if item["kind"] == "delivery":
-                equal(row, codec.row(item["row"], comparison=True))
+                checked_delivery_row = codec.row(item["row"], comparison=True)
+                equal(row, checked_delivery_row)
                 equal(audit, item["audit"])
             need(audit["row_hash"] not in seen_hash, "unique workload audit identity")
             seen_hash.add(audit["row_hash"])
@@ -459,7 +460,7 @@ async def verify_pages(conn, ch, context, workload, codec, native_hash):
                 content_sha256=row["content_sha256"],
             )
             if item["kind"] == "delivery":
-                intent.update(row=codec.row(item["row"], comparison=True), audit=item["audit"])
+                intent.update(row=checked_delivery_row, audit=item["audit"])
                 observed.update(row=row, audit=audit)
             chain_update(expected_chain, count, intent)
             chain_update(observed_chain, count, observed)
