@@ -237,6 +237,7 @@ def native_settings(out: dict[str, Any], *, timeout: float) -> dict[str, Any]:
     out["result_overflow_mode"] = "throw"
     out["sort_overflow_mode"] = "throw"
     out["group_by_overflow_mode"] = "throw"
+    out["distinct_overflow_mode"] = "throw"
     out["set_overflow_mode"] = "throw"
     out["join_overflow_mode"] = "throw"
     return out

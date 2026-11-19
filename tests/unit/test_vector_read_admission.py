@@ -508,6 +508,8 @@ async def test_vector_native_timeout_refuses_partial_results(
         ("result_overflow_mode", "break", {"max_result_rows": 1, "max_result_bytes": 64}),
         ("sort_overflow_mode", "break", {"max_rows_to_sort": 1, "max_bytes_to_sort": 64}),
         ("group_by_overflow_mode", "any", {"max_rows_to_group_by": 1}),
+        ("distinct_overflow_mode", "break", {"max_rows_in_distinct": 1}),
+        ("distinct_overflow_mode", "break", {"max_bytes_in_distinct": 64}),
         ("set_overflow_mode", "break", {"max_rows_in_set": 1, "max_bytes_in_set": 64}),
         ("join_overflow_mode", "break", {"max_rows_in_join": 1, "max_bytes_in_join": 64}),
     ],
@@ -631,3 +633,104 @@ async def test_entity_boost_unrelated_native_error_retains_optional_fallback(
         == {}
     )
     assert driver.started == 1 and driver.active == 0
+
+
+@pytest.mark.parametrize("limit", ["max_rows_in_distinct", "max_bytes_in_distinct"])
+@pytest.mark.asyncio
+async def test_identifier_distinct_refusal_preserves_complete_results_and_reuses_capacity(
+    monkeypatch: pytest.MonkeyPatch, limit: str
+) -> None:
+    import json
+
+    from server.core.errors import VectorAdmissionError
+    from server.core.traffic_context import traffic_class_var
+    from server.core.vectors import admission
+    from server.memory.store.lookups import find_by_identifier
+
+    gate = admission._Admission()
+    monkeypatch.setattr(admission, "_admission", gate)
+    ch, driver = client(monkeypatch, pool=2)
+    complete = [
+        {
+            "memory_key": "closest",
+            "memory_type": "semantic",
+            "content_excerpt": "Issue context.\nThe complete closest passage remains.",
+            "version": 2,
+        },
+        {
+            "memory_key": "other",
+            "memory_type": "semantic",
+            "content_excerpt": "Issue context in another complete passage.",
+            "version": 1,
+        },
+    ]
+    failure = NativeBudgetError(191)
+
+    async def native(sql: str, **kwargs: Any) -> Any:
+        driver.started += 1
+        driver.settings.append(dict(kwargs["settings"]))
+        assert "SELECT DISTINCT" in sql and "cosineDistance" in sql
+        assert "org = {org:String}" in sql and "namespace = {ns:String}" in sql
+        assert kwargs["parameters"]["org"] == "one-org"
+        assert kwargs["parameters"]["ns"] == "private"
+        assert admission.current_work() == admission.VectorWork("one-org", ("private",), 1)
+        assert gate.population == 1 and gate.orgs["one-org"].held == 1
+        selected = complete
+        settings_for_query = kwargs["settings"]
+        if limit in settings_for_query:
+            assert settings_for_query[limit] == (1 if limit == "max_rows_in_distinct" else 64)
+            if settings_for_query["distinct_overflow_mode"] == "break":
+                selected = complete[1:]
+            else:
+                raise failure
+        names = list(selected[0])
+        return SimpleNamespace(
+            result_rows=[tuple(row[name] for name in names) for row in selected],
+            column_names=names,
+            summary={},
+        )
+
+    monkeypatch.setattr(driver, "query", native)
+
+    async def read() -> list[dict[str, Any]]:
+        return await find_by_identifier(
+            org="one-org",
+            namespace="private",
+            identifiers=["Issue"],
+            query_embedding=[1.0, 0.0],
+            ch=ch,
+        )
+
+    def drained() -> None:
+        assert gate.population == 0 and gate.orgs == {}
+        assert ch._slots is not None and ch._slots._value == 2
+        assert ch._inflight == {} and ch._retired == {}
+        assert admission.current_work() is None
+
+    token = traffic_class_var.set(("interactive", "test"))
+    try:
+        monkeypatch.setattr(settings, "ch_settings_by_traffic_class", "{}")
+        assert await read() == complete
+        drained()
+        cap = {
+            limit: 1 if limit == "max_rows_in_distinct" else 64,
+            "distinct_overflow_mode": "break",
+        }
+        monkeypatch.setattr(
+            settings, "ch_settings_by_traffic_class", json.dumps({"interactive": cap})
+        )
+        result: object = None
+        with pytest.raises(VectorAdmissionError) as caught:
+            result = await read()
+        assert result is None
+        assert caught.value.__cause__ is failure
+        assert caught.value.extra == {"reason": "rows", "retry_after_s": 1}
+        assert caught.value.code == "VECTOR_CAPACITY_REFUSED" and caught.value.status_code == 429
+        assert caught.value.headers() == {"Retry-After": "1"}
+        drained()
+        monkeypatch.setattr(settings, "ch_settings_by_traffic_class", "{}")
+        assert await read() == complete
+        drained()
+        assert driver.started == 3
+    finally:
+        traffic_class_var.reset(token)

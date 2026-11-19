@@ -222,9 +222,33 @@ _NATIVE_RANKED_ROWS = (
 )
 
 
+_NATIVE_DISTINCT_IDENTITY_ROWS = (
+    "SELECT memory_key AS n, cosineDistance(embedding, [1.0, 0.0]) AS distance "
+    "FROM (SELECT number AS memory_key, number % 2 AS writer, "
+    "[toFloat64(number + 1), 1.0] AS embedding FROM numbers(64)) AS candidates "
+    "WHERE (memory_key, writer) IN ("
+    "SELECT DISTINCT number, number % 2 FROM numbers(64)) "
+    "ORDER BY distance, n LIMIT 64"
+)
+
+
 @pytest.mark.parametrize(
     ("sql", "profile", "complete_count", "native_code"),
     [
+        pytest.param(
+            _NATIVE_DISTINCT_IDENTITY_ROWS,
+            {"max_rows_in_distinct": 8, "distinct_overflow_mode": "break"},
+            64,
+            191,
+            id="distinct-identity-rows",
+        ),
+        pytest.param(
+            _NATIVE_DISTINCT_IDENTITY_ROWS,
+            {"max_bytes_in_distinct": 128, "distinct_overflow_mode": "break"},
+            64,
+            191,
+            id="distinct-identity-bytes",
+        ),
         pytest.param(
             _NATIVE_RANKED_ROWS,
             {"max_result_rows": 8, "result_overflow_mode": "break"},

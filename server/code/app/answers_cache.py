@@ -98,7 +98,8 @@ class _Lookup:
 
 async def _serve_from_cache(ctx: _AskCtx) -> _Lookup:
     """Own namespace's semantic entry, else the exact question's cached
-    abstain, else the release branch's trunk entry. Fails open to a miss."""
+    abstain, else the release branch's trunk entry. Ordinary read failures return
+    a miss; capacity refusals propagate."""
 
     async def _read(call: Awaitable[Any]) -> Any:
         return await call
@@ -112,7 +113,7 @@ async def _serve_from_cache(ctx: _AskCtx) -> _Lookup:
         )
     except VectorCapacityError:
         raise
-    except Exception as e:  # noqa: BLE001 — a cache read never sinks the ask
+    except Exception as e:  # noqa: BLE001 — ordinary cache failures must not stop the ask
         logger.debug("code.ask cache read failed: %s", e)
         return _Lookup("miss")
     if row is not None:
