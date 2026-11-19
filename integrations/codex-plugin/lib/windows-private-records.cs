@@ -622,7 +622,16 @@ public sealed class WindowsPrivateRecords
         return id;
     }
 
+    static void WriteRootPhase(string phase) {
+        try {
+            Console.Error.WriteLine("LSP1:" + phase + ":0");
+            Console.Error.Flush();
+        } catch (Exception) { // Diagnostic I/O must not interrupt authority or cleanup.
+        }
+    }
+
     public string CreateRoot() {
+        WriteRootPhase("root-entry");
         string id = Guid.NewGuid().ToString("D");
         string unused;
         List<SafeFileHandle> baseHeld = PinDirectories(new string[] { "root.json" }, true, out unused);
@@ -635,6 +644,7 @@ public sealed class WindowsPrivateRecords
             using (SafeFileHandle root = OpenDirectory(rootPath, true)) {
                 CreateNew(new string[] { id, "state" }, Encoding.UTF8.GetBytes("0\n"));
                 CreateNew(new string[] { id, "root.json" }, Encoding.UTF8.GetBytes("{\"version\":1,\"id\":\"" + id + "\"}"));
+                WriteRootPhase("root-flushed");
                 Require(!IsProtected(id));
                 return id;
             }

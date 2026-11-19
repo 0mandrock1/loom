@@ -51,6 +51,8 @@ const phases = new Set([
   "native-op",
   "record-construct",
   "record-dispatch",
+  "root-entry",
+  "root-flushed",
   "output-encode",
   "cleanup",
   "protocol",
@@ -83,6 +85,7 @@ function helperDiagnostic(stderr) {
       code === null ||
       (match[1] === "compiler-bytes" && (code < 0 || code > 8192)) ||
       (match[1] === "compiler-format" && (code < 0 || code > 6)) ||
+      (["root-entry", "root-flushed"].includes(match[1]) && code !== 0) ||
       (!phases.has(match[1]) && match[1] !== "worker-exit" && match[1] !== "helper-exit")
     ) {
       unexpected = true;

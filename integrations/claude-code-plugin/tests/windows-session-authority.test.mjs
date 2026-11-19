@@ -118,6 +118,8 @@ function nativePhaseTrail(child) {
     "native-op",
     "record-construct",
     "record-dispatch",
+    "root-entry",
+    "root-flushed",
     "output-encode",
     "cleanup",
     "worker-exit",
@@ -147,7 +149,8 @@ function nativePhaseTrail(child) {
         code >= -2147483648 &&
         code <= 2147483647 &&
         (match[1] !== "compiler-bytes" || (code >= 0 && code <= 8192)) &&
-        (match[1] !== "compiler-format" || (code >= 0 && code <= 6))
+        (match[1] !== "compiler-format" || (code >= 0 && code <= 6)) &&
+        (!["root-entry", "root-flushed"].includes(match[1]) || code === 0)
       ) {
         if (frames.length === 24) frames.shift();
         frames.push({ phase: match[1], code, observerMs: Math.min(60000, Math.round(performance.now() - started)) });
