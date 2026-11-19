@@ -29,12 +29,14 @@ tokens per `tools/list`; every other op runs through `loom_op {op, arguments}`. 
 
 > **Bare mode skips hooks.** `claude --bare` (chosen by some agent harnesses for prompt-cache and cost reasons) does not run PreToolUse hooks, so the token shunt and the outcome capture in this plugin do not fire there. A harness that wants the shunt under bare mode needs the SDK backend's hook path instead.
 
-Automatic hooks require an existing binding to an unprotected session family. An
-unknown, damaged or protected family stays silent, including automatic signup
-and the session primer. Binding uses the hook's raw `session_id`; a payload
-containing only `sessionId` stays silent. The hooks do not create an independent
-native session family or declare protection for direct MCP responses. Native
-session creation and private-content publication remain unqualified.
+A `SessionStart` event with `source: startup` establishes one durable session
+family before automatic hook work. Concurrent startup hooks use that same
+family; existing privacy marks never reset. Other lifecycle events resolve an
+existing family. Unknown, damaged or protected families stay silent, including
+automatic signup and the session primer. Binding uses the hook's raw
+`session_id`; a payload containing only `sessionId` stays silent. The hooks do
+not declare protection for direct MCP responses. Native startup, response
+observation and private-content publication remain unqualified.
 
 On Windows, the local authority uses the process token owner and protected
 owner-only access controls on NTFS. A bounded helper checks record handles and

@@ -18,7 +18,7 @@ $loomDiagnosticStream.Flush()
 $loomDiagnosticStream.Write([byte[]](76, 83, 80, 49, 58, 101, 110, 99, 111, 100, 105, 110, 103, 45, 111, 117, 116, 112, 117, 116, 58, 48, 10), 0, 23)
 $loomDiagnosticStream.Flush()
 function Write-LoomProtectionPhase([string]$phase, [int]$code = 0) {
-    if ($phase -cnotin @('entry', 'encoding-new', 'encoding-created', 'encoding-input', 'encoding-output', 'startup', 'bootstrap', 'worker-bootstrap', 'guardian-deadline', 'native-job', 'native-timer', 'worker-start', 'worker-assign', 'compiler-private', 'compile', 'request', 'native-op', 'cleanup', 'worker-exit', 'helper-exit')) { throw 'Unavailable' }
+    if ($phase -cnotin @('entry', 'encoding-new', 'encoding-created', 'encoding-input', 'encoding-output', 'startup', 'bootstrap', 'worker-bootstrap', 'guardian-deadline', 'native-job', 'native-timer', 'worker-start', 'worker-assign', 'compiler-private', 'compiler-identity', 'compiler-path', 'compiler-security', 'compiler-parents', 'compiler-directory', 'compiler-receipt', 'compile', 'request', 'native-op', 'cleanup', 'worker-exit', 'helper-exit')) { throw 'Unavailable' }
     if ($phase -cnotin @('worker-exit', 'helper-exit')) { $script:loomProtectionPhase = $phase }
     try {
         [Console]::Error.WriteLine('LSP1:' + $phase + ':' + $code.ToString([Globalization.CultureInfo]::InvariantCulture))
@@ -35,6 +35,7 @@ $succeeded = $false
 try {
     Write-LoomProtectionPhase $(if ($CleanupCompilation) { 'cleanup' } else { 'compiler-private' })
     if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { throw 'Unavailable' }
+    Write-LoomProtectionPhase 'compiler-identity'
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 
     function Pin-Directory([string]$directory, [bool]$private, [bool]$allowMissing = $false) {
@@ -90,11 +91,13 @@ try {
         }
     }
 
+    Write-LoomProtectionPhase 'compiler-path'
     $compilerBase = [IO.Path]::GetFullPath($env:LOOM_PRIVATE_COMPILER_BASE)
     $compilationId = $env:LOOM_PRIVATE_COMPILATION_ID
     if ($compilationId -notmatch '^[0-9a-f]{32}$') { throw 'Unavailable' }
     $root = [IO.Path]::GetPathRoot($compilerBase)
     if ($root -notmatch '^[A-Za-z]:\\$') { throw 'Unavailable' }
+    Write-LoomProtectionPhase 'compiler-security'
     $security = [System.Security.AccessControl.DirectorySecurity]::new()
     $security.SetOwner($sid)
     $security.SetAccessRuleProtection($true, $false)
@@ -104,6 +107,7 @@ try {
     $security.AddAccessRule(([System.Security.AccessControl.FileSystemAccessRule]::new($sid,
         [System.Security.AccessControl.FileSystemRights]::FullControl, $inherit,
         [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)))
+    Write-LoomProtectionPhase 'compiler-parents'
     [void](Pin-Directory $root $false)
     $current = $root
     $missing = $false
@@ -131,10 +135,12 @@ try {
         $succeeded = $true
         $result = $null
     } else {
+    Write-LoomProtectionPhase 'compiler-directory'
     New-PrivateDirectory $candidate $false
     $compileDirectory = $candidate
     $compilerHandleStart = $held.Count
     [void](Pin-Directory $compileDirectory $true)
+    Write-LoomProtectionPhase 'compiler-receipt'
     [IO.File]::WriteAllText([IO.Path]::Combine($compileDirectory, 'created'), ('loom-compiler-v1:' + $compilationId))
 
     $result = & $Operation $compileDirectory

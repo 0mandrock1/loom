@@ -73,7 +73,7 @@ function Receive-LoomWorkerPhases($state, [bool]$finish = $false) {
         catch { $state.Unexpected = $true; $state.Pending = $null; break }
         if ($null -eq $line) { $state.Pending = $null; break }
         $code = 0
-        if ($line -cmatch '^LSP1:(entry|encoding-new|encoding-created|encoding-input|encoding-output|startup|bootstrap|worker-bootstrap|guardian-deadline|native-job|native-timer|worker-start|worker-assign|compiler-private|compile|request|native-op|cleanup|worker-exit|helper-exit):(-?[0-9]{1,10})$' -and [int]::TryParse($Matches[2], [ref]$code)) {
+        if ($line -cmatch '^LSP1:(entry|encoding-new|encoding-created|encoding-input|encoding-output|startup|bootstrap|worker-bootstrap|guardian-deadline|native-job|native-timer|worker-start|worker-assign|compiler-private|compiler-identity|compiler-path|compiler-security|compiler-parents|compiler-directory|compiler-receipt|compile|request|native-op|cleanup|worker-exit|helper-exit):(-?[0-9]{1,10})$' -and [int]::TryParse($Matches[2], [ref]$code)) {
             Write-LoomProtectionPhase $Matches[1] $code
             if ($code -ne 0) { $state.Failed = $true }
         } else { $state.Unexpected = $true }

@@ -31,10 +31,10 @@ function home() {
   return { directory, base: path.join(directory, ".loom", "session-protection", "v1") };
 }
 
-function keyFor(value = identity) {
+function keyFor(value = identity, host = "codex") {
   return crypto
     .createHash("sha256")
-    .update(JSON.stringify(["codex", value]))
+    .update(JSON.stringify([host, value]))
     .digest("hex");
 }
 
@@ -70,12 +70,12 @@ function entryOptions(directory) {
   };
 }
 
-function entryArguments(source) {
-  return ["--input-type=module", "-e", source, "startup-entry.mjs", "SessionStart", "codex"];
+function entryArguments(source, host = "codex") {
+  return ["--input-type=module", "-e", source, "startup-entry.mjs", "SessionStart", host];
 }
 
-function runEntry(directory, name, input = event) {
-  const result = spawnSync(process.execPath, entryArguments(entrySource(directory, name)), {
+function runEntry(directory, name, input = event, host = "codex") {
+  const result = spawnSync(process.execPath, entryArguments(entrySource(directory, name), host), {
     ...entryOptions(directory),
     input: JSON.stringify(input),
   });
@@ -84,8 +84,8 @@ function runEntry(directory, name, input = event) {
   assert.equal(result.stderr, "");
 }
 
-function startEntry(directory, name, before = "") {
-  const child = spawn(process.execPath, entryArguments(entrySource(directory, name, before)), {
+function startEntry(directory, name, before = "", host = "codex") {
+  const child = spawn(process.execPath, entryArguments(entrySource(directory, name, before), host), {
     ...entryOptions(directory),
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -156,86 +156,92 @@ afterEach(async () => {
   owned.clear();
 });
 
-test("a Codex startup hook establishes before its main and request without a factory", () => {
-  const { directory, base } = home();
-  assert.equal(fs.existsSync(base), false);
-  runEntry(directory, "startup");
-  const root = readMain(directory, "startup");
-  assert.deepEqual(findProtectionAlias("codex", identity, { base }), root);
-  assert.equal(sessionIsProtected(root), false);
-  assert.deepEqual(roots(base), [root.id]);
-  assert.deepEqual(
-    fs.readdirSync(path.join(base, "aliases")).sort(),
-    process.platform === "win32" ? [keyFor() + ".json"] : [keyFor() + ".claim", keyFor() + ".json"],
-  );
-  if (process.platform !== "win32") {
-    const marker = fs.lstatSync(path.join(base, "aliases", keyFor() + ".claim"));
-    assert.equal(marker.isFile(), true);
-    assert.equal(marker.size, 0);
-    assert.equal(marker.mode & 0o077, 0);
-  }
-});
-
-test("concurrent actual startup hook entries establish the same immutable family", async () => {
-  const { directory, base } = home();
-  const entries = [startEntry(directory, "session-start"), startEntry(directory, "run")];
-  await Promise.all(entries.map((entry) => entry.marker("READY\n")));
-  for (const entry of entries) entry.child.stdin.end(JSON.stringify(event));
-  for (const result of await Promise.all(entries.map((entry) => entry.closed))) {
-    assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stderr, "");
-  }
-  const first = readMain(directory, "session-start");
-  assert.deepEqual(readMain(directory, "run"), first);
-  assert.deepEqual(roots(base), [first.id]);
-  assert.deepEqual(findProtectionAlias("codex", identity, { base }), first);
-});
-
-test("startup never resets an existing protected alias or creates another root", () => {
-  const { directory, base } = home();
-  runEntry(directory, "first");
-  const root = readMain(directory, "first");
-  protectSession(root);
-  const state = fs.readFileSync(path.join(base, root.id, "state"));
-  runEntry(directory, "again");
-  assert.equal(fs.existsSync(path.join(directory, "again.main")), false);
-  assert.equal(fs.existsSync(path.join(directory, "again.sends")), false);
-  assert.deepEqual(findProtectionAlias("codex", identity, { base }), root);
-  assert.deepEqual(fs.readFileSync(path.join(base, root.id, "state")), state);
-  assert.deepEqual(roots(base), [root.id]);
-});
-
-for (const [name, input, options] of [
-  ...["resume", "fork", "clear", "compact"].map((source) => [source, { ...event, source }, {}]),
-  ["missing payload event", { session_id: identity, source: "startup" }, {}],
-  ["mismatched payload event", { ...event, hook_event_name: "Stop" }, {}],
-  ["missing source", { session_id: identity, hook_event_name: "SessionStart" }, {}],
-  ["subagent", { ...event, hook_event_name: "SubagentStart" }, { event: "SubagentStart" }],
-  ["other hook", event, { event: "UserPromptSubmit" }],
-  ["other host", event, { host: "claude-code" }],
-  ["task host", event, { host: "cline" }],
-]) {
-  test(`unknown ${name} cannot bootstrap`, () => {
-    const { base } = home();
-    assert.throws(
-      () => bindHookProtection(input, { host: "codex", event: "SessionStart", base, ...options }),
-      SessionProtectionUnavailable,
-    );
+for (const host of ["codex", "claude-code"]) {
+  test(`${host} startup establishes before its main and request without a factory`, () => {
+    const { directory, base } = home();
     assert.equal(fs.existsSync(base), false);
+    runEntry(directory, "startup", event, host);
+    const root = readMain(directory, "startup");
+    assert.deepEqual(findProtectionAlias(host, identity, { base }), root);
+    assert.equal(sessionIsProtected(root), false);
+    assert.deepEqual(roots(base), [root.id]);
+    assert.deepEqual(
+      fs.readdirSync(path.join(base, "aliases")).sort(),
+      process.platform === "win32"
+        ? [keyFor(identity, host) + ".json"]
+        : [keyFor(identity, host) + ".claim", keyFor(identity, host) + ".json"],
+    );
+    if (process.platform !== "win32") {
+      const marker = fs.lstatSync(path.join(base, "aliases", keyFor(identity, host) + ".claim"));
+      assert.equal(marker.isFile(), true);
+      assert.equal(marker.size, 0);
+      assert.equal(marker.mode & 0o077, 0);
+    }
+  });
+
+  test(`${host} concurrent startup entries establish the same immutable family`, async () => {
+    const { directory, base } = home();
+    const entries = [startEntry(directory, "session-start", "", host), startEntry(directory, "run", "", host)];
+    await Promise.all(entries.map((entry) => entry.marker("READY\n")));
+    for (const entry of entries) entry.child.stdin.end(JSON.stringify(event));
+    for (const result of await Promise.all(entries.map((entry) => entry.closed))) {
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stderr, "");
+    }
+    const first = readMain(directory, "session-start");
+    assert.deepEqual(readMain(directory, "run"), first);
+    assert.deepEqual(roots(base), [first.id]);
+    assert.deepEqual(findProtectionAlias(host, identity, { base }), first);
+  });
+
+  test(`${host} startup never resets a protected alias or creates another root`, () => {
+    const { directory, base } = home();
+    runEntry(directory, "first", event, host);
+    const root = readMain(directory, "first");
+    protectSession(root);
+    const state = fs.readFileSync(path.join(base, root.id, "state"));
+    runEntry(directory, "again", event, host);
+    assert.equal(fs.existsSync(path.join(directory, "again.main")), false);
+    assert.equal(fs.existsSync(path.join(directory, "again.sends")), false);
+    assert.deepEqual(findProtectionAlias(host, identity, { base }), root);
+    assert.deepEqual(fs.readFileSync(path.join(base, root.id, "state")), state);
+    assert.deepEqual(roots(base), [root.id]);
   });
 }
 
-test("startup cannot replace other contributing roots with a fresh family", () => {
-  const { base } = home();
-  const known = createProtectionRoot({ base });
-  assert.throws(
-    () => bindHookProtection(event, { host: "codex", event: "SessionStart", base, knownRoots: [known] }),
-    SessionProtectionUnavailable,
-  );
-  assert.equal(sessionIsProtected(known), true);
-  assert.equal(findProtectionAlias("codex", identity, { base }), undefined);
-  assert.deepEqual(roots(base), [known.id]);
-});
+for (const host of ["codex", "claude-code"]) {
+  for (const [name, input, options] of [
+    ...["resume", "fork", "clear", "compact"].map((source) => [source, { ...event, source }, {}]),
+    ["missing payload event", { session_id: identity, source: "startup" }, {}],
+    ["mismatched payload event", { ...event, hook_event_name: "Stop" }, {}],
+    ["missing source", { session_id: identity, hook_event_name: "SessionStart" }, {}],
+    ["subagent", { ...event, hook_event_name: "SubagentStart" }, { event: "SubagentStart" }],
+    ["other hook", event, { event: "UserPromptSubmit" }],
+    ["unsupported host", event, { host: "unsupported" }],
+    ["task host", event, { host: "cline" }],
+  ]) {
+    test(`${host} unknown ${name} cannot bootstrap`, () => {
+      const { base } = home();
+      assert.throws(
+        () => bindHookProtection(input, { host, event: "SessionStart", base, ...options }),
+        SessionProtectionUnavailable,
+      );
+      assert.equal(fs.existsSync(base), false);
+    });
+  }
+
+  test(`${host} startup cannot replace other contributing roots with a fresh family`, () => {
+    const { base } = home();
+    const known = createProtectionRoot({ base });
+    assert.throws(
+      () => bindHookProtection(event, { host, event: "SessionStart", base, knownRoots: [known] }),
+      SessionProtectionUnavailable,
+    );
+    assert.equal(sessionIsProtected(known), true);
+    assert.equal(findProtectionAlias(host, identity, { base }), undefined);
+    assert.deepEqual(roots(base), [known.id]);
+  });
+}
 
 for (const damage of ["alias", "manifest"]) {
   test(`a damaged ${damage} is not repaired by startup`, () => {

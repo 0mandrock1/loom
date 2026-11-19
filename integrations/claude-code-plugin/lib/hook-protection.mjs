@@ -1,4 +1,4 @@
-// Codex declares a new root; all inherited or passive hooks resolve known state.
+// Native startup declares a root; inherited and passive hooks resolve known state.
 import {
   establishProtectionAlias,
   findProtectionAlias,
@@ -21,7 +21,7 @@ function refuse(roots) {
   throw new SessionProtectionUnavailable();
 }
 
-/** Only a verified Codex startup establishes its first application-owned anchor. */
+/** Only an explicit native startup establishes its first application-owned anchor. */
 export function bindHookProtection(payload, { host, event, base, knownRoots = [] } = {}) {
   const roots = [...knownRoots];
   try {
@@ -38,7 +38,7 @@ export function bindHookProtection(payload, { host, event, base, knownRoots = []
     // Resolve this anchor even when another known contributor is unusable.
     const startup =
       !roots.length &&
-      host === "codex" &&
+      ["claude-code", "codex"].includes(host) &&
       event === "SessionStart" &&
       payload.hook_event_name === "SessionStart" &&
       payload.source === "startup";
