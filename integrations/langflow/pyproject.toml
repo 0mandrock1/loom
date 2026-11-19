@@ -27,4 +27,11 @@ packages = ["src/lfx_loom"]
 "loom_component.py" = "lfx_loom/components/loom/loom_component.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["/src/lfx_loom", "/extension.json", "/loom_component.py", "/pyproject.toml", "/README.md", "/LICENSE"]
+include = [
+  "/src/lfx_loom",
+  "/extension.json",
+  "/loom_component.py",
+  "/pyproject.toml",
+  "/README.md",
+  "/LICENSE",
+]

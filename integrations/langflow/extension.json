@@ -5,9 +5,7 @@
   "name": "Loom",
   "description": "Save and search Loom memory and search knowledge documents.",
   "lfx": {
-    "compat": [
-      "1"
-    ]
+    "compat": ["1"]
   },
   "bundles": [
     {

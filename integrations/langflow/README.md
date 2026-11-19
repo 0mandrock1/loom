@@ -23,7 +23,7 @@ The package metadata requires `lfx==1.13.3` and `clickhouse-loom>=1.2.0,<2`.
 The hosted packaging check builds both distributions, installs the extension with
 the checkout's SDK wheel in an isolated environment, and checks manifest discovery,
 source bytes and class loading. Those checks do not invoke the component or run a
-live flow. Native loader results and a live Langflow transcript are pending.
+live flow. A live Langflow flow has not been qualified.
 
 ## Load the custom component
 
