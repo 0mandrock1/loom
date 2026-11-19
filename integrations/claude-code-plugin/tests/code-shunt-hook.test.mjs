@@ -14,7 +14,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import { cachePathFor } from "../lib/repo-scope.mjs";
-import { batchKind } from "../lib/shunt-ledger.mjs";
+import { batchKind, parseShuntBatch } from "../lib/shunt-ledger.mjs";
 import { protectSession, sessionIsProtected } from "../lib/session-protection.mjs";
 import { sessionStatePath, tmpStatePath } from "../lib/tmp-state.mjs";
 import { hostEnv } from "./host-env.mjs";
@@ -76,6 +76,66 @@ function recordFixtureEvent(observation, event, details = {}) {
 function observedFailure(error, observation) {
   error.message += `; shunt fixture observation ${JSON.stringify(observation.events)}`;
   return error;
+}
+
+function observedClaimControl(file) {
+  const unavailable = { readable: false, controlValid: null, rows: null, roots: null };
+  if (typeof process.getuid !== "function" || !fs.constants.O_NOFOLLOW || !fs.constants.O_NONBLOCK) {
+    return unavailable;
+  }
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const held = fs.fstatSync(fd);
+    if (
+      !held.isFile() ||
+      held.nlink !== 1 ||
+      held.uid !== process.getuid() ||
+      (held.mode & 0o077) !== 0 ||
+      !Number.isSafeInteger(held.size) ||
+      held.size < 0 ||
+      held.size > 65536
+    ) {
+      return unavailable;
+    }
+    const bytes = Buffer.alloc(held.size);
+    if (fs.readSync(fd, bytes, 0, bytes.length, 0) !== bytes.length) return unavailable;
+    const current = fs.fstatSync(fd);
+    if (current.size !== held.size || current.nlink !== 1) return unavailable;
+    const batch = parseShuntBatch(bytes.toString("utf8"));
+    return {
+      readable: true,
+      controlValid: Boolean(batch),
+      rows: batch?.lines ?? null,
+      roots: batch?.roots.length ?? null,
+    };
+  } catch {
+    return unavailable;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function observedRetainedClaims(tmp) {
+  const claims = [];
+  let directory;
+  let complete = false;
+  try {
+    directory = fs.opendirSync(tmp);
+    for (let scanned = 0; scanned < 64 && claims.length < 4; scanned++) {
+      const entry = directory.readSync();
+      if (!entry) {
+        complete = true;
+        break;
+      }
+      if (entry.name.startsWith("loom-shunt-protected-claim-") && entry.name.endsWith(".log.control")) {
+        claims.push(observedClaimControl(path.join(tmp, entry.name)));
+      }
+    }
+    return { limited: !complete, claims };
+  } finally {
+    if (directory) directory.closeSync();
+  }
 }
 
 function runHook(payload, { tmp, url = "http://127.0.0.1:9", env = {}, observation }) {
@@ -651,6 +711,7 @@ test("an unattributed batch in the same protected scope stays untouched while a 
             ownedClaimCount: fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-"))
               .length,
             unattributedFileExists: fs.existsSync(pendingPath(tmp, url, "unknown-producer")),
+            claimControl: observedRetainedClaims(tmp),
           });
         } catch {
           recordFixtureEvent(observation, "snapshot-unavailable");
