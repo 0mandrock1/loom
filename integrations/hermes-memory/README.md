@@ -7,10 +7,11 @@ MCP sidecar. It adds no Python dependencies.
 The implementation targets the public provider and credential APIs in Hermes
 0.23.2 and the HTTP memory API in Loom 1.2.0. Offline contract checks use doubles
 for Hermes and HTTP. Native manifest admission, isolated registration and normal
-provider loading passed against Hermes source commit
-`dff103e05878bfa321301f6ab74ce766a29f1345`; its provider base class and HTTP helper
-match release 0.23.2 byte for byte. A live Loom write/read round trip still needs
-qualification. This provider is not listed in the Hermes plugin catalog.
+provider loading passed against Hermes release 0.23.2, commit
+`ae2a81ccc00e9b7c06301523e5bb09608397149c`, on Linux AArch64 with Python 3.14.7.
+Those checks used a dummy single-user profile without live Loom operations. A
+live Loom write/read round trip still needs qualification. This provider is not
+listed in the Hermes plugin catalog.
 
 ## Tools
 
