@@ -239,6 +239,8 @@ function Invoke-LoomRecordOperation([Reflection.Assembly]$assembly) {
 }
 
 if ($DefinitionsOnly) { return }
+$loomTerminalReady = $false
+$loomTerminalExitAttempted = $false
 try {
     Write-LoomProtectionPhase 'startup'
     if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { throw 'Unavailable' }
@@ -255,6 +257,7 @@ try {
             param($compilerNative, $compilerJob, $compilerDeadline, $directory)
             Invoke-LoomCompileRecords $compilerNative $compilerJob $compilerDeadline $directory
         }
+        $loomTerminalReady = $true
         # Compilation descendants and owned files are already gone. Preserve
         # the original earlier native-operation cutoff on this same self-job.
         Start-LoomNativeTimer $native 'StopJob' $compiled.Guardian.Job ($compiled.Guardian.Deadline - 150)
@@ -263,10 +266,26 @@ try {
     }
     Write-LoomProtectionPhase 'helper-exit' 0
     if ($script:loomProtectionDiagnosticFailed) { throw 'Unavailable' }
+    if ($loomTerminalReady) {
+        $loomTerminalExitAttempted = $true
+        [Console]::Out.Flush()
+        [Console]::Error.Flush()
+        [void]$native::TerminateProcess($native::GetCurrentProcess(), [uint32]0)
+        # Exact-self termination must not return, including a false API result.
+        throw 'Unavailable'
+    }
     exit 0
 } catch {
     Write-LoomProtectionPhase $script:loomProtectionPhase ([int]$_.Exception.HResult)
     Write-LoomProtectionPhase 'helper-exit' 1
     [Console]::Out.Write('{"ok":false}')
+    if ($loomTerminalReady -and -not $loomTerminalExitAttempted) {
+        $loomTerminalExitAttempted = $true
+        try {
+            [Console]::Out.Flush()
+            [Console]::Error.Flush()
+            [void]$native::TerminateProcess($native::GetCurrentProcess(), [uint32]1)
+        } catch { } # Terminal failure remains failure under the existing watchdogs.
+    }
     exit 1
 }
