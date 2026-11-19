@@ -3106,11 +3106,10 @@ settings:
   # `?schema_profile=`. [restart]
   # mcp_schema_profile: "standard"
 
-  # Ops whose tools/list entry carries `_meta: {"anthropic/alwaysLoad": true}`, so a
-  # host that defers MCP tools behind tool search lists these up front and an agent
-  # calls them on its first turn instead of spending a turn loading them.
-  # Comma-separated op names; empty = none. [restart]
-  # mcp_always_load_tools: "code.search,code.symbol"
+  # Comma-separated ops whose MCP descriptors request eager loading with
+  # anthropic/alwaysLoad. Empty leaves loading to the host; set names to keep selected
+  # tools upfront. [restart]
+  # mcp_always_load_tools: ""
 
   # Seconds without a tool call after which the mcp_session_run_sweep worker closes an
   # MCP session's implicit run (one per token and `Mcp-Session-Id`, begun on the first
