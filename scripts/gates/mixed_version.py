@@ -344,17 +344,47 @@ class Server:
         observation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         started = time.perf_counter() if observation is not None else 0.0
+        if observation is not None:
+            observation["started_unix_ns"] = time.time_ns()
+            observation["started_monotonic_s"] = started
         try:
-            r = httpx.post(
-                f"{self.url}/v1/{op}",
-                json=body,
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=60,
-            )
+            if observation is None:
+                r = httpx.post(
+                    f"{self.url}/v1/{op}",
+                    json=body,
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=60,
+                )
+            else:
+                connection: dict[str, float] = {}
+                observation["connection_events_ms"] = connection
+
+                def trace(name: str, _info: dict[str, Any]) -> None:
+                    if name in (
+                        "connection.connect_tcp.started",
+                        "connection.connect_tcp.complete",
+                        "connection.connect_tcp.failed",
+                        "http11.send_request_body.complete",
+                        "http11.receive_response_headers.complete",
+                    ):
+                        connection[name] = (time.perf_counter() - started) * 1000
+
+                setup = time.perf_counter()
+                # Match httpx.post: a fresh default client, closed inside elapsed_ms.
+                with httpx.Client(timeout=60) as client:
+                    observation["client_setup_ms"] = (time.perf_counter() - setup) * 1000
+                    r = client.post(
+                        f"{self.url}/v1/{op}",
+                        json=body,
+                        headers={"Authorization": f"Bearer {token}"},
+                        extensions={"trace": trace},
+                    )
         except httpx.HTTPError as exc:
             if observation is not None:
                 observation.update(
-                    elapsed_ms=(time.perf_counter() - started) * 1000, error=type(exc).__name__
+                    elapsed_ms=(time.perf_counter() - started) * 1000,
+                    error=type(exc).__name__,
+                    finished_unix_ns=time.time_ns(),
                 )
             raise
         if observation is not None:
@@ -362,7 +392,20 @@ class Server:
                 elapsed_ms=(time.perf_counter() - started) * 1000,
                 status=r.status_code,
                 error="" if r.status_code == 200 else f"{r.status_code}:{_error_code(r)}",
+                finished_unix_ns=time.time_ns(),
             )
+            try:
+                observation["httpx_elapsed_ms"] = r.elapsed.total_seconds() * 1000
+                request_id = r.headers.get("X-Request-Id", "")
+                if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", request_id):
+                    observation["request_id"] = request_id
+                for name, duration in re.findall(
+                    r"(?:^|,\s*)(app|ch);dur=([0-9]+(?:\.[0-9]+)?)",
+                    r.headers.get("Server-Timing", ""),
+                ):
+                    observation[f"server_{name}_ms"] = float(duration)
+            except Exception as error:  # noqa: BLE001 — timing metadata cannot change the response
+                observation["timing_error"] = type(error).__name__
         if r.status_code != 200:
             raise AssertionError(f"{self.name} {op}: {r.status_code} {r.text[:400]}")
         return dict(r.json())
@@ -642,6 +685,7 @@ class Scenario:
                     arm[0].stop()
                 finally:
                     arm[1].stop()
+                timing_evidence = self.latency_timing_evidence(samples, fixtures)
                 print(
                     "latency-acceptance "
                     + json.dumps(
@@ -686,6 +730,8 @@ class Scenario:
                                 for role in ("main", "light")
                             },
                             "attempts": samples,
+                            "timing_evidence": timing_evidence,
+                            "ack_to_first_search_samples_ms": visibility,
                             "normal_load_errors": {
                                 "attempted": len(samples),
                                 "errors": {
@@ -721,6 +767,63 @@ class Scenario:
                     ),
                     flush=True,
                 )
+
+    def latency_timing_evidence(
+        self, samples: list[dict[str, Any]], fixtures: list[Any]
+    ) -> dict[str, Any]:
+        """Read bounded timing witnesses after the measured server groups stop."""
+        timing_evidence: dict[str, Any] = {}
+        try:
+            ids = list(dict.fromkeys(s["request_id"] for s in samples if s.get("request_id")))
+            timing_evidence["request_count"] = len(ids)
+            if len(ids) > 120:
+                timing_evidence["error"] = "request_limit"
+            elif ids:
+                params = {
+                    "ids": "[" + ", ".join(map(sql_string, ids)) + "]",
+                    "orgs": "[" + ", ".join(sql_string(f[1]["org"]) for f in fixtures) + "]",
+                }
+                bounds = {
+                    "max_execution_time": 5,
+                    "max_rows_to_read": 1_000_000,
+                    "max_memory_usage": 64_000_000,
+                    "max_result_rows": 121,
+                    "result_overflow_mode": "throw",
+                }
+                sql(self.ch_port, "SYSTEM FLUSH LOGS", settings=bounds)
+                statements = {
+                    "requests": (
+                        "SELECT request_id, operation, toString(ts) AS emitted_at, "
+                        "latency_ms, instance, instance_label, build_commit, "
+                        "args['out_ch_elapsed_ms'] AS ch_elapsed_ms, "
+                        "args['out_ch_statements'] AS ch_statements "
+                        "FROM loom.agent_events WHERE kind = 'request' "
+                        "AND org IN {orgs:Array(String)} AND namespace = 'latency' "
+                        "AND request_id IN {ids:Array(String)} "
+                        "ORDER BY request_id LIMIT 121 FORMAT JSONEachRow"
+                    ),
+                    "native": (
+                        "SELECT splitByChar(' ', log_comment)[2] AS request_id, "
+                        "count() AS statements, "
+                        "toString(min(query_start_time_microseconds)) AS first_start, "
+                        "toString(max(event_time_microseconds)) AS last_end, "
+                        "sum(query_duration_ms) AS summed_ms, max(query_duration_ms) AS max_ms, "
+                        "argMax(query_id, query_duration_ms) AS slowest_query_id, "
+                        "sum(read_rows) AS read_rows, sum(read_bytes) AS read_bytes, "
+                        "max(memory_usage) AS max_memory_bytes "
+                        "FROM system.query_log WHERE is_initial_query "
+                        "AND type IN ('QueryFinish', 'ExceptionBeforeStart', "
+                        "'ExceptionWhileProcessing') "
+                        "AND request_id IN {ids:Array(String)} "
+                        "GROUP BY request_id ORDER BY request_id LIMIT 121 FORMAT JSONEachRow"
+                    ),
+                }
+                for name, statement in statements.items():
+                    raw = sql(self.ch_port, statement, params, bounds)
+                    timing_evidence[name] = [json.loads(line) for line in raw.splitlines()]
+        except Exception as error:  # noqa: BLE001 — evidence cannot replace a workload failure
+            timing_evidence["error"] = type(error).__name__
+        return timing_evidence
 
     def latency_workers(self, srv: Server) -> dict[str, Any]:
         assert srv.proc is not None and srv.web_workers == 2 and srv.workers == "off"
