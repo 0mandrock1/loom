@@ -74,8 +74,9 @@ successful lookup is not a measurement of task accuracy or cost savings. See
 
 ## Check one caller and its impact
 
-Use the same indexed repository and choose a function with one direct caller you can
-identify in source. Its language needs call edges
+This check is independent of the fast-tier definition check above: the caller may come
+from either the fast tier or a compiler tier. Use an indexed repository and choose a
+function with one direct caller you can identify in source. Its language needs call edges
 ([language support](../features/code-index/overview.md#language-support)). Replace the
 placeholders below with your organization, indexed namespace and qualified function name.
 
@@ -94,10 +95,15 @@ placeholders below with your organization, indexed namespace and qualified funct
        "name": "<qualified function name>",
        "depth": 1,
        "max_nodes": 20,
-       "include_ambiguous": false
+       "include_ambiguous": false,
+       "explain": true
      }
    }
    ```
+
+   The inner `arguments.explain: true` requests the full code-op result instead of the
+   compact MCP shape, which can omit fields needed for these checks. It does not change graph
+   coverage or freshness.
 
    Check a returned `edges` row's `from_symbol`, `path`, `line`, `edge_kind`, `tier`
    and `confidence`. Verify that the source at that tier's recorded commit contains
@@ -105,7 +111,7 @@ placeholders below with your organization, indexed namespace and qualified funct
    `ambiguous` is true, choose the intended qualified name from `candidates` first.
 
 3. Call `loom_op` again with `op: "code.impact"` and
-   `arguments: {"org": "<org>", "namespace": "<indexed namespace>", "name": "<qualified function name>", "depth": 1, "per_hop_limit": 20}`.
+   `arguments: {"org": "<org>", "namespace": "<indexed namespace>", "name": "<qualified function name>", "depth": 1, "per_hop_limit": 20, "explain": true}`.
    Look for the checked caller in `impacted_symbols`: `qualified_name`, `path`,
    `hop: 1` and `tier`. This request resolves the supplied name; `files` would
    seed every function in those files. `impacted_tests` lists mapped tests;
