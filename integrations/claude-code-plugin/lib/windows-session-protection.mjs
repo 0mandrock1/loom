@@ -34,6 +34,8 @@ const phases = new Set([
   "compiler-parents",
   "compiler-directory",
   "compiler-receipt",
+  "compiler-environment",
+  "compiler-launch",
   "compile",
   "request",
   "native-op",

@@ -63,6 +63,8 @@ function nativePhaseTrail(child) {
     "compiler-parents",
     "compiler-directory",
     "compiler-receipt",
+    "compiler-environment",
+    "compiler-launch",
     "compile",
     "request",
     "native-op",

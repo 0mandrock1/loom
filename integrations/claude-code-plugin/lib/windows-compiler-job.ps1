@@ -67,6 +67,27 @@ function New-LoomCompilerJob([type]$native) {
     } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($limits) }
 }
 
+# Compiler output stays inside the exclusive invocation directory. Only fixed
+# numeric compiler IDs can leave this function, never text or file paths.
+function Write-LoomCompilerCodes([string]$file) {
+    $stream = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        $bytes = [byte[]]::new(8192)
+        $count = $stream.Read($bytes, 0, $bytes.Length)
+        $text = [Text.Encoding]::ASCII.GetString($bytes, 0, $count)
+        $pattern = '^(?:[^\r\n]{1,2048}\([0-9]{1,6}(?:,[0-9]{1,6})?\): )?(?:error|warning) CS([0-9]{4}):'
+        $codes = [Collections.Generic.HashSet[int]]::new()
+        foreach ($line in $text.Split([char]10)) {
+            $match = [Text.RegularExpressions.Regex]::Match($line, $pattern)
+            if ($match.Success) {
+                $code = [int]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+                if ($codes.Add($code)) { Write-LoomProtectionPhase 'compile' $code }
+                if ($codes.Count -ge 4) { break }
+            }
+        }
+    } finally { $stream.Dispose() }
+}
+
 # All callers supply fixed plugin/test arguments. Session JSON never selects
 # the application, command line, environment, working directory or source.
 function Invoke-LoomCompilerProcess([type]$native, [IntPtr]$job, [long]$deadline,
@@ -75,8 +96,9 @@ function Invoke-LoomCompilerProcess([type]$native, [IntPtr]$job, [long]$deadline
     if ($application.Contains('"')) { throw 'Unavailable' }
     $command = [Text.StringBuilder]::new('"' + $application + '" ' + $arguments)
     $attributeList = $startup = $information = $handleList = $security = $environment = [IntPtr]::Zero
-    $nul = $process = $thread = [IntPtr]::Zero
+    $nul = $compilerLog = $process = $thread = [IntPtr]::Zero
     $attributesInitialized = $false
+    $compilerLogPath = [IO.Path]::Combine($directory, 'compiler-output.log')
     try {
         $pointerSize = [IntPtr]::Size
         $startupSize = if ($pointerSize -eq 8) { 104 } else { 68 }
@@ -93,7 +115,10 @@ function Invoke-LoomCompilerProcess([type]$native, [IntPtr]$job, [long]$deadline
         [Runtime.InteropServices.Marshal]::WriteInt32($security, $(if ($pointerSize -eq 8) { 16 } else { 8 }), 1)
         $nul = $native::CreateFileW('NUL', [uint32]3221225472, 3, $security, 3, 0, [IntPtr]::Zero)
         if ($nul.ToInt64() -eq -1) { $nul = [IntPtr]::Zero; throw 'Unavailable' }
-        # STARTUPINFOEX allows ONLY this harmless standard-I/O handle through.
+        # CREATE_NEW under the pinned owner-only invocation directory.
+        $compilerLog = $native::CreateFileW($compilerLogPath, [uint32]3221225472, 0, $security, 1, 0x80, [IntPtr]::Zero)
+        if ($compilerLog.ToInt64() -eq -1) { $compilerLog = [IntPtr]::Zero; throw 'Unavailable' }
+        # Only stdin NUL and private compiler output are inherited.
         # Job and pinned-directory handles remain noninherited.
         $size = [IntPtr]::Zero
         $initialized = $native::InitializeProcThreadAttributeList([IntPtr]::Zero, 1, 0, [ref]$size)
@@ -102,21 +127,34 @@ function Invoke-LoomCompilerProcess([type]$native, [IntPtr]$job, [long]$deadline
         $attributeList = [Runtime.InteropServices.Marshal]::AllocHGlobal($size)
         if (-not $native::InitializeProcThreadAttributeList($attributeList, 1, 0, [ref]$size)) { throw 'Unavailable' }
         $attributesInitialized = $true
-        $handleList = [Runtime.InteropServices.Marshal]::AllocHGlobal($pointerSize)
-        [Runtime.InteropServices.Marshal]::WriteIntPtr($handleList, $nul)
+        $handleList = [Runtime.InteropServices.Marshal]::AllocHGlobal(2 * $pointerSize)
+        [Runtime.InteropServices.Marshal]::WriteIntPtr($handleList, 0, $nul)
+        [Runtime.InteropServices.Marshal]::WriteIntPtr($handleList, $pointerSize, $compilerLog)
         if (-not $native::UpdateProcThreadAttribute($attributeList, 0, [IntPtr]0x20002,
-            $handleList, [IntPtr]$pointerSize, [IntPtr]::Zero, [IntPtr]::Zero)) { throw 'Unavailable' }
+            $handleList, [IntPtr](2 * $pointerSize), [IntPtr]::Zero, [IntPtr]::Zero)) { throw 'Unavailable' }
         [Runtime.InteropServices.Marshal]::WriteIntPtr($startup, $startupSize, $attributeList)
         [Runtime.InteropServices.Marshal]::WriteInt32($startup, $(if ($pointerSize -eq 8) { 60 } else { 44 }), 0x100)
         $standardOffset = if ($pointerSize -eq 8) { 80 } else { 56 }
-        for ($i = 0; $i -lt 3; $i++) { [Runtime.InteropServices.Marshal]::WriteIntPtr($startup, $standardOffset + $i * $pointerSize, $nul) }
+        [Runtime.InteropServices.Marshal]::WriteIntPtr($startup, $standardOffset, $nul)
+        [Runtime.InteropServices.Marshal]::WriteIntPtr($startup, $standardOffset + $pointerSize, $compilerLog)
+        [Runtime.InteropServices.Marshal]::WriteIntPtr($startup, $standardOffset + 2 * $pointerSize, $compilerLog)
+        Write-LoomProtectionPhase 'compiler-environment'
         $variables = [Environment]::GetEnvironmentVariables()
         $variables['TEMP'] = $directory
         $variables['TMP'] = $directory
-        $entries = @($variables.Keys | Sort-Object | ForEach-Object { [string]$_ + '=' + [string]$variables[$_] })
+        # Win32 requires case-insensitive Unicode ordering without locale.
+        $names = [string[]]::new($variables.Count)
+        $index = 0
+        foreach ($name in $variables.Keys) { $names[$index++] = [string]$name }
+        [Array]::Sort($names, [StringComparer]::OrdinalIgnoreCase)
+        $entries = [string[]]::new($names.Length)
+        for ($index = 0; $index -lt $names.Length; $index++) {
+            $entries[$index] = $names[$index] + '=' + [string]$variables[$names[$index]]
+        }
         $environment = [Runtime.InteropServices.Marshal]::StringToHGlobalUni(($entries -join "`0") + "`0`0")
         if ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -ge $deadline) { throw 'Unavailable' }
         Write-LoomProtectionPhase 'worker-start'
+        Write-LoomProtectionPhase 'compiler-launch'
         # CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT |
         # EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW. Never BREAKAWAY.
         if (-not $native::CreateProcessW($application, $command, [IntPtr]::Zero, [IntPtr]::Zero,
@@ -139,7 +177,15 @@ function Invoke-LoomCompilerProcess([type]$native, [IntPtr]$job, [long]$deadline
         if (-not $native::GetExitCodeProcess($process, [ref]$exitCode)) { throw 'Unavailable' }
         if ($exitCode -gt [int]::MaxValue) { Write-LoomProtectionPhase 'worker-exit' -1 }
         else { Write-LoomProtectionPhase 'worker-exit' ([int]$exitCode) }
-        if ($exitCode -ne 0) { throw 'Unavailable' }
+        if ($exitCode -ne 0) {
+            # Read no output until the exact compiler has exited AND every
+            # descendant is stopped, including after a native deadline exit.
+            Stop-LoomCompilerJob $native $job
+            if (-not $native::CloseHandle($compilerLog)) { throw 'Unavailable' }
+            $compilerLog = [IntPtr]::Zero
+            Write-LoomCompilerCodes $compilerLogPath
+            throw 'Unavailable'
+        }
     } finally {
         if ($process -ne [IntPtr]::Zero) {
             if ($native::WaitForSingleObject($process, 0) -ne 0) {
@@ -155,6 +201,7 @@ function Invoke-LoomCompilerProcess([type]$native, [IntPtr]$job, [long]$deadline
         foreach ($allocation in @($environment, $handleList, $attributeList, $information, $startup, $security)) {
             if ($allocation -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::FreeHGlobal($allocation) }
         }
+        if ($compilerLog -ne [IntPtr]::Zero) { [void]$native::CloseHandle($compilerLog) }
         if ($nul -ne [IntPtr]::Zero) { [void]$native::CloseHandle($nul) }
     }
 }
