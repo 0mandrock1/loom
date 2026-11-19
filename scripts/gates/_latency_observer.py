@@ -28,7 +28,12 @@ _STAGES = (
     ("_run_handler", "handler"),
     ("_finish_success", "finish"),
 )
-_PATHS = {"http_sha256": "server/transport/http.py", "main_sha256": "server/main.py"}
+_TAIL_STAGES = (("settle", "tail_settle"), ("_publication_barrier", "tail_publication"))
+_PATHS = {
+    "http_sha256": "server/transport/http.py",
+    "main_sha256": "server/main.py",
+    "request_tail_sha256": "server/core/request_tail.py",
+}
 _FIELDS = {
     "pid",
     "asgi_unix_ns",
@@ -36,7 +41,11 @@ _FIELDS = {
     "body_delivered_ms",
     "response_start_ms",
     "endpoint_start_ms",
-    *(name + suffix for _, name in _STAGES for suffix in ("_start_ms", "_duration_ms")),
+    *(
+        name + suffix
+        for _, name in (*_STAGES, *_TAIL_STAGES)
+        for suffix in ("_start_ms", "_duration_ms")
+    ),
 }
 _current: ContextVar[dict[str, Any] | None] = ContextVar("mixed_latency_stages", default=None)
 
@@ -49,6 +58,7 @@ def source_hashes(tree: Path) -> dict[str, str]:
 
 def _timed(name: str, function: Any) -> Any:
     def finish(record: dict[str, Any], started: float) -> None:
+        # The last completed call wins; an outer call finishes after its nested calls.
         record[name + "_start_ms"] = (started - record["asgi_monotonic_s"]) * 1000
         record[name + "_duration_ms"] = (time.perf_counter() - started) * 1000
         if name == "bind":
@@ -108,6 +118,8 @@ class _ObservedApp:
 
         async def sent(message: Any) -> None:
             if message["type"] == "http.response.start":
+                # This snapshot includes completed pre-header tail calls only. Later
+                # body publication checks and final cleanup cannot update this header.
                 record["response_start_ms"] = (
                     time.perf_counter() - record["asgi_monotonic_s"]
                 ) * 1000
@@ -140,18 +152,23 @@ def create_app() -> _ObservedApp:
         ("server", "server/__init__.py"),
         ("server.transport.http", _PATHS["http_sha256"]),
         ("server.main", _PATHS["main_sha256"]),
+        ("server.core.request_tail", _PATHS["request_tail_sha256"]),
     ):
         spec = find_spec(module)
         if spec is None or spec.origin is None or Path(spec.origin).resolve() != tree / relative:
             raise RuntimeError("latency observer resolved a server outside its arm")
     http, main = import_module("server.transport.http"), import_module("server.main")
+    request_tail = import_module("server.core.request_tail")
     if (
         Path(http.__file__).resolve() != tree / _PATHS["http_sha256"]
         or Path(main.__file__).resolve() != tree / _PATHS["main_sha256"]
+        or Path(request_tail.__file__).resolve() != tree / _PATHS["request_tail_sha256"]
     ):
         raise RuntimeError("latency observer imported a server outside its arm")
     for attribute, name in _STAGES:
         setattr(http, attribute, _timed(name, getattr(http, attribute)))
+    for attribute, name in _TAIL_STAGES:
+        setattr(request_tail, attribute, _timed(name, getattr(request_tail, attribute)))
     return _ObservedApp(main.app, source_hashes(tree))
 
 

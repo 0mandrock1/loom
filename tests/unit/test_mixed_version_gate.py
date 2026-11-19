@@ -520,7 +520,11 @@ async def test_stage_asgi_metadata_is_bounded_private_and_does_not_change_respon
     clock = ManualClock(t=10)
     monkeypatch.setattr(observer.time, "perf_counter", clock.monotonic)
     monkeypatch.setattr(observer.time, "time_ns", lambda: 100)
-    sources = {"main_sha256": "a" * 64, "http_sha256": "b" * 64}
+    sources = {
+        "main_sha256": "a" * 64,
+        "http_sha256": "b" * 64,
+        "request_tail_sha256": "c" * 64,
+    }
     request = {"type": "http.request", "body": b"private argument", "more_body": False}
     body = {"type": "http.response.body", "body": b"complete private response"}
     headers = [(b"set-cookie", b"private cookie")]
@@ -562,7 +566,11 @@ def test_stage_metadata_refuses_untrusted_fields_numbers_and_sources(change):
 
     from scripts.gates import _latency_observer as observer
 
-    sources = {"main_sha256": "a" * 64, "http_sha256": "b" * 64}
+    sources = {
+        "main_sha256": "a" * 64,
+        "http_sha256": "b" * 64,
+        "request_tail_sha256": "c" * 64,
+    }
     record = {
         **sources,
         "pid": 123,
@@ -593,6 +601,7 @@ def test_stage_factory_checks_arm_origins_before_importing_server(
         "server": "server/__init__.py",
         "server.transport.http": "server/transport/http.py",
         "server.main": "server/main.py",
+        "server.core.request_tail": "server/core/request_tail.py",
     }
     for relative in paths.values():
         path = tmp_path / relative
@@ -603,6 +612,11 @@ def test_stage_factory_checks_arm_origins_before_importing_server(
         setattr(http, attribute, lambda *args, **kwargs: None)
     app = object()
     main = SimpleNamespace(__file__=str(tmp_path / paths["server.main"]), app=app)
+    request_tail = SimpleNamespace(
+        __file__=str(tmp_path / paths["server.core.request_tail"]),
+        settle=lambda *args, **kwargs: None,
+        _publication_barrier=lambda *args, **kwargs: None,
+    )
     imports, specs = [], []
 
     def find_spec(name):
@@ -615,7 +629,11 @@ def test_stage_factory_checks_arm_origins_before_importing_server(
     def import_module(name):
         assert specs == list(paths)
         imports.append(name)
-        return http if name == "server.transport.http" else main
+        return {
+            "server.transport.http": http,
+            "server.main": main,
+            "server.core.request_tail": request_tail,
+        }[name]
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(observer, "find_spec", find_spec)
@@ -627,7 +645,7 @@ def test_stage_factory_checks_arm_origins_before_importing_server(
     else:
         wrapped = observer.create_app()
         assert wrapped.app is app and wrapped.sources == observer.source_hashes(tmp_path)
-        assert imports == ["server.transport.http", "server.main"]
+        assert imports == ["server.transport.http", "server.main", "server.core.request_tail"]
 
 
 @pytest.mark.parametrize("observed", [False, True])
@@ -637,7 +655,11 @@ def test_stage_profile_keeps_exact_arm_pythonpath_and_ordinary_launch(
     from types import SimpleNamespace
 
     tree = tmp_path / "arm"
-    for relative in ("server/main.py", "server/transport/http.py"):
+    for relative in (
+        "server/main.py",
+        "server/transport/http.py",
+        "server/core/request_tail.py",
+    ):
         path = tree / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# This arm's source.\n")
@@ -717,7 +739,11 @@ def test_stage_client_metadata_does_not_change_closed_timing_or_complete_result(
     from scripts.gates import _latency_observer as observer
 
     state = latency_transport
-    sources = {"main_sha256": "a" * 64, "http_sha256": "b" * 64}
+    sources = {
+        "main_sha256": "a" * 64,
+        "http_sha256": "b" * 64,
+        "request_tail_sha256": "c" * 64,
+    }
     state.server.stage_observer = True
     state.server.stage_sources = sources
     state.response.headers[observer.HEADER] = (
@@ -820,3 +846,261 @@ def test_latency_statement_costs_keep_original_witnesses_and_bound_diagnostics(m
                 "JSONDecodeError" if mode == "parse-failure" else "RuntimeError"
             )
         assert "private backend detail" not in json.dumps(out)
+
+
+@pytest.fixture
+def tail_observer_arm(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from scripts.gates import _latency_observer as observer
+    from tests.unit.clock_fake import ManualClock
+
+    clock = ManualClock(t=10)
+    monkeypatch.setattr(observer.time, "perf_counter", clock.monotonic)
+    monkeypatch.setattr(observer.time, "time_ns", lambda: 100)
+    paths = {
+        "server": "server/__init__.py",
+        "server.transport.http": "server/transport/http.py",
+        "server.main": "server/main.py",
+        "server.core.request_tail": "server/core/request_tail.py",
+    }
+    for relative in paths.values():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# This arm's source.\n")
+    http = SimpleNamespace(__file__=str(tmp_path / paths["server.transport.http"]))
+    for attribute, _name in observer._STAGES:
+        setattr(http, attribute, lambda *args, **kwargs: None)
+    main = SimpleNamespace(__file__=str(tmp_path / paths["server.main"]), app=None)
+    tail = SimpleNamespace(__file__=str(tmp_path / paths["server.core.request_tail"]))
+    modules = {
+        "server.transport.http": http,
+        "server.main": main,
+        "server.core.request_tail": tail,
+    }
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        observer, "find_spec", lambda name: SimpleNamespace(origin=str(tmp_path / paths[name]))
+    )
+    monkeypatch.setattr(observer, "import_module", lambda name: modules[name])
+
+    def install(app, settle, publication):
+        main.app, tail.settle, tail._publication_barrier = app, settle, publication
+        return observer.create_app()
+
+    return SimpleNamespace(
+        observer=observer, clock=clock, http=http, tail=tail, install=install, tree=tmp_path
+    )
+
+
+async def test_tail_stage_header_locates_post_finish_work_without_changing_delegation(
+    tail_observer_arm,
+):
+    arm = tail_observer_arm
+    marker, answer = object(), object()
+    calls, sent = [], []
+
+    async def settle(value, *, selected):
+        calls.append(("settle", value, selected))
+        arm.clock.advance(0.109384679)
+        return answer
+
+    async def publication(value, *, selected):
+        calls.append(("publication", value, selected))
+        arm.clock.advance(0.007)
+        return answer
+
+    async def finished():
+        arm.clock.advance(0.020)
+        return answer
+
+    async def app(scope, receive, send):
+        assert await arm.observer._timed("finish", finished)() is answer
+        assert await arm.tail.settle(marker, selected=marker) is answer
+        assert await arm.tail._publication_barrier(marker, selected=marker) is answer
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        return answer
+
+    async def send(message):
+        sent.append(message)
+
+    wrapped = arm.install(app, settle, publication)
+    assert await wrapped({"type": "http"}, None, send) is answer
+    raw = sent[0]["headers"][-1][1]
+    metadata = arm.observer.parse_metadata(raw.decode(), wrapped.sources)
+    assert metadata["tail_settle_start_ms"] == pytest.approx(20)
+    assert metadata["tail_settle_duration_ms"] == pytest.approx(109.384679)
+    assert metadata["tail_publication_start_ms"] == pytest.approx(129.384679)
+    assert metadata["tail_publication_duration_ms"] == pytest.approx(7)
+    finish_end = metadata["finish_start_ms"] + metadata["finish_duration_ms"]
+    assert metadata["response_start_ms"] - finish_end == pytest.approx(116.384679)
+    assert calls == [("settle", marker, marker), ("publication", marker, marker)]
+    assert metadata["request_tail_sha256"] == wrapped.sources["request_tail_sha256"]
+    assert len(raw) <= 4096 and arm.observer._current.get() is None
+    # Outside an observed request, these same wrappers only delegate.
+    assert await arm.tail.settle(marker, selected=answer) is answer
+    assert await arm.tail._publication_barrier(answer, selected=marker) is answer
+    assert calls[2:] == [("settle", marker, answer), ("publication", answer, marker)]
+    assert arm.observer._current.get() is None and sent[0]["headers"][-1][1] == raw
+
+
+async def test_tail_stage_last_outer_completion_replaces_earlier_and_nested_calls(
+    tail_observer_arm,
+):
+    arm = tail_observer_arm
+    calls, sent = [], []
+    answer, marker = object(), object()
+
+    async def settle(value, *, branch):
+        calls.append((value, branch))
+        if branch == "early":
+            arm.clock.advance(0.002)
+        elif branch == "outer":
+            arm.clock.advance(0.001)
+            assert await arm.tail.settle(value, branch="inner") is answer
+            arm.clock.advance(0.004)
+        else:
+            arm.clock.advance(0.003)
+        return answer
+
+    async def publication(value):
+        assert value is marker
+        arm.clock.advance(0.005)
+        return answer
+
+    async def app(scope, receive, send):
+        assert await arm.tail.settle(marker, branch="early") is answer
+        assert await arm.tail.settle(marker, branch="outer") is answer
+        assert await arm.tail._publication_barrier(marker) is answer
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+
+    async def send(message):
+        sent.append(message)
+
+    wrapped = arm.install(app, settle, publication)
+    await wrapped({"type": "http"}, None, send)
+    metadata = arm.observer.parse_metadata(sent[0]["headers"][-1][1].decode(), wrapped.sources)
+    assert calls == [(marker, "early"), (marker, "outer"), (marker, "inner")]
+    assert metadata["tail_settle_start_ms"] == pytest.approx(2)
+    assert metadata["tail_settle_duration_ms"] == pytest.approx(8)
+    assert metadata["tail_publication_start_ms"] == pytest.approx(10)
+    assert metadata["tail_publication_duration_ms"] == pytest.approx(5)
+    assert metadata["response_start_ms"] == pytest.approx(15)
+
+
+async def test_tail_stage_sent_header_excludes_later_body_checks_and_final_cleanup(
+    tail_observer_arm,
+):
+    arm = tail_observer_arm
+    sent, records, calls = [], [], []
+    body = {"type": "http.response.body", "body": b"unchanged response"}
+
+    async def settle(duration):
+        calls.append(("settle", duration))
+        arm.clock.advance(duration)
+
+    async def publication(duration):
+        calls.append(("publication", duration))
+        arm.clock.advance(duration)
+
+    async def app(scope, receive, send):
+        await arm.tail.settle(0.005)
+        await arm.tail._publication_barrier(0.003)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await arm.tail._publication_barrier(0.011)
+        await send(body)
+        await arm.tail.settle(0.017)
+        records.append(dict(arm.observer._current.get()))
+
+    async def send(message):
+        sent.append(message)
+
+    wrapped = arm.install(app, settle, publication)
+    await wrapped({"type": "http"}, None, send)
+    raw = sent[0]["headers"][-1][1]
+    metadata = arm.observer.parse_metadata(raw.decode(), wrapped.sources)
+    assert metadata["tail_settle_duration_ms"] == pytest.approx(5)
+    assert metadata["tail_publication_duration_ms"] == pytest.approx(3)
+    assert metadata["response_start_ms"] == pytest.approx(8)
+    assert records[0]["tail_settle_start_ms"] == pytest.approx(19)
+    assert records[0]["tail_settle_duration_ms"] == pytest.approx(17)
+    assert records[0]["tail_publication_start_ms"] == pytest.approx(8)
+    assert records[0]["tail_publication_duration_ms"] == pytest.approx(11)
+    assert sent[1] is body and sent[0]["headers"][-1][1] == raw
+    assert calls == [
+        ("settle", 0.005),
+        ("publication", 0.003),
+        ("publication", 0.011),
+        ("settle", 0.017),
+    ]
+    assert arm.observer._current.get() is None
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_tail_stage_failure_keeps_exact_error_and_no_response(tail_observer_arm, cancelled):
+    import asyncio
+
+    arm = tail_observer_arm
+    error = asyncio.CancelledError("owned cancellation") if cancelled else RuntimeError("private")
+    marker = object()
+    calls, records, sent = [], [], []
+
+    async def settle(value, *, selected):
+        calls.append((value, selected))
+        records.append(arm.observer._current.get())
+        arm.clock.advance(0.003)
+        raise error
+
+    async def publication(value):
+        pytest.fail("publication follows successful settle only")
+
+    async def app(scope, receive, send):
+        await arm.tail.settle(marker, selected=marker)
+        await arm.tail._publication_barrier(marker)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+
+    async def send(message):
+        sent.append(message)
+
+    wrapped = arm.install(app, settle, publication)
+    with pytest.raises(type(error)) as caught:
+        await wrapped({"type": "http"}, None, send)
+    assert caught.value is error and calls == [(marker, marker)] and sent == []
+    assert records[0]["tail_settle_start_ms"] == pytest.approx(0)
+    assert records[0]["tail_settle_duration_ms"] == pytest.approx(3)
+    assert "tail_publication_duration_ms" not in records[0]
+    assert arm.observer._current.get() is None
+
+
+def test_tail_stage_factory_refuses_wrong_tail_origin_before_wrapping(tail_observer_arm):
+    from types import SimpleNamespace
+
+    arm = tail_observer_arm
+    observed = []
+
+    async def settle(value):
+        observed.append(value)
+
+    async def publication(value):
+        observed.append(value)
+
+    async def app(scope, receive, send):
+        pytest.fail("a wrong-origin app must not run")
+
+    original_find = arm.observer.find_spec
+    arm.observer.find_spec = lambda name: (
+        SimpleNamespace(origin=str(arm.tree / "wrong" / "request_tail.py"))
+        if name == "server.core.request_tail"
+        else original_find(name)
+    )
+    try:
+        with pytest.raises(RuntimeError, match="resolved a server outside"):
+            arm.install(app, settle, publication)
+        assert arm.tail.settle is settle and arm.tail._publication_barrier is publication
+    finally:
+        arm.observer.find_spec = original_find
+    arm.tail.__file__ = str(arm.tree / "wrong" / "request_tail.py")
+    with pytest.raises(RuntimeError, match="imported a server outside"):
+        arm.install(app, settle, publication)
+    assert arm.tail.settle is settle and arm.tail._publication_barrier is publication
+    assert observed == []
