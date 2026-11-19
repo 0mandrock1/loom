@@ -12,7 +12,75 @@ const startupHome = os.homedir();
 const script = fileURLToPath(new URL("./windows-session-protection.ps1", import.meta.url));
 const operationTimeoutMs = 2000;
 const cleanupReserveMs = 500;
-const unavailable = () => new Error("Session protection state could not be confirmed");
+const failureDiagnostics = new WeakMap();
+const phases = new Set([
+  "startup",
+  "bootstrap",
+  "worker-bootstrap",
+  "guardian-deadline",
+  "native-job",
+  "native-timer",
+  "worker-start",
+  "worker-assign",
+  "compiler-private",
+  "compile",
+  "request",
+  "native-op",
+  "cleanup",
+  "protocol",
+]);
+const boundedCode = (value) => (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647 ? value : null);
+const unavailable = (diagnostic) => {
+  const error = new Error("Session protection state could not be confirmed");
+  if (diagnostic) failureDiagnostics.set(error, Object.freeze(diagnostic));
+  return error;
+};
+
+export const windowsFailureDiagnostic = (error) => failureDiagnostics.get(error);
+
+function helperDiagnostic(stderr) {
+  let phase = "startup",
+    failurePhase = null,
+    errorCode = null,
+    workerExit = null;
+  let unexpected = false;
+  const lines = (stderr ?? "").replace(/^\uFEFF/, "").split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  for (const line of lines) {
+    const match = /^LSP1:([a-z-]+):(-?[0-9]{1,10})$/.exec(line);
+    const code = match ? boundedCode(Number(match[2])) : null;
+    if (!match || code === null) {
+      unexpected = true;
+      continue;
+    }
+    if (match[1] === "worker-exit") {
+      workerExit = code;
+      if (code !== 0 && failurePhase === null) failurePhase = phase;
+    } else if (match[1] === "helper-exit") {
+      if (code !== 0 && failurePhase === null) failurePhase = phase;
+    } else if (phases.has(match[1])) {
+      phase = match[1];
+      if (code !== 0) {
+        if (failurePhase === null) failurePhase = phase;
+        if (errorCode === null) errorCode = code;
+      }
+    } else unexpected = true;
+  }
+  return { phase: failurePhase ?? phase, errorCode, workerExit, unexpected, failed: failurePhase !== null };
+}
+
+function failedOperation(result, started, phase) {
+  const helper = helperDiagnostic(result.stderr);
+  return unavailable({
+    phase: phase ?? helper.phase,
+    exitCode: boundedCode(result.status),
+    workerExit: helper.workerExit,
+    signal: result.signal === "SIGTERM" ? 15 : result.signal === "SIGKILL" ? 9 : result.signal ? -1 : 0,
+    errorCode: boundedCode(result.error?.errno) ?? helper.errorCode,
+    elapsedMs: Math.min(60000, Math.max(0, Math.round(performance.now() - started))),
+    timedOut: result.error?.code === "ETIMEDOUT",
+  });
+}
 
 export function windowsSessionProtection(op, args) {
   if (process.platform !== "win32" || !startupSystemRoot || !path.isAbsolute(startupSystemRoot)) throw unavailable();
@@ -28,7 +96,8 @@ export function windowsSessionProtection(op, args) {
   const system32 = path.join(startupSystemRoot, "System32");
   const powershellHome = path.join(system32, "WindowsPowerShell", "v1.0");
   const compilationId = crypto.randomBytes(16).toString("hex");
-  const deadline = performance.now() + operationTimeoutMs;
+  const started = performance.now();
+  const deadline = started + operationTimeoutMs;
   const executable = path.join(powershellHome, "powershell.exe");
   const arguments_ = ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", script];
   const options = {
@@ -63,7 +132,14 @@ export function windowsSessionProtection(op, args) {
         input: "",
         timeout: remaining,
       });
-      if (!cleanup.error && !cleanup.signal && cleanup.status === 0 && !cleanup.stderr) {
+      const cleanupDiagnostic = helperDiagnostic(cleanup.stderr);
+      if (
+        !cleanup.error &&
+        !cleanup.signal &&
+        cleanup.status === 0 &&
+        !cleanupDiagnostic.unexpected &&
+        !cleanupDiagnostic.failed
+      ) {
         try {
           const response = JSON.parse(cleanup.stdout.replace(/^\uFEFF/, ""));
           cleanupConfirmed =
@@ -73,28 +149,31 @@ export function windowsSessionProtection(op, args) {
         }
       }
     }
-    const error = unavailable();
+    const error = failedOperation(result, started);
     error.cleanupPending = !cleanupConfirmed;
     throw error;
   }
-  if (result.error || result.signal || result.status !== 0 || result.stderr) throw unavailable();
+  const helper = helperDiagnostic(result.stderr);
+  if (result.error || result.signal || result.status !== 0 || helper.unexpected || helper.failed)
+    throw failedOperation(result, started);
   let response;
   try {
     response = JSON.parse(result.stdout.replace(/^\uFEFF/, ""));
   } catch {
-    throw unavailable();
+    throw failedOperation(result, started, "protocol");
   }
-  if (!response || Object.keys(response).sort().join(",") !== "ok,value" || response.ok !== true) throw unavailable();
+  if (!response || Object.keys(response).sort().join(",") !== "ok,value" || response.ok !== true)
+    throw failedOperation(result, started, "protocol");
   const value = response.value;
   if (op === "create" && (typeof value !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value)))
-    throw unavailable();
-  if (op === "inspect" && typeof value !== "boolean") throw unavailable();
-  if (["protect", "bind"].includes(op) && value !== null) throw unavailable();
+    throw failedOperation(result, started, "protocol");
+  if (op === "inspect" && typeof value !== "boolean") throw failedOperation(result, started, "protocol");
+  if (["protect", "bind"].includes(op) && value !== null) throw failedOperation(result, started, "protocol");
   if (
     op === "find" &&
     value !== null &&
     (typeof value !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value))
   )
-    throw unavailable();
+    throw failedOperation(result, started, "protocol");
   return value;
 }

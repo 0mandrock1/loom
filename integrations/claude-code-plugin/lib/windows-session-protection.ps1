@@ -4,6 +4,14 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::InputEncoding = New-Object Text.UTF8Encoding($false)
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+function Write-LoomProtectionPhase([string]$phase, [int]$code = 0) {
+    if ($phase -cnotin @('startup', 'bootstrap', 'worker-bootstrap', 'guardian-deadline', 'native-job', 'native-timer', 'worker-start', 'worker-assign', 'compiler-private', 'compile', 'request', 'native-op', 'cleanup', 'worker-exit', 'helper-exit')) { throw 'Unavailable' }
+    if ($phase -cnotin @('worker-exit', 'helper-exit')) { $script:loomProtectionPhase = $phase }
+    try {
+        [Console]::Error.WriteLine('LSP1:' + $phase + ':' + $code.ToString([Globalization.CultureInfo]::InvariantCulture))
+        [Console]::Error.Flush()
+    } catch { $script:loomProtectionDiagnosticFailed = $true }
+}
 function Invoke-LoomCompilerScope([type]$native, [bool]$CleanupCompilation, [scriptblock]$Operation) {
 $held = New-Object 'System.Collections.Generic.List[System.IntPtr]'
 $compileDirectory = $null
@@ -12,6 +20,7 @@ $result = $null
 $succeeded = $false
 
 try {
+    Write-LoomProtectionPhase $(if ($CleanupCompilation) { 'cleanup' } else { 'compiler-private' })
     if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { throw 'Unavailable' }
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 
@@ -119,8 +128,10 @@ try {
     $succeeded = $true
     }
 } catch {
+    Write-LoomProtectionPhase $script:loomProtectionPhase ([int]$_.Exception.HResult)
     $succeeded = $false
 } finally {
+    Write-LoomProtectionPhase 'cleanup'
     if ($compilerHandleStart -ge 0) {
         for ($i = $held.Count - 1; $i -ge $compilerHandleStart; $i--) {
             if (-not $native::CloseHandle($held[$i])) { $succeeded = $false }
@@ -135,7 +146,10 @@ try {
                 [IO.File]::Delete($file)
             }
             [IO.Directory]::Delete($compileDirectory, $false)
-        } catch { $succeeded = $false }
+        } catch {
+            Write-LoomProtectionPhase 'cleanup' ([int]$_.Exception.HResult)
+            $succeeded = $false
+        }
     }
     for ($i = $held.Count - 1; $i -ge 0; $i--) {
         if (-not $native::CloseHandle($held[$i])) { $succeeded = $false }
@@ -147,6 +161,7 @@ return $result
 
 function Invoke-LoomRecordOperation([string]$compileDirectory) {
     # Compile fixed code before reading any session request.
+    Write-LoomProtectionPhase 'compile'
     $source = [IO.File]::ReadAllText([IO.Path]::Combine($PSScriptRoot, 'windows-private-records.cs'))
     $parameters = New-Object System.CodeDom.Compiler.CompilerParameters
     $parameters.GenerateInMemory = $true
@@ -158,6 +173,7 @@ function Invoke-LoomRecordOperation([string]$compileDirectory) {
     [void]$parameters.ReferencedAssemblies.Add('System.Core.dll')
     Microsoft.PowerShell.Utility\Add-Type -TypeDefinition $source -Language CSharp -CompilerParameters $parameters -ErrorAction Stop | Out-Null
 
+    Write-LoomProtectionPhase 'request'
     $buffer = New-Object char[] 4097
     $count = 0
     while ($count -lt $buffer.Length) {
@@ -177,6 +193,7 @@ function Invoke-LoomRecordOperation([string]$compileDirectory) {
     }
     if ((($request.PSObject.Properties.Name | Sort-Object) -join ',') -ne $expectedKeys) { throw 'Unavailable' }
     if ($request.base -isnot [string] -or $request.base.Length -gt 2048 -or -not [IO.Path]::IsPathRooted($request.base)) { throw 'Unavailable' }
+    Write-LoomProtectionPhase 'native-op'
     $store = New-Object WindowsPrivateRecords($request.base)
     $result = switch ($request.op) {
         'create' { $store.CreateRoot() }
@@ -190,10 +207,12 @@ function Invoke-LoomRecordOperation([string]$compileDirectory) {
 
 if ($DefinitionsOnly) { return }
 try {
+    Write-LoomProtectionPhase 'startup'
     if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { throw 'Unavailable' }
     if ($Worker -and [Console]::In.ReadLine() -cne $env:LOOM_PRIVATE_COMPILATION_ID) { throw 'Unavailable' }
     . ([IO.Path]::Combine($PSScriptRoot, 'windows-native-bootstrap.ps1'))
     . ([IO.Path]::Combine($PSScriptRoot, 'windows-compiler-job.ps1'))
+    Write-LoomProtectionPhase $(if ($Worker) { 'worker-bootstrap' } else { 'bootstrap' })
     $native = New-LoomBootstrapApi
     if ($Worker) {
         $result = Invoke-LoomCompilerScope $native $false ${function:Invoke-LoomRecordOperation}
@@ -207,8 +226,12 @@ try {
             [void](Invoke-LoomCompilerScope $native $true $null)
         }
     }
+    Write-LoomProtectionPhase 'helper-exit' 0
+    if ($script:loomProtectionDiagnosticFailed) { throw 'Unavailable' }
     exit 0
 } catch {
+    Write-LoomProtectionPhase $script:loomProtectionPhase ([int]$_.Exception.HResult)
+    Write-LoomProtectionPhase 'helper-exit' 1
     [Console]::Out.Write('{"ok":false}')
     exit 1
 }

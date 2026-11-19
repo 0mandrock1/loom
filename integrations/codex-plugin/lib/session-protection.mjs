@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { readPrivateFile } from "./tmp-state.mjs";
-import { windowsSessionProtection } from "./windows-session-protection.mjs";
+import { windowsSessionProtection, windowsFailureDiagnostic } from "./windows-session-protection.mjs";
 
 const ROOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const VERSION = 1;
@@ -18,6 +18,18 @@ export class SessionProtectionUnavailable extends Error {
     super("Session protection state could not be confirmed");
     this.name = "SessionProtectionUnavailable";
   }
+}
+
+function protectionUnavailable(error) {
+  const unavailable = new SessionProtectionUnavailable();
+  const diagnostic = windowsFailureDiagnostic(error);
+  if (diagnostic) {
+    Object.defineProperty(unavailable, "cause", { value: diagnostic, enumerable: true });
+    // TAP preserves the original error code when it unwraps a test failure.
+    const code = `LSP1:${diagnostic.phase}:${diagnostic.exitCode ?? "_"}:${diagnostic.workerExit ?? "_"}:${diagnostic.signal}:${diagnostic.errorCode ?? "_"}:${diagnostic.elapsedMs}:${Number(diagnostic.timedOut)}`;
+    Object.defineProperty(unavailable, "code", { value: code, enumerable: true });
+  }
+  return unavailable;
 }
 
 function privateDirectory(directory) {
@@ -90,8 +102,8 @@ export function createProtectionRoot({ base = defaultBase() } = {}) {
     syncDirectory(base);
     if (sessionIsProtected(root)) throw new SessionProtectionUnavailable();
     return root;
-  } catch {
-    throw new SessionProtectionUnavailable();
+  } catch (error) {
+    throw protectionUnavailable(error);
   }
 }
 
@@ -129,8 +141,8 @@ export function protectSession(root) {
     } finally {
       fs.closeSync(fd);
     }
-  } catch {
-    throw new SessionProtectionUnavailable();
+  } catch (error) {
+    throw protectionUnavailable(error);
   }
 }
 
@@ -198,8 +210,8 @@ export function bindProtectionAlias(root, host, identity) {
       syncDirectory(directory);
     }
     syncDirectory(root.base);
-  } catch {
-    throw new SessionProtectionUnavailable();
+  } catch (error) {
+    throw protectionUnavailable(error);
   }
 }
 
@@ -222,8 +234,8 @@ export function findProtectionAlias(host, identity, { base = defaultBase() } = {
     const root = Object.freeze({ base, id });
     location(root);
     return root;
-  } catch {
-    throw new SessionProtectionUnavailable();
+  } catch (error) {
+    throw protectionUnavailable(error);
   }
 }
 
