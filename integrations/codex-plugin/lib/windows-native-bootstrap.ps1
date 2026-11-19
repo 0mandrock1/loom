@@ -54,7 +54,8 @@ function New-LoomBootstrapApi {
             [void], [type[]]@([IntPtr], [byte]))
         $il = $method.GetILGenerator()
         $il.Emit([System.Reflection.Emit.OpCodes]::Ldarg_0)
-        $il.Emit([System.Reflection.Emit.OpCodes]::Ldc_I4_1)
+        # Distinguish native deadline termination from ordinary failure code 1.
+        $il.Emit([System.Reflection.Emit.OpCodes]::Ldc_I4, [int]1460)
         $il.Emit([System.Reflection.Emit.OpCodes]::Call, $nativeMethods['TerminateJobObject'])
         $il.Emit([System.Reflection.Emit.OpCodes]::Pop)
         $il.Emit([System.Reflection.Emit.OpCodes]::Ret)

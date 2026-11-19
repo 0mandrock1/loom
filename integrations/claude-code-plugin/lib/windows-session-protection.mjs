@@ -82,6 +82,7 @@ function helperDiagnostic(stderr) {
   }
   return {
     phase: failurePhase ?? phase,
+    lastValidatedPhase: phase,
     errorCode,
     workerExit,
     unexpected,
@@ -95,10 +96,12 @@ function failedOperation(result, started, phase) {
   const helper = helperDiagnostic(result.stderr);
   return unavailable({
     phase: phase ?? helper.phase,
+    lastValidatedPhase: helper.lastValidatedPhase,
     exitCode: boundedCode(result.status),
     workerExit: helper.workerExit,
     signal: result.signal === "SIGTERM" ? 15 : result.signal === "SIGKILL" ? 9 : result.signal ? -1 : 0,
     errorCode: boundedCode(result.error?.errno) ?? helper.errorCode,
+    helperErrorCode: helper.errorCode,
     elapsedMs: Math.min(60000, Math.max(0, Math.round(performance.now() - started))),
     timedOut: result.error?.code === "ETIMEDOUT",
     stdoutUnits: boundedCount(result.stdout?.length),
@@ -110,13 +113,13 @@ function failedOperation(result, started, phase) {
 
 export function windowsSessionProtection(op, args) {
   if (process.platform !== "win32" || !startupSystemRoot || !path.isAbsolute(startupSystemRoot)) throw unavailable();
-  if (!["create", "inspect", "protect", "bind", "find"].includes(op)) throw unavailable();
+  if (!["create", "inspect", "protect", "bind", "find", "establish"].includes(op)) throw unavailable();
   if (!args || typeof args.base !== "string" || !path.isAbsolute(args.base) || args.base.length > 2048)
     throw unavailable();
   if (["inspect", "protect", "bind"].includes(op) && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(args.id)) {
     throw unavailable();
   }
-  if (["bind", "find"].includes(op) && !/^[0-9a-f]{64}$/.test(args.key)) throw unavailable();
+  if (["bind", "find", "establish"].includes(op) && !/^[0-9a-f]{64}$/.test(args.key)) throw unavailable();
   const request = JSON.stringify({ ...args, op });
   if (Buffer.byteLength(request, "utf8") > 4096) throw unavailable();
   const system32 = path.join(startupSystemRoot, "System32");
@@ -191,7 +194,10 @@ export function windowsSessionProtection(op, args) {
   if (!response || Object.keys(response).sort().join(",") !== "ok,value" || response.ok !== true)
     throw failedOperation(result, started, "protocol");
   const value = response.value;
-  if (op === "create" && (typeof value !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value)))
+  if (
+    ["create", "establish"].includes(op) &&
+    (typeof value !== "string" || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value))
+  )
     throw failedOperation(result, started, "protocol");
   if (op === "inspect" && typeof value !== "boolean") throw failedOperation(result, started, "protocol");
   if (["protect", "bind"].includes(op) && value !== null) throw failedOperation(result, started, "protocol");

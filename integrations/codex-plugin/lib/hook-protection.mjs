@@ -1,5 +1,10 @@
-// A passive hook resolves existing lineage; it never establishes a parent edge.
-import { findProtectionAlias, protectSession, SessionProtectionUnavailable } from "./session-protection.mjs";
+// Codex declares a new root; all inherited or passive hooks resolve known state.
+import {
+  establishProtectionAlias,
+  findProtectionAlias,
+  protectSession,
+  SessionProtectionUnavailable,
+} from "./session-protection.mjs";
 
 function sameRoot(first, second) {
   return first?.base === second?.base && first?.id === second?.id;
@@ -16,7 +21,7 @@ function refuse(roots) {
   throw new SessionProtectionUnavailable();
 }
 
-/** Only canonical identity and existing application-owned anchors are authority. */
+/** Only a verified Codex startup establishes its first application-owned anchor. */
 export function bindHookProtection(payload, { host, event, base, knownRoots = [] } = {}) {
   const roots = [...knownRoots];
   try {
@@ -31,7 +36,16 @@ export function bindHookProtection(payload, { host, event, base, knownRoots = []
     )
       throw new SessionProtectionUnavailable();
     // Resolve this anchor even when another known contributor is unusable.
-    const root = findProtectionAlias(host, payload.session_id, { base });
+    const startup =
+      !roots.length &&
+      host === "codex" &&
+      event === "SessionStart" &&
+      payload.hook_event_name === "SessionStart" &&
+      payload.source === "startup";
+    // The initializer waits for concurrent publication before inspecting it.
+    const root = startup
+      ? establishProtectionAlias(host, payload.session_id, { base })
+      : findProtectionAlias(host, payload.session_id, { base });
     if (root) roots.push(root);
     if (
       typeof event !== "string" ||

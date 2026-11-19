@@ -30,9 +30,9 @@ afterEach(() => {
 });
 const payload = (source = "startup") => ({ session_id: "known", hook_event_name: "SessionStart", source });
 
-test("an unbound hook identity never acquires a new family", () => {
+test("an unbound resumed hook identity never acquires a new family", () => {
   assert.throws(
-    () => bindHookProtection(payload(), { host: "codex", event: "SessionStart" }),
+    () => bindHookProtection(payload("resume"), { host: "codex", event: "SessionStart" }),
     SessionProtectionUnavailable,
   );
 });
@@ -50,7 +50,7 @@ test("an unbound hook identity never acquires a new family", () => {
     assert.equal(sessionIsProtected(findProtectionAlias("codex", "known", { base })), true);
   });
 
-  for (const source of ["startup", "resume", "fork", "clear", "compact"]) {
+  for (const source of ["resume", "fork", "clear", "compact"]) {
     test(`unbound ${source} refuses without a root factory`, () => {
       const { base, root } = fixture();
       const before = fs.readdirSync(base);

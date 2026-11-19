@@ -1,15 +1,18 @@
 # Native timer callbacks contain emitted IL only; they need no PowerShell
 # runspace, managed timer, Node event loop or compiler to stop a blocked worker.
 $script:loomTimerRoots = [System.Collections.Generic.List[System.Delegate]]::new()
-function Start-LoomNativeTimer([type]$native, [string]$method, [IntPtr]$context, [uint32]$milliseconds) {
+function Start-LoomNativeTimer([type]$native, [string]$method, [IntPtr]$context, [long]$deadline) {
     Write-LoomProtectionPhase 'native-timer'
     $callbackType = $native.Assembly.GetType('LoomNativeTimerCallback', $true)
     $callback = [Delegate]::CreateDelegate($callbackType, $native.GetMethod($method))
     $script:loomTimerRoots.Add($callback)
     $pointer = [Runtime.InteropServices.Marshal]::GetFunctionPointerForDelegate($callback)
     $timer = [IntPtr]::Zero
+    # Callback and job setup consume the same absolute operation budget.
+    $remaining = $deadline - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    if ($remaining -le 0 -or $remaining -gt 1500) { throw 'Unavailable' }
     # A one-shot callback on the native timer thread performs one short API call.
-    if (-not $native::CreateTimerQueueTimer([ref]$timer, [IntPtr]::Zero, $pointer, $context, $milliseconds, 0, 0x28)) {
+    if (-not $native::CreateTimerQueueTimer([ref]$timer, [IntPtr]::Zero, $pointer, $context, ([uint32]$remaining), 0, 0x28)) {
         $nativeCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
         Write-LoomProtectionPhase 'native-timer' $nativeCode
         throw 'Unavailable'
@@ -21,10 +24,12 @@ function Start-LoomGuardianDeadline([type]$native) {
     Write-LoomProtectionPhase 'guardian-deadline'
     $deadline = 0L
     if (-not [long]::TryParse($env:LOOM_PRIVATE_DEADLINE_UTC, [ref]$deadline)) { throw 'Unavailable' }
-    $remaining = $deadline - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $remaining = $deadline - $now
     if ($remaining -le 0) { throw 'Unavailable' }
-    # The startup timestamp only shortens this relative native timer.
+    # Anchor both native deadlines before creating or assigning either job.
     $remaining = [Math]::Min(1500L, $remaining)
+    $deadline = $now + $remaining
     # An outer self-job covers worker creation as well as compilation. Even
     # death between Process.Start and inner assignment closes this handle.
     $outer = New-LoomCompilerJob $native
@@ -33,8 +38,8 @@ function Start-LoomGuardianDeadline([type]$native) {
         Write-LoomProtectionPhase 'native-job' $nativeCode
         throw 'Unavailable'
     }
-    Start-LoomNativeTimer $native 'StopJob' $outer ([uint32]$remaining)
-    return [Diagnostics.Stopwatch]::StartNew(), [int]$remaining
+    Start-LoomNativeTimer $native 'StopJob' $outer $deadline
+    return $deadline
 }
 
 function New-LoomCompilerJob([type]$native) {
@@ -80,14 +85,12 @@ function Receive-LoomWorkerPhases($state, [bool]$finish = $false) {
 function Invoke-LoomGuardedWorker([type]$native, [string]$workerScript, [scriptblock]$cleanup, [scriptblock]$observe = $null) {
     [Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
     [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-    $clock, $budget = Start-LoomGuardianDeadline $native
-    if ($budget -le 150) { throw 'Unavailable' }
+    $deadline = Start-LoomGuardianDeadline $native
+    if (($deadline - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) -le 150) { throw 'Unavailable' }
     $job = New-LoomCompilerJob $native
     # The guardian is outside this inner job. OS death still closes the last
     # noninherited handle. The earlier timer leaves time for exact cleanup.
-    $workerTime = $budget - 150 - $clock.ElapsedMilliseconds
-    if ($workerTime -le 0) { throw 'Unavailable' }
-    Start-LoomNativeTimer $native 'StopJob' $job ([uint32]$workerTime)
+    Start-LoomNativeTimer $native 'StopJob' $job ($deadline - 150)
     $worker = $null
     $assigned = $false
     $workerPhases = $null

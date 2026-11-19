@@ -202,6 +202,7 @@ function Invoke-LoomRecordOperation([string]$compileDirectory) {
         'protect' { 'base,id,op' }
         'bind' { 'base,id,key,op' }
         'find' { 'base,key,op' }
+        'establish' { 'base,key,op' }
         default { throw 'Unavailable' }
     }
     if ((($request.PSObject.Properties.Name | Sort-Object) -join ',') -ne $expectedKeys) { throw 'Unavailable' }
@@ -214,6 +215,7 @@ function Invoke-LoomRecordOperation([string]$compileDirectory) {
         'protect' { $store.AppendProtection($request.id); $null }
         'bind' { $store.BindAlias($request.key, $request.id); $null }
         'find' { $store.FindAlias($request.key) }
+        'establish' { $store.EstablishAlias($request.key) }
     }
     return $result
 }
