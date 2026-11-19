@@ -331,6 +331,7 @@ async function flushPending(repo) {
  *  `verdict` is classifyRead/classifyGrep's {deny, reason}; `tokens` is the
  *  estimate kept out (hit) or let in (pass); `span` the lines covered. */
 function settle(repo, { tool, verdict, tokens, path = "", span = { start: 0, end: 0 } }) {
+  if (automaticSessionIsProtected()) return;
   const denied = Boolean(verdict.deny);
   if (denied) deny(verdict.deny);
   const unflushed = logDecision(repo.pending, {

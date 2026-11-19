@@ -85,7 +85,7 @@ function runHook(payload, { tmp, url = "http://127.0.0.1:9", env = {} }) {
     child.stdout.on("data", (c) => {
       out += c;
     });
-    child.on("close", () => {
+    child.on("close", (code) => {
       let log = "";
       try {
         log = fs.readFileSync(logPath(tmp), "utf8");
@@ -93,7 +93,13 @@ function runHook(payload, { tmp, url = "http://127.0.0.1:9", env = {} }) {
         /* no decision logged */
       }
       const hso = out ? JSON.parse(out).hookSpecificOutput : {};
-      resolve({ deny: hso.permissionDecisionReason ?? null, updatedInput: hso.updatedInput ?? null, log });
+      resolve({
+        code,
+        stdout: out,
+        deny: hso.permissionDecisionReason ?? null,
+        updatedInput: hso.updatedInput ?? null,
+        log,
+      });
     });
     child.stdin.end(JSON.stringify(payload));
   });
@@ -109,7 +115,8 @@ async function withServer(answers, fn) {
     req.on("end", () => {
       seen.push({ url: req.url, body: raw ? JSON.parse(raw) : {} });
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify(answers[req.url] || {}));
+      const answer = answers[req.url];
+      res.end(JSON.stringify(typeof answer === "function" ? answer() : answer || {}));
     });
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
@@ -584,3 +591,55 @@ test("an unattributed batch in the same protected scope stays untouched while a 
     for (const owned of [tmp, dir]) fs.rmSync(owned, { recursive: true, force: true });
   }
 });
+
+for (const mode of ["mirrored", "late-sibling-mark"]) {
+  test(`a symbol reply ${mode} withholds the actual shunt denial and decision log`, async () => {
+    const { dir } = checkout({ "src/a.cpp": "bool renameTempPartAndAdd();\n" });
+    const tmp = seed(dir, { existingSessions: ["e2e"] });
+    const root = establishFixtureSession(tmp, "e2e");
+    try {
+      const answers = {
+        "/v1/code.symbol": () => {
+          // The real hook has dispatched and is awaiting this response.
+          if (mode === "late-sibling-mark") protectSession(root);
+          return {
+            mirrored: mode === "mirrored",
+            definitions: [
+              {
+                path: "src/a.cpp",
+                start_line: 1,
+                end_line: 1,
+                symbol: "DB::MergeTreeData::renameTempPartAndAdd",
+                tier: "scip",
+              },
+            ],
+          };
+        },
+      };
+      await withServer(answers, async (url, seen) => {
+        const answer = await runHook(
+          {
+            tool_name: "Bash",
+            tool_input: { command: "grep -n renameTempPartAndAdd src/a.cpp" },
+            cwd: dir,
+            session_id: "e2e",
+          },
+          { tmp, url },
+        );
+        assert.equal(answer.code, 0);
+        assert.deepEqual(
+          seen.map((request) => request.url),
+          ["/v1/code.symbol"],
+        );
+        assert.equal(answer.stdout, "");
+        assert.equal(answer.deny, null);
+        assert.equal(answer.updatedInput, null);
+        assert.equal(answer.log, "");
+        assert.equal(sessionIsProtected(root), true);
+      });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}

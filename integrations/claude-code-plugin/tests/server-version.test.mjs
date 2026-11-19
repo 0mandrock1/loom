@@ -10,6 +10,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { sessionIsProtected } from "../lib/session-protection.mjs";
 import { MIN_SERVER_VERSION, isOlder, parseVersion, pluginVersion, serverVersionLine } from "../lib/server-version.mjs";
 
 const HOOK = fileURLToPath(new URL("../hooks/loom-session-start.mjs", import.meta.url));
@@ -91,7 +92,7 @@ async function fakeLoom(health) {
 
 function session(url, extraEnv = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "loom-minver-")));
-  establishFixtureSession(dir, "server-version-session");
+  const root = establishFixtureSession(dir, "server-version-session");
   return new Promise((resolve) => {
     const started = Date.now();
     const child = spawn(process.execPath, [HOOK, "SessionStart"], {
@@ -111,8 +112,9 @@ function session(url, extraEnv = {}) {
     child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => (stderr += c));
     child.on("close", (code) => {
+      const protectedSession = sessionIsProtected(root);
       fs.rmSync(dir, { recursive: true, force: true });
-      resolve({ code, stdout, stderr, ms: Date.now() - started });
+      resolve({ code, stdout, stderr, ms: Date.now() - started, protectedSession });
     });
     child.stdin.end(JSON.stringify({ session_id: "server-version-session" }));
   });
@@ -140,7 +142,7 @@ test("SessionStart warns once about a server older than the plugin's minimum", a
 });
 
 test("SessionStart says nothing about versions for a current, unversioned, non-SemVer or hung health", async () => {
-  for (const health of [{ version: minimum }, {}, { version: "nightly" }, "not json", "hang"]) {
+  for (const health of [{ version: minimum }, {}, { version: "nightly" }, "hang"]) {
     const loom = await fakeLoom(health);
     try {
       const out = await session(loom.url);
@@ -148,6 +150,7 @@ test("SessionStart says nothing about versions for a current, unversioned, non-S
       assert.equal(out.stderr, "");
       assert.equal(out.stdout.includes("upgrade the server"), false, out.stdout);
       assert.ok(out.stdout.length > 0, "the primer still renders");
+      assert.equal(out.protectedSession, false);
     } finally {
       loom.close();
     }
@@ -155,7 +158,25 @@ test("SessionStart says nothing about versions for a current, unversioned, non-S
   // Nothing listens at all.
   const out = await session("http://127.0.0.1:9");
   assert.equal(out.code, 0);
+  assert.equal(out.stderr, "");
   assert.equal(out.stdout.includes("upgrade the server"), false);
+  assert.ok(out.stdout.length > 0, "the unreachable server still leaves an ordinary primer");
+  assert.equal(out.protectedSession, false);
+});
+
+test("SessionStart withholds the primer and durably protects malformed JSON health", async () => {
+  const health = "not json";
+  const loom = await fakeLoom(health);
+  try {
+    const out = await session(loom.url);
+    assert.equal(out.code, 0, JSON.stringify(health));
+    assert.equal(out.stderr, "");
+    assert.equal(out.stdout.includes("upgrade the server"), false, out.stdout);
+    assert.equal(out.stdout, "");
+    assert.equal(out.protectedSession, true);
+  } finally {
+    loom.close();
+  }
 });
 
 test("a lower LOOM_HOOK_TIMEOUT_MS bounds the health call SessionStart waits for", async () => {
