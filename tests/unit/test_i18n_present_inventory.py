@@ -29,14 +29,16 @@ def publish(root: pathlib.Path, source: str) -> pathlib.Path:
 
 @pytest.fixture
 def repo(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
-    git(tmp_path, "init", "-q", "-b", "main")
-    (tmp_path / "docs").mkdir()
+    root = tmp_path / "repo"
+    root.mkdir()
+    git(root, "init", "-q", "-b", "main")
+    (root / "docs").mkdir()
     for name in ("a", "b"):
-        (tmp_path / f"docs/{name}.md").write_text(f"# {name.upper()}\n")
-    git(tmp_path, "add", "docs")
-    monkeypatch.setattr(t, "ROOT", tmp_path)
+        (root / f"docs/{name}.md").write_text(f"# {name.upper()}\n")
+    git(root, "add", "docs")
+    monkeypatch.setattr(t, "ROOT", root)
     monkeypatch.setenv("LOOM_I18N_MODEL", t.DEFAULT_MODEL)
-    return tmp_path
+    return root
 
 
 @pytest.mark.parametrize("count", [1, 2])
