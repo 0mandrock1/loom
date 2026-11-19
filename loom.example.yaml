@@ -1066,6 +1066,11 @@ settings:
   # the only source. [restart]
   # code_self_service_enabled: true
 
+  # True leaves code.repo.remote_branches, code.repo.add and code.repo.add_branch to
+  # platform admins: a token scoped to namespaces, or a trusted caller acting for
+  # another subject, is refused too. False: each op's own role decides. [restart]
+  # code_self_service_platform_admin_only: false
+
   # Where the code ingest worker clones a self-service entry's bare mirror (one per
   # GitHub repository, shared by its branches). [restart]
   # code_repos_root: "var/code_repos/self"
@@ -1163,6 +1168,14 @@ settings:
   # sandbox" in code-index-operations.md says. [restart]
   # code_sandbox_required: false
 
+  # True lets a host without the sandbox add and fetch a self-service entry with a
+  # network remote: its git jobs (ls-remote, clone, fetch) run as plain processes and it
+  # gets no compiler tier. Refused at load without
+  # code_self_service_platform_admin_only, where a request can carry no principal (auth
+  # off, or mcp_auth_mode open), and with code_sandbox_required. False: such an entry
+  # needs the sandbox. [restart]
+  # code_self_service_git_unsandboxed: false
+
   # Largest file one process of a sandboxed repository job may write, in MiB (a pack or
   # index.scip). [restart]
   # code_sandbox_max_file_mb: 32768
@@ -1205,6 +1218,30 @@ settings:
 
   # Max PR heads fetched per shared mirror per ingest pass. [restart]
   # code_git_pr_head_batch: 200
+
+  # --- git through a forward proxy ---
+  # The code index's network git (clone, fetch, ls-remote, submodule update) through an
+  # operator's forward proxy (code/app/index/git_proxy.py). With the proxy set, such a
+  # git job connects through it or is refused: never directly.
+
+  # The proxy: `http://host:port` or `https://host:port`, the port named, with no
+  # credentials, path or query. Empty = git connects directly. [restart]
+  # code_git_proxy_url: ""
+
+  # File holding the proxy password, read again for every git job. Empty = no password;
+  # a file that cannot be read or is empty refuses the job. Needs code_git_proxy_url.
+  # [restart]
+  # code_git_proxy_token_file: ""
+
+  # PEM bundle git verifies TLS with through the proxy, in place of its default roots (a
+  # proxy that terminates TLS under its own authority). Needs code_git_proxy_url.
+  # [restart]
+  # code_git_proxy_ca_file: ""
+
+  # The proxy user of an entry that names no `git_proxy_identity`: letters, digits and
+  # `. _ ~ @ -`, at most 128. Empty = such an entry's git jobs are refused. Needs
+  # code_git_proxy_url. [restart]
+  # code_git_proxy_identity: ""
 
   # --- open-PR fill ---
 
@@ -2849,6 +2886,30 @@ settings:
   # token response cannot prove this registration setting; false disables it. [restart]
   # connect_notion_read_content_only: false
 
+  # Seconds for the whole optional live-search leg, including final membership checks.
+  # At most five; provider credential deadlines may shorten it further. [restart]
+  # knowledge_live_search_timeout_s: 5.0
+
+  # Connected registrations searched per live-search request, from one to three.
+  # [restart]
+  # knowledge_live_search_max_sources: 3
+
+  # Live hits across all registrations, and the per-provider page bound, from one to
+  # ten. [restart]
+  # knowledge_live_search_max_hits: 10
+
+  # Bytes read from one live-search provider response, at most 256 KiB. The
+  # document-source download limit may shorten this bound further. [restart]
+  # knowledge_live_search_response_max_bytes: 262144
+
+  # Registered Drive items searched per source, from one to four; no pagination.
+  # [restart]
+  # knowledge_live_search_max_items: 4
+
+  # Native parent lookups per Notion membership check, from zero to three. Zero accepts
+  # directly registered pages and database membership without parent fetches. [restart]
+  # knowledge_live_search_max_ancestors: 3
+
   # Seconds for local connection stops, including their source retirement writes.
   # [restart]
   # knowledge_connected_stop_timeout_s: 20.0
@@ -3036,8 +3097,8 @@ settings:
   # that resolves to it. Not a server-wide read-only switch: a request naming another
   # toolset gets it, and the token is the boundary. "all"       — the stable ops plus
   # the experimental ops the core or atomic roster lists; the other experimental ops
-  # stay callable by name, and _MCP_HIDDEN_OPS are never listed. An unknown value is
-  # "core". [restart]
+  # stay callable by name, and _MCP_HIDDEN_OPS are never listed, the two upload ops
+  # under mcp_code_upload_tools aside. An unknown value is "core". [restart]
   # mcp_toolset: "core"
 
   # tools/list schema profile: "standard" (curated prose + inputSchema), "full" (+
@@ -3067,6 +3128,11 @@ settings:
   # List code.* tools on the MCP surface (core toolset union). Off = code ops are
   # HTTP/SDK-only. [restart]
   # mcp_code_tools: false
+
+  # Serve the compiler-tier upload ops (code.scip_ingest, code.scip_status) over MCP,
+  # which hides both when off. On, an upload is accepted, on every transport, only for a
+  # namespace that has a repository entry. [restart]
+  # mcp_code_upload_tools: false
 
   # ===== The memory plane outside search/ask/extraction: writes, conflicts, lifecycle, workers =====
 

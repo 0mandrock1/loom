@@ -956,6 +956,10 @@ class CodeSettings(BaseModel):
     # for a namespace a member added from the page is skipped.
     # Off = the operator's JSON is the only source.
     code_self_service_enabled: bool = True
+    # True leaves code.repo.remote_branches, code.repo.add and code.repo.add_branch to
+    # platform admins: a token scoped to namespaces, or a trusted caller acting for
+    # another subject, is refused too. False: each op's own role decides.
+    code_self_service_platform_admin_only: bool = False
     # Where the code ingest worker clones a self-service entry's bare mirror (one per
     # GitHub repository, shared by its branches).
     code_repos_root: str = "var/code_repos/self"
@@ -1030,6 +1034,13 @@ class CodeSettings(BaseModel):
     # missing sandbox as an error. False: without the sandbox, jobs fall back
     # to plain processes as "Without the sandbox" in code-index-operations.md says.
     code_sandbox_required: bool = False
+    # True lets a host without the sandbox add and fetch a self-service entry with a
+    # network remote: its git jobs (ls-remote, clone, fetch) run as plain processes and
+    # it gets no compiler tier. Refused at load without
+    # code_self_service_platform_admin_only, where a request can carry no principal
+    # (auth off, or mcp_auth_mode open), and with code_sandbox_required. False: such an
+    # entry needs the sandbox.
+    code_self_service_git_unsandboxed: bool = False
     # Largest file one process of a sandboxed repository job may write, in MiB (a
     # pack or index.scip).
     code_sandbox_max_file_mb: int = 32768
@@ -1062,6 +1073,55 @@ class CodeSettings(BaseModel):
     code_git_fetch_pr_heads: bool = True
     # Max PR heads fetched per shared mirror per ingest pass.
     code_git_pr_head_batch: int = 200
+    # The code index's network git (clone, fetch, ls-remote, submodule update) through
+    # an operator's forward proxy (code/app/index/git_proxy.py). With the proxy set, such
+    # a git job connects through it or is refused: never directly.
+    # --- git through a forward proxy ---
+    # The proxy: `http://host:port` or `https://host:port`, the port named, with no
+    # credentials, path or query. Empty = git connects directly.
+    code_git_proxy_url: str = ""
+    # File holding the proxy password, read again for every git job. Empty = no password;
+    # a file that cannot be read or is empty refuses the job. Needs code_git_proxy_url.
+    code_git_proxy_token_file: str = ""
+    # PEM bundle git verifies TLS with through the proxy, in place of its default roots
+    # (a proxy that terminates TLS under its own authority). Needs code_git_proxy_url.
+    code_git_proxy_ca_file: str = ""
+    # The proxy user of an entry that names no `git_proxy_identity`: letters, digits and
+    # `. _ ~ @ -`, at most 128. Empty = such an entry's git jobs are refused. Needs
+    # code_git_proxy_url.
+    code_git_proxy_identity: str = ""
+
+    @model_validator(mode="after")
+    def _check_git_proxy(self) -> CodeSettings:
+        """A proxy URL git cannot use, or a proxy setting without the proxy, fails at
+        load, not at the first fetch. The URL holds no credentials, so it is not a secret."""
+        url = self.code_git_proxy_url
+        if url:
+            parts = urlsplit(url)
+            if not is_http_url(url) or "@" in parts.netloc or parts.path not in ("", "/"):
+                raise ValueError(
+                    "LOOM_CODE_GIT_PROXY_URL must be http://host:port or https://host:port, "
+                    "with no credentials, path or query"
+                )
+            if parts.port is None:
+                # git's HTTP library would otherwise assume 1080 for an http proxy.
+                raise ValueError("LOOM_CODE_GIT_PROXY_URL must name the proxy's port")
+        identity = self.code_git_proxy_identity
+        needs_url = {
+            "LOOM_CODE_GIT_PROXY_TOKEN_FILE": self.code_git_proxy_token_file,
+            "LOOM_CODE_GIT_PROXY_CA_FILE": self.code_git_proxy_ca_file,
+            "LOOM_CODE_GIT_PROXY_IDENTITY": identity,
+        }
+        for variable, value in needs_url.items():
+            if value and not url:
+                raise ValueError(f"{variable} needs LOOM_CODE_GIT_PROXY_URL")
+        if identity and not GIT_PROXY_IDENTITY.fullmatch(identity):
+            raise ValueError(
+                "LOOM_CODE_GIT_PROXY_IDENTITY takes letters, digits and . _ ~ @ - only, "
+                "at most 128 characters"
+            )
+        return self
+
     # --- open-PR fill ---
     # Open-PR rows per pass whose head_sha / base_sha / files the PR-history
     # worker fills from the mirror; rows the mirror lacks fall back to GitHub
@@ -2345,6 +2405,21 @@ class KnowledgeSettings(BaseModel):
     # The operator has restricted the public integration to read-content capability.
     # Its token response cannot prove this registration setting; false disables it.
     connect_notion_read_content_only: bool = False
+    # Seconds for the whole optional live-search leg, including final membership checks.
+    # At most five; provider credential deadlines may shorten it further.
+    knowledge_live_search_timeout_s: float = Field(default=5.0, gt=0, le=5.0)
+    # Connected registrations searched per live-search request, from one to three.
+    knowledge_live_search_max_sources: int = Field(default=3, ge=1, le=3)
+    # Live hits across all registrations, and the per-provider page bound, from one to ten.
+    knowledge_live_search_max_hits: int = Field(default=10, ge=1, le=10)
+    # Bytes read from one live-search provider response, at most 256 KiB.
+    # The document-source download limit may shorten this bound further.
+    knowledge_live_search_response_max_bytes: int = Field(default=256 * 1024, ge=1, le=256 * 1024)
+    # Registered Drive items searched per source, from one to four; no pagination.
+    knowledge_live_search_max_items: int = Field(default=4, ge=1, le=4)
+    # Native parent lookups per Notion membership check, from zero to three.
+    # Zero accepts directly registered pages and database membership without parent fetches.
+    knowledge_live_search_max_ancestors: int = Field(default=3, ge=0, le=3)
     # Seconds for local connection stops, including their source retirement writes.
     knowledge_connected_stop_timeout_s: float = Field(default=20.0, gt=0)
     # Seconds for best-effort provider revocation after every local stop has committed.
@@ -2583,7 +2658,8 @@ class McpSettings(BaseModel):
     #                 naming another toolset gets it, and the token is the boundary.
     #   "all"       — the stable ops plus the experimental ops the core or atomic
     #                 roster lists; the other experimental ops stay callable by name,
-    #                 and _MCP_HIDDEN_OPS are never listed.
+    #                 and _MCP_HIDDEN_OPS are never listed, the two upload ops under
+    #                 mcp_code_upload_tools aside.
     # An unknown value is "core".
     mcp_toolset: str = "core"
     # tools/list schema profile: "standard" (curated prose + inputSchema),
@@ -2609,6 +2685,10 @@ class McpSettings(BaseModel):
     # List code.* tools on the MCP surface (core toolset union). Off = code
     # ops are HTTP/SDK-only.
     mcp_code_tools: bool = False
+    # Serve the compiler-tier upload ops (code.scip_ingest, code.scip_status) over MCP, which
+    # hides both when off. On, an upload is accepted, on every transport, only for a
+    # namespace that has a repository entry.
+    mcp_code_upload_tools: bool = False
 
 
 # ===== Memory =================================================================
@@ -4499,6 +4579,9 @@ _HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 _HEADER_TEXT = re.compile(r"[A-Za-z0-9._~:@-]*")
 # A customer or feature name sent as a header value: the same characters, at least one.
 _HEADER_VALUE = re.compile(r"[A-Za-z0-9._~:@-]+")
+# The user name a repository's git presents to LOOM_CODE_GIT_PROXY_URL: those characters
+# without the colon, which would split the Basic pair it travels in.
+GIT_PROXY_IDENTITY = re.compile(r"[A-Za-z0-9._~@-]{1,128}")
 # What an identity header template names, each as `{name}` (server/llm/identity.py).
 IDENTITY_PLACEHOLDERS = ("org", "namespace", "agent", "tenant", "subject", "user_id", "email")
 IDENTITY_PLACEHOLDER = re.compile(r"\{(" + "|".join(IDENTITY_PLACEHOLDERS) + r")\}")

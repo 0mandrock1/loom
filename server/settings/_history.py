@@ -60,7 +60,7 @@ DEFAULT_CHANGES: tuple[DefaultChange, ...] = (
         ),
     ),
     DefaultChange(
-        version="1.3.0",
+        version="1.3.1",
         name="mcp_always_load_tools",
         old="code.search,code.symbol",
         new="",
