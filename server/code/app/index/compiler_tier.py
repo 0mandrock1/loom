@@ -240,37 +240,64 @@ def tier_outcome(result: TierResult, **extra: Any) -> dict[str, Any]:
     }
 
 
-def resolve_checkout(cfg: RepoConfig, producer: str) -> tuple[Path, Path, str | None]:
-    """(checkout, bare clone, missing) for `producer` on this entry. Sync: callers run
-    it in a thread, the worker convention that keeps the event loop free of filesystem
-    calls. The checkout is absolute because a harness hands it to the converter after
-    `cd`-ing into it; the bare clone is shared by every branch of the repository."""
-    checkout = Path(checkout_for(cfg, producer)).absolute()
-    bare = Path(cfg.git_dir)
-    if not bare.exists():
-        return checkout, bare, f"bare clone missing at {bare}"
-    if not checkout.exists():
-        # The checkout follows the lease: a new leader (or a new pod) starts from an
-        # empty repository, and the tier fetches the target from the mirror. The C++
-        # harness configures its build tree on the first run.
-        from server.code.app.index.gitrepo import auth_env
+def _prepare_checkout(checkout: Path) -> str | None:
+    """Initialize only empty directories; an existing tree must own its Git root."""
+    from server.code.app.index.gitrepo import auth_env
 
-        # Made before `git init`, which keeps its mode, so an entry restricted later
-        # needs no window closed.
+    if not checkout.exists():
         try:
             os.makedirs(checkout, mode=PRIVATE_DIR_MODE, exist_ok=True)
             set_repo_dir_mode(str(checkout))
         except OSError as e:
             logger.warning("compiler tier: could not create %s: %s", checkout, e)
-            return checkout, bare, f"checkout missing at {checkout} (mkdir failed)"
-        init = subprocess.run(
-            ["git", "init", "-q", str(checkout)], capture_output=True, text=True, env=auth_env()
+            return "mkdir failed"
+    try:
+        if not checkout.is_dir():
+            return "not a directory"
+        if not any(checkout.iterdir()):
+            set_repo_dir_mode(str(checkout))
+            init = subprocess.run(
+                ["git", "init", "-q", str(checkout)],
+                capture_output=True,
+                text=True,
+                env=auth_env(),
+                timeout=settings.code_git_timeout_s,
+            )
+            if init.returncode:
+                return f"git init: {init.stderr.strip()}"
+        metadata = checkout / ".git"
+        if metadata.is_file() or metadata.is_symlink() or (metadata / "commondir").exists():
+            return "compiler checkout needs a standalone .git directory; use a separate empty path"
+        probe = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            env=auth_env(),
+            timeout=settings.code_git_timeout_s,
         )
-        if init.returncode:
-            reason = init.stderr.strip()
-            return checkout, bare, f"checkout missing at {checkout} (git init: {reason})"
-    if not checkout.exists():
-        return checkout, bare, f"checkout missing at {checkout}"
+        if probe.returncode:
+            return "not a Git working tree"
+        if Path(probe.stdout.removesuffix("\n")).resolve() != checkout.resolve():
+            return "not the root of its Git working tree"
+    except OSError as e:
+        return f"checkout unavailable: {e}"
+    except subprocess.TimeoutExpired:
+        return "checkout Git command timed out"
+    return None
+
+
+def resolve_checkout(cfg: RepoConfig, producer: str) -> tuple[Path, Path, str | None]:
+    """Resolve the producer's checkout and mirror, or explain why they are unusable.
+
+    Callers run this in a thread. The checkout is absolute because a harness changes
+    into it before consuming the converter's paths; every branch shares the mirror.
+    """
+    checkout = Path(checkout_for(cfg, producer)).absolute()
+    bare = Path(cfg.git_dir)
+    if not bare.exists():
+        return checkout, bare, f"bare clone missing at {bare}"
+    if reason := _prepare_checkout(checkout):
+        return checkout, bare, f"checkout missing at {checkout} ({reason})"
     return checkout, bare.resolve(), None
 
 
