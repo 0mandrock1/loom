@@ -27,6 +27,7 @@ from server.code.app.index.producer_inference import worker_owns
 from server.code.app.index.repo_modes import PRIVATE_DIR_MODE, set_repo_dir_mode
 from server.code.app.index.sandbox import JobOptions, run_job, sandbox_available
 from server.code.domain.index.repos import checkout_for
+from server.core.errors import caller_text
 from server.settings import settings
 from server.workers import pass_context
 from server.workers.status import log_pass_errors, record_pass
@@ -294,7 +295,8 @@ def _prepare_checkout(checkout: Path) -> str | None:
                 return f"git init: {init.stderr.strip()}"
         return _checkout_metadata_error(checkout)
     except OSError as e:
-        return f"checkout unavailable: {e}"
+        logger.warning("compiler tier: checkout %s unavailable: %s", checkout, e)
+        return f"checkout unavailable: {caller_text(e)}"
     except subprocess.TimeoutExpired:
         return "checkout Git command timed out"
 

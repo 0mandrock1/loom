@@ -321,6 +321,27 @@ def test_checkout_git_commands_have_a_timeout_and_report_expiry(
     assert seen == [settings.code_git_timeout_s]
 
 
+def test_checkout_os_errors_log_details_without_retaining_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    bare = _bare_repo(tmp_path)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    cfg = repo_config(git_dir=str(bare), scip_checkout_dir=str(checkout), scip_producer="python")
+
+    def unavailable(_checkout: Path) -> None:
+        raise OSError("backend-private-detail")
+
+    monkeypatch.setattr("server.code.app.index.compiler_tier._checkout_metadata_error", unavailable)
+
+    _actual, _bare, missing = resolve_checkout(cfg, "python")
+
+    assert missing is not None
+    assert "backend-private-detail" not in missing
+    assert "OSError" in missing
+    assert "backend-private-detail" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_no_git_command_in_a_checkout_starts_a_repack(tmp_path: Path, monkeypatch) -> None:
     """Auto-gc inside a fetch writes a pack as big as the repository; every git
