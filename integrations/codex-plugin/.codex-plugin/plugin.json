@@ -1,6 +1,6 @@
 {
   "name": "loom",
-  "version": "1.2.40",
+  "version": "1.2.42",
   "description": "Shared long-term memory and code intelligence for Codex, self-hosted on ClickHouse. MCP tools to save and recall decisions, preferences and corrections across sessions and teammates; lifecycle hooks that capture each session with no model call; a code index that answers where-is, who-calls and blast-radius questions with line-accurate units instead of whole-file reads.",
   "author": {
     "name": "ClickHouse"
@@ -28,7 +28,10 @@
     "longDescription": "Loom gives Codex a memory that outlives the session and is shared with every other agent on the team: decisions, preferences and corrections are captured by lifecycle hooks with no model call, a budgeted primer is loaded at session start, and in a loom-indexed repository the code tools answer structure questions with line-accurate units instead of whole files.",
     "developerName": "ClickHouse",
     "category": "Developer Tools",
-    "capabilities": ["Read", "Write"],
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
     "websiteURL": "https://clickhouse.github.io/loom/features/integrations/codex/",
     "defaultPrompt": [
       "What did we decide about this repository last week?",

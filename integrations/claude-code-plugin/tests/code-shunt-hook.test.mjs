@@ -683,3 +683,32 @@ for (const mode of ["mirrored", "late-sibling-mark"]) {
     }
   });
 }
+
+for (const status of ["modified", "untracked"]) {
+  for (const tool of ["Grep", "Bash"]) {
+    test(`${status} ${tool} single-file grep stays local without indexed requests`, async (t) => {
+      const { dir } = checkout({ "src/parser.py": "field_value = 1\n" });
+      const rel = status === "untracked" ? "src/local_parser.py" : "src/parser.py";
+      fs.writeFileSync(path.join(dir, rel), "field_value = 2\n");
+      const tmp = seed(dir, { existingSessions: ["local-query"] });
+      t.after(() => {
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.rmSync(tmp, { recursive: true, force: true });
+      });
+      const input =
+        tool === "Grep"
+          ? { pattern: "field_value", path: path.join(dir, rel), output_mode: "content" }
+          : { command: `grep -n field_value ${rel}` };
+      await withServer({}, async (url, seen) => {
+        const result = await runHook(
+          { tool_name: tool, tool_input: input, cwd: dir, session_id: "local-query" },
+          { tmp, url },
+        );
+        assert.equal(result.deny, null);
+        assert.equal(result.updatedInput, null);
+        assert.match(result.log, new RegExp(`\\tpass\\t(?:Grep|Bash:grep)\\t\\d+\\t\\t${status}\\t`));
+        assert.deepEqual(seen, [], "working-tree evidence needs no indexed lookup");
+      });
+    });
+  }
+}
