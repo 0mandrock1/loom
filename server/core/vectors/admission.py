@@ -234,6 +234,11 @@ def native_settings(out: dict[str, Any], *, timeout: float) -> dict[str, Any]:
         out[key] = int(bound) if bound.is_integer() else bound
     out["read_overflow_mode"] = "throw"
     out["timeout_overflow_mode"] = "throw"
+    out["result_overflow_mode"] = "throw"
+    out["sort_overflow_mode"] = "throw"
+    out["group_by_overflow_mode"] = "throw"
+    out["set_overflow_mode"] = "throw"
+    out["join_overflow_mode"] = "throw"
     return out
 
 
@@ -246,6 +251,8 @@ def raise_native(error: Exception) -> None:
     reasons: dict[int, VectorCapacityReason] = {
         158: "rows",
         307: "rows",
+        191: "rows",
+        396: "rows",
         241: "memory",
         159: "deadline",
     }

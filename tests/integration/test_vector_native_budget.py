@@ -213,3 +213,156 @@ def test_native_api_row_refusal_preserves_committed_heads(
     assert scalar.status_code == 200 and scalar.json()["found"] is True
     assert scalar.json()["value"] == _budget_value(0)
     assert scalar.json()["version"] == version_before
+
+
+_NATIVE_RANKED_ROWS = (
+    "SELECT number AS n, "
+    "cosineDistance([toFloat64(number + 1), 1.0], [1.0, 0.0]) AS distance "
+    "FROM numbers(64) ORDER BY distance, n"
+)
+
+
+@pytest.mark.parametrize(
+    ("sql", "profile", "complete_count", "native_code"),
+    [
+        pytest.param(
+            _NATIVE_RANKED_ROWS,
+            {"max_result_rows": 8, "result_overflow_mode": "break"},
+            64,
+            396,
+            id="result-rows",
+        ),
+        pytest.param(
+            _NATIVE_RANKED_ROWS,
+            {"max_result_bytes": 128, "result_overflow_mode": "break"},
+            64,
+            396,
+            id="result-bytes",
+        ),
+        pytest.param(
+            _NATIVE_RANKED_ROWS,
+            {"max_rows_to_sort": 8, "sort_overflow_mode": "break"},
+            64,
+            396,
+            id="sort",
+        ),
+        pytest.param(
+            "SELECT number % 32 AS n, count() AS copies, "
+            "min(cosineDistance([toFloat64(number + 1), 1.0], [1.0, 0.0])) AS distance "
+            "FROM numbers(64) GROUP BY n ORDER BY distance, n",
+            {"max_rows_to_group_by": 8, "group_by_overflow_mode": "any"},
+            32,
+            158,
+            id="group-by-any",
+        ),
+        pytest.param(
+            "SELECT number AS n, "
+            "cosineDistance([toFloat64(number + 1), 1.0], [1.0, 0.0]) AS distance "
+            "FROM numbers(32) WHERE number IN (SELECT number FROM numbers(32)) "
+            "ORDER BY distance, n",
+            {"max_rows_in_set": 8, "set_overflow_mode": "break"},
+            32,
+            191,
+            id="in-set",
+        ),
+        pytest.param(
+            "SELECT l.n AS n, r.n + 1 AS matched, "
+            "cosineDistance([toFloat64(l.n + 1), 1.0], [1.0, 0.0]) AS distance "
+            "FROM (SELECT number AS n FROM numbers(32)) AS l "
+            "ALL INNER JOIN (SELECT number AS n FROM numbers(32)) AS r ON l.n = r.n "
+            "ORDER BY distance, n SETTINGS join_algorithm = 'hash'",
+            {"max_rows_in_join": 8, "join_overflow_mode": "break"},
+            32,
+            191,
+            id="hash-join",
+        ),
+    ],
+)
+async def test_native_overflow_refuses_partial_vector_results_and_allows_complete_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+    sql: str,
+    profile: dict[str, Any],
+    complete_count: int,
+    native_code: int,
+) -> None:
+    import json
+
+    from server.core.traffic_context import traffic_class_var
+
+    monkeypatch.setattr(settings, "vector_scan_max_concurrent_per_org", 2)
+    monkeypatch.setattr(settings, "vector_scan_max_waiters_per_org", 2)
+    monkeypatch.setattr(settings, "ch_pool_maxsize", 2)
+    monkeypatch.setattr(settings, "ch_pool_wait_ms", 500)
+    common = {"max_block_size": 1, "max_threads": 1, "use_query_cache": 0}
+    monkeypatch.setattr(
+        settings, "ch_settings_by_traffic_class", json.dumps({"interactive": common})
+    )
+    org = unique_org("vector-native-overflow")
+    client = ch.CHClient()
+    gate = admission._admission
+    population_before = gate.population
+    pool_before = ch.pool_reading()
+    work_before = admission.current_work()
+    traffic_token = traffic_class_var.set(("", ""))
+
+    def assert_drained() -> None:
+        assert gate.population == population_before
+        assert org not in gate.orgs
+        assert ch.pool_reading() == pool_before
+        assert client._inflight == {}
+        assert client._retired == {}
+
+    try:
+        with ch.query_tag("itest.vector-native-overflow"), admission.vector_work("", (), 0):
+            await client.connect()
+            traffic_class_var.set(("interactive", "test"))
+            complete = await client.query_all(sql)
+            assert len(complete) == complete_count
+            assert [row["n"] for row in complete] == list(reversed(range(complete_count)))
+            assert_drained()
+            with admission.vector_work(org, "native-overflow", weight=2):
+                assert await client.query_all(sql) == complete
+            assert_drained()
+
+            capped = {**common, **profile}
+            monkeypatch.setattr(
+                settings, "ch_settings_by_traffic_class", json.dumps({"interactive": capped})
+            )
+            scalar_settings = ch.statement_settings(sql)
+            assert all(scalar_settings[key] == value for key, value in capped.items())
+            partial = await client.query_all(sql)
+            assert len(partial) < len(complete)
+            assert_drained()
+
+            with admission.vector_work(org, "native-overflow", weight=2):
+                vector_settings = ch.statement_settings(sql)
+                result: object = None
+                with pytest.raises(VectorAdmissionError) as caught:
+                    result = await client.query_all(sql)
+                assert result is None
+                assert type(caught.value) is VectorAdmissionError
+                assert caught.value.code == "VECTOR_CAPACITY_REFUSED"
+                assert caught.value.status_code == 429
+                assert caught.value.extra == {"reason": "rows", "retry_after_s": 1}
+                assert caught.value.headers() == {"Retry-After": "1"}
+                assert isinstance(caught.value.__cause__, DatabaseError)
+                assert error_code(caught.value.__cause__) == native_code
+                for key, value in capped.items():
+                    expected = "throw" if key.endswith("_overflow_mode") else value
+                    assert vector_settings[key] == expected
+                assert_drained()
+
+            monkeypatch.setattr(
+                settings, "ch_settings_by_traffic_class", json.dumps({"interactive": common})
+            )
+            with admission.vector_work(org, "native-overflow", weight=2):
+                assert await client.query_all(sql) == complete
+            assert admission.current_work() is None
+            assert_drained()
+    finally:
+        try:
+            await client.disconnect()
+        finally:
+            traffic_class_var.reset(traffic_token)
+    assert admission.current_work() == work_before
+    assert_drained()

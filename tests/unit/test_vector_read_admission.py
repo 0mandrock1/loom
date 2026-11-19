@@ -500,3 +500,134 @@ async def test_vector_native_timeout_refuses_partial_results(
         assert native["read_overflow_mode"] == "throw"
     else:
         assert "max_rows_to_read" not in native
+
+
+@pytest.mark.parametrize(
+    ("mode", "configured", "limits"),
+    [
+        ("result_overflow_mode", "break", {"max_result_rows": 1, "max_result_bytes": 64}),
+        ("sort_overflow_mode", "break", {"max_rows_to_sort": 1, "max_bytes_to_sort": 64}),
+        ("group_by_overflow_mode", "any", {"max_rows_to_group_by": 1}),
+        ("set_overflow_mode", "break", {"max_rows_in_set": 1, "max_bytes_in_set": 64}),
+        ("join_overflow_mode", "break", {"max_rows_in_join": 1, "max_bytes_in_join": 64}),
+    ],
+)
+@pytest.mark.parametrize(
+    ("source", "vector", "already_throws"),
+    [
+        ("class", True, False),
+        ("statement", True, False),
+        ("class", True, True),
+        ("class", False, False),
+        ("statement", False, False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_vector_native_partial_modes_throw_without_relaxing_limits(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    configured: str,
+    limits: dict[str, int],
+    source: str,
+    vector: bool,
+    already_throws: bool,
+) -> None:
+    import contextlib
+    import json
+
+    from server.core.traffic_context import traffic_class_var
+    from server.core.vectors.admission import vector_work
+
+    ch, driver = client(monkeypatch)
+    driver.release.set()
+    configured = "throw" if already_throws else configured
+    caps = {**limits, mode: configured}
+    monkeypatch.setattr(settings, "ch_settings_by_traffic_class", json.dumps({"interactive": caps}))
+    token = traffic_class_var.set(("interactive", "test") if source == "class" else ("", ""))
+    try:
+        with vector_work("one-org", ["private"]) if vector else contextlib.nullcontext():
+            if source == "statement":
+
+                async def raw_query(sql: str, **kwargs: Any) -> bytes:
+                    driver.started += 1
+                    driver.settings.append(kwargs["settings"])
+                    return b"body"
+
+                monkeypatch.setattr(driver, "raw_query", raw_query, raising=False)
+                assert (
+                    await ch.raw_bytes("SELECT number FROM numbers(10)", settings=caps) == b"body"
+                )
+            else:
+                assert await ch.query_all("SELECT number FROM numbers(10)") == []
+    finally:
+        traffic_class_var.reset(token)
+    assert driver.started == 1 and driver.active == 0
+    native = driver.settings[0]
+    assert native[mode] == ("throw" if vector else configured)
+    assert {key: native[key] for key in limits} == limits
+    if vector:
+        assert native["read_overflow_mode"] == native["timeout_overflow_mode"] == "throw"
+    else:
+        assert "max_rows_to_read" not in native
+
+
+@pytest.mark.parametrize("code", [191, 396])
+@pytest.mark.asyncio
+async def test_entity_boost_native_set_or_result_limit_is_a_complete_failure(
+    monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    from server.core.errors import VectorCapacityError
+
+    ch, driver = client(monkeypatch)
+    driver.release.set()
+    driver.failure = NativeBudgetError(code)
+    monkeypatch.setattr(ann_entity_boosts, "get_client", lambda: ch)
+    with pytest.raises(VectorCapacityError) as caught:
+        await ann_entity_boosts._ann_entity_boosts(
+            org="one-org",
+            namespaces=["private"],
+            agent="a",
+            user_id="u",
+            query_entities=["entity"],
+            embedder=Embedder(),
+        )
+    assert caught.value.__cause__ is driver.failure
+    assert caught.value.extra["reason"] == "rows"
+    assert caught.value.extra["retry_after_s"] == 1
+    assert driver.started == 1 and driver.active == 0
+
+
+@pytest.mark.parametrize("code", [191, 396])
+@pytest.mark.asyncio
+async def test_scalar_set_or_result_limit_retains_original_native_error(
+    monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    ch, driver = client(monkeypatch)
+    driver.release.set()
+    driver.failure = NativeBudgetError(code)
+    with pytest.raises(NativeBudgetError) as caught:
+        await ch.query_all("SELECT 1")
+    assert caught.value is driver.failure
+    assert driver.started == 1 and driver.active == 0
+
+
+@pytest.mark.asyncio
+async def test_entity_boost_unrelated_native_error_retains_optional_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ch, driver = client(monkeypatch)
+    driver.release.set()
+    driver.failure = NativeBudgetError(60)
+    monkeypatch.setattr(ann_entity_boosts, "get_client", lambda: ch)
+    assert (
+        await ann_entity_boosts._ann_entity_boosts(
+            org="one-org",
+            namespaces=["private"],
+            agent="a",
+            user_id="u",
+            query_entities=["entity"],
+            embedder=Embedder(),
+        )
+        == {}
+    )
+    assert driver.started == 1 and driver.active == 0
