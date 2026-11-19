@@ -1,12 +1,20 @@
 # Agent runs, traces and PR history
 
-Loom records the work coding agents do, as runs and searchable session conversations, and
-connects it to your code history. Runs carry goals and outcomes, and model costs when the
-Claude Code plugin reports the session's turn usage (on by default). The history covers
-merged pull requests, review comments, GitHub issues and, with a tracker source, incidents
-and CI runs. Conversation recording, PR history and the tracker are each off until turned
-on. An agent or a person can then ask what was tried before, what was decided and which
-change introduced a regression.
+Loom records agent runs and conversations, checks bug drafts for duplicates and ranks
+candidate regression PRs without building the code.
+
+Runs carry goals and outcomes, and model costs when the Claude Code plugin reports the
+session's turn usage (on by default). The history covers merged pull requests, review
+comments, GitHub issues and, with a tracker source, incidents and CI runs. Conversation
+recording, PR history and the tracker are each off until turned on. An agent or a person
+can then ask what was tried before, what was decided and which changes to investigate
+for a regression.
+
+Duplicate checks need a registered tracker source and a namespace the caller may read.
+PR ranking needs indexed merged-PR history with `LOOM_CODE_PR_HISTORY_ENABLED=true`.
+The [bug draft to candidate PRs](../features/tracker/overview.md#from-a-bug-draft-to-candidate-prs)
+walkthrough connects both operations. Candidate ranking neither runs a bisect nor proves
+which change caused the bug.
 
 ## What you get
 
