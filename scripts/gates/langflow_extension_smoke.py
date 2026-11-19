@@ -10,11 +10,6 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-import loom
-from lfx.custom.custom_component.component import Component
-from lfx.extension.discovery import discover_installed_extensions
-from lfx.extension.loader import load_installed_extensions
-
 
 def only(directory: Path, pattern: str) -> Path:
     paths = list(directory.glob(pattern))
@@ -67,6 +62,8 @@ def check_installed(expected: dict[str, bytes], prefix: Path) -> metadata.Distri
 
 
 def check_sdk(sdk_wheel: Path, prefix: Path) -> str:
+    import loom
+
     sdk = metadata.distribution("clickhouse-loom")
     assert Path(loom.__file__).resolve().is_relative_to(prefix)
     with zipfile.ZipFile(sdk_wheel) as archive:
@@ -79,6 +76,10 @@ def check_sdk(sdk_wheel: Path, prefix: Path) -> str:
 
 
 def check_discovery(installed: metadata.Distribution, component_bytes: bytes) -> str:
+    from lfx.custom.custom_component.component import Component
+    from lfx.extension.discovery import discover_installed_extensions
+    from lfx.extension.loader import load_installed_extensions
+
     discoveries, errors = discover_installed_extensions()
     assert not errors, errors
     matching = [record for record in discoveries if record.extension_id == "lfx-loom"]
