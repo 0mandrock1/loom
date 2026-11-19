@@ -1,3 +1,4 @@
+import "./temp-home.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -29,214 +30,216 @@ const response = (body) => async () => ({ status: 200, json: async () => body })
 if (process.platform === "win32" || typeof process.getuid !== "function") {
   test("automatic contexts refuse unavailable native capsule authority", () => {
     let ran = false;
-    withAutomaticSessionProtection({ base: path.resolve("missing"), id: "00000000-0000-0000-0000-000000000000" }, () => {
-      ran = true;
-    });
+    withAutomaticSessionProtection(
+      { base: path.resolve("missing"), id: "00000000-0000-0000-0000-000000000000" },
+      () => {
+        ran = true;
+      },
+    );
     assert.equal(ran, false);
   });
 } else {
-test("a marked response is durable before return and stops the next automatic operation", async () => {
-  const { root } = fixture();
-  let sends = 0;
-  const fetchImpl = async () => {
-    sends++;
-    return { status: 200, json: async () => ({ mirrored: true, answer: "private answer" }) };
-  };
-  await withAutomaticSessionProtection(root, async () => {
-    const first = await requestJson("http://server/v1/context.pack", { fetchImpl });
-    assert.equal(first.body.answer, "private answer");
-    assert.equal(sessionIsProtected(root), true);
-    const later = await requestJson("http://other/v1/code.repos", { fetchImpl, token: "other-token" });
-    assert.deepEqual(later, { status: 0, body: null, suppressed: true });
-  });
-  assert.equal(sends, 1);
-  const explicit = await withSessionProtection(root, () =>
-    requestJson("http://other/v1/memory.set", { fetchImpl: response({ version: 2 }) }),
-  );
-  assert.equal(explicit.body.version, 2);
-  assert.equal(sessionIsProtected(root), true);
-});
-
-for (const body of [
-  { result: { structuredContent: { mirrored: true, items: [] } } },
-  { content: [{ type: "text", text: '{"mirrored":true,"found":true}' }] },
-  { items: [{ found: true, mirrored: true }] },
-  { jsonrpc: "2.0", id: 1, error: { code: -32000, data: { mirrored: true, code: "REFUSED" } } },
-  { mirrored: true, code: "REFUSED" },
-]) {
-  test(`canonical response envelopes protect the same family (${JSON.stringify(body)})`, () => {
+  test("a marked response is durable before return and stops the next automatic operation", async () => {
     const { root } = fixture();
-    assert.equal(observeSessionResponse(root, body), body);
+    let sends = 0;
+    const fetchImpl = async () => {
+      sends++;
+      return { status: 200, json: async () => ({ mirrored: true, answer: "private answer" }) };
+    };
+    await withAutomaticSessionProtection(root, async () => {
+      const first = await requestJson("http://server/v1/context.pack", { fetchImpl });
+      assert.equal(first.body.answer, "private answer");
+      assert.equal(sessionIsProtected(root), true);
+      const later = await requestJson("http://other/v1/code.repos", { fetchImpl, token: "other-token" });
+      assert.deepEqual(later, { status: 0, body: null, suppressed: true });
+    });
+    assert.equal(sends, 1);
+    const explicit = await withSessionProtection(root, () =>
+      requestJson("http://other/v1/memory.set", { fetchImpl: response({ version: 2 }) }),
+    );
+    assert.equal(explicit.body.version, 2);
     assert.equal(sessionIsProtected(root), true);
   });
-}
 
-test("a marked JSON-RPC error is observed before its consumer and blocks the next automatic send", async () => {
-  const { root } = fixture();
-  const body = { jsonrpc: "2.0", id: 7, error: { code: -32000, data: { mirrored: true, code: "REFUSED" } } };
-  let sends = 0;
-  await withAutomaticSessionProtection(root, async () => {
-    const reply = await requestJson("http://server/mcp", {
-      fetchImpl: async () => {
-        sends++;
-        return { status: 403, json: async () => body };
-      },
+  for (const body of [
+    { result: { structuredContent: { mirrored: true, items: [] } } },
+    { content: [{ type: "text", text: '{"mirrored":true,"found":true}' }] },
+    { items: [{ found: true, mirrored: true }] },
+    { jsonrpc: "2.0", id: 1, error: { code: -32000, data: { mirrored: true, code: "REFUSED" } } },
+    { mirrored: true, code: "REFUSED" },
+  ]) {
+    test(`canonical response envelopes protect the same family (${JSON.stringify(body)})`, () => {
+      const { root } = fixture();
+      assert.equal(observeSessionResponse(root, body), body);
+      assert.equal(sessionIsProtected(root), true);
     });
-    assert.equal(reply.status, 403);
-    assert.equal(reply.body, body);
-    assert.equal(sessionIsProtected(root), true);
-    const later = await requestJson("http://server/v1/code.repos", {
-      fetchImpl: async () => {
-        sends++;
-        return { status: 200, json: async () => ({ repos: [] }) };
-      },
+  }
+
+  test("a marked JSON-RPC error is observed before its consumer and blocks the next automatic send", async () => {
+    const { root } = fixture();
+    const body = { jsonrpc: "2.0", id: 7, error: { code: -32000, data: { mirrored: true, code: "REFUSED" } } };
+    let sends = 0;
+    await withAutomaticSessionProtection(root, async () => {
+      const reply = await requestJson("http://server/mcp", {
+        fetchImpl: async () => {
+          sends++;
+          return { status: 403, json: async () => body };
+        },
+      });
+      assert.equal(reply.status, 403);
+      assert.equal(reply.body, body);
+      assert.equal(sessionIsProtected(root), true);
+      const later = await requestJson("http://server/v1/code.repos", {
+        fetchImpl: async () => {
+          sends++;
+          return { status: 200, json: async () => ({ repos: [] }) };
+        },
+      });
+      assert.deepEqual(later, { status: 0, body: null, suppressed: true });
     });
-    assert.deepEqual(later, { status: 0, body: null, suppressed: true });
+    assert.equal(sends, 1);
   });
-  assert.equal(sends, 1);
-});
 
-test("model arguments do not become response envelopes or choose protection identity", () => {
-  const { root } = fixture();
-  const input = { arguments: { mirrored: true, session_id: "another-session" }, answer: "ordinary" };
-  assert.equal(observeSessionResponse(root, input), input);
-  assert.equal(sessionIsProtected(root), false);
-});
-
-test("parallel unrelated contexts retain separate state while siblings share a mark", async () => {
-  const { root, base } = fixture();
-  const unrelated = createProtectionRoot({ base });
-  await Promise.all([
-    withSessionProtection(root, () =>
-      requestJson("http://first/v1/knowledge.get", { fetchImpl: response({ mirrored: true }) }),
-    ),
-    withSessionProtection(unrelated, () =>
-      requestJson("http://second/v1/knowledge.get", { fetchImpl: response({ found: true }) }),
-    ),
-  ]);
-  let siblingRan = false;
-  withAutomaticSessionProtection(root, () => {
-    siblingRan = true;
+  test("model arguments do not become response envelopes or choose protection identity", () => {
+    const { root } = fixture();
+    const input = { arguments: { mirrored: true, session_id: "another-session" }, answer: "ordinary" };
+    assert.equal(observeSessionResponse(root, input), input);
+    assert.equal(sessionIsProtected(root), false);
   });
-  assert.equal(siblingRan, false);
-  assert.equal(sessionIsProtected(unrelated), false);
-});
 
-test("taint during an automatic callback's await prevents its later dispatch", async () => {
-  const { root } = fixture();
-  let resume;
-  const waiting = new Promise((resolve) => {
-    resume = resolve;
-  });
-  let sends = 0;
-  const pending = withAutomaticSessionProtection(root, async () => {
-    await waiting;
-    return requestJson("http://server/v1/conversation.append", {
-      fetchImpl: async () => {
-        sends++;
-        return { status: 200, json: async () => ({ stored: true }) };
-      },
+  test("parallel unrelated contexts retain separate state while siblings share a mark", async () => {
+    const { root, base } = fixture();
+    const unrelated = createProtectionRoot({ base });
+    await Promise.all([
+      withSessionProtection(root, () =>
+        requestJson("http://first/v1/knowledge.get", { fetchImpl: response({ mirrored: true }) }),
+      ),
+      withSessionProtection(unrelated, () =>
+        requestJson("http://second/v1/knowledge.get", { fetchImpl: response({ found: true }) }),
+      ),
+    ]);
+    let siblingRan = false;
+    withAutomaticSessionProtection(root, () => {
+      siblingRan = true;
     });
+    assert.equal(siblingRan, false);
+    assert.equal(sessionIsProtected(unrelated), false);
   });
-  protectSession(root);
-  resume();
-  assert.deepEqual(await pending, { status: 0, body: null, suppressed: true });
-  assert.equal(sends, 0);
-});
 
-test("a failed durable mark withholds the response and leaves automatic capture suppressed", async () => {
-  const { root, base } = fixture();
-  fs.unlinkSync(path.join(base, root.id, "state"));
-  const reply = await withSessionProtection(root, () =>
-    requestJson("http://server/v1/knowledge.get", {
-      fetchImpl: response({ mirrored: true, text: "must not escape" }),
-    }),
-  );
-  assert.equal(reply.status, 0);
-  assert.equal(reply.body, null);
-  assert.equal(reply.error, "Session protection state could not be confirmed");
-  let automaticRan = false;
-  withAutomaticSessionProtection(root, () => {
-    automaticRan = true;
+  test("taint during an automatic callback's await prevents its later dispatch", async () => {
+    const { root } = fixture();
+    let resume;
+    const waiting = new Promise((resolve) => {
+      resume = resolve;
+    });
+    let sends = 0;
+    const pending = withAutomaticSessionProtection(root, async () => {
+      await waiting;
+      return requestJson("http://server/v1/conversation.append", {
+        fetchImpl: async () => {
+          sends++;
+          return { status: 200, json: async () => ({ stored: true }) };
+        },
+      });
+    });
+    protectSession(root);
+    resume();
+    assert.deepEqual(await pending, { status: 0, body: null, suppressed: true });
+    assert.equal(sends, 0);
   });
-  assert.equal(automaticRan, false);
-});
 
-test("a malformed flag or truncated MCP envelope is withheld without exposing its text", async () => {
-  const { root } = fixture();
-  for (const body of [{ mirrored: "true" }, { content: [{ type: "text", text: '{"mirrored":true' }] }]) {
+  test("a failed durable mark withholds the response and leaves automatic capture suppressed", async () => {
+    const { root, base } = fixture();
+    fs.unlinkSync(path.join(base, root.id, "state"));
     const reply = await withSessionProtection(root, () =>
-      requestJson("http://server/v1/knowledge.get", { fetchImpl: response(body) }),
+      requestJson("http://server/v1/knowledge.get", {
+        fetchImpl: response({ mirrored: true, text: "must not escape" }),
+      }),
     );
     assert.equal(reply.status, 0);
     assert.equal(reply.body, null);
     assert.equal(reply.error, "Session protection state could not be confirmed");
-  }
-});
-
-test("unbound requests make no session-protection declaration", async () => {
-  let headers;
-  await requestJson("http://server/v1/context.pack", {
-    fetchImpl: async (_url, options) => {
-      headers = options.headers;
-      return { status: 200, json: async () => ({ answer: "ordinary" }) };
-    },
+    let automaticRan = false;
+    withAutomaticSessionProtection(root, () => {
+      automaticRan = true;
+    });
+    assert.equal(automaticRan, false);
   });
-  assert.equal(
-    Object.keys(headers).some((name) => name.toLowerCase() === "x-loom-session-protection"),
-    false,
-  );
-});
 
-test("repeated moderate MCP blocks share one decoding budget", async () => {
-  const { root } = fixture();
-  const block = { type: "text", text: JSON.stringify({ answer: "x".repeat(256 * 1024) }) };
-  const reply = await withSessionProtection(root, () =>
-    requestJson("http://server/v1/context.pack", { fetchImpl: response({ content: Array(32).fill(block) }) }),
-  );
-  assert.equal(reply.status, 0);
-  assert.equal(reply.body, null);
-  assert.equal(reply.error, "Session protection state could not be confirmed");
-});
+  test("a malformed flag or truncated MCP envelope is withheld without exposing its text", async () => {
+    const { root } = fixture();
+    for (const body of [{ mirrored: "true" }, { content: [{ type: "text", text: '{"mirrored":true' }] }]) {
+      const reply = await withSessionProtection(root, () =>
+        requestJson("http://server/v1/knowledge.get", { fetchImpl: response(body) }),
+      );
+      assert.equal(reply.status, 0);
+      assert.equal(reply.body, null);
+      assert.equal(reply.error, "Session protection state could not be confirmed");
+    }
+  });
 
-test("excessive response fan-out and cyclic envelopes refuse without output", () => {
-  const { root } = fixture();
-  const cyclic = {};
-  cyclic.result = cyclic;
-  for (const body of [cyclic, { items: Array(20000).fill({ found: false }) }]) {
+  test("unbound requests make no session-protection declaration", async () => {
+    let headers;
+    await requestJson("http://server/v1/context.pack", {
+      fetchImpl: async (_url, options) => {
+        headers = options.headers;
+        return { status: 200, json: async () => ({ answer: "ordinary" }) };
+      },
+    });
+    assert.equal(
+      Object.keys(headers).some((name) => name.toLowerCase() === "x-loom-session-protection"),
+      false,
+    );
+  });
+
+  test("repeated moderate MCP blocks share one decoding budget", async () => {
+    const { root } = fixture();
+    const block = { type: "text", text: JSON.stringify({ answer: "x".repeat(256 * 1024) }) };
+    const reply = await withSessionProtection(root, () =>
+      requestJson("http://server/v1/context.pack", { fetchImpl: response({ content: Array(32).fill(block) }) }),
+    );
+    assert.equal(reply.status, 0);
+    assert.equal(reply.body, null);
+    assert.equal(reply.error, "Session protection state could not be confirmed");
+  });
+
+  test("excessive response fan-out and cyclic envelopes refuse without output", () => {
+    const { root } = fixture();
+    const cyclic = {};
+    cyclic.result = cyclic;
+    for (const body of [cyclic, { items: Array(20000).fill({ found: false }) }]) {
+      assert.throws(() => observeSessionResponse(root, body), {
+        message: "Session protection state could not be confirmed",
+      });
+    }
+  });
+
+  test("nested non-text blocks share the observation work budget", () => {
+    const { root } = fixture();
+    const blocks = Array(4999).fill({ type: "image" });
+    const body = { items: Array.from({ length: 5000 }, () => ({ content: blocks })) };
     assert.throws(() => observeSessionResponse(root, body), {
       message: "Session protection state could not be confirmed",
     });
-  }
-});
-
-test("nested non-text blocks share the observation work budget", () => {
-  const { root } = fixture();
-  const blocks = Array(4999).fill({ type: "image" });
-  const body = { items: Array.from({ length: 5000 }, () => ({ content: blocks })) };
-  assert.throws(() => observeSessionResponse(root, body), {
-    message: "Session protection state could not be confirmed",
   });
-});
 
-test("a nested explicit operation restores its parent's automatic dispatch guard", async () => {
-  const { root } = fixture();
-  await withAutomaticSessionProtection(root, async () => {
-    protectSession(root);
-    const explicit = await withSessionProtection(root, () =>
-      requestJson("http://server/v1/memory.set", { fetchImpl: response({ version: 3 }) }),
-    );
-    assert.equal(explicit.body.version, 3);
-    let sends = 0;
-    const next = await requestJson("http://server/v1/code.repos", {
-      fetchImpl: async () => {
-        sends++;
-        return { status: 200, json: async () => ({ repos: [] }) };
-      },
+  test("a nested explicit operation restores its parent's automatic dispatch guard", async () => {
+    const { root } = fixture();
+    await withAutomaticSessionProtection(root, async () => {
+      protectSession(root);
+      const explicit = await withSessionProtection(root, () =>
+        requestJson("http://server/v1/memory.set", { fetchImpl: response({ version: 3 }) }),
+      );
+      assert.equal(explicit.body.version, 3);
+      let sends = 0;
+      const next = await requestJson("http://server/v1/code.repos", {
+        fetchImpl: async () => {
+          sends++;
+          return { status: 200, json: async () => ({ repos: [] }) };
+        },
+      });
+      assert.equal(sends, 0);
+      assert.deepEqual(next, { status: 0, body: null, suppressed: true });
     });
-    assert.equal(sends, 0);
-    assert.deepEqual(next, { status: 0, body: null, suppressed: true });
   });
-});
-
 }

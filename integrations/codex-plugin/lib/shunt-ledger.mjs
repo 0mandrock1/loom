@@ -31,9 +31,17 @@ function batchRoots(roots) {
   if (!Array.isArray(roots) || !roots.length) return null;
   const known = new Map();
   for (const root of roots) {
-    if (!root || typeof root !== "object" || Array.isArray(root) ||
-        Object.keys(root).sort().join(",") !== "base,id" ||
-        typeof root.base !== "string" || !path.isAbsolute(root.base) || typeof root.id !== "string" || !ROOT_ID.test(root.id)) return null;
+    if (
+      !root ||
+      typeof root !== "object" ||
+      Array.isArray(root) ||
+      Object.keys(root).sort().join(",") !== "base,id" ||
+      typeof root.base !== "string" ||
+      !path.isAbsolute(root.base) ||
+      typeof root.id !== "string" ||
+      !ROOT_ID.test(root.id)
+    )
+      return null;
     const copy = Object.freeze({ base: root.base, id: root.id });
     known.set(JSON.stringify([copy.base, copy.id]), copy);
   }
@@ -55,7 +63,8 @@ export function formatShuntBatchLine(line, roots) {
 
 /** Any unattributed or damaged row withholds the entire batch, preserving its bytes. */
 export function parseShuntBatch(text) {
-  if (typeof text !== "string" || !text || !text.endsWith("\n") || Buffer.byteLength(text, "utf8") > MAX_BATCH_BYTES) return null;
+  if (typeof text !== "string" || !text || !text.endsWith("\n") || Buffer.byteLength(text, "utf8") > MAX_BATCH_BYTES)
+    return null;
   const roots = [];
   const lines = [];
   for (const raw of text.slice(0, -1).split("\n")) {
@@ -65,9 +74,15 @@ export function parseShuntBatch(text) {
     } catch {
       return null;
     }
-    if (!row || typeof row !== "object" || Array.isArray(row) ||
-        Object.keys(row).sort().join(",") !== "line,protectionRoots,version" || row.version !== 1 ||
-        !validDecisionLine(row.line)) return null;
+    if (
+      !row ||
+      typeof row !== "object" ||
+      Array.isArray(row) ||
+      Object.keys(row).sort().join(",") !== "line,protectionRoots,version" ||
+      row.version !== 1 ||
+      !validDecisionLine(row.line)
+    )
+      return null;
     const retained = batchRoots(row.protectionRoots);
     if (!retained) return null;
     roots.push(...retained);

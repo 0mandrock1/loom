@@ -50,7 +50,10 @@ test("the flusher advances a cursor it owns and never follows a symlink at the c
   try {
     const own = path.join(dir, "loom-conv-a.offset");
     const jobPath = await flush(dir, url, {
-      protectionRoots: [root], appends: [append], cursorPath: own, advanceTo: 42,
+      protectionRoots: [root],
+      appends: [append],
+      cursorPath: own,
+      advanceTo: 42,
     });
     assert.equal(fs.readFileSync(own, "utf8"), "42");
     assert.equal(fs.existsSync(jobPath), false);
@@ -60,7 +63,10 @@ test("the flusher advances a cursor it owns and never follows a symlink at the c
     const planted = path.join(dir, "loom-conv-b.offset");
     fs.symlinkSync(victim, planted);
     const plantedJob = await flush(dir, url, {
-      protectionRoots: [root], appends: [append], cursorPath: planted, advanceTo: 42,
+      protectionRoots: [root],
+      appends: [append],
+      cursorPath: planted,
+      advanceTo: 42,
     });
     assert.equal(fs.readFileSync(victim, "utf8"), "keep");
     assert.equal(fs.existsSync(plantedJob), false);

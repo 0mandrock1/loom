@@ -274,7 +274,10 @@ test("a chained Bash read is judged segment by segment; the first deny wins", as
 // The hook's pending batch for the seeded repository (o/code-x), the server at
 // `url`, runHook's token and a session.
 const pendingPath = (tmp, url, session = "e2e", namespace = "code-x") =>
-  sessionStatePath(batchKind({ serverUrl: url, token: "t", org: "o", namespace }), session, { ext: ".log.control", tmp });
+  sessionStatePath(batchKind({ serverUrl: url, token: "t", org: "o", namespace }), session, {
+    ext: ".log.control",
+    tmp,
+  });
 const reporting = { LOOM_SHUNT_REPORT: "on", LOOM_SHUNT_READ_CAP: "200" };
 const rangedRead = (dir) => ({
   ...readOf(dir, "src/a.cpp"),
@@ -459,7 +462,6 @@ test("an over-cap read whose budget cannot be written passes as budget_unrecorde
   assert.match(r.log, /\tpass\tRead\t\d+\t\tbudget_unrecorded\t/);
 });
 
-
 test("a producer protected after queuing keeps its bytes while an unrelated clean hit posts", async () => {
   const { dir } = checkout({ "src/a.cpp": BIG });
   fs.appendFileSync(path.join(dir, "src/a.cpp"), "// private producer change\n");
@@ -486,7 +488,10 @@ test("a producer protected after queuing keeps its bytes while an unrelated clea
       assert.equal(outcomes(seen)[0].body.action, "shunt_hit");
       assert.ok(outcomes(seen)[0].body.spans.some((span) => span.startsWith("src/b.cpp:")));
       assert.equal(JSON.stringify(outcomes(seen)).includes("src/a.cpp"), false);
-      assert.equal(outcomes(seen).some((entry) => entry.body.source === "modified"), false);
+      assert.equal(
+        outcomes(seen).some((entry) => entry.body.source === "modified"),
+        false,
+      );
       assert.deepEqual(fs.readFileSync(queuedA), before, "protected evidence is neither claimed nor changed");
       assert.equal(fs.existsSync(pendingPath(tmp, url, "B")), false);
       assert.equal(sessionIsProtected(rootB), false);
@@ -526,7 +531,12 @@ test("a marked aggregate response protects every producer and retains both unack
       assert.equal(claims.length, 2, "claiming moves evidence; a marked answer does not acknowledge it");
       const retained = claims.map((name) => fs.readFileSync(path.join(tmp, name), "utf8"));
       assert.ok(retained.includes(beforeA), "producer A's exact queued bytes remain in its claim");
-      const rows = retained.flatMap((text) => text.trimEnd().split("\n").map((line) => JSON.parse(line)));
+      const rows = retained.flatMap((text) =>
+        text
+          .trimEnd()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      );
       assert.equal(rows.length, 2);
       const rowA = rows.find((row) =>
         row.protectionRoots.some((root) => root.base === rootA.base && root.id === rootA.id),
@@ -565,7 +575,10 @@ test("an unattributed batch in the same protected scope stays untouched while a 
       assert.equal(carriesPlanted(seen), false);
       assert.deepEqual(fs.readFileSync(unattributed), before, "a matching filename cannot supply producer authority");
       assert.equal(fs.existsSync(pendingPath(tmp, url, "B")), false);
-      assert.deepEqual(fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-")), []);
+      assert.deepEqual(
+        fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-")),
+        [],
+      );
     });
   } finally {
     for (const owned of [tmp, dir]) fs.rmSync(owned, { recursive: true, force: true });

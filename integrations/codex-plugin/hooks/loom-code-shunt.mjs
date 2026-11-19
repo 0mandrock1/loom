@@ -231,17 +231,19 @@ function logDecision(pending, { decision, tool, tokensSaved, reason, passReason,
   } catch {
     /* tmp not writable, or a file we do not own: fine */
   }
-  return withBatchLock(pending.path, () => {
-    try {
-      // Do not append over damaged or unattributed evidence.
-      if (fs.existsSync(pending.path) && !parseShuntBatch(readPrivateFile(pending.path))) return 0;
-      if (automaticSessionIsProtected()) return 0;
-      writePrivateFile(pending.path, row, { append: true });
-      return parseShuntBatch(readPrivateFile(pending.path))?.lines || 0;
-    } catch {
-      return 0;
-    }
-  }) || 0;
+  return (
+    withBatchLock(pending.path, () => {
+      try {
+        // Do not append over damaged or unattributed evidence.
+        if (fs.existsSync(pending.path) && !parseShuntBatch(readPrivateFile(pending.path))) return 0;
+        if (automaticSessionIsProtected()) return 0;
+        writePrivateFile(pending.path, row, { append: true });
+        return parseShuntBatch(readPrivateFile(pending.path))?.lines || 0;
+      } catch {
+        return 0;
+      }
+    }) || 0
+  );
 }
 
 /** The batch files of this reporting scope that this user owns: this
@@ -276,9 +278,13 @@ function claimBatch(file) {
     try {
       const before = parseShuntBatch(readPrivateFile(file));
       if (!before || !rootsAreClean(before.roots)) return null;
-      claimed = tmpStatePath("shunt-protected-claim", `${file}:${process.pid}:${crypto.randomBytes(8).toString("hex")}`, {
-        ext: ".log.control",
-      });
+      claimed = tmpStatePath(
+        "shunt-protected-claim",
+        `${file}:${process.pid}:${crypto.randomBytes(8).toString("hex")}`,
+        {
+          ext: ".log.control",
+        },
+      );
       fs.renameSync(file, claimed);
       // Re-read after claim: a changed control record is never sent as the old one.
       const batch = parseShuntBatch(readPrivateFile(claimed));

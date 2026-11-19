@@ -31,7 +31,10 @@ const payload = (source = "startup") => ({ session_id: "known", hook_event_name:
 
 if (process.platform === "win32" || typeof process.getuid !== "function") {
   test("unavailable platform authority never binds a native hook", () => {
-    assert.throws(() => bindHookProtection(payload(), { host: "codex", event: "SessionStart" }), SessionProtectionUnavailable);
+    assert.throws(
+      () => bindHookProtection(payload(), { host: "codex", event: "SessionStart" }),
+      SessionProtectionUnavailable,
+    );
   });
 } else {
   test("canonical existing alias reopens the same family without creating state", () => {
@@ -51,7 +54,10 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
     test(`unbound ${source} refuses without a root factory`, () => {
       const { base, root } = fixture();
       const before = fs.readdirSync(base);
-      assert.throws(() => bindHookProtection(payload(source), { host: "codex", event: "SessionStart", base }), SessionProtectionUnavailable);
+      assert.throws(
+        () => bindHookProtection(payload(source), { host: "codex", event: "SessionStart", base }),
+        SessionProtectionUnavailable,
+      );
       assert.deepEqual(fs.readdirSync(base), before);
       assert.equal(sessionIsProtected(root), false);
     });
@@ -61,7 +67,10 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
     const { base, root } = fixture();
     bindProtectionAlias(root, "codex", "42");
     for (const input of [{ session_id: 42 }, { sessionId: "42" }, { session_id: "missing", parent_id: "42" }]) {
-      assert.throws(() => bindHookProtection(input, { host: "codex", event: "SessionStart", base }), SessionProtectionUnavailable);
+      assert.throws(
+        () => bindHookProtection(input, { host: "codex", event: "SessionStart", base }),
+        SessionProtectionUnavailable,
+      );
     }
     assert.equal(sessionIsProtected(root), false);
     assert.equal(findProtectionAlias("codex", "missing", { base }), undefined);
@@ -72,7 +81,10 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
     const second = createProtectionRoot({ base });
     const third = createProtectionRoot({ base });
     bindProtectionAlias(root, "codex", "known");
-    assert.throws(() => bindHookProtection(payload(), { host: "codex", event: "SessionStart", base, knownRoots: [second, third] }), SessionProtectionUnavailable);
+    assert.throws(
+      () => bindHookProtection(payload(), { host: "codex", event: "SessionStart", base, knownRoots: [second, third] }),
+      SessionProtectionUnavailable,
+    );
     for (const anchor of [root, second, third]) assert.equal(sessionIsProtected(anchor), true);
     assert.deepEqual(findProtectionAlias("codex", "known", { base }), root);
   });
@@ -81,9 +93,19 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
     const { base, root } = fixture();
     const other = createProtectionRoot({ base });
     bindProtectionAlias(root, "codex", "known");
-    assert.throws(() => bindHookProtection({ ...payload(), hook_event_name: "PostToolUse" }, {
-      host: "codex", event: "SessionStart", base, knownRoots: [other],
-    }), SessionProtectionUnavailable);
+    assert.throws(
+      () =>
+        bindHookProtection(
+          { ...payload(), hook_event_name: "PostToolUse" },
+          {
+            host: "codex",
+            event: "SessionStart",
+            base,
+            knownRoots: [other],
+          },
+        ),
+      SessionProtectionUnavailable,
+    );
     assert.equal(sessionIsProtected(root), true);
     assert.equal(sessionIsProtected(other), true);
   });
@@ -94,7 +116,16 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
     const third = createProtectionRoot({ base });
     bindProtectionAlias(root, "codex", "known");
     fs.unlinkSync(path.join(base, root.id, "state"));
-    assert.throws(() => bindHookProtection(payload(), { host: "codex", event: "SessionStart", base, knownRoots: [root, second, third] }), SessionProtectionUnavailable);
+    assert.throws(
+      () =>
+        bindHookProtection(payload(), {
+          host: "codex",
+          event: "SessionStart",
+          base,
+          knownRoots: [root, second, third],
+        }),
+      SessionProtectionUnavailable,
+    );
     assert.equal(sessionIsProtected(second), true);
     assert.equal(sessionIsProtected(third), true);
   });
@@ -104,7 +135,10 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
     bindProtectionAlias(root, "codex", "known");
     fs.unlinkSync(path.join(base, root.id, "root.json"));
     const before = fs.readdirSync(base);
-    assert.throws(() => bindHookProtection(payload("resume"), { host: "codex", event: "SessionStart", base }), SessionProtectionUnavailable);
+    assert.throws(
+      () => bindHookProtection(payload("resume"), { host: "codex", event: "SessionStart", base }),
+      SessionProtectionUnavailable,
+    );
     assert.deepEqual(fs.readdirSync(base), before);
   });
 
@@ -133,12 +167,16 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
           await postBounded("observe.record", {}, { token: "fixture", serverUrl: "http://inert.invalid" });
         });
       `;
-      const result = spawnSync(process.execPath, ["--input-type=module", "-e", code, "hook-entry.mjs", "PostToolUse", "claude-code"], {
-        env: { PATH: process.env.PATH, HOME: directory, USERPROFILE: directory },
-        input: JSON.stringify({ session_id: "known", hook_event_name: "PostToolUse", tool_response: response }),
-        encoding: "utf8",
-        timeout: 5000,
-      });
+      const result = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-e", code, "hook-entry.mjs", "PostToolUse", "claude-code"],
+        {
+          env: { PATH: process.env.PATH, HOME: directory, USERPROFILE: directory },
+          input: JSON.stringify({ session_id: "known", hook_event_name: "PostToolUse", tool_response: response }),
+          encoding: "utf8",
+          timeout: 5000,
+        },
+      );
       assert.equal(result.error, undefined);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stderr, "");

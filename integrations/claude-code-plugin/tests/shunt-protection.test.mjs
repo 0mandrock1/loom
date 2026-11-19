@@ -5,12 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, test } from "node:test";
 
-import {
-  batchKind,
-  formatShuntBatchLine,
-  formatShuntLine,
-  parseShuntBatch,
-} from "../lib/shunt-ledger.mjs";
+import { batchKind, formatShuntBatchLine, formatShuntLine, parseShuntBatch } from "../lib/shunt-ledger.mjs";
 import { STALE_STATE_MS, sessionStatePath, sweepStaleStateFiles, tmpStatePath } from "../lib/tmp-state.mjs";
 
 // These descriptors exercise serialization; only the hook checks live authority.
