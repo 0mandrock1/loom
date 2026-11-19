@@ -46,6 +46,22 @@ describe("model memory metadata", () => {
     expect(calls).toEqual([]);
   });
 
+  it("omits null metadata and keeps the application-bound identity", async () => {
+    const { agent, calls } = setup({ memory_id: "m", version: 1 });
+    await agent.tools({ userId: "bound-user" }).execute("loom_remember", {
+      memory_key: "k",
+      value: "v",
+      files: null,
+      source_resource_id: null,
+      org: "other",
+      namespace: "other",
+      user_id: "other-user",
+    });
+    expect(calls[0].body).toMatchObject({ org: "test", namespace: "memory", user_id: "bound-user" });
+    expect(calls[0].body).not.toHaveProperty("files");
+    expect(calls[0].body).not.toHaveProperty("source_resource_id");
+  });
+
   it("opts into corrections without changing the six defaults", async () => {
     const receipt = { updated: true, memory_id: "m", new_version: 9, content_sha256: "new" };
     const { agent, calls } = setup(receipt);

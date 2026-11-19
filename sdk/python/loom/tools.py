@@ -400,9 +400,9 @@ class AgentTools:
             if a.get("memory_type"):
                 body["memory_type"] = str(a["memory_type"])
             for field in ("files", "tags"):
-                if field in a:
+                if field in a and a[field] is not None:
                     body[field] = _strings(a, field)
-            if "source_resource_id" in a:
+            if a.get("source_resource_id") not in (None, ""):
                 body["source_resource_id"] = _str(a, "source_resource_id")
             r = await call("memory.set", body)
             return {
@@ -423,7 +423,7 @@ class AgentTools:
                 "agent": "*",
                 "session_id": "-",
             }
-            if a.get("if_match_sha256"):
+            if a.get("if_match_sha256") not in (None, ""):
                 body["if_match_sha256"] = _str(a, "if_match_sha256")
             return await call("memory.update", body)
         if name == "loom_recall":

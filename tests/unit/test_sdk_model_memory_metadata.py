@@ -116,3 +116,27 @@ async def test_update_ambiguity_is_not_retried_as_a_new_fact() -> None:
         assert calls[0][0] == "/v1/memory.update"
     finally:
         await agent.close()
+
+
+async def test_model_metadata_cannot_replace_the_bound_identity() -> None:
+    agent, calls = _agent({"memory_id": "m", "version": 1})
+    try:
+        await agent.tools(user_id="bound-user").execute(
+            "loom_remember",
+            {
+                "memory_key": "k",
+                "value": "v",
+                "org": "other",
+                "namespace": "other",
+                "user_id": "other-user",
+                "files": None,
+                "source_resource_id": None,
+            },
+        )
+        assert calls[0][1]["org"] == "test"
+        assert calls[0][1]["namespace"] == "memory"
+        assert calls[0][1]["user_id"] == "bound-user"
+        assert "files" not in calls[0][1]
+        assert "source_resource_id" not in calls[0][1]
+    finally:
+        await agent.close()
