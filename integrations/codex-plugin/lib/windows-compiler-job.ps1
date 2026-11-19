@@ -67,8 +67,8 @@ function New-LoomCompilerJob([type]$native) {
     } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($limits) }
 }
 
-# Compiler output stays inside the exclusive invocation directory. Only fixed
-# numeric compiler IDs can leave this function, never text or file paths.
+# Compiler output stays inside the exclusive invocation directory. Only bounded
+# counts, fixed format tags and numeric compiler IDs leave, never text or paths.
 function Write-LoomCompilerCodes([string]$file) {
     $stream = [IO.File]::Open($file, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     try {
@@ -86,6 +86,16 @@ function Write-LoomCompilerCodes([string]$file) {
             }
         }
     } finally { $stream.Dispose() }
+    # These tags describe the bounded prefix; they do not choose a decoder.
+    $format = 6
+    if ($count -eq 0) { $format = 0 }
+    elseif ($count -ge 4 -and $bytes[0] -eq 255 -and $bytes[1] -eq 254 -and $bytes[2] -eq 0 -and $bytes[3] -eq 0) { $format = 4 }
+    elseif ($count -ge 4 -and $bytes[0] -eq 0 -and $bytes[1] -eq 0 -and $bytes[2] -eq 254 -and $bytes[3] -eq 255) { $format = 5 }
+    elseif ($count -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191) { $format = 1 }
+    elseif ($count -ge 2 -and $bytes[0] -eq 255 -and $bytes[1] -eq 254) { $format = 2 }
+    elseif ($count -ge 2 -and $bytes[0] -eq 254 -and $bytes[1] -eq 255) { $format = 3 }
+    Write-LoomProtectionPhase 'compiler-bytes' $count
+    Write-LoomProtectionPhase 'compiler-format' $format
     Write-LoomProtectionPhase 'compiler-scanned'
 }
 

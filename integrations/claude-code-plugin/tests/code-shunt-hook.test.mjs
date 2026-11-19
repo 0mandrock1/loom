@@ -543,7 +543,6 @@ test("a marked aggregate response protects every producer and retains both unack
   try {
     await withServer({ "/v1/code.outcome": { mirrored: true } }, async (url, seen, observation) => {
       let queuedA;
-      let queuedB;
       try {
         const a = await runHook(
           { ...readOf(dir, "src/a.cpp"), session_id: "A" },
@@ -555,7 +554,6 @@ test("a marked aggregate response protects every producer and retains both unack
         assert.equal(outcomes(seen).length, 0);
         assert.equal(sessionIsProtected(rootA), false);
         assert.equal(sessionIsProtected(rootB), false);
-        queuedB = pendingPath(tmp, url, "B");
         const b = await runHook(
           { ...readOf(other, "src/b.cpp"), session_id: "B" },
           { tmp, url, env: reporting, observation },
@@ -567,7 +565,7 @@ test("a marked aggregate response protects every producer and retains both unack
         assert.equal(sessionIsProtected(rootA), true);
         assert.equal(sessionIsProtected(rootB), true);
         assert.equal(fs.existsSync(queuedA), false);
-        assert.equal(fs.existsSync(queuedB), false);
+        assert.equal(fs.existsSync(pendingPath(tmp, url, "B")), false);
         const claims = fs.readdirSync(tmp).filter((name) => name.startsWith("loom-shunt-protected-claim-"));
         assert.equal(claims.length, 2, "claiming moves evidence; a marked answer does not acknowledge it");
         const retained = claims.map((name) => fs.readFileSync(path.join(tmp, name), "utf8"));
@@ -596,17 +594,12 @@ test("a marked aggregate response protects every producer and retains both unack
       } catch (error) {
         try {
           const aTracked = queuedA !== undefined;
-          const bTracked = queuedB !== undefined;
           const aExists = aTracked ? fs.existsSync(queuedA) : null;
-          const bExists = bTracked ? fs.existsSync(queuedB) : null;
           const names = fs.readdirSync(tmp);
           recordFixtureEvent(observation, "marked-queue-snapshot", {
             aPendingTracked: aTracked,
             aPendingExists: aExists,
             aPendingBytes: aTracked ? (aExists ? fs.statSync(queuedA).size : 0) : null,
-            bPendingTracked: bTracked,
-            bPendingExists: bExists,
-            bPendingBytes: bTracked ? (bExists ? fs.statSync(queuedB).size : 0) : null,
             ownedClaimCount: names.filter((name) => name.startsWith("loom-shunt-protected-claim-")).length,
             ownedClaimPayloadCount: names.filter(
               (name) => name.startsWith("loom-shunt-protected-claim-") && name.endsWith(".log.control"),

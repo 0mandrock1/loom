@@ -39,6 +39,8 @@ const phases = new Set([
   "compiler-stopped",
   "compiler-closed",
   "compiler-scanned",
+  "compiler-bytes",
+  "compiler-format",
   "compiler-stop",
   "compiler-query",
   "compiler-close",
@@ -79,6 +81,8 @@ function helperDiagnostic(stderr) {
     if (
       !match ||
       code === null ||
+      (match[1] === "compiler-bytes" && (code < 0 || code > 8192)) ||
+      (match[1] === "compiler-format" && (code < 0 || code > 6)) ||
       (!phases.has(match[1]) && match[1] !== "worker-exit" && match[1] !== "helper-exit")
     ) {
       unexpected = true;
@@ -86,6 +90,7 @@ function helperDiagnostic(stderr) {
       continue;
     }
     validFrames = boundedCount(validFrames + 1);
+    if (match[1] === "compiler-bytes" || match[1] === "compiler-format") continue;
     if (match[1] === "worker-exit") {
       workerExit = code;
       if (code !== 0 && failurePhase === null) failurePhase = phase;

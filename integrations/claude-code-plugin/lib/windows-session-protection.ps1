@@ -18,8 +18,8 @@ $loomDiagnosticStream.Flush()
 $loomDiagnosticStream.Write([byte[]](76, 83, 80, 49, 58, 101, 110, 99, 111, 100, 105, 110, 103, 45, 111, 117, 116, 112, 117, 116, 58, 48, 10), 0, 23)
 $loomDiagnosticStream.Flush()
 function Write-LoomProtectionPhase([string]$phase, [int]$code = 0) {
-    if ($phase -cnotin @('entry', 'encoding-new', 'encoding-created', 'encoding-input', 'encoding-output', 'startup', 'bootstrap', 'worker-bootstrap', 'guardian-deadline', 'native-job', 'native-timer', 'worker-start', 'worker-assign', 'compiler-private', 'compiler-identity', 'compiler-path', 'compiler-security', 'compiler-parents', 'compiler-directory', 'compiler-receipt', 'compiler-environment', 'compiler-launch', 'compiler-stopped', 'compiler-closed', 'compiler-scanned', 'compiler-stop', 'compiler-query', 'compiler-close', 'compile', 'request', 'request-parse', 'request-keys', 'native-op', 'record-construct', 'record-dispatch', 'output-encode', 'cleanup', 'worker-exit', 'helper-exit')) { throw 'Unavailable' }
-    if ($phase -cnotin @('worker-exit', 'helper-exit')) { $script:loomProtectionPhase = $phase }
+    if ($phase -cnotin @('entry', 'encoding-new', 'encoding-created', 'encoding-input', 'encoding-output', 'startup', 'bootstrap', 'worker-bootstrap', 'guardian-deadline', 'native-job', 'native-timer', 'worker-start', 'worker-assign', 'compiler-private', 'compiler-identity', 'compiler-path', 'compiler-security', 'compiler-parents', 'compiler-directory', 'compiler-receipt', 'compiler-environment', 'compiler-launch', 'compiler-stopped', 'compiler-closed', 'compiler-scanned', 'compiler-bytes', 'compiler-format', 'compiler-stop', 'compiler-query', 'compiler-close', 'compile', 'request', 'request-parse', 'request-keys', 'native-op', 'record-construct', 'record-dispatch', 'output-encode', 'cleanup', 'worker-exit', 'helper-exit')) { throw 'Unavailable' }
+    if ($phase -cnotin @('worker-exit', 'helper-exit', 'compiler-bytes', 'compiler-format')) { $script:loomProtectionPhase = $phase }
     try {
         [Console]::Error.WriteLine('LSP1:' + $phase + ':' + $code.ToString([Globalization.CultureInfo]::InvariantCulture))
         [Console]::Error.Flush()

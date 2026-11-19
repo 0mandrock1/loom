@@ -106,6 +106,8 @@ function nativePhaseTrail(child) {
     "compiler-stopped",
     "compiler-closed",
     "compiler-scanned",
+    "compiler-bytes",
+    "compiler-format",
     "compiler-stop",
     "compiler-query",
     "compiler-close",
@@ -138,7 +140,15 @@ function nativePhaseTrail(child) {
       pending = pending.slice(end + 1);
       const match = /^LSP1:([a-z-]+):(-?[0-9]{1,10})$/.exec(line);
       const code = match ? Number(match[2]) : NaN;
-      if (match && phases.has(match[1]) && Number.isSafeInteger(code) && code >= -2147483648 && code <= 2147483647) {
+      if (
+        match &&
+        phases.has(match[1]) &&
+        Number.isSafeInteger(code) &&
+        code >= -2147483648 &&
+        code <= 2147483647 &&
+        (match[1] !== "compiler-bytes" || (code >= 0 && code <= 8192)) &&
+        (match[1] !== "compiler-format" || (code >= 0 && code <= 6))
+      ) {
         if (frames.length === 24) frames.shift();
         frames.push({ phase: match[1], code, observerMs: Math.min(60000, Math.round(performance.now() - started)) });
       } else rejected = Math.min(1024, rejected + 1);
