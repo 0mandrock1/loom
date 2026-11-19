@@ -120,6 +120,12 @@ with `loom install`) so the tools the block names are listed.
 
 Use an [authenticated multi-user deployment](quickstart.md#2-open-the-dashboard)
 with TLS for remote clients. Single-user mode does not enforce team access boundaries.
+The server must support create-if-absent memory writes through
+`if_match_sha256: "absent"`, and its session-protection policy must admit the write.
+Token minting and namespace roles alone do not establish these prerequisites.
+A precondition or protection refusal stops this walkthrough; it does not qualify
+the access check. Keep the precondition when diagnosing a refusal.
+
 The operator chooses an ordinary, disposable memory namespace used only for this check,
 shown as `acme/team-alpha`, with no existing `example/team-access-check` key. The other
 team's example namespace, `team-beta`, is also a memory namespace, not an org-readable
