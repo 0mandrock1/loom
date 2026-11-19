@@ -14,6 +14,9 @@ const operationTimeoutMs = 2000;
 const cleanupReserveMs = 500;
 const failureDiagnostics = new WeakMap();
 const phases = new Set([
+  "entry",
+  "encoding-input",
+  "encoding-output",
   "startup",
   "bootstrap",
   "worker-bootstrap",
@@ -30,6 +33,7 @@ const phases = new Set([
   "protocol",
 ]);
 const boundedCode = (value) => (Number.isInteger(value) && value >= -2147483648 && value <= 2147483647 ? value : null);
+const boundedCount = (value) => Math.min(1024, Math.max(0, Number.isSafeInteger(value) ? value : 0));
 const unavailable = (diagnostic) => {
   const error = new Error("Session protection state could not be confirmed");
   if (diagnostic) failureDiagnostics.set(error, Object.freeze(diagnostic));
@@ -39,20 +43,28 @@ const unavailable = (diagnostic) => {
 export const windowsFailureDiagnostic = (error) => failureDiagnostics.get(error);
 
 function helperDiagnostic(stderr) {
-  let phase = "startup",
+  let phase = "unknown",
     failurePhase = null,
     errorCode = null,
     workerExit = null;
   let unexpected = false;
+  let validFrames = 0,
+    rejectedLines = 0;
   const lines = (stderr ?? "").replace(/^\uFEFF/, "").split(/\r?\n/);
   if (lines.at(-1) === "") lines.pop();
   for (const line of lines) {
     const match = /^LSP1:([a-z-]+):(-?[0-9]{1,10})$/.exec(line);
     const code = match ? boundedCode(Number(match[2])) : null;
-    if (!match || code === null) {
+    if (
+      !match ||
+      code === null ||
+      (!phases.has(match[1]) && match[1] !== "worker-exit" && match[1] !== "helper-exit")
+    ) {
       unexpected = true;
+      rejectedLines = boundedCount(rejectedLines + 1);
       continue;
     }
+    validFrames = boundedCount(validFrames + 1);
     if (match[1] === "worker-exit") {
       workerExit = code;
       if (code !== 0 && failurePhase === null) failurePhase = phase;
@@ -66,7 +78,15 @@ function helperDiagnostic(stderr) {
       }
     } else unexpected = true;
   }
-  return { phase: failurePhase ?? phase, errorCode, workerExit, unexpected, failed: failurePhase !== null };
+  return {
+    phase: failurePhase ?? phase,
+    errorCode,
+    workerExit,
+    unexpected,
+    failed: failurePhase !== null,
+    validFrames,
+    rejectedLines,
+  };
 }
 
 function failedOperation(result, started, phase) {
@@ -79,6 +99,10 @@ function failedOperation(result, started, phase) {
     errorCode: boundedCode(result.error?.errno) ?? helper.errorCode,
     elapsedMs: Math.min(60000, Math.max(0, Math.round(performance.now() - started))),
     timedOut: result.error?.code === "ETIMEDOUT",
+    stdoutUnits: boundedCount(result.stdout?.length),
+    stderrUnits: boundedCount(result.stderr?.length),
+    validFrames: helper.validFrames,
+    rejectedLines: helper.rejectedLines,
   });
 }
 

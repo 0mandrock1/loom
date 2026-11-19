@@ -1,11 +1,19 @@
 # Durable session records use one native operation per helper invocation.
 param([switch]$CleanupCompilation, [switch]$Worker, [switch]$DefinitionsOnly)
 $ErrorActionPreference = 'Stop'
+# Fixed ASCII diagnostics precede cmdlet and encoding initialization.
+$loomDiagnosticStream = [Console]::OpenStandardError()
+$loomDiagnosticStream.Write([byte[]](76, 83, 80, 49, 58, 101, 110, 116, 114, 121, 58, 48, 10), 0, 13)
+$loomDiagnosticStream.Flush()
 $ProgressPreference = 'SilentlyContinue'
 [Console]::InputEncoding = New-Object Text.UTF8Encoding($false)
+$loomDiagnosticStream.Write([byte[]](76, 83, 80, 49, 58, 101, 110, 99, 111, 100, 105, 110, 103, 45, 105, 110, 112, 117, 116, 58, 48, 10), 0, 22)
+$loomDiagnosticStream.Flush()
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+$loomDiagnosticStream.Write([byte[]](76, 83, 80, 49, 58, 101, 110, 99, 111, 100, 105, 110, 103, 45, 111, 117, 116, 112, 117, 116, 58, 48, 10), 0, 23)
+$loomDiagnosticStream.Flush()
 function Write-LoomProtectionPhase([string]$phase, [int]$code = 0) {
-    if ($phase -cnotin @('startup', 'bootstrap', 'worker-bootstrap', 'guardian-deadline', 'native-job', 'native-timer', 'worker-start', 'worker-assign', 'compiler-private', 'compile', 'request', 'native-op', 'cleanup', 'worker-exit', 'helper-exit')) { throw 'Unavailable' }
+    if ($phase -cnotin @('entry', 'encoding-input', 'encoding-output', 'startup', 'bootstrap', 'worker-bootstrap', 'guardian-deadline', 'native-job', 'native-timer', 'worker-start', 'worker-assign', 'compiler-private', 'compile', 'request', 'native-op', 'cleanup', 'worker-exit', 'helper-exit')) { throw 'Unavailable' }
     if ($phase -cnotin @('worker-exit', 'helper-exit')) { $script:loomProtectionPhase = $phase }
     try {
         [Console]::Error.WriteLine('LSP1:' + $phase + ':' + $code.ToString([Globalization.CultureInfo]::InvariantCulture))

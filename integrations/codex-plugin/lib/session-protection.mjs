@@ -26,7 +26,7 @@ function protectionUnavailable(error) {
   if (diagnostic) {
     Object.defineProperty(unavailable, "cause", { value: diagnostic, enumerable: true });
     // TAP preserves the original error code when it unwraps a test failure.
-    const code = `LSP1:${diagnostic.phase}:${diagnostic.exitCode ?? "_"}:${diagnostic.workerExit ?? "_"}:${diagnostic.signal}:${diagnostic.errorCode ?? "_"}:${diagnostic.elapsedMs}:${Number(diagnostic.timedOut)}`;
+    const code = `LSP1:${diagnostic.phase}:${diagnostic.exitCode ?? "_"}:${diagnostic.workerExit ?? "_"}:${diagnostic.signal}:${diagnostic.errorCode ?? "_"}:${diagnostic.elapsedMs}:${Number(diagnostic.timedOut)}:${diagnostic.stdoutUnits}:${diagnostic.stderrUnits}:${diagnostic.validFrames}:${diagnostic.rejectedLines}`;
     Object.defineProperty(unavailable, "code", { value: code, enumerable: true });
   }
   return unavailable;
