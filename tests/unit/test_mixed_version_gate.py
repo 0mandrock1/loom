@@ -743,3 +743,80 @@ def test_stage_client_metadata_does_not_change_closed_timing_or_complete_result(
         assert "server_stages" not in sample and sample["timing_error"] == "JSONDecodeError"
     else:
         assert sample["server_stages"]["pid"] == 123
+
+
+@pytest.mark.parametrize(
+    "mode", ["complete", "overflow", "parse-failure", "output-limit", "backend-failure"]
+)
+def test_latency_statement_costs_keep_original_witnesses_and_bound_diagnostics(monkeypatch, mode):
+    import json
+
+    scenario = mixed_version.Scenario.__new__(mixed_version.Scenario)
+    scenario.ch_port = 18123
+    request_id = "00000000-0000-0000-0000-000000000001"
+    samples = [{"request_id": request_id, "error": "503:PROJECTION_BEHIND"}]
+    requests = [{"request_id": request_id, "latency_ms": 20}]
+    native = [{"request_id": request_id, "statements": 1}]
+    cost = [1000, 2000, 1, 18446744073709551615, 1, 2, 3, 4, 2, 0, 30, 4000000000, 1000000, 1]
+    row = {
+        "request_id": request_id,
+        "total_statements": 65 if mode == "overflow" else 1,
+        "overflow": int(mode == "overflow"),
+        "statements": [cost] * (64 if mode == "overflow" else 1),
+    }
+    calls = []
+
+    def sql(port, query, params=None, settings=None):
+        assert port == 18123
+        calls.append((query, params, settings))
+        if query == "SYSTEM FLUSH LOGS":
+            return ""
+        if "FROM loom.agent_events" in query:
+            return json.dumps(requests[0])
+        if "groupArray(64)" not in query:
+            return json.dumps(native[0])
+        if mode == "backend-failure":
+            raise RuntimeError("private backend detail")
+        if mode == "parse-failure":
+            return "{"
+        if mode == "output-limit":
+            return " " * 2_097_153
+        return json.dumps(row)
+
+    monkeypatch.setattr(mixed_version, "sql", sql)
+    out = scenario.latency_timing_evidence(samples, [("main", {"org": "fixture"})])
+    assert out["requests"] == requests and out["native"] == native
+    assert samples == [{"request_id": request_id, "error": "503:PROJECTION_BEHIND"}]
+    bounds = {
+        "max_execution_time": 5,
+        "max_rows_to_read": 1_000_000,
+        "max_memory_usage": 64_000_000,
+        "max_result_rows": 121,
+        "result_overflow_mode": "throw",
+    }
+    assert len(calls) == 4 and all(call[2] == bounds for call in calls[:3])
+    query, params, limits = calls[-1]
+    assert params == calls[1][1] == calls[2][1]
+    assert limits == {
+        **bounds,
+        "max_result_bytes": 2_097_152,
+        "output_format_json_quote_64bit_integers": 0,
+    }
+    assert "request_id IN {ids:Array(String)}" in query
+    assert "GROUP BY request_id ORDER BY request_id LIMIT 121" in query
+    assert "normalized_query_hash" in query and "count() AS total_statements" in query
+    assert not any(name in query for name in ("SELECT *", "query,", "address", "exception,"))
+    if mode in ("complete", "overflow"):
+        assert out["statement_costs"] == [row]
+        assert out.get("statement_cost_error") == (
+            "statement_limit" if mode == "overflow" else None
+        )
+    else:
+        assert "statement_costs" not in out
+        if mode == "output-limit":
+            assert out["statement_cost_error"] == "output_limit"
+        else:
+            assert out["error"] == (
+                "JSONDecodeError" if mode == "parse-failure" else "RuntimeError"
+            )
+        assert "private backend detail" not in json.dumps(out)

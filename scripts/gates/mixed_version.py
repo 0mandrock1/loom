@@ -835,10 +835,46 @@ class Scenario:
                         "AND request_id IN {ids:Array(String)} "
                         "GROUP BY request_id ORDER BY request_id LIMIT 121 FORMAT JSONEachRow"
                     ),
+                    "statement_costs": (
+                        "SELECT splitByChar(' ', log_comment)[2] AS request_id, "
+                        "count() AS total_statements, toUInt8(total_statements > 64) AS overflow, "
+                        "arraySort(s -> (s.1, s.2, s.3), groupArray(64)(("
+                        "toUnixTimestamp64Micro(query_start_time_microseconds), "
+                        "toUnixTimestamp64Micro(event_time_microseconds), "
+                        "if(startsWith(query_id, concat(request_id, ':')), "
+                        "toUInt64OrZero(splitByChar(':', query_id)[2]), 0), "
+                        "normalized_query_hash, query_duration_ms, read_rows, read_bytes, "
+                        "memory_usage, toUInt8(type), exception_code, "
+                        "toFloat64OrNull(Settings['max_execution_time']), "
+                        "toUInt64OrNull(Settings['max_memory_usage']), "
+                        "toUInt64OrNull(Settings['max_rows_to_read']), "
+                        "if(mapContains(Settings, 'read_overflow_mode'), "
+                        "toUInt8(Settings['read_overflow_mode'] = 'throw'), NULL)"
+                        "))) AS statements "
+                        "FROM system.query_log WHERE is_initial_query "
+                        "AND type IN ('QueryFinish', 'ExceptionBeforeStart', "
+                        "'ExceptionWhileProcessing') "
+                        "AND request_id IN {ids:Array(String)} "
+                        "GROUP BY request_id ORDER BY request_id LIMIT 121 FORMAT JSONEachRow"
+                    ),
                 }
                 for name, statement in statements.items():
-                    raw = sql(self.ch_port, statement, params, bounds)
+                    limits = bounds
+                    if name == "statement_costs":
+                        limits = {
+                            **bounds,
+                            "max_result_bytes": 2_097_152,
+                            "output_format_json_quote_64bit_integers": 0,
+                        }
+                    raw = sql(self.ch_port, statement, params, limits)
+                    if name == "statement_costs" and len(raw.encode()) > 2_097_152:
+                        timing_evidence["statement_cost_error"] = "output_limit"
+                        continue
                     timing_evidence[name] = [json.loads(line) for line in raw.splitlines()]
+                    if name == "statement_costs" and any(
+                        row["overflow"] for row in timing_evidence[name]
+                    ):
+                        timing_evidence["statement_cost_error"] = "statement_limit"
         except Exception as error:  # noqa: BLE001 — evidence cannot replace a workload failure
             timing_evidence["error"] = type(error).__name__
         return timing_evidence
