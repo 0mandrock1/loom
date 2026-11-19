@@ -295,8 +295,10 @@ export class AgentTools {
     opts: AgentToolsOptions = {},
   ) {
     this.maxResultChars = opts.maxResultChars ?? 8_000;
-    if (opts.only?.includes("loom_update") &&
-        (typeof scope.userId !== "string" || !scope.userId.trim() || scope.userId.trim() === "-"))
+    if (
+      opts.only?.includes("loom_update") &&
+      (typeof scope.userId !== "string" || !scope.userId.trim() || scope.userId.trim() === "-")
+    )
       throw new LoomError("loom_update requires an application-bound named userId");
     if (opts.only?.includes("loom_code_lookup") && opts.codeNamespace === undefined)
       throw new LoomError("loom_code_lookup requires codeNamespace");
