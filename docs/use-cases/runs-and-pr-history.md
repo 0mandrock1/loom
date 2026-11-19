@@ -11,9 +11,8 @@ can then ask what was tried before, what was decided and which changes to invest
 for a regression.
 
 Duplicate checks need a registered tracker source and a namespace the caller may read.
-PR ranking needs indexed merged-PR history with `LOOM_CODE_PR_HISTORY_ENABLED=true`.
 The [bug draft to candidate PRs](../features/tracker/overview.md#from-a-bug-draft-to-candidate-prs)
-walkthrough connects both operations. Candidate ranking neither runs a bisect nor proves
+walkthrough covers tracker access and PR-history setup for both operations. Candidate ranking neither runs a bisect nor proves
 which change caused the bug.
 
 ## What you get
