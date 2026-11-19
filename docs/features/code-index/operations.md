@@ -122,9 +122,8 @@ definition when the name resolves uniquely in the same namespace. Ambiguous name
 unsupported reference forms create no such edge. This is a recorded textual reference,
 not proof that the implementation satisfies the specification.
 
-Use an [indexed repository](repositories.md), a token that may read it and the `coding`
-MCP toolset. Check the
-[branch and indexed revision](freshness.md) before comparing documents and implementation;
+Use an indexed repository, a token that may read it and the `coding`
+MCP toolset. Check the branch and indexed revision before comparing documents and implementation;
 editor changes are not indexed. The names below illustrate the call shapes: replace them
 with a section and definition returned from your repository, rather than expecting these
 example names to exist.
