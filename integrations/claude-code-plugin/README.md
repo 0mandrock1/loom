@@ -31,9 +31,10 @@ tokens per `tools/list`; every other op runs through `loom_op {op, arguments}`. 
 
 Automatic hooks require an existing binding to an unprotected session family. An
 unknown, damaged or protected family stays silent, including automatic signup
-and the session primer. The hooks do not create an independent native session
-family or declare protection for direct MCP responses. Native session creation
-and private-content publication remain unqualified.
+and the session primer. Binding uses the hook's raw `session_id`; a payload
+containing only `sessionId` stays silent. The hooks do not create an independent
+native session family or declare protection for direct MCP responses. Native
+session creation and private-content publication remain unqualified.
 
 ## Data handling
 

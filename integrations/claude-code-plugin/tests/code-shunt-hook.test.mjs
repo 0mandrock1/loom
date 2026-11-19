@@ -301,7 +301,7 @@ test("a deny claims the pending batch, posts it as code.outcome and removes it",
     assert.equal(fs.existsSync(pendingPath(tmp, url)), false);
   });
   assert.deepEqual(
-    fs.readdirSync(tmp).filter((n) => n.startsWith("loom-shunt-claim-")),
+    fs.readdirSync(tmp).filter((n) => n.startsWith("loom-shunt-protected-claim-")),
     [],
     "the claimed batch is removed",
   );

@@ -21,7 +21,7 @@ export function bindHookProtection(payload, { host, event, base, knownRoots = []
   const roots = [...knownRoots];
   try {
     if (
-      !["claude-code", "codex"].includes(host) ||
+      !["claude-code", "codex", "cline"].includes(host) ||
       !payload ||
       typeof payload !== "object" ||
       Array.isArray(payload) ||

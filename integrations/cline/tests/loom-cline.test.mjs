@@ -8,6 +8,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { establishFixtureSession } from "../../claude-code-plugin/tests/established-session.mjs";
 import { recalledDataBlock } from "../../claude-code-plugin/lib/prompt-recall.mjs";
 import { recordingPrimerLine } from "../../claude-code-plugin/lib/recording.mjs";
 import { readSessionState } from "../../claude-code-plugin/lib/tmp-state.mjs";
@@ -228,6 +229,7 @@ test("a read of two files marks both shown in the plugin's file-context state", 
   }
   Object.assign(process.env, { HOME: tmp, TMPDIR: tmp, LOOM_BASE_URL: "http://127.0.0.1:9", LOOM_API_KEY: "x" });
   try {
+    establishFixtureSession(tmp, "conv_two", "cline");
     const files = JSON.stringify([{ path: "a.py" }, { path: "b.py" }]);
     const read = { ...ROOT, taskId: "conv_two", preToolUse: { toolName: "read_files", parameters: { files } } };
     await handle("PreToolUse", read, { tmp });
@@ -417,6 +419,7 @@ test("each event script answers without a Loom directory, and always exits 0", (
 
 test("against an unreachable server the adapter adds only the primer's static notes", () => {
   const tmp = tmpDir();
+  establishFixtureSession(tmp, ROOT.taskId, "cline");
   const files = JSON.stringify([{ path: "./a.py" }]);
   const r = spawnSync(process.execPath, [path.join(HERE, "..", "loom-cline.mjs"), "PreToolUse"], {
     input: JSON.stringify({ ...ROOT, preToolUse: { toolName: "read_files", parameters: { files } } }),
