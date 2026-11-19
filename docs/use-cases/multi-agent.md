@@ -1,9 +1,9 @@
 # Shared context for multi-agent workflows
 
-Loom gives the agents in a multi-agent workflow one place to share context: memory every
-agent in a namespace reads, task inboxes for handing work from one agent to another, and a
-record of decisions. Your agents and orchestrator run the workflow; Loom keeps what they
-learn and hand over.
+Loom is a self-hosted MCP server for multi-agent memory, with namespace-scoped tokens and
+separate read and write roles. Agents share context through memory, task inboxes and
+decision records within the namespaces they can access. Your agents and orchestrator run
+the workflow; Loom keeps what they learn and hand over.
 
 ## What you get
 
