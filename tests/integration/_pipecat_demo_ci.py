@@ -117,7 +117,7 @@ async def test_pipecat_text_example_recalls_and_stores_the_real_turn(
             native_session,
             "assistant",
             example.REPLY,
-            "process:pipecat-demo-app",
+            "assistant",
             "message",
         ),
         (
@@ -128,7 +128,7 @@ async def test_pipecat_text_example_recalls_and_stores_the_real_turn(
             native_session,
             "user",
             example.FACT,
-            "process:pipecat-demo-app",
+            "user",
             "message",
         ),
     ]
