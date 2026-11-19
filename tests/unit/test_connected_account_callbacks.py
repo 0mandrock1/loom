@@ -61,7 +61,9 @@ def _auth(**changes: Any) -> AuthInfo:
     )
 
 
-def _request(kind: str, state: str, binding: str, code: str = "older-code") -> Request:
+def _request(
+    kind: str, state: str, binding: str, code: str = "older-code", *, accept: str = ""
+) -> Request:
     return Request(
         {
             "type": "http",
@@ -70,7 +72,10 @@ def _request(kind: str, state: str, binding: str, code: str = "older-code") -> R
             "server": ("app.example", 443),
             "path": f"/v1/connect/{kind}/callback",
             "query_string": urlencode({"state": state, "code": code}).encode(),
-            "headers": [(b"cookie", f"{routes._cookie(state)}={binding}".encode())],
+            "headers": [
+                (b"cookie", f"{routes._cookie(state)}={binding}".encode()),
+                (b"accept", accept.encode()),
+            ],
         }
     )
 
@@ -375,6 +380,62 @@ async def test_signed_primary_route_cookie_matches_configured_callback_prefix(wo
     expired.load(done.headers["set-cookie"])
     assert expired[cookie.key]["path"] == cookie["path"]
     assert expired[cookie.key]["max-age"] == "0"
+
+
+@pytest.mark.parametrize(
+    "accept,redirected",
+    [
+        ("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", True),
+        ("application/json;q=0.5, text/html;q=0.9", True),
+        ("text/*;q=0.8, application/json;q=0.4", True),
+        ("application/json, text/html;q=0.8", False),
+        ("application/json, text/html", False),
+        ("*/*", False),
+        ("", False),
+        ("text/html;q=0, */*;q=1", False),
+        ("text/html;q=invalid", False),
+        ("text/html;q=nan", False),
+        ("text/html;q=2", False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_callback_negotiates_browser_return_without_consent_parameters(
+    world: _World, accept: str, redirected: bool
+):
+    _url, state, binding = await accounts.start(_auth(), "gdrive")
+    request = _request("gdrive", state, binding, accept=accept)
+    request.scope["query_string"] += b"&return_to=https%3A%2F%2Funtrusted.example%2Fcollect"
+    response = await routes.callback("gdrive", request)
+    assert world.account().active
+    assert response.status_code == (302 if redirected else 200)
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["vary"] == "Accept"
+    expired = SimpleCookie()
+    expired.load(response.headers["set-cookie"])
+    assert expired[routes._cookie(state)]["path"] == "/prefix/v1/connect/gdrive/callback"
+    assert expired[routes._cookie(state)]["max-age"] == "0"
+    if redirected:
+        assert response.headers["location"] == "/settings/connected-accounts"
+        assert response.body == b""
+    else:
+        assert "location" not in response.headers
+        assert json.loads(response.body) == {"connected": True}
+    public = str(dict(response.headers)) + str(response.body)
+    for secret in (state, binding, "older-code", _ACCESS, _REFRESH, "untrusted.example"):
+        assert secret not in public
+    with pytest.raises(ValidationError):
+        await routes.callback("gdrive", request)
+
+
+@pytest.mark.asyncio
+async def test_browser_callback_refuses_unbound_consent_before_redirecting(world: _World):
+    _url, state, _binding = await accounts.start(_auth(), "gdrive")
+    with pytest.raises(ValidationError):
+        await routes.callback(
+            "gdrive", _request("gdrive", state, "other-browser", accept="text/html")
+        )
+    assert not world.requests and not world.account().active
 
 
 @pytest.mark.parametrize("credential", ["missing", "malformed", "on_behalf"])
