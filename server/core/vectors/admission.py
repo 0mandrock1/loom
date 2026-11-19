@@ -233,6 +233,7 @@ def native_settings(out: dict[str, Any], *, timeout: float) -> dict[str, Any]:
         bound = min(previous, cap) if math.isfinite(previous) and previous > 0 else cap
         out[key] = int(bound) if bound.is_integer() else bound
     out["read_overflow_mode"] = "throw"
+    out["timeout_overflow_mode"] = "throw"
     return out
 
 

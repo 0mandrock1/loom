@@ -444,3 +444,59 @@ def test_vector_concrete_error_hierarchy_preserves_wire_contracts(kind: str) -> 
         "category": category,
         "retryable": retryable,
     }
+
+
+@pytest.mark.parametrize(
+    ("source", "vector", "configured", "expected"),
+    [
+        ("class", True, "break", "throw"),
+        ("statement", True, "break", "throw"),
+        ("class", True, "throw", "throw"),
+        ("class", False, "break", "break"),
+        ("statement", False, "break", "break"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_vector_native_timeout_refuses_partial_results(
+    monkeypatch: pytest.MonkeyPatch, source: str, vector: bool, configured: str, expected: str
+) -> None:
+    import contextlib
+    import json
+
+    from server.core.traffic_context import traffic_class_var
+    from server.core.vectors.admission import vector_work
+
+    ch, driver = client(monkeypatch)
+    driver.release.set()
+    monkeypatch.setattr(settings, "ch_timeout_read_s", 0.0)
+    caps = {"max_execution_time": 0.05, "timeout_overflow_mode": configured}
+    monkeypatch.setattr(settings, "ch_settings_by_traffic_class", json.dumps({"interactive": caps}))
+    token = traffic_class_var.set(("interactive", "test") if source == "class" else ("", ""))
+    scope = vector_work("one-org", ["private"]) if vector else contextlib.nullcontext()
+    try:
+        with scope:
+            if source == "statement":
+
+                async def raw_query(sql: str, **kwargs: Any) -> bytes:
+                    driver.started += 1
+                    driver.settings.append(kwargs["settings"])
+                    return b"body"
+
+                monkeypatch.setattr(driver, "raw_query", raw_query, raising=False)
+                assert (
+                    await ch.raw_bytes("SELECT number FROM numbers(10)", settings=caps) == b"body"
+                )
+            else:
+                assert await ch.query_all("SELECT number FROM numbers(10)") == []
+    finally:
+        traffic_class_var.reset(token)
+    assert driver.started == 1
+    assert driver.active == 0
+    native = driver.settings[0]
+    assert native["max_execution_time"] == 0.05
+    assert native["timeout_overflow_mode"] == expected
+    if vector:
+        assert native["max_rows_to_read"] == settings.vector_scan_max_rows_to_read
+        assert native["read_overflow_mode"] == "throw"
+    else:
+        assert "max_rows_to_read" not in native
