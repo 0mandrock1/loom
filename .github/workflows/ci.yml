@@ -999,9 +999,9 @@ jobs:
         env:
           LOOM_PG_IMAGE: postgres:${{ matrix.postgres }}
           LOOM_PG_CONTAINER: loom-scale-index-drill-pg
-          LOOM_PG_HOST_PORT: "55432"
+          LOOM_PG_HOST_PORT: "15432"
           LOOM_PG_INDEX_DRILL: "1"
-          LOOM_PG_INDEX_DRILL_DSN: postgres://loom:loomdev@localhost:55432/loom
+          LOOM_PG_INDEX_DRILL_DSN: postgres://loom:loomdev@localhost:15432/loom
         run: |
           set -euo pipefail
           for name in loom-scale-index-drill-pg loom-scale-index-drill-pg-standby; do
