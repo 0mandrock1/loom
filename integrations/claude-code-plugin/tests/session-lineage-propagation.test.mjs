@@ -120,7 +120,9 @@ if (process.platform === "win32" || typeof process.getuid !== "function") {
         }),
       ),
     );
-    assert.equal(result.body.content, "private");
+    assert.equal(result.status, 0);
+    assert.equal(result.body, null);
+    assert.equal(result.error, "Session protection state could not be confirmed");
     assert.equal(sessionIsProtected(a), true);
     assert.equal(sessionIsProtected(b), true);
   });
