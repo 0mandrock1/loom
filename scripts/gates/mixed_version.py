@@ -526,6 +526,38 @@ class Scenario:
 
         corpus = {f"seed/{i:04}": value(f"seed/{i:04}") for i in range(2048)}
         light = {f"light/{i:02}": value(f"light/{i:02}") for i in range(16)}
+        # Both cohorts exist before timing; head does not add its seed corpus after base.
+        # Measured writes still add heads between arms, so physical snapshots can differ.
+        prepared: dict[str, list[Any]] = {}
+        for label in ("base", "head"):
+            fixtures = []
+            for role, contents in (("main", corpus), ("light", light)):
+                org = f"{self.org}-{label}-{role}"
+                ident = {
+                    "org": org,
+                    "namespace": "latency",
+                    "agent": "gate",
+                    "user_id": "-",
+                    "session_id": "-",
+                }
+                token = mint(org, "latency")
+                expected = {}
+                entries = [
+                    {"memory_key": k, "value": v, "memory_type": "semantic"}
+                    for k, v in contents.items()
+                ]
+                for offset in range(0, len(entries), 8):
+                    seed_started = time.monotonic()
+                    batch = entries[offset : offset + 8]
+                    result = self.builds["N-1"].call(
+                        token, "memory.bulk_set", {**ident, "entries": batch}
+                    )
+                    expected.update(committed_latency_rows("memory.bulk_set", result, batch))
+                    # Four requests/sec is below the ordinary namespace write rate.
+                    time.sleep(max(0, 0.25 - (time.monotonic() - seed_started)))
+                fixture = (role, ident, token, expected)
+                fixtures.append(fixture)
+            prepared[label] = fixtures
         for label, source in (("base", base), ("head", head)):
             tree = self.builds["N-1" if label == "base" else "N"].tree
             arm = [
@@ -550,7 +582,7 @@ class Scenario:
             }
             proofs = []
             proofs_after = []
-            fixtures = []
+            fixtures = prepared[label]
             complete = False
             try:
                 for srv in arm:
@@ -558,30 +590,7 @@ class Scenario:
                     assert srv.ready()[0]
                     proofs.append(self.latency_workers(srv))
                 assert len({w["pid"] for p in proofs for w in p["workers"]}) == 4
-                for role, contents in (("main", corpus), ("light", light)):
-                    org = f"{self.org}-{label}-{role}"
-                    ident = {
-                        "org": org,
-                        "namespace": "latency",
-                        "agent": "gate",
-                        "user_id": "-",
-                        "session_id": "-",
-                    }
-                    token = mint(org, "latency")
-                    expected = {}
-                    entries = [
-                        {"memory_key": k, "value": v, "memory_type": "semantic"}
-                        for k, v in contents.items()
-                    ]
-                    for offset in range(0, len(entries), 8):
-                        seed_started = time.monotonic()
-                        batch = entries[offset : offset + 8]
-                        result = arm[0].call(token, "memory.bulk_set", {**ident, "entries": batch})
-                        expected.update(committed_latency_rows("memory.bulk_set", result, batch))
-                        # Four requests/sec is below the ordinary namespace write rate.
-                        time.sleep(max(0, 0.25 - (time.monotonic() - seed_started)))
-                    fixture = (role, ident, token, expected)
-                    fixtures.append(fixture)
+                for _role, ident, token, expected in fixtures:
                     for srv in arm:
                         self.latency_census(srv, ident, token, expected)
 

@@ -171,8 +171,74 @@ def test_latency_first_search_and_real_worker_identity_positive_controls() -> No
             assert_latency_worker(*args)
 
 
+@pytest.fixture
+def latency_seed_api(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    seeded = {}
+
+    def call(token, op, body):
+        assert token == "fixture-token" and op == "memory.bulk_set"
+        rows = seeded.setdefault(body["org"], {})
+        written = []
+        for entry in body["entries"]:
+            assert entry["memory_key"] not in rows
+            rows[entry["memory_key"]] = dict(entry)
+            written.append({**_latency_written(), "memory_key": entry["memory_key"]})
+        return {"written": written}
+
+    monkeypatch.setattr(mixed_version, "mint", lambda *_args: "fixture-token")
+    monkeypatch.setattr(mixed_version.time, "sleep", lambda _seconds: None)
+    return SimpleNamespace(tree=tmp_path, call=call, seeded=seeded)
+
+
+def test_latency_both_complete_cohorts_exist_before_the_first_measured_group(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, latency_seed_api
+) -> None:
+    from types import SimpleNamespace
+
+    class FirstGroupReached(RuntimeError):
+        pass
+
+    stopped = []
+
+    class MeasuredGroup:
+        def __init__(self, name, *args, **kwargs):
+            self.name = name
+
+        def start(self):
+            expected = {
+                f"fixture-{arm}-{role}": count
+                for arm in ("base", "head")
+                for role, count in (("main", 2048), ("light", 16))
+            }
+            assert {org: len(rows) for org, rows in latency_seed_api.seeded.items()} == expected, (
+                "both complete cohorts must exist before the first measured group starts"
+            )
+            for org, rows in latency_seed_api.seeded.items():
+                prefix, count, width = (
+                    ("seed", 2048, 4) if org.endswith("-main") else ("light", 16, 2)
+                )
+                assert set(rows) == {f"{prefix}/{i:0{width}}" for i in range(count)}
+            raise FirstGroupReached()
+
+        def stop(self):
+            stopped.append(self.name)
+
+    monkeypatch.setattr(mixed_version, "Server", MeasuredGroup)
+    scenario = mixed_version.Scenario.__new__(mixed_version.Scenario)
+    scenario.org = "fixture"
+    scenario.builds = {"N-1": latency_seed_api, "N": SimpleNamespace(tree=tmp_path)}
+    scenario.ch_port = 18123
+    scenario.owned_logs = tmp_path
+    scenario.owned_servers = []
+    with pytest.raises(FirstGroupReached):
+        scenario.latency_acceptance("base", "head")
+    assert stopped == ["latency-base-0", "latency-base-1"]
+
+
 def test_latency_partial_start_registers_and_stops_both_owned_groups(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path, latency_seed_api
 ) -> None:
     from types import SimpleNamespace
 
@@ -192,7 +258,8 @@ def test_latency_partial_start_registers_and_stops_both_owned_groups(
 
     monkeypatch.setattr(mixed_version, "Server", RefusedStart)
     scenario = mixed_version.Scenario.__new__(mixed_version.Scenario)
-    scenario.builds = {label: SimpleNamespace(tree=tmp_path) for label in ("N-1", "N")}
+    scenario.org = "fixture"
+    scenario.builds = {"N-1": latency_seed_api, "N": SimpleNamespace(tree=tmp_path)}
     scenario.ch_port = 18123
     scenario.owned_logs = tmp_path
     scenario.owned_servers = owned
