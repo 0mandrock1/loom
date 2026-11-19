@@ -86,6 +86,7 @@ function Write-LoomCompilerCodes([string]$file) {
             }
         }
     } finally { $stream.Dispose() }
+    Write-LoomProtectionPhase 'compiler-scanned'
 }
 
 # All callers supply fixed plugin/test arguments. Session JSON never selects
@@ -181,8 +182,14 @@ function Invoke-LoomCompilerProcess([type]$native, [IntPtr]$job, [long]$deadline
             # Read no output until the exact compiler has exited AND every
             # descendant is stopped, including after a native deadline exit.
             Stop-LoomCompilerJob $native $job
-            if (-not $native::CloseHandle($compilerLog)) { throw 'Unavailable' }
+            Write-LoomProtectionPhase 'compiler-stopped'
+            if (-not $native::CloseHandle($compilerLog)) {
+                $nativeCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                Write-LoomProtectionPhase 'compiler-close' $nativeCode
+                throw 'Unavailable'
+            }
             $compilerLog = [IntPtr]::Zero
+            Write-LoomProtectionPhase 'compiler-closed'
             Write-LoomCompilerCodes $compilerLogPath
             throw 'Unavailable'
         }
@@ -207,11 +214,19 @@ function Invoke-LoomCompilerProcess([type]$native, [IntPtr]$job, [long]$deadline
 }
 
 function Stop-LoomCompilerJob([type]$native, [IntPtr]$job) {
-    if (-not $native::TerminateJobObject($job, 1)) { throw 'Unavailable' }
+    if (-not $native::TerminateJobObject($job, 1)) {
+        $nativeCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        Write-LoomProtectionPhase 'compiler-stop' $nativeCode
+        throw 'Unavailable'
+    }
     $accounting = [Runtime.InteropServices.Marshal]::AllocHGlobal(48)
     try {
         do {
-            if (-not $native::QueryInformationJobObject($job, 1, $accounting, 48, [IntPtr]::Zero)) { throw 'Unavailable' }
+            if (-not $native::QueryInformationJobObject($job, 1, $accounting, 48, [IntPtr]::Zero)) {
+                $nativeCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+                Write-LoomProtectionPhase 'compiler-query' $nativeCode
+                throw 'Unavailable'
+            }
             $active = [Runtime.InteropServices.Marshal]::ReadInt32($accounting, 40)
             if ($active -gt 0) { [Threading.Thread]::Sleep(1) }
         } while ($active -gt 0)
