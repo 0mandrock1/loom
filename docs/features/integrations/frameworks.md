@@ -1165,6 +1165,9 @@ async with Agent(org="acme", namespace="support") as loom_agent:
 
 Install with `pip install 'clickhouse-loom[pipecat]'` (`pipecat-ai` 1.16.x).
 
+The [text-only example](https://github.com/ClickHouse/loom/blob/main/sdk/python/examples/pipecat_text_memory.py)
+uses a canned reply and requires the application's existing trusted session pointer.
+
 | Pipecat                        | Loom                                                                                                                                                                                         |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `LLMContextFrame` (recall)     | `memory.search` with the turn's latest user text; with `honour_abstain`, leaves out memories below Loom's floor and adds nothing when Loom abstains; the matches replace one developer block |

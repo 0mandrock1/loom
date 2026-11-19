@@ -187,7 +187,9 @@ test("missing or damaged resume metadata never creates clean state", () => {
   assert.throws(() => protectionForAlias("codex", "missing", { base }), SessionProtectionUnavailable);
   bindProtectionAlias(root, "codex", "session");
   const aliases = path.join(base, "aliases");
-  const [name] = fs.readdirSync(aliases);
+  const names = fs.readdirSync(aliases).filter((name) => name.endsWith(".json"));
+  assert.equal(names.length, 1);
+  const [name] = names;
   const file = path.join(aliases, name);
   const saved = fs.readFileSync(file);
   fs.writeFileSync(file, "{");

@@ -1133,6 +1133,26 @@
           "type": "integer",
           "description": "Max PR heads fetched per shared mirror per ingest pass."
         },
+        "code_git_proxy_ca_file": {
+          "default": "",
+          "type": "string",
+          "description": "PEM bundle git verifies TLS with through the proxy, in place of its default roots (a proxy that terminates TLS under its own authority). Needs code_git_proxy_url."
+        },
+        "code_git_proxy_identity": {
+          "default": "",
+          "type": "string",
+          "description": "The proxy user of an entry that names no `git_proxy_identity`: letters, digits and `. _ ~ @ -`, at most 128. Empty = such an entry's git jobs are refused. Needs code_git_proxy_url."
+        },
+        "code_git_proxy_token_file": {
+          "default": "",
+          "type": "string",
+          "description": "File holding the proxy password, read again for every git job. Empty = no password; a file that cannot be read or is empty refuses the job. Needs code_git_proxy_url."
+        },
+        "code_git_proxy_url": {
+          "default": "",
+          "type": "string",
+          "description": "The proxy: `http://host:port` or `https://host:port`, the port named, with no credentials, path or query. Empty = git connects directly."
+        },
         "code_git_remote": {
           "default": "",
           "type": "string",
