@@ -730,7 +730,8 @@ def add_attach_parser(csub: Any) -> None:
     p.add_argument(
         "--dry-run",
         action="store_true",
-        help="Run the refusals and the scan and print what would be placed; write nothing "
+        help="Run the refusals and the scan and print what would be placed; keep cell state, "
+        "tenancy triggers and placements unchanged. Command participation is still recorded "
         "(the router's own begin refusals do not run)",
     )
     for flag, what in (

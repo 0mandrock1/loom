@@ -1175,9 +1175,10 @@ included and never longer than what is left, but for a floor of 100 ms: every tr
 before the wait is judged spent, so `--wait 0` is one try of each wait with no retry;
 `--scan-budget` (default 2 hours) bounds each full scan, which `--wait` does not count.
 `--dry-run` runs the refusals and the scan, prints what would be placed and skipped and the
-scan's time, and writes nothing; the router's checks at `attach/begin` do not run. On a
-`serving` row attach first verifies that the connected authority, configured cell and
-bucket match the directory registration. It then reads the cell's mode: `enforced` is
+scan's time. Cell state, tenancy triggers and placements stay unchanged; normal participant
+enrollment and retirement are still recorded. The router's checks at `attach/begin` do not
+run. On a `serving` row attach first verifies that the connected authority, configured cell
+and bucket match the directory registration. It then reads the cell's mode: `enforced` is
 done (exit 0), and any other mode refuses: the directory and the cell's Postgres disagree,
 as after a restore of one of them, and attach lowers and repairs neither.
 

@@ -13071,7 +13071,7 @@
            "nargs": 0,
            "type": null,
            "required": false,
-           "help": "Run the refusals and the scan and print what would be placed; write nothing (the router's own begin refusals do not run)",
+           "help": "Run the refusals and the scan and print what would be placed; keep cell state, tenancy triggers and placements unchanged. Command participation is still recorded (the router's own begin refusals do not run)",
            "metavar": null
           },
           {

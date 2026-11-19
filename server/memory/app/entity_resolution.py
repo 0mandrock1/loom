@@ -312,19 +312,21 @@ def choose_canonical_candidate(
     # Block by length (index), then bound by character overlap, then — only
     # for what survives both — run the real similarity. Both bounds are exact
     # (see the note above), so this decides exactly what the full scan would.
-    scored = sorted(
-        (
-            (
-                prepared[i][0],
-                _prepared_similarity(mention, prepared[i][0], m_compact, prepared[i][1]),
-            )
-            for i in _blocked_positions(prepared, m_len, m_clen, min_score)
-            if prepared[i][0] != mention
-            and _overlap_admits(prepared, i, m_len, m_clen, m_chars, m_cchars, min_score)
-        ),
-        key=lambda item: item[1],
-        reverse=True,
-    )
+    scored: list[tuple[str, float]] = []
+    gap_blockers = 0
+    for i in _blocked_positions(prepared, m_len, m_clen, min_score):
+        if prepared[i][0] == mention or not _overlap_admits(
+            prepared, i, m_len, m_clen, m_chars, m_cchars, min_score
+        ):
+            continue
+        score = _prepared_similarity(mention, prepared[i][0], m_compact, prepared[i][1])
+        scored.append((prepared[i][0], score))
+        if 1.0 - score < min_gap:
+            gap_blockers += 1
+            # Two scores this close to one leave no room for the required winner gap.
+            if gap_blockers == 2:
+                return EntityResolutionDecision(mention, mention, 1.0, "self")
+    scored.sort(key=lambda item: item[1], reverse=True)
     if not scored:
         return EntityResolutionDecision(mention, mention, 1.0, "self")
     best, best_score = scored[0]

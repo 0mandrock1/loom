@@ -699,3 +699,106 @@ async def test_prepared_scoring_preserves_complete_resolver_rows(monkeypatch, se
         assert [row["evidence_count"] for row in inserted[1:]] == [0, 3]
         assert all(row["canonical_text"] == canonical for row in inserted[1:])
     assert rows == before
+
+
+@pytest.mark.parametrize("shape", ["prepared", "tuples", "raw"])
+@pytest.mark.parametrize(
+    ("mention", "suffixes"),
+    [
+        ("893", ["83", "89", "892", "93"]),
+        ("1234", ["123", "124", "134"]),
+    ],
+)
+def test_ambiguous_candidate_gap_stops_unnecessary_scores(monkeypatch, shape, mention, suffixes):
+    from server.memory.app import entity_resolution as owner
+
+    prefix = "gate-95e31a07d4c84b62a90f65de28c713bf-2-"
+    mention = prefix + mention
+    raw = [prefix + suffix for suffix in suffixes]
+    expected = _frozen_raw_entity_decision(mention, raw)
+    assert expected == owner.EntityResolutionDecision(mention, mention, 1.0, "self")
+    prepared = owner._prepare_candidates(raw)
+    candidates = raw if shape == "raw" else list(prepared) if shape == "tuples" else prepared
+    score_pair = owner._prepared_similarity
+    pairs = []
+
+    def observed_score(left, right, compact_left, compact_right):
+        pairs.append((left, right))
+        return score_pair(left, right, compact_left, compact_right)
+
+    monkeypatch.setattr(owner, "_prepared_similarity", observed_score)
+    assert owner.choose_canonical_candidate(mention, candidates) == expected
+    # Two exact scores already make the winner gap impossible, even for a later score of one.
+    assert pairs == [(mention, candidate[0]) for candidate in prepared[:2]]
+
+
+@pytest.mark.parametrize("min_gap", [0.0, -0.1, 0.01, 1.0 - 84 / 85, float("nan")])
+def test_ambiguous_gap_bound_keeps_smaller_or_unordered_gap_scoring(monkeypatch, min_gap):
+    from server.memory.app import entity_resolution as owner
+
+    prefix = "gate-95e31a07d4c84b62a90f65de28c713bf-2-"
+    mention = prefix + "893"
+    raw = [prefix + suffix for suffix in ("83", "89", "892", "93")]
+    expected = _frozen_raw_entity_decision(mention, raw, min_gap=min_gap, max_entropy=1.0)
+    prepared = owner._prepare_candidates(raw)
+    score_pair = owner._prepared_similarity
+    pairs = []
+
+    def observed_score(left, right, compact_left, compact_right):
+        pairs.append((left, right))
+        return score_pair(left, right, compact_left, compact_right)
+
+    monkeypatch.setattr(owner, "_prepared_similarity", observed_score)
+    assert (
+        owner.choose_canonical_candidate(mention, prepared, min_gap=min_gap, max_entropy=1.0)
+        == expected
+    )
+    # Equality still admits a winner; zero, negative and NaN gaps cannot prove rejection.
+    assert pairs == [(mention, candidate[0]) for candidate in prepared]
+
+
+def test_one_high_candidate_still_resolves_fuzzy():
+    from server.memory.app import entity_resolution as owner
+
+    prefix = "gate-95e31a07d4c84b62a90f65de28c713bf-2-"
+    mention, candidate = prefix + "893", prefix + "89"
+    expected = _frozen_raw_entity_decision(mention, [candidate])
+    assert expected == owner.EntityResolutionDecision(mention, candidate, 84 / 85, "fuzzy")
+    assert owner.choose_canonical_candidate(mention, [candidate]) == expected
+
+
+@pytest.mark.parametrize("gap", ["default", "equal", "above"])
+def test_gap_bound_leaves_room_for_later_perfect_candidate(monkeypatch, gap):
+    import math
+
+    from server.memory.app import entity_resolution as owner
+
+    family = "95e31a07d4c84b62a90f65de28c713bf"
+    prefix = f"gate-{family}-2-"
+    mention = prefix + "893"
+    later = f"gate.{family}-2-893"
+    raw = [prefix + "813", prefix + "823", later]
+    boundary = 1.0 - 42 / 43
+    min_gap = 0.02 if gap == "default" else boundary
+    if gap == "above":
+        min_gap = math.nextafter(boundary, math.inf)
+    expected = _frozen_raw_entity_decision(mention, raw, min_gap=min_gap, max_entropy=1.0)
+    assert expected == owner.EntityResolutionDecision(
+        mention, mention if gap == "above" else later, 1.0, "self" if gap == "above" else "fuzzy"
+    )
+    prepared = owner._prepare_candidates(raw)
+    assert [candidate[0] for candidate in prepared] == raw
+    score_pair = owner._prepared_similarity
+    pairs = []
+
+    def observed_score(left, right, compact_left, compact_right):
+        pairs.append((left, right))
+        return score_pair(left, right, compact_left, compact_right)
+
+    monkeypatch.setattr(owner, "_prepared_similarity", observed_score)
+    assert (
+        owner.choose_canonical_candidate(mention, prepared, min_gap=min_gap, max_entropy=1.0)
+        == expected
+    )
+    if gap != "above":
+        assert pairs == [(mention, candidate) for candidate in raw]
