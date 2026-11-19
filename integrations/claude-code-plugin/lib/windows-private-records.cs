@@ -232,12 +232,11 @@ public sealed class WindowsPrivateRecords
         finally { CloseDirectories(held); }
     }
 
-    // State/root/alias/capsule records are immutable creations. The lifecycle
-    // caller must never call this to recreate missing history on resume.
-    public void CreateNew(string[] components, byte[] bytes) {
+    // CreateRoot retains every parent; each record still reopens and checks them.
+    void CreateRootRecord(string[] components, byte[] bytes) {
         Require(bytes != null && bytes.Length <= MaxRecord);
         string leaf;
-        List<SafeFileHandle> held = PinDirectories(components, true, out leaf);
+        List<SafeFileHandle> held = PinDirectories(components, false, out leaf);
         try {
             IntPtr allocation;
             SecurityAttributes sa = Attributes(out allocation);
@@ -642,8 +641,8 @@ public sealed class WindowsPrivateRecords
             try { Require(CreateDirectoryW(rootPath, ref sa)); }
             finally { Marshal.FreeHGlobal(allocation); }
             using (SafeFileHandle root = OpenDirectory(rootPath, true)) {
-                CreateNew(new string[] { id, "state" }, Encoding.UTF8.GetBytes("0\n"));
-                CreateNew(new string[] { id, "root.json" }, Encoding.UTF8.GetBytes("{\"version\":1,\"id\":\"" + id + "\"}"));
+                CreateRootRecord(new string[] { id, "state" }, Encoding.UTF8.GetBytes("0\n"));
+                CreateRootRecord(new string[] { id, "root.json" }, Encoding.UTF8.GetBytes("{\"version\":1,\"id\":\"" + id + "\"}"));
                 WriteRootPhase("root-flushed");
                 Require(!IsProtected(id));
                 return id;
