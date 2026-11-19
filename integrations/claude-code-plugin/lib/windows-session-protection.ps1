@@ -217,34 +217,25 @@ function Invoke-LoomRecordOperation([Reflection.Assembly]$assembly) {
         $count += $read
     }
     if ($count -gt 4096) { throw 'Unavailable' }
+    $codecType = $assembly.GetType('WindowsPrivateRecords', $true, $false)
     Write-LoomProtectionPhase 'request-parse'
-    $request = Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject ([string]::new($buffer, 0, $count)) -ErrorAction Stop
+    $request = $codecType::ParseRequest(([string]::new($buffer, 0, $count)))
     Write-LoomProtectionPhase 'request-keys'
-    $expectedKeys = switch ($request.op) {
-        'create' { 'base,op' }
-        'inspect' { 'base,id,op' }
-        'protect' { 'base,id,op' }
-        'bind' { 'base,id,key,op' }
-        'find' { 'base,key,op' }
-        'establish' { 'base,key,op' }
-        default { throw 'Unavailable' }
-    }
-    if ((($request.PSObject.Properties.Name | Sort-Object) -join ',') -ne $expectedKeys) { throw 'Unavailable' }
-    if ($request.base -isnot [string] -or $request.base.Length -gt 2048 -or -not [IO.Path]::IsPathRooted($request.base)) { throw 'Unavailable' }
     Write-LoomProtectionPhase 'native-op'
     $recordType = $assembly.GetType('WindowsPrivateRecords', $true, $false)
     Write-LoomProtectionPhase 'record-construct'
-    $store = [Activator]::CreateInstance($recordType, [object[]]@($request.base))
+    $store = [Activator]::CreateInstance($recordType, [object[]]@($request['base']))
     Write-LoomProtectionPhase 'record-dispatch'
-    $result = switch ($request.op) {
+    $result = switch ($request['op']) {
         'create' { $store.CreateRoot() }
-        'inspect' { $store.IsProtected($request.id) }
-        'protect' { $store.AppendProtection($request.id); $null }
-        'bind' { $store.BindAlias($request.key, $request.id); $null }
-        'find' { $store.FindAlias($request.key) }
-        'establish' { $store.EstablishAlias($request.key) }
+        'inspect' { $store.IsProtected($request['id']) }
+        'protect' { $store.AppendProtection($request['id']); $null }
+        'bind' { $store.BindAlias($request['key'], $request['id']); $null }
+        'find' { $store.FindAlias($request['key']) }
+        'establish' { $store.EstablishAlias($request['key']) }
     }
-    return $result
+    Write-LoomProtectionPhase 'output-encode'
+    return $recordType::EncodeResponse($request['op'], $result)
 }
 
 if ($DefinitionsOnly) { return }
@@ -268,8 +259,7 @@ try {
         # the original earlier native-operation cutoff on this same self-job.
         Start-LoomNativeTimer $native 'StopJob' $compiled.Guardian.Job ($compiled.Guardian.Deadline - 150)
         $result = Invoke-LoomRecordOperation $compiled.Value
-        Write-LoomProtectionPhase 'output-encode'
-        [Console]::Out.Write((ConvertTo-Json -Compress -Depth 4 -InputObject @{ ok = $true; value = $result }))
+        [Console]::Out.Write($result)
     }
     Write-LoomProtectionPhase 'helper-exit' 0
     if ($script:loomProtectionDiagnosticFailed) { throw 'Unavailable' }

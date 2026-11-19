@@ -10,6 +10,8 @@ import { afterEach, test } from "node:test";
 import {
   bindProtectionAlias,
   createProtectionRoot,
+  establishProtectionAlias,
+  findProtectionAlias,
   protectionForAlias,
   protectSession,
   sessionIsProtected,
@@ -37,6 +39,42 @@ function witnessEnv() {
     LOOM_PRIVATE_COMPILATION_ID: crypto.randomBytes(16).toString("hex"),
     LOOM_PRIVATE_DEADLINE_UTC: String(Date.now() + 1500),
   };
+}
+
+function helperRequest(input) {
+  const environment = witnessEnv();
+  const system32 = path.join(process.env.SystemRoot, "System32");
+  const powershellHome = path.join(system32, "WindowsPowerShell", "v1.0");
+  const result = spawnSync(
+    path.join(powershellHome, "powershell.exe"),
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      fileURLToPath(new URL("../lib/windows-session-protection.ps1", import.meta.url)),
+    ],
+    {
+      input,
+      encoding: "utf8",
+      windowsHide: true,
+      cwd: system32,
+      timeout: 1500,
+      maxBuffer: 1024,
+      env: {
+        SystemRoot: process.env.SystemRoot,
+        WINDIR: process.env.SystemRoot,
+        PATH: system32,
+        PSModulePath: path.join(powershellHome, "Modules"),
+        LOOM_PRIVATE_COMPILER_BASE: environment.LOOM_PRIVATE_COMPILER_BASE,
+        LOOM_PRIVATE_COMPILATION_ID: environment.LOOM_PRIVATE_COMPILATION_ID,
+        LOOM_PRIVATE_DEADLINE_UTC: environment.LOOM_PRIVATE_DEADLINE_UTC,
+      },
+    },
+  );
+  assert.equal(result.error, undefined);
+  assert.equal(result.signal, null);
+  return result;
 }
 
 // Retain only protocol phases and observer timing when a real witness exits early.
@@ -314,6 +352,73 @@ if (process.platform === "win32") {
       if (caller.exitCode === null && caller.signalCode === null) caller.kill("SIGKILL");
       if (receipt) exactProcesses([receipt.guardian, receipt], true);
     }
+  });
+
+  test("the real helper accepts reordered escaped request keys and fixed primitive results", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "loom-windows-codec-"));
+    owned.add(directory);
+    const base = path.join(directory, "private space 日");
+    const result = helperRequest(String.raw`{"\u006fp":"create","\u0062ase":${JSON.stringify(base)}}`);
+    assert.equal(result.status, 0, result.stderr);
+    const response = JSON.parse(result.stdout);
+    assert.deepEqual(Object.keys(response).sort(), ["ok", "value"]);
+    assert.equal(response.ok, true);
+    assert.equal(typeof response.value, "string");
+    assert.equal(response.value.length, 36);
+    const root = { base, id: response.value };
+    assert.equal(sessionIsProtected(root), false);
+    bindProtectionAlias(root, "codex", "codec-results");
+    assert.deepEqual(protectionForAlias("codex", "codec-results", { base }), root);
+    assert.deepEqual(establishProtectionAlias("codex", "codec-results", { base }), root);
+    assert.equal(findProtectionAlias("codex", "missing-codec-result", { base }), undefined);
+    protectSession(root);
+    assert.equal(sessionIsProtected(root), true);
+  });
+
+  test("the real helper refuses malformed and coerced requests before native authority", () => {
+    const { root, directory } = fresh();
+    bindProtectionAlias(root, "codex", "codec-refusals");
+    protectSession(root);
+    const state = fs.readFileSync(path.join(directory, "state"));
+    const aliases = path.join(root.base, "aliases");
+    const [claimName] = fs.readdirSync(aliases).filter((name) => name.endsWith(".claim"));
+    const claim = path.join(aliases, claimName);
+    const claimBytes = fs.readFileSync(claim);
+    const entries = fs.readdirSync(root.base).sort();
+    const base = root.base;
+    const key = "a".repeat(64);
+    const ordinary = { base, op: "find", key };
+    for (const [name, input] of [
+      ["malformed JSON", '{"op":'],
+      ["trailing JSON", JSON.stringify(ordinary) + " true"],
+      ["non-object JSON", "[]"],
+      [
+        "duplicate decoded key",
+        String.raw`{"op":"find","\u006fp":"find","base":${JSON.stringify(base)},"key":"${key}"}`,
+      ],
+      ["unknown operation", JSON.stringify({ ...ordinary, op: "remove" })],
+      ["extra key", JSON.stringify({ ...ordinary, extra: "" })],
+      ["missing key", JSON.stringify({ base, op: "find" })],
+      ["operation case", JSON.stringify({ ...ordinary, op: "FIND" })],
+      ["key case", JSON.stringify({ Base: base, op: "find", key })],
+      ["base coercion", JSON.stringify({ ...ordinary, base: 1 })],
+      ["null base", JSON.stringify({ ...ordinary, base: null })],
+      ["relative base", JSON.stringify({ ...ordinary, base: "relative" })],
+      ["long base", JSON.stringify({ ...ordinary, base: "C:\\" + "a".repeat(2046) })],
+      ["operation coercion", JSON.stringify({ ...ordinary, op: ["find"] })],
+      ["id coercion", JSON.stringify({ base, op: "inspect", id: { id: root.id } })],
+      ["key coercion", JSON.stringify({ ...ordinary, key: false })],
+    ]) {
+      const result = helperRequest(input);
+      assert.equal(result.status, 1, `${name}: ${result.stderr}`);
+      assert.deepEqual(JSON.parse(result.stdout), { ok: false }, name);
+      assert.match(result.stderr, /^LSP1:request-parse:0\r?$/m, name);
+      assert.doesNotMatch(result.stderr, /^LSP1:(?:native-op|record-construct|record-dispatch):/m, name);
+      assert.deepEqual(fs.readdirSync(root.base).sort(), entries, name);
+      assert.deepEqual(fs.readFileSync(path.join(directory, "state")), state, name);
+      assert.deepEqual(fs.readFileSync(claim), claimBytes, name);
+    }
+    assert.equal(sessionIsProtected(root), true);
   });
 
   test("real Windows creation has token owner and one protected owner DACL", () => {

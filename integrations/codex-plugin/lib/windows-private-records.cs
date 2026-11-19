@@ -396,12 +396,64 @@ public sealed class WindowsPrivateRecords
         return value != null && Regex.IsMatch(value, @"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$");
     }
 
-    // Duplicate keys retain their last value, matching JSON.parse. Earlier
+    public static Dictionary<string, string> ParseRequest(string text) {
+        Require(text != null && text.Length <= 4096);
+        Dictionary<string, object> fields = new RecordReader(text).Read(true);
+        object operation;
+        Require(fields.TryGetValue("op", out operation) && operation is string);
+        string op = (string)operation;
+        string[] keys;
+        switch (op) {
+            case "create": keys = new string[] { "base", "op" }; break;
+            case "inspect": case "protect": keys = new string[] { "base", "id", "op" }; break;
+            case "bind": keys = new string[] { "base", "id", "key", "op" }; break;
+            case "find": case "establish": keys = new string[] { "base", "key", "op" }; break;
+            default: throw new Unavailable();
+        }
+        Require(fields.Count == keys.Length);
+        Dictionary<string, string> request = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string key in keys) {
+            object value;
+            Require(fields.TryGetValue(key, out value) && value is string);
+            request[key] = (string)value;
+        }
+        Require(request["base"].Length <= 2048 && Path.IsPathRooted(request["base"]));
+        return request;
+    }
+
+    public static string EncodeResponse(string op, object value) {
+        string json;
+        switch (op) {
+            case "inspect":
+                Require(value is bool);
+                json = (bool)value ? "true" : "false";
+                break;
+            case "protect": case "bind":
+                Require(value == null);
+                json = "null";
+                break;
+            case "create": case "establish": case "find":
+                if (value == null) {
+                    Require(op == "find");
+                    json = "null";
+                } else {
+                    string id = value as string;
+                    Require(id != null && id.Length == 36 && RootId(id));
+                    json = "\"" + id + "\"";
+                }
+                break;
+            default: throw new Unavailable();
+        }
+        return "{\"ok\":true,\"value\":" + json + "}";
+    }
+
+    // Stored duplicate keys retain their last value, matching JSON.parse. Earlier
     // overwritten values still need strict syntax, even if not schema values.
     sealed class RecordReader {
         readonly string text;
         int offset;
-        public RecordReader(byte[] bytes) { text = Encoding.UTF8.GetString(bytes); }
+        public RecordReader(byte[] bytes) : this(Encoding.UTF8.GetString(bytes)) {}
+        public RecordReader(string text) { this.text = text; }
         void Space() {
             while (offset < text.Length && (text[offset] == ' ' || text[offset] == '\t' || text[offset] == '\r' || text[offset] == '\n')) offset++;
         }
@@ -527,12 +579,13 @@ public sealed class WindowsPrivateRecords
                 }
             }
         }
-        public Dictionary<string, object> Read() {
+        public Dictionary<string, object> Read(bool rejectDuplicates = false) {
             Dictionary<string, object> result = new Dictionary<string, object>(StringComparer.Ordinal);
             Require(Take('{'));
             if (!Take('}')) {
                 do {
                     string key = String();
+                    if (rejectDuplicates) Require(!result.ContainsKey(key));
                     Require(Take(':'));
                     Space();
                     Require(offset < text.Length);
